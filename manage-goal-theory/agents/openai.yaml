@@ -1,0 +1,4 @@
+interface:
+  display_name: "Manage Goal Theory"
+  short_description: "Maintain .agent_goal theory notes"
+  default_prompt: "Use $manage-goal-theory to create or update .agent_goal/goal_theory.md with technical logic, treating .agent_advice only as non-GT evidence or hypotheses until supported."

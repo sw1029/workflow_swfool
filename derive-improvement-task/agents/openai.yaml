@@ -1,0 +1,4 @@
+interface:
+  display_name: "Derive Improvement Task"
+  short_description: "Generate task.md or task packs"
+  default_prompt: "Use $derive-improvement-task with fixed reasoning_effort xhigh agents; when called from $orchestrate-task-cycle, include references/workflow-routing.md and active .task/task_pack context while critically analyzing goal, authority, .agent_advice non-GT direction evidence, issue, schema-contract, task-miss, blocker-signature, semantic-signature, goal-distance, and input-delta evidence before writing the next task.md."

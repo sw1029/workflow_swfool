@@ -1,0 +1,4 @@
+interface:
+  display_name: "Monitor Running Execution"
+  short_description: "Track long-running execution state"
+  default_prompt: "Use $monitor-running-execution to record and check a long-running task execution."

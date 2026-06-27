@@ -1,0 +1,4 @@
+interface:
+  display_name: "Orchestrate Task Cycle"
+  short_description: "Run governed cycles with quality gates"
+  default_prompt: "Use $orchestrate-task-cycle in Korean, keep .agent_goal GT and .agent_advice non-GT separate, route implementation through $task-md-agent-governance, audit generated code structure before run/log, enforce loop breakers, validate progress axes, track issues, and invoke $repo-change-commit."

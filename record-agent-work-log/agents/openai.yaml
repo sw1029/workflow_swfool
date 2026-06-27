@@ -1,0 +1,4 @@
+interface:
+  display_name: "Record Agent Work Log"
+  short_description: "Standardize .agent_log entries"
+  default_prompt: "Use $record-agent-work-log to record task intent, work performed, result, and gaps in .agent_log."

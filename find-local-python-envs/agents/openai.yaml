@@ -1,0 +1,4 @@
+interface:
+  display_name: "Find Local Python Envs"
+  short_description: "Match dependencies to local envs"
+  default_prompt: "Use $find-local-python-envs to find local Python environments that can run code with the required dependencies."

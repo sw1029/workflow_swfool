@@ -1,0 +1,4 @@
+interface:
+  display_name: "Inspect OOM Risk"
+  short_description: "Find repo OOM risk surfaces"
+  default_prompt: "Use $inspect-oom-risk to audit this repo for out-of-memory risks with minimum reasoning_effort high for code/resource analysis agents and xhigh for important reviews, then return prioritized findings."

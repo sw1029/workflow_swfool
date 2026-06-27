@@ -1,0 +1,4 @@
+interface:
+  display_name: "Manage Goal Architecture"
+  short_description: "Maintain .agent_goal architecture"
+  default_prompt: "Use $manage-goal-architecture to create or update .agent_goal/goal_architecture.md with repo structure and module summaries, treating .agent_advice only as non-GT design evidence."

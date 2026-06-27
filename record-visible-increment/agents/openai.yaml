@@ -1,0 +1,4 @@
+interface:
+  display_name: "Record Visible Increment"
+  short_description: "Record visible workflow progress deltas"
+  default_prompt: "Use $record-visible-increment to capture the visible delta from a completed cycle step."

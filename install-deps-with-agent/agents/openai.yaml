@@ -1,0 +1,4 @@
+interface:
+  display_name: "Install Deps With Agent"
+  short_description: "Cache-first dependency install agent"
+  default_prompt: "Use $install-deps-with-agent to check local caches and environments first, then assign one agent to install missing dependencies or long-running downloads."

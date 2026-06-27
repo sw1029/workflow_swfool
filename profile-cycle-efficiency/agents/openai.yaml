@@ -1,0 +1,4 @@
+interface:
+  display_name: "Profile Cycle Efficiency"
+  short_description: "Profile cycle cost and repeated work"
+  default_prompt: "Use $profile-cycle-efficiency to identify repeated micro-cycles and validation inefficiency."

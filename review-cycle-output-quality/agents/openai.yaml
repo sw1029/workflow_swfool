@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review Cycle Output Quality"
+  short_description: "Direct qualitative review of cycle outputs"
+  default_prompt: "Use $review-cycle-output-quality to inspect cycle output artifacts directly and produce a structured qualitative review before deriving the next task."

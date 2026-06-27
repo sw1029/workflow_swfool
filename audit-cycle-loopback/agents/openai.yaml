@@ -1,0 +1,4 @@
+interface:
+  display_name: "Audit Cycle Loopback"
+  short_description: "Compute anti-loop progress gates"
+  default_prompt: "Use $audit-cycle-loopback to compute a conservative anti-loop progress gate before deriving the next task."

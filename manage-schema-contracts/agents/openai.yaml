@@ -1,0 +1,4 @@
+interface:
+  display_name: "Manage Schema Contracts"
+  short_description: "Track shared schemas and module contracts"
+  default_prompt: "Use $manage-schema-contracts to maintain .schema and .contract records according to .agent_goal/goal_schema_contract.md, considering .agent_advice only as non-GT contract/design evidence."

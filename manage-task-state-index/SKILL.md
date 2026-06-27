@@ -1,0 +1,174 @@
+---
+name: manage-task-state-index
+description: "Maintain workspace `.task/index.md` and `.task/index.jsonl` as a durable task-state index using fixed `reasoning_effort: medium` for ID correction work, optional ID insight agents, scan/audit/link repair, and lifecycle transition recording. Use when Codex creates, updates, promotes, archives, resolves, deletes, audits, validates, or needs global ID consistency checks across task, issue, goal, external-advice, schema-contract, execution, and validation workflows."
+---
+
+# Manage Task State Index
+
+## Overview
+
+Use this skill to keep one workspace-local task lifecycle index under `.task/`. The canonical record is append-only `.task/index.jsonl`; the human-readable view is `.task/index.md`.
+
+This skill records traceability only. It does not decide task completion, delete artifacts, or replace the source workflows that create `task.md`, candidate tasks, implementation issues, task misses, execution logs, goal/interview outputs, or audit logs.
+
+## Routing Policy
+
+- When called from `$orchestrate-task-cycle`, consume the canonical orchestration reference [workflow-routing.md](../orchestrate-task-cycle/references/workflow-routing.md) as caller context, but keep this skill's fixed ID-only routing below.
+- Treat ID correction as medium-reasoning work. When spawning or requesting optional ID insight agents, set `reasoning_effort: medium` whenever the subagent tooling exposes it.
+- Apply the same fixed `reasoning_effort: medium` requirement when a caller asks this skill to perform scan/audit/link repair, lifecycle transition recording, candidate/miss cleanup gating, or durable ID audit report creation through delegated work.
+- Do not inherit `high` or `xhigh` routing from caller workflows for `$manage-task-state-index` ID correction. This skill's ID-specific routing is fixed at medium unless the user explicitly changes it.
+- If the available delegation tool cannot enforce `reasoning_effort: medium`, include the requirement in the prompt and report the limitation in the outcome.
+
+## Index Model
+
+Use these files:
+
+- `.task/index.jsonl`: append-only JSONL events for durable state changes.
+- `.task/index.md`: regenerated summary view grouped by artifact type.
+
+Use stable IDs for all important artifacts:
+
+- `task-*`: current or historical `task.md` content.
+- `pack-*`: `.task/task_pack/*.json` task-pack queue; Markdown renders are linked as fields, not separate canonical records.
+- `past-*`: previous `task.md` content archived as `past_task` through `$record-agent-work-log`.
+- `cand-*`: `.task/candidate_task/` proposal.
+- `miss-*`: `.task/task_miss/` report.
+- `log-*`: `.agent_log/` record.
+- `run-*`: execution evidence from `$run-task-code-and-log`.
+- `audit-*`: audit evidence from `$inspect-repo-with-agents` or `$inspect-oom-risk`.
+- `val-*`: completion validation report from `$validate-task-completion`.
+- `env-*`: environment discovery evidence from `$find-local-python-envs`.
+- `issue-*`: `.issue/` local issue documents or GitHub issue mirror documents from `$manage-implementation-issues`.
+- `issue-res-*`: resolved, closed, or archived `.issue/` resolution records.
+- `issue-map-*`: `.issue/index.md` or local issue mapping/history views.
+- `goal-*`: `.agent_goal/` files managed by goal-related skills.
+- `prompt-*`: raw prompt shaping drafts or reports from `$shape-agent-goal-prompt`.
+- `int-*`: `.interview/` state and audit artifacts from `$deep-interview-goal-context`.
+- `adv-*`: `.agent_advice/` external advice artifacts from `$manage-external-advice`; advice is non-GT direction evidence, not `.agent_goal` truth.
+- `schema-*`: `.schema/` or `.contract/` schema, module contract, script contract, compatibility note, or needs-review contract.
+- `schema-map-*`: `.schema/index.md`, `.schema/causal_map.md`, `.contract/index.md`, `.contract/causal_map.md`, compatibility map, or contracts JSONL map/history artifact.
+
+Use statuses that match the owning workflow, such as `active`, `superseded`, `candidate`, `applied`, `open`, `partially_resolved`, `resolved`, `deleted`, `obsolete`, `logged`, `passed`, `partial`, and `failed`.
+
+Validation artifacts may also record a separate progress status such as `advanced`, `safety_only`, `no_progress`, or `regressed` in their title, links, or concise metadata. Do not treat progress status as a replacement for validation status.
+
+For the complete event schema and link relationship names, read [index-schema.md](references/index-schema.md).
+
+## Workflow
+
+1. Initialize or refresh the index.
+   - Create `.task/` if missing.
+   - Preserve existing `.task/index.jsonl`; never truncate it.
+   - Regenerate `.task/index.md` from JSONL whenever state changes.
+   - Prefer the bundled script:
+
+     ```bash
+     python3 /home/swfool/.codex/skills/manage-task-state-index/scripts/task_state_index.py --root . init
+     ```
+
+2. Discover current artifacts.
+   - Scan for `task.md`, `.task/candidate_task/*.md`, `.task/task_pack/*.json`, `.task/task_miss/**/*.md`, `.task/validation/*.md`, `.task/id_audit/*.md`, `.issue/**/*.md`, `.agent_log/**/*.md`, `.agent_goal/*.md`, `.agent_advice/**/*.md`, `.interview/**/*.md`, `.schema/` schema/contract/map artifacts, and `.contract/` auxiliary contract/map artifacts.
+   - Assign IDs to artifacts that are not already indexed.
+   - Reuse an ID only when the artifact type, path, and content digest match; a changed `task.md` normally receives a new `task-*` ID.
+   - When a caller restricts indexing to exact-path add/link, record that restriction in the created/updated artifact note and include the reason global scan/audit was skipped.
+
+     ```bash
+     python3 /home/swfool/.codex/skills/manage-task-state-index/scripts/task_state_index.py --root . scan
+     ```
+
+3. Add or update a specific artifact when another workflow creates it.
+   - Add the new artifact immediately after the owning workflow writes it.
+   - Include the artifact type, path, status, concise title, parent ID when relevant, and relationship links.
+   - Before adding a timestamped log or miss artifact, check whether an existing indexed artifact has the same type, task parent, canonical result path/check path, status, and content digest. If so, reuse/link the existing artifact rather than creating duplicate lifecycle meaning.
+
+     ```bash
+     python3 /home/swfool/.codex/skills/manage-task-state-index/scripts/task_state_index.py --root . add \
+       --type task \
+       --path task.md \
+       --status active \
+       --title "Implement current task"
+     ```
+
+4. Link related artifacts.
+   - Link the active task to the selected candidate, archived `past_task`, audit logs, execution logs, validation reports, and task_miss reports.
+   - Link the active task to the task-pack item that supplied it with `promoted_from_pack` or `pack_for_task` when `.task/task_pack` is in scope.
+   - Link implementation issues to active tasks, candidates, task_miss reports, validation reports, run logs, worktree/branch handoff records, and closing evidence.
+   - Link external advice to tasks, candidates, schema/design notes, validations, or logs when advice was considered, incorporated, rejected, deferred, or retired.
+   - Link schema contracts and schema maps to tasks, candidates, task_miss reports, goal artifacts, modules, scripts, and audits when known.
+   - Use relationship names such as `derived_from`, `promoted_from_pack`, `pack_for_task`, `inserted_after`, `reordered_by`, `terminal_blocker_for`, `input_delta_for`, `consolidation_candidate_for`, `supersedes`, `produced`, `audit_for`, `run_for`, `miss_for`, `resolves`, `validates`, `issue_for`, `tracks_task`, `derived_from_issue`, `fixes_issue`, `closes_issue`, `resolved_by`, `worktree_for`, `branch_for`, `advice_for`, `incorporated_into`, `applied_by`, `rejected_by`, `superseded_by`, `conflicts_with_goal`, `conflicts_with_authority`, `contract_for`, `schema_for`, `module_contract_for`, `script_contract_for`, `depends_on`, `produces_schema`, `consumes_schema`, `compatible_with`, `breaks_contract`, and `supersedes_contract`.
+
+     ```bash
+     python3 /home/swfool/.codex/skills/manage-task-state-index/scripts/task_state_index.py --root . link \
+       --source-id task-20260522-213000-example \
+       --link produced:miss-20260522-214000-generalization-gap
+     ```
+
+5. Record lifecycle transitions before destructive cleanup.
+- Before deleting an applied candidate, mark it `applied` and link it to the active task.
+- Before superseding, completing, or terminal-blocking a task pack, index the task-pack JSON and link the evidence with `reordered_by`, `terminal_blocker_for`, or `input_delta_for` as applicable.
+- Before deleting a resolved task miss, mark it `resolved` or `deleted` and link the evidence report.
+- Before closing, archiving, or deleting a local issue record, mark it `resolved`, `closed`, or `archived` and link the run/validation evidence through `$manage-implementation-issues`.
+- Before moving advice to applied or rejected, ensure `$manage-external-advice` writes the lifecycle event and any `past_advice` log; this skill may index and link the resulting artifacts but does not decide advice application.
+- Before replacing `task.md`, ensure the previous content has a `past-*` or `log-*` record linked from the new task.
+
+6. Run global ID consistency audit.
+   - Run the deterministic audit whenever a workflow is about to claim completion, delete an artifact, resolve a miss, publish an audit, or replace `task.md`.
+   - Use this command for a non-mutating audit:
+
+     ```bash
+     python3 /home/swfool/.codex/skills/manage-task-state-index/scripts/task_state_index.py --root . audit
+     ```
+
+   - Use this command when the audit itself should become a durable artifact:
+
+     ```bash
+     python3 /home/swfool/.codex/skills/manage-task-state-index/scripts/task_state_index.py --root . audit --write-report
+     ```
+
+   - Use `audit --summary-only --focus-path <path>` for cycle reports that need global counts and current-surface issues without dumping unrelated historical debt. The summary output is not a replacement for full audit evidence when deletion, issue closure, or completion depends on global consistency.
+   - Treat high-severity ID issues as traceability blockers for completion-oriented workflows until they are resolved or explicitly documented as non-applicable.
+   - If several consecutive cycles used exact-path-only add/link instead of global scan/audit, recommend a global audit before the next completion claim, candidate deletion, issue closure, readiness promotion, or commit that changes workflow state.
+   - When cycle/profile evidence reports over-threshold run directories, processed candidates, versioned command families, or repeated exact-path-only state mutations, register or link a consolidation candidate instead of recording the growth as informational only. Mark that candidate or index note as `progress_kind: governance_only` unless strict changed-and-semantic primary-output evidence proves otherwise. Use `consolidation_candidate_for`, `supersedes`, or `depends_on` links to tie the candidate to the budget evidence.
+   - If no `.task`, `.issue`, `.agent_log`, `.agent_goal`, `.agent_advice`, `.interview`, `.schema`, `.contract`, or task artifact exists, do not force an ID workflow; report that no ID context was available and let the calling skill continue its original purpose.
+
+7. Optionally request additional ID insight from a dedicated agent.
+   - Use one separate read-only ID insight agent only when the calling workflow already authorizes agents or the user explicitly asks for ID/governance audit.
+   - Spawn or request this ID insight agent with fixed `reasoning_effort: medium`.
+   - This agent is additional; never count it as one of the existing implementation, inspection, question, review, or synthesis agents.
+   - Give the agent `.task/index.md`, the deterministic `audit` JSON, and relevant artifact paths only. Do not assign repo implementation, OOM analysis, env discovery, prompt shaping, or task synthesis to it.
+   - The agent may suggest missing links, stale IDs, duplicate lifecycle records, parent/child relationship corrections, and candidate/miss cleanup risks. The main agent owns all writes.
+   - Use [id-agent-prompts.md](references/id-agent-prompts.md) for prompt shape.
+
+8. Report the index state.
+   - Include the updated `.task/index.md` path and the important IDs in the user-facing summary.
+   - If an artifact could not be linked because its producing workflow did not leave a durable file, record that as a note rather than inventing evidence.
+
+## Script Commands
+
+Use `scripts/task_state_index.py` for deterministic updates:
+
+- `init`: create `.task/index.jsonl` if needed and rebuild `.task/index.md`.
+- `scan`: discover standard artifacts and append missing index events.
+- `add`: append or update one artifact event.
+- `link`: append a relationship from one indexed artifact to another.
+- `rebuild`: regenerate `.task/index.md` from `.task/index.jsonl`.
+- `audit`: inspect global ID consistency, broken links, duplicate active paths, stale digests, missing files, active task conflicts, and unindexed standard artifacts. Add `--write-report` to write `.task/id_audit/*.md` and index it as `audit-*`. Add `--summary-only --focus-path <path>` to emit compact counts and focused issues for report packets.
+
+All commands print JSON so the caller can capture IDs and changed paths.
+
+## Guardrails
+
+- Do not use the index as proof that work is complete; use `$validate-task-completion` for verdicts.
+- Do not delete, move, or rewrite task artifacts from this skill unless the user or owning workflow explicitly requested it.
+- Do not overwrite `.task/index.jsonl`.
+- Do not remove historical events from `.task/index.jsonl`; append a correcting event instead.
+- Do not store secrets, private tokens, raw sensitive data, or large copyrighted excerpts in index fields.
+- Do not store full schema payloads or large contract bodies in index fields; store paths, titles, statuses, versions, and concise relationship fields.
+- Do not treat `.agent_goal/goal_schema_contract.md` as a schema contract body. Index it as a `goal-*` artifact; index the `.schema/` and `.contract/` files that implement it as `schema-*` or `schema-map-*`.
+- Do not treat `.agent_advice` as `.agent_goal` GT. Index advice as `external_advice` with `adv-*` IDs and non-GT lifecycle links.
+- Do not mark a task_miss resolved without evidence from `$task-md-agent-governance`, `$inspect-repo-with-agents`, or `$validate-task-completion`.
+- Do not mark an issue closed or resolved without evidence from `$manage-implementation-issues`, `$run-task-code-and-log`, or `$validate-task-completion`.
+- Do not make a generic skill fail only because no ID context exists; ID management is best-effort unless the user explicitly requested an ID audit or completion validation.
+- Do not let an ID insight agent edit files or perform the owning workflow's normal analysis; it is an additional traceability reviewer only.
+- Do not run optional ID insight agents with any reasoning effort other than `medium` when the tooling exposes `reasoning_effort`.
+- Do not let exact-path-only indexing become an implicit proof of global consistency. Exact-path updates are allowed for safety-scoped cycles, but completion claims must state whether global audit was run, deferred, or intentionally skipped.

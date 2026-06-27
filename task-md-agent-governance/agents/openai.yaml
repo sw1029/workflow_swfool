@@ -1,0 +1,4 @@
+interface:
+  display_name: "Task.md Agent Governance"
+  short_description: "Implement task.md under authority policy"
+  default_prompt: "Use $task-md-agent-governance to implement task.md with code-writing workers on gpt-5.5 (reasoning_effort medium by default, high for high-reliability core logic), high-reasoning governance/audit, authority-policy and .agent_advice non-GT propagation, schema/authority/advice compliance audit, and miss records under .task/task_miss."

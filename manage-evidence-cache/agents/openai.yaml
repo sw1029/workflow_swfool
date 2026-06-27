@@ -1,0 +1,4 @@
+interface:
+  display_name: "Manage Evidence Cache"
+  short_description: "Fingerprint and classify reusable evidence"
+  default_prompt: "Use $manage-evidence-cache to classify prior evidence as reusable, stale, fresh-required, or unsafe."

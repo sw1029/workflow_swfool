@@ -1,0 +1,4 @@
+interface:
+  display_name: "Repo Change Commit"
+  short_description: "Review repo state, goal gates, gitignore noise, and commit"
+  default_prompt: "Use $repo-change-commit with fixed reasoning_effort low; when called from $orchestrate-task-cycle, consume references/workflow-routing.md context to review repo status, account for validation/progress/issue/goal context, classify changes, validate commit readiness, and make a scoped commit."

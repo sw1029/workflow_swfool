@@ -1,0 +1,181 @@
+# Workflow Routing Reference
+
+This is the canonical routing reference for `$orchestrate-task-cycle`. It is a skill-internal operating document, not workspace goal truth.
+
+For durable artifact contracts, use [cycle-artifacts.md](cycle-artifacts.md). For optional long-range task queues, use [task-pack-workflow.md](task-pack-workflow.md). The full phase order is fixed as:
+
+```text
+context -> ledger_init -> authority -> acceptance -> route_plan -> validation_set_plan -> governance -> result_contract -> ledger_append -> code_structure_audit -> run -> qualitative_review -> loopback_audit -> validation_set_build -> schema_pre_derive -> visible_increment -> derive -> schema_post_derive -> index -> validate -> issue -> commit -> dashboard -> report -> closeout_commit
+```
+
+## Goal Truth Inputs
+
+Use only the existing workspace `.agent_goal/` files as long-term goal truth:
+
+- `.agent_goal/final_goal.md`
+- `.agent_goal/conventions.md`
+- `.agent_goal/goal_architecture.md`
+- `.agent_goal/goal_theory.md`
+- `.agent_goal/goal_schema_contract.md`
+- `.agent_goal/agent_authority.md`
+
+Do not create a new long-term GT document for routing. When a GT file is absent, report it as absent or use the owning skill's documented fallback. Do not infer permissions, API/network authority, or broader direction freedom from missing GT.
+
+## Non-GT Direction Advice
+
+Use `.agent_advice/active/*.md` as non-GT direction evidence when present. Advice can influence task direction, design choices, derivation, governance, and validation, but it must be listed as `used_advice` and must never appear in `used_goal_truth` or the final report's `기준 GT` field. Use `$manage-external-advice` to intake, normalize, render, apply, reject, or retire advice.
+
+Rendered subskill packets must carry enough advice substance for downstream agents to act without reopening raw advice blindly: advice ID/path, summary, actionable directives, application gates, and, when present, evidence-to-apply notes and exclusions. If active advice exists, governance, derivation, and validation results must either list `used_advice` or record an explicit advice defer/reject/not-applicable rationale; omission is a transition blocker, not a silent warning.
+
+Active/adopted advice files used by a cycle are tracked workflow evidence by default. Mark advice `local_only` only for sensitive or explicitly external-only material, and carry that reason into report and commit packets.
+
+## Goal Portfolio Inputs
+
+Before the `derive` phase, pass a compact portfolio planning packet to `$derive-improvement-task`. It should classify how the just-finished cycle relates to the long-term goal rather than only following the nearest failure artifact.
+
+Required fields:
+
+- `goal_delta`: final-goal axes, current-task axes, goal-alignment gap, no-claim boundaries, and safe retarget options.
+- `blocker_taxonomy`: one or more of `provider_runtime_blocker`, `output_artifact_blocker`, `kg_core_blocker`, `claim_readiness_blocker`, `rights_blocker`, `task_state_blocker`, `quality_blocker`, or `workflow_lifecycle_blocker`.
+- `portfolio_candidates`: candidate next tasks with blocker class, goal fit, provider dependency, parallel feasibility, expected artifact, validation profile, and no-overclaim notes.
+- `provider_dependency`: `none`, `optional`, `bounded`, or `required` for each candidate.
+- `parallel_subwork`: read-only or disjoint-write sub-work packages that can execute under one canonical active task.
+- `advice_disposition`: `not_applicable`, `deferred`, `partially_applied_as_guard`, `accepted_as_design_candidate`, `incorporated_into_task`, `implemented_in_schema`, `rejected`, or `retired_or_superseded`.
+- `qualitative_review_packet`: `review_status`, `quality_verdict`, reviewed artifacts, key findings, blocker taxonomy deltas, direction recommendations, semantic readiness/cap fields, no-overclaim flags, and evidence paths from `$review-cycle-output-quality` when the cycle produced reviewable outputs.
+- `anti_loop_progress_gate`: `family_key`, `changed_vs_previous`, `semantic_progress`, `authoritative_semantic_progress` when present, `same_family_micro_hardening_count`, `effective_allowed_dispositions`, `disposition_intersection_basis`, `consolidation_streak`, quality vector, provider/env behavior scalars, disposition, hard-stop state, findings, and evidence paths from `$audit-cycle-loopback`.
+- `validation_set_packet`: `validation_set_need`, `validation_set_status`, `quality_tier`, `not_gold`, validation-set ID, item/label/oracle counts, source-class distribution, oracle/split/leakage/root paths, sealed holdout status, and blocked/candidate-only reasons from `$build-validation-set-with-agents` when validation assets are relevant.
+- `output_delta_packet`: output-delta contract path/status, repository-declared output layer paths, previous/current fingerprints, `changed_vs_previous`, `semantic_progress`, `produced_domain_delta`, `metadata_only`, `effective_progress_kind`, scalar counts, evidence paths, and skipped/blocked reason when a repo contract is available.
+- `failure_autopsy_packet`: safe scalar failure diagnostics such as `error_type`, `exception_class`, `traceback_last_frame`, `http_status`, `missing_env_key_names`, `provider_request_count`, `provider_status`, `failure_class`, `provider_response_empty`, and `provider_response_parse_failed` when execution fails.
+- `task_pack_packet`: active pack ID/path/status, Markdown render path, current item ID/order/status, planned item count, pack-level goal, mutation log summary, terminal blocker state, and selected disposition: `promote_next_item`, `insert_item`, `reorder_items`, `supersede_pack`, `derive_standalone`, or `terminal_blocked`.
+- `gt_constraint_conflict_packet`: deterministic task-vs-GT contradiction output from `scripts/detect_gt_constraint_conflict.py`, including `conflicts`, behavior booleans such as `provider_request_count` and `env_file_read`, `requires_conflict_resolution_task`, and `evidence_paths`.
+- `loop_breaker_packet`: normalized blocker signature, additive semantic signature, suffix-normalized `root_key`, stable `root_axis` counts, recent same-root-key/signature/semantic-family counts, compared cycle IDs, positive input delta status, newly introduced input kinds, `has_supplied_input_delta`, `supplied_input_artifact_paths`, provider re-attempt and mitigation gate status, command-surface budget status, sealed-family matches, zero-viable-candidate state, `autonomous_retarget_disabled`, and terminal blocker recommendation.
+- `goal_distance_gate`: `cycles_since_goal_productive_output`, `goal_productive_this_cycle`, `governance_only_streak`, threshold used, and whether derive must select `goal_productive` work or record `terminal_blocked`.
+- `anti_loop_progress_gate`: repeated artifact family, same-family micro-hardening count, provider/env behavior booleans, semantic-output stagnation, qualitative progress cap, command-surface hard-stop state, and effective allowed next dispositions from [anti-loop-progress-gates.md](anti-loop-progress-gates.md).
+
+Use provider-dependent work as an optional producer when provider-neutral KG/core/evidence/feature/commitment/claim/rights/quality work can safely advance without live calls or raw body inspection. Keep one canonical active `task.md`; do not create multiple active tasks for parallelism. Serialize writes to `task.md`, `.task/index.*`, `.schema/index.md`, `.schema/contracts.jsonl`, `.issue/`, and Git staging.
+
+When a task pack exists under `.task/task_pack/`, keep that same one-active-task rule. A pack item becomes executable only after `$derive-improvement-task` promotes it into `task.md`. Late-cycle insertion or reordering is allowed only with new evidence, repeated blocker signatures, missing supplied positive input delta, or terminal blocker evidence.
+
+## Canonical Routing
+
+| Phase | Owning skill | Packet target | Routing | Required context | Hard gate |
+| --- | --- | --- | --- | --- | --- |
+| Collect context | `$orchestrate-task-cycle` | `report` or `governance` | Deterministic helper scripts | `task.md`, `.agent_goal/`, `.agent_advice/`, `.task/`, `.issue/`, `.agent_log/`, `.schema/`, `.contract/`, optional Git state | `available_goal_truth` and `used_goal_truth` must stay separate; final `기준 GT` may list only actually used GT. |
+| Initialize ledger | `$maintain-cycle-ledger` | `report` | Deterministic ledger helper | `.task/cycle/<cycle-id>/stage.jsonl`, `current_stage.json`, `packets/` | Stage events are append-only workflow state. |
+| Resolve authority | `$manage-agent-authority` | `governance` | Owning skill policy | `.agent_goal/agent_authority.md` or fallback context | Authority policy must be resolved or the `default_current_agent_permissions` fallback must be named before implementation, derivation, validation, or reporting. |
+| Normalize acceptance/demo | `$normalize-acceptance-and-demo` | `governance` | Summary-level workflow artifact | Current `task.md`, authority policy, advice packet, schema/contract summaries | Missing acceptance criteria become assumptions or blockers, not hidden scope expansion. |
+| Route plan | `$orchestrate-task-cycle` | `validation_set_plan` or `governance` | Summary-level deterministic classification | Current task, acceptance, authority, GT/advice packets, schema/contracts, issues, task_miss, `.validation/` inventory | Classify whether validation assets are `not_applicable`, `plan`, `build`, `refresh`, `consume`, or `blocked_or_candidate_only`; skipped paths require reasons. |
+| Plan validation-set assets | `$build-validation-set-with-agents` | `validation_set_plan` | Planning agents may use `reasoning_effort: xhigh`; implementation edits forbidden | Task expectations, authority policy, GT files, enriched active advice, schema/contract context, validation gaps, existing `.validation/` inventory, source-class/no-overclaim policy | Produce only public criteria, failure taxonomy, oracle/split/leakage/label-visibility policy, and source boundary; do not expose sealed holdout labels or edit code. Active advice must be used or explicitly disposed. |
+| Implement and audit current task | `$task-md-agent-governance` | `governance` | Code analysis at least `high`; important review `xhigh`; code-writing workers `model: gpt-5.5` with `reasoning_effort: medium` by default, `high` for high-reliability core logic | Current `task.md`, authority policy, GT files, enriched active advice, schema/contract context, ID context | No behavior-changing repository edit may bypass this phase; active advice must be reported as used or explicitly deferred/rejected/not applicable. |
+| Validate governance result contract | `$validate-subskill-result-contract` | `governance` | Deterministic result-contract helper; default `warn` | Governance result JSON/summary | Missing required fields must be warned or blocked before the cycle advances. |
+| Append stage evidence | `$maintain-cycle-ledger` | `report` | Append-only ledger event | Governance result, contract result, packets | Do not overwrite prior events; append corrective events. |
+| Audit generated code structure | `$orchestrate-task-cycle` deterministic helper, with `$task-md-agent-governance` owning any later refactor | `code_structure_audit` | Read-only helper; use `scripts/code_structure_audit.py`; see [code-structure-audit.md](code-structure-audit.md) | Governance changed-file list, changed source files, task/module context, exemptions for generated/vendor/migration files | Must not patch implementation code. `refactor_required` forces derive/validation to carry moduleization work unless an existing-debt exemption or bounded split plan exists. `blocked` may stop pre-run only for unsafe generated code or missing split evidence. |
+| Execute and log | `$run-task-code-and-log` | `run` | Follow task-declared command and validation profile | Governance summary, execution command, prerequisite manifest/hash evidence, long-running authorization if any | `running` is not success unless startup/heartbeat evidence is explicitly sufficient for the task. |
+| Direct qualitative output review | `$review-cycle-output-quality` | `qualitative_review` | Exactly one read-only reviewer agent; `reasoning_effort: xhigh` when available | Run result, generated output artifact paths, task expectations, authority/no-overclaim policy, enriched active advice, schema/contract summaries, output-delta contract when available | The reviewer may inspect outputs directly but may not edit files; result must report `review_agent_count: 1`, qualitative findings, recommendations, evidence paths, output-delta status/produced-domain-delta/metadata-only/effective-progress-kind when applicable, and advice usage or disposition. |
+| Anti-loop progress audit | `$audit-cycle-loopback` | `loopback_audit` | Deterministic producer first; optional one read-only reviewer when insufficient or near threshold | Raw artifact paths, run/review scalar evidence, artifact family, semantic signature, provider/env behavior, family progress registry, loop-detection gates, output-delta packet, strict runner validation when available | Must emit `anti_loop_progress_gate`; missing/malformed artifacts fail closed as `conservative_hold`; self-declared `produced_domain_delta` and non-empty rows are not truth; `effective_allowed_dispositions` is the downstream disposition constraint. |
+| Build, refresh, or consume validation-set assets | `$build-validation-set-with-agents` | `validation_set_build` | Deterministic scripts and executable oracles first; semantic labeler/adjudicator agents may use `xhigh`; implementation edits forbidden | Validation-set plan or build-only rationale, run evidence, qualitative review findings, source locators/hashes/source_class policy, authority/no-overclaim policy, schema contracts, active advice disposition | Write reusable assets under `.validation/sets/` or candidates under `.validation/candidates/`, cycle-local evidence under `.task/validation_set/`; block raw body persistence, fixture/metadata promotion, unsupported gold claims, and sealed holdout label exposure. |
+| Refresh schema contracts before next task | `$manage-schema-contracts` | `schema_pre_derive` | Schema/contract review uses the owning skill's policy; code-analysis subskills at least `high`, important review `xhigh` | Implementation/execution evidence, qualitative review result when available, `.agent_goal/goal_schema_contract.md`, `.schema/`, `.contract/` | Schema refresh may not patch implementation code; skipped refresh requires a reason. |
+| Record visible increment | `$record-visible-increment` | `derive` | Deterministic delta artifact | Completed implementation/run/qualitative/schema evidence | Must set `not_validation_evidence: true`; cannot replace validation evidence. |
+| Derive next task | `$derive-improvement-task` | `derive` | Fixed `reasoning_effort: xhigh` for goal/convention alignment, issue-fit, task_miss, improvement, synthesis, schema-planning, and ID-consistency agents | Completed task evidence, qualitative review packet, anti-loop progress gate, output-delta packet, failure-autopsy packet, authority policy, GT files, enriched active advice, task_miss, issues, candidates, active task pack summary, schema/contract context, GT/task conflict packet, progress-loop detection with `root_key`, `semantic_signature`, and `root_axis`, supplied-input delta gate, provider re-attempt/mitigation gate, command-surface budget, goal-distance gate, goal portfolio packet | Must archive previous `task.md` as `past_task` before replacement unless in `initial_init` mode; selected task or retained candidates must record active advice, qualitative review disposition, `progress_kind`, effective progress kind when output-delta overrides it, and `semantic_signature`; metadata-only work cannot be goal-productive without independent validated positive evidence. If a task constraint contradicts GT, select conflict-resolution, goal-productive contradiction removal, or user escalation/terminal state. If provider mitigation is unexhausted and retry is authorized, must select bounded retry/probe instead of terminal seal; if retry is unauthorized, terminal/user escalation must name the authority blocker. If command-surface budget is exceeded, must register/select consolidation unless strict changed-and-semantic evidence exists or terminal. If anti-loop hard stop or same-family micro-hardening threshold is active, another same-family micro-hardening task is invalid. If root-axis/root-key hard stop is active, another governance-only retarget is invalid. If active pack exists, must promote, insert, reorder, supersede, derive standalone with rationale, or record `terminal_blocked`. |
+| Reconcile schema contracts after derivation | `$manage-schema-contracts` | `schema_post_derive` | Same schema/contract routing as above | New `task.md`, retained candidates, schema/contract planning evidence | Planned contract work is documentation only; implementation waits for the next governance phase. |
+| Index artifacts | `$manage-task-state-index` | `index` | Fixed `reasoning_effort: medium` | Current task, past_task, candidates, misses, logs, validation, issues, schema/contract artifacts, cycle ledger | High-severity ID inconsistencies block deletion, cleanup, issue closure, and final completion claims. |
+| Validate completion | `$validate-task-completion` | `validate` | Repository and OOM audits as important review `xhigh`; ID-only correction fixed `medium` | Past/current task links, execution logs, task_miss, issue state, advice state, schema/contract state, environment evidence, goal portfolio expectations | Must return `validation_verdict`, `progress_verdict`, and goal-relevant `progress_axes` when available; do not treat provider-only or `safety_only` progress as KG/ZKP/rights/gold progress; active advice requires `used_advice` or explicit disposition rationale. |
+| Track issues | `$manage-implementation-issues` | `issue` | Issue analysis follows its owning skill; code-analysis subskills at least `high` when used | Validation result, blockers, run/log/miss evidence, active or next task | Issue lifecycle changes require execution or validation evidence; issue tracking does not patch code; skipped issue tracking requires a reason. |
+| Finalize implementation Git state | `$repo-change-commit` | `commit` | Fixed `reasoning_effort: low` | Validation verdict, progress verdict, changed files, blockers, issue IDs, schema status, advice status | Do not commit before validation and issue tracking. Use `commit_role: implementation`; partial verdicts require explicit checkpoint intent. |
+| Render dashboard/profile | `$render-cycle-dashboard`, `$profile-cycle-efficiency` | `report` | Deterministic dashboard/profile helpers | Cycle ledger, validation, issue, commit evidence | Write dashboard Markdown in Korean while preserving canonical step/status tokens; do not hide failed, partial, skipped, or running stages. |
+| Report cycle result | `$orchestrate-task-cycle` | `report` | Korean summary; preserve exact paths, commands, IDs, hashes | Outputs from all prior phases and implementation commit result if any | Use `references/cycle-report-template.md` field order. |
+| Finalize closeout Git state | `$repo-change-commit` | `closeout_commit` | Fixed `reasoning_effort: low` | Rendered report/dashboard, stage ledger/current_stage, commit-result, used advice files, local-only reasons | Use `commit_role: closeout`; do not backfill the closeout hash into a report committed by the same closeout commit. |
+
+## Worker Model Canonicalization
+
+The canonical code-writing worker route is:
+
+```text
+agent_type: worker
+model: gpt-5.5
+reasoning_effort: medium
+```
+
+Use `reasoning_effort: high` on `gpt-5.5` for high-reliability core logic, including schema/contract compatibility logic, task/index/issue lifecycle mutation, validation gates, security-sensitive behavior, irreversible workflow decisions, or code whose regression could corrupt durable artifacts.
+
+Any reference to the legacy Spark worker model, "Spark workers", or inherited worker routing is stale unless it is explicitly identified as historical context. Update the packet or prompt before delegating code-writing work.
+
+## Helper Script Hooks
+
+Use the helper scripts in this skill to make routing evidence explicit:
+
+- `scripts/collect_cycle_context.py --root . --include-git`: collect compact JSON inventory for `task.md`, `.agent_goal`, `.agent_advice`, `.task`, `.issue`, `.agent_log`, `.schema`, `.contract`, validation, and Git state.
+- `scripts/cycle_ledger.py --root . init|append|render|current`: maintain `.task/cycle/<cycle-id>/stage.jsonl`, `current_stage.json`, `packets/`, `dashboard.md`, and report-support summaries.
+- `scripts/cycle_ledger.py` writes canonical workflow-stage statuses. It normalizes an appended stage `success` or `succeeded` to `complete` and preserves the original in `source_status`; owning skill result statuses remain in result packets.
+- `scripts/render_subskill_packet.py --target governance|validation_set_plan|code_structure_audit|run|qualitative_review|loopback_audit|validation_set_build|schema_pre_derive|derive|schema_post_derive|index|validate|issue|commit|report|closeout_commit`: render the Markdown or JSON packet to pass to the next owning skill, including separate `available_goal_truth`, `used_goal_truth`, and enriched `used_advice` lists with advice ID/path, summary, actionable directives, and application gates.
+- `scripts/code_structure_audit.py --root . --file <path>` or `--input-json <governance-result.json>`: scan changed source files for size and responsibility-boundary risk. It emits only scalar/code-symbol evidence and suggested split metadata; it does not persist source bodies or patch files.
+- `scripts/task_pack_queue.py --root . status|validate|render|next`: inspect and render optional `.task/task_pack` queues. The JSON queue is authoritative and the Markdown render is for the user's language.
+- `scripts/result_contract.py --target <target>`: validate subskill result fields; default to `warn`, use `block` for final report, running-state, issue closure, candidate deletion, and commit gates.
+- `scripts/changed_surface.py` and `scripts/validation_scope.py`: classify changed surfaces and write validation-scope manifests.
+- `scripts/evidence_cache.py`: fingerprint evidence and classify candidates as `reuse`, `fresh_required`, `stale`, or `unsafe_to_reuse`; never auto-pass validation.
+- `scripts/visible_increment.py`: write `.task/delta/<cycle-id>-visible-delta.{md,json}` with `not_validation_evidence: true` for CLI/API/workflow artifact deltas.
+- `scripts/validate_cycle_transition.py --transition <name>`: validate ordering, authority/GT propagation, advice non-GT propagation, running-state handling, derive/schema/issue/commit skipped reasons, stale worker model references, and required GT/advice usage lists.
+- `scripts/detect_gt_constraint_conflict.py --root .`: detect when `task.md` forbids a canonical action that `.agent_goal/agent_authority.md` or `.agent_goal/conventions.md` allows or requires, such as runtime `.env` credential reads or bounded OpenAI retry/probe before provider terminal sealing.
+- `scripts/detect_progress_loop.py --root .`: detect repeated `safety_only`, unchanged blocker, normalized blocker signatures, additive semantic signatures, stable root-axis repeats, sealed semantic-family matches, missing supplied input deltas, provider re-attempt requirements, command-surface budget excess, autonomous-retarget hard stops, governance-only streaks, stale goal-productive output distance, zero viable candidate states, and no-live micro-contract loops before next-task derivation, prioritizing cycle ledger, task index, structured validation, active issue/miss evidence, and using regex only as low-confidence fallback.
+- `scripts/render_cycle_dashboard.py` and `scripts/profile_cycle_efficiency.py`: render dashboard and efficiency profile from ledger evidence.
+- `scripts/monitor_running_execution.py`: verify long-running execution details without treating `running` as success.
+- `scripts/assemble_cycle_report.py`: assemble a Korean report draft in the required field order and flag missing report evidence.
+
+Scripts are judgment aids. They do not replace the owning skills' responsibility for implementation, validation verdicts, issue lifecycle, schema reconciliation, or Git commits.
+
+## Transition Rules
+
+- `authority_policy` must be present in governance, derivation, validation, and final-report packets. It may be `.agent_goal/agent_authority.md` or `default_current_agent_permissions`.
+- The packet's `used_goal_truth` list must name every `.agent_goal/` GT file actually used. If no GT files exist, use `없음` in final reporting.
+- The packet's `used_advice` list must name active `.agent_advice/active` files when present and include their normalized summary/directives/gates when available. If no active advice exists, report `없음` under `비-GT 방향성 문서`.
+- Governance, derivation, and validation stage results with active advice in scope must include `used_advice` or one of `advice_deferred_reason`, `advice_rejected_reason`, `advice_not_applicable_reason`, or `advice_handling_rationale`.
+- If advice was applied, rejected, or deferred during the cycle, `$manage-external-advice` must leave an indexed lifecycle record and, for applied advice, a `past_advice` log.
+- Used active/adopted advice files must be staged in the implementation or closeout commit unless a `local_only` reason is recorded.
+- Ledger stage `status` must use lifecycle vocabulary such as `complete`, `partial`, `skipped`, `not_applicable`, `blocked`, or `failed`. Do not write an execution result `success` as the lifecycle status; preserve it in the run result and let `cycle_ledger.py` normalize accidental stage `success` to `complete`.
+- `code_structure_audit` must run after governance evidence exists and before execution unless the cycle is explicitly code-free. Skipped/not-applicable structure audits require a concrete reason.
+- `code_structure_audit` is not a refactoring step. It may recommend `moduleization_required`, but module creation, file moves, API compatibility shims, and test rewrites must be routed through `$task-md-agent-governance`.
+- A `refactor_required` structure audit result should not block smoke execution by itself, but it must be carried into `$derive-improvement-task`, `$validate-task-completion`, issue tracking, and the final report. Use `blocked` only when the generated code is unsafe to execute or the required split plan is absent for a hard-threshold violation.
+- A `$run-task-code-and-log` result of `running` is valid in-progress evidence only when PID/session/job ID, log path, startup or heartbeat evidence, monitor command, stop command, and remaining validation are captured.
+- Do not treat `running` as `success`, `passed`, or `complete` unless task success criteria explicitly say startup/heartbeat evidence is sufficient.
+- `$review-cycle-output-quality` must use exactly one read-only reviewer agent. If no reviewable output exists, content access is forbidden, or reviewer delegation is unavailable, record a concrete blocked/not-applicable reason instead of fabricating qualitative evidence.
+- `$build-validation-set-with-agents` must preserve source class, avoid raw body persistence, keep reusable assets under `.validation/`, and record `not_gold` unless human-reviewed or fully deterministic authoritative evidence exists. Skipped, blocked, or candidate-only validation-set stages require concrete reasons.
+- `$repo-change-commit` may run only after `$validate-task-completion` has produced a verdict and `$manage-implementation-issues` has tracked blockers or the next task when applicable.
+- A `partial` validation verdict can produce a checkpoint commit only when the commit intent says `partial/checkpoint`, remaining blockers are named, and the staged files form a coherent change set.
+- A closeout commit may run only after dashboard/report artifacts are rendered; it should include intentional closeout artifacts or record a concrete `commit_skipped_reason`.
+- A skipped schema, issue, commit, derive, or validation-adjacent stage must record a concrete skipped or pending reason in the ledger.
+- `$record-visible-increment` output under `.task/delta/` must include `not_validation_evidence: true`.
+- `$optimize-task-slice` is advisory before `$derive-improvement-task`; it cannot select the final next task or alter fixed `xhigh` derivation routing.
+- If the last two completed tasks are `safety_only` and the same issue blocker remains, `$derive-improvement-task` must supply or validate the missing evidence path, perform a bounded source-backed run/preflight, batch adjacent no-live boundaries, or stop with a concrete blocker.
+- If recent cycles repeat the same normalized `blocker_signature` or the same additive `semantic_signature`, `$derive-improvement-task` must either promote a safe active pack item, insert/reorder the active pack with evidence, supply a positive input delta backed by non-empty artifact path or `produced_domain_delta=true`, select goal-productive work outside the sealed family, or record `terminal_blocked`.
+- If a semantic family is sealed by previous terminal state, non-terminal derivation in that family is blocked until a supplied input delta, authority change, or external-state change exists.
+- If `goal_distance_gate.requires_goal_productive_next` is true or the last two progress-bearing cycles were `governance_only`, `$derive-improvement-task` must select `progress_kind: goal_productive` or record `terminal_blocked`.
+- If output-delta review reports `produced_domain_delta: false`, `changed_vs_previous: false`, `semantic_progress: false`, or `metadata_only: true`, `$derive-improvement-task` must use `effective_progress_kind: governance_only` unless independent validated positive evidence exists. Non-empty counts alone are insufficient for goal-productive progress.
+- If the last two progress-bearing cycles are metadata-only after output-delta review, `$derive-improvement-task` must select `resume_primary_output`, bounded source-backed run/preflight, safe root-cause repair, or `terminal_blocked`.
+- If `gt_constraint_conflict_packet.status=block`, `$derive-improvement-task` must not inherit the contradictory task prohibition. It must select conflict-resolution, goal-productive contradiction removal, or user escalation/terminal state. Detect contradictions from behavior booleans such as provider request counts and env-file reads, not only from task wording.
+- If `root_axis_gate.autonomous_retarget_disabled=true`, `$derive-improvement-task` must select `progress_kind: goal_productive` or record terminal/user-escalation state. A changed `semantic_signature`, version suffix, or task family name alone does not reopen autonomous retargeting when the `root_key` is unchanged.
+- Do not seal a blocker family unless a root-cause/autopsy repair task has been attempted for that family, or the derive result records why root-cause repair is impossible, unauthorized, or unsafe.
+- Do not seal a blocker family when authority permits an unattempted productive alternative path, such as bounded provider retry/probe, source-backed preflight/run, or deterministic provider-neutral quality recovery. A seal must name `authorized_alternative_path`, set `alternative_in_gt_allowed=true`, set `gt_allowed_alternative_attempted=true`, and cite `gt_allowed_alternative_evidence_paths`; a fabricated or non-GT input class is not a valid alternative.
+- If `provider_reattempt_gate.provider_mitigation_required=true`, `$derive-improvement-task` must not terminal-seal provider failure while required mitigations remain missing. If `provider_reattempt_required=true`, it must select a bounded provider retry/probe task and record `provider_reattempt_disposition`; terminal/provider-family sealing is blocked.
+- If `command_surface_budget.consolidation_candidate_required=true` or `hard_gate=true`, `$derive-improvement-task` must register or select a consolidation candidate unless strict changed-and-semantic primary-output evidence already justifies goal-productive work, or the result records terminal/user-escalation state.
+- If `effective_allowed_dispositions` is present, `$derive-improvement-task` must choose a selected disposition inside it. Individual gate `allowed_dispositions` are inputs to an intersection, not independent escape hatches.
+- If the same artifact family has at least three consecutive micro-hardening tasks without provider requests and without semantic-output change, `$derive-improvement-task` must select provider/semantic-output transition, consolidation, supplied-input/domain-delta work, or terminal/user escalation; another same-family micro-hardening task is not goal-productive.
+- Evidence-family next tasks with `positive_input_delta_required: true` must name at least one newly introduced input kind and also provide a supplied positive input delta through non-empty `supplied_input_artifact_paths` or `produced_domain_delta=true`. Without that supplied delta, the derive result is blocked unless it records a terminal blocker or a concrete external handoff.
+- If there are zero viable candidates or pack items, record `terminal_blocked` with required handoff/input/authority details; do not derive another narrowing task.
+- If repeated provider/runtime/output blockers occur and provider-neutral KG/core/evidence/feature/commitment/claim/rights/quality work can safely advance, `$derive-improvement-task` must include a provider-neutral candidate or explicitly explain why every provider-neutral candidate is unsafe, unauthorized, or not useful for the current goal.
+- Validation and reporting should carry `progress_axes` when available. Never infer KG quality, gold readiness, GraphRAG readiness, ZKP readiness, rights readiness, downstream readiness, or final readiness from provider terminal evidence alone.
+- Keep provider/runtime lifecycle schema records separate from long-lived KG data-model contract records. Provider terminal evidence may explain a workflow blocker, but it should not become the only schema-planning axis.
+
+## Prohibited Bypasses
+
+- Do not edit implementation source, tests, notebooks, runtime/build/CI configuration, or behavior-changing scripts outside `$task-md-agent-governance`.
+- Do not use `$run-task-code-and-log`, `$review-cycle-output-quality`, `$manage-schema-contracts`, `$derive-improvement-task`, `$validate-task-completion`, or `$repo-change-commit` as implementation escape hatches.
+- Do not use `code_structure_audit` as an implementation escape hatch; it reports module-boundary risk and split plans only.
+- Do not use `$build-validation-set-with-agents` as an implementation escape hatch or as a substitute for final completion validation.
+- Do not treat agent consensus labels, fixtures, synthetic data, or metadata-only rows as gold, sampled-real positive evidence, or human-reviewed evidence.
+- Do not create new GT files to satisfy routing. Use existing `.agent_goal/*.md` files only.
+- Do not treat `.agent_advice` as GT, authority, or permission evidence.
+- Do not advance governance, derivation, or validation when active advice is omitted without an explicit disposition rationale.
+- Do not downgrade `$derive-improvement-task` agents below fixed `xhigh`.
+- Do not upgrade `$manage-task-state-index` ID-only correction above fixed `medium` because a caller is high/xhigh.
+- Do not upgrade `$repo-change-commit` above fixed `low` because validation or audit was high/xhigh.
+- Do not delete candidates, misses, issues, or logs without the owning skill and ID audit allowing the transition.

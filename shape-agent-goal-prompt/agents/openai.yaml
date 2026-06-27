@@ -1,0 +1,4 @@
+interface:
+  display_name: "Shape Agent Goal Prompt"
+  short_description: "Convert raw prompts to .agent_goal"
+  default_prompt: "Use $shape-agent-goal-prompt to turn a raw prompt into .agent_goal/final_goal.md and conventions.md with critical review."

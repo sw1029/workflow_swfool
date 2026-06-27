@@ -1,0 +1,4 @@
+interface:
+  display_name: "Run Task Code And Log"
+  short_description: "Execute specified code and log results"
+  default_prompt: "Use $run-task-code-and-log to run the specified task or issue-resolution command exactly as instructed, including authorized long-term running jobs, and log the result with $record-agent-work-log."

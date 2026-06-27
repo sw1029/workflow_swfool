@@ -1,0 +1,4 @@
+interface:
+  display_name: "Optimize Task Slice"
+  short_description: "Advise on task slice granularity"
+  default_prompt: "Use $optimize-task-slice to classify whether the next task should be batched, narrowed, or blocked."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Manage External Advice"
+  short_description: "Normalize non-GT advice inputs"
+  default_prompt: "Use $manage-external-advice to intake, normalize, inject, and retire external advice Markdown without treating it as goal truth."

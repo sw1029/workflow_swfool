@@ -1,0 +1,4 @@
+interface:
+  display_name: "Maintain Cycle Ledger"
+  short_description: "Maintain task-cycle stage ledgers"
+  default_prompt: "Use $maintain-cycle-ledger to initialize and append durable task-cycle stage events."

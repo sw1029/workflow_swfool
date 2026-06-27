@@ -1,0 +1,4 @@
+interface:
+  display_name: "Plan Validation Scope"
+  short_description: "Choose current, affected, or full validation"
+  default_prompt: "Use $plan-validation-scope to choose the cheapest valid validation profile for changed surfaces."

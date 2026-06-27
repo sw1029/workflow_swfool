@@ -1,0 +1,4 @@
+interface:
+  display_name: "Manage Agent Goal"
+  short_description: "Maintain .agent_goal files"
+  default_prompt: "Use $manage-agent-goal to create or update .agent_goal/final_goal.md and .agent_goal/conventions.md, treating .agent_advice only as non-GT evidence unless the user explicitly asks to promote supported content."
