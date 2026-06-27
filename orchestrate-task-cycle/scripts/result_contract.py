@@ -137,6 +137,19 @@ COMMON_FIELDS = {
 
 RUNNING_FIELDS = ["pid_or_session", "log_path", "startup_or_heartbeat_evidence", "monitor_command", "stop_command", "remaining_validation"]
 ADVICE_REQUIRED_TARGETS = {"governance", "validation_set_plan", "qualitative_review", "validation_set_build", "derive", "validate"}
+PACK_DISPOSITIONS = {
+    "create_pack",
+    "promote_next_item",
+    "insert_items",
+    "insert_item",
+    "reorder_items",
+    "skip_items",
+    "exclude_items",
+    "supersede_pack",
+    "derive_standalone",
+    "terminal_blocked",
+}
+PACK_MUTATION_DISPOSITIONS = {"create_pack", "insert_items", "insert_item", "reorder_items", "skip_items", "exclude_items", "supersede_pack", "terminal_blocked"}
 
 
 def load_json(path_value: str | None) -> dict[str, Any]:
@@ -220,6 +233,12 @@ def has_value(data: dict[str, Any], field: str) -> bool:
         "task_pack_status": ["task_pack_status", "derive.task_pack_status", "result.task_pack_status", "task_pack.status", "task_pack_packet.status"],
         "task_pack_path": ["task_pack_path", "derive.task_pack_path", "result.task_pack_path", "task_pack.path", "task_pack_packet.path"],
         "task_pack_item_id": ["task_pack_item_id", "promoted_item_id", "derive.task_pack_item_id", "derive.promoted_item_id", "result.task_pack_item_id", "result.promoted_item_id", "task_pack.item_id", "task_pack_packet.current_item_id"],
+        "pack_disposition": ["pack_disposition", "derive.pack_disposition", "result.pack_disposition", "task_pack_packet.pack_disposition", "task_pack.disposition"],
+        "pack_mutation_plan": ["pack_mutation_plan", "derive.pack_mutation_plan", "result.pack_mutation_plan", "task_pack_packet.pack_mutation_plan"],
+        "pack_mutation_log": ["pack_mutation_log", "mutation_log", "task_pack.mutation_log", "task_pack_packet.mutation_log", "result.pack_mutation_log"],
+        "task_pack_render_path": ["task_pack_render_path", "render_path", "task_pack.render_path", "task_pack_packet.render_path", "result.task_pack_render_path"],
+        "skipped_item_ids": ["skipped_item_ids", "exclude_item_ids", "pack_mutation_plan.skipped_item_ids", "pack_mutation_plan.item_ids", "result.skipped_item_ids"],
+        "derive_standalone_rationale": ["derive_standalone_rationale", "pack_bypass_rationale", "result.derive_standalone_rationale"],
         "terminal_blocker": ["terminal_blocker", "derive.terminal_blocker", "result.terminal_blocker", "task_pack.terminal_blocker"],
         "output_delta_status": ["output_delta_status", "output_delta.output_delta_status", "output_delta_gate.output_delta_status", "quality_review.output_delta_status", "qualitative_review.output_delta_status", "result.output_delta.output_delta_status"],
         "produced_domain_delta": ["produced_domain_delta", "output_delta.produced_domain_delta", "output_delta_gate.produced_domain_delta", "quality_review.produced_domain_delta", "qualitative_review.produced_domain_delta", "result.output_delta.produced_domain_delta"],
@@ -646,14 +665,68 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
         if status in {"deferred", "pending", "blocked", "failed"} and not has_value(result, "derive_pending_reason") and not has_value(result, "blockers"):
             add(findings, "block" if mode == "block" else "warn", "derive_pending_reason_missing", "Deferred or blocked derivation requires a pending/blocker reason.")
         selected_source = str(value_for(result, "selected_task_source") or "").lower()
+        pack_disposition = str(
+            first_present(
+                result,
+                [
+                    "pack_disposition",
+                    "derive.pack_disposition",
+                    "result.pack_disposition",
+                    "task_pack_packet.pack_disposition",
+                    "task_pack.disposition",
+                ],
+            )
+            or ""
+        ).lower()
+        pack_scope = task_pack_in_scope(result) or bool(pack_disposition)
         if active_task_pack_present(result) and selected_source != "task_pack" and not has_value(result, "task_pack_status"):
             add(findings, "block" if mode == "block" else "warn", "task_pack_status_missing", "Active task pack in scope requires `task_pack_status` in derive result.")
+        if pack_scope and not pack_disposition:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "pack_disposition_missing",
+                "`derive` with task-pack scope requires exactly one `pack_disposition`.",
+                {"allowed": sorted(PACK_DISPOSITIONS)},
+            )
+        if pack_disposition and pack_disposition not in PACK_DISPOSITIONS:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "pack_disposition_invalid",
+                "`pack_disposition` is not an allowed task-pack transaction.",
+                {"pack_disposition": pack_disposition, "allowed": sorted(PACK_DISPOSITIONS)},
+            )
         if selected_source and selected_source not in {"task_pack", "candidate_task", "standalone", "terminal_blocked"}:
             add(findings, "warn", "selected_task_source_invalid", "`selected_task_source` should be task_pack, candidate_task, standalone, or terminal_blocked.", {"selected_task_source": selected_source})
         if selected_source == "task_pack":
             require_context_field("task_pack_status", "task_pack_status_missing", "`selected_task_source: task_pack` requires `task_pack_status`.")
             require_context_field("task_pack_path", "task_pack_path_missing", "`selected_task_source: task_pack` requires `task_pack_path`.")
             require_context_field("task_pack_item_id", "task_pack_item_id_missing", "`selected_task_source: task_pack` requires `task_pack_item_id` or `promoted_item_id`.")
+            require_context_field("pack_disposition", "pack_disposition_missing", "`selected_task_source: task_pack` requires `pack_disposition`.")
+        if pack_disposition in PACK_MUTATION_DISPOSITIONS:
+            require_context_field("pack_mutation_plan", "pack_mutation_plan_missing", "Pack mutation dispositions require `pack_mutation_plan`.")
+            require_context_field("task_pack_path", "task_pack_path_missing", "Pack mutation dispositions require `task_pack_path`.")
+            require_context_field("task_pack_render_path", "task_pack_render_path_missing", "Pack mutation dispositions require a refreshed Markdown render path.")
+            if not has_value(result, "pack_mutation_log") and not has_value(result, "pack_mutation_plan"):
+                add(
+                    findings,
+                    "block" if mode == "block" else "warn",
+                    "pack_mutation_evidence_missing",
+                    "Pack mutation dispositions should carry mutation-log evidence or a durable mutation plan.",
+                )
+        if pack_disposition in {"skip_items", "exclude_items"}:
+            require_context_field("skipped_item_ids", "skipped_item_ids_missing", "Skipping/excluding pack items requires `skipped_item_ids` or `exclude_item_ids`.")
+        if pack_disposition == "derive_standalone":
+            require_context_field("derive_standalone_rationale", "derive_standalone_rationale_missing", "`derive_standalone` with an active pack requires a rationale.")
+        if pack_disposition == "terminal_blocked" and selected_source not in {"", "terminal_blocked"}:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "pack_terminal_selected_source_mismatch",
+                "`pack_disposition: terminal_blocked` should use `selected_task_source: terminal_blocked`.",
+                {"selected_task_source": selected_source},
+            )
         if selected_source == "terminal_blocked" and not has_value(result, "terminal_blocker"):
             add(findings, "block", "terminal_blocker_missing", "`selected_task_source: terminal_blocked` requires `terminal_blocker`.")
         if selected_source == "terminal_blocked" and not has_value(result, "semantic_signature"):

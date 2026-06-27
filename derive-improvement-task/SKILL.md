@@ -1,6 +1,6 @@
 ---
 name: derive-improvement-task
-description: "Derive the next actionable `task.md` from agent-based repository analysis with fixed `reasoning_effort: xhigh` for improvement, issue-fit, task_miss, synthesis, schema-planning, and ID-consistency agents. Use when Codex should combine `.agent_goal` alignment, `$manage-agent-authority`, active `.agent_advice` non-GT direction, `.issue`, `.task/task_miss`, `.task/candidate_task`, and optional `.task/task_pack` queues; create an initial task when absent; promote one active task-pack item into `task.md`; archive the old task as `past_task`; write the new task with a top execution-environment section; retain candidates; update task packs for insert/reorder/terminal blocker state; and delete applied candidates only after the real task is written."
+description: "Derive the next actionable `task.md` or bounded task-pack transaction from agent-based repository analysis with fixed `reasoning_effort: xhigh` for improvement, issue-fit, task_miss, synthesis, schema-planning, and ID-consistency agents. Use when Codex should combine `.agent_goal` alignment, `$manage-agent-authority`, active `.agent_advice` non-GT direction, `.issue`, `.task/task_miss`, `.task/candidate_task`, and optional `.task/task_pack` queues; create an initial task when absent; create a bounded task pack when long-range ordering prevents myopic loops; promote one active task-pack item into `task.md`; archive the old task as `past_task`; write the new task with a top execution-environment section; retain candidates; update task packs for insert/reorder/skip/supersede/terminal blocker state; and delete applied candidates only after the real task is written."
 ---
 
 # Derive Improvement Task
@@ -9,7 +9,7 @@ description: "Derive the next actionable `task.md` from agent-based repository a
 
 Use this skill to turn current goal context, repository evidence, previous misses, and candidate ideas into the next concrete `task.md`.
 
-When long-range ordering is needed, this skill may also create or update a task pack under `.task/task_pack/`. The pack is planning state only; the final executable output remains one active `task.md`.
+When long-range ordering is needed, this skill may also create or update a task pack under `.task/task_pack/`. The pack is planning state only; the final executable output remains one active `task.md`. Treat pack updates as a transaction: choose exactly one `pack_disposition`, mutate the JSON queue with evidence, refresh the Markdown render, and promote at most one item into `task.md`.
 
 The workflow is intentionally agent-heavy: use `$inspect-repo-with-agents` for critical goal/convention-alignment analysis, agent-based `.task/task_miss` analysis, one issue goal-fit agent from `$manage-implementation-issues`, three parallel improvement-analysis agents, one synthesis agent, and `$record-agent-work-log` to preserve the previous `task.md` as `past_task` before replacing it.
 
@@ -35,7 +35,8 @@ Keep task derivation conservative, but avoid selecting another task whose main e
 - Merge adjacent no-live micro-contracts when they share the same target script/module, issue blocker, prerequisite chain, promotion boundary, and validation surface. A merged task may still be narrow, but it should close a coherent boundary as one cycle.
 - Classify recent completed tasks by progress, not only validation. Use `advanced` when the task unlocked a new execution or goal state, `safety_only` when it only proved fail-closed/no-live safety, `no_progress` when it added no meaningful blocker movement, and `regressed` when it weakened or broke a required state.
 - If the last two completed tasks are `safety_only` and the same blocker remains open, the selected next task must supply or validate the missing evidence path, perform a bounded source-backed run/preflight, consolidate remaining no-live boundaries into one batch task, or explicitly stop with a blocker explaining the missing external input or authorization.
-- If an active task pack exists, consider the next pack item before standalone candidates. Promote it unless current evidence requires insertion, reordering, superseding, or terminal blocking.
+- If no active task pack exists and a known 2-5 step sequence would prevent repeated myopic derivation, create a bounded pack and promote only the first safe item into `task.md`.
+- If an active task pack exists, consider the next pack item before standalone candidates. Promote it unless current evidence requires insertion, reordering, skipping/excluding, superseding, standalone bypass, or terminal blocking.
 - If recent evidence repeats the same normalized blocker signature, do not select another narrowing or handoff task unless a new input kind, authority change, external-state change, or safe pack item changes the blocker state.
 - If recent evidence repeats the same suffix-normalized `root_key` or `semantic_signature`, treat it as the same blocker family even when target-surface, run directory, timestamp, `after-*`, date, sequence, or `vN` suffixes changed. Do not select another non-terminal task in a sealed semantic family without a supplied input artifact/domain delta, authority change, or external-state change.
 - If the caller supplies `feature_symbol_gate`, use it as the observed-over-declared loop signal. Treat repeated symbols with `observed_output_class` of `metadata_only` or `terminal_record` as the same workflow attempt even when labels, task names, run directories, signatures, or version suffixes changed.
@@ -137,10 +138,10 @@ Keep task derivation conservative, but avoid selecting another task whose main e
    - Keep unapplied candidates in `.task/candidate_task/` and update or create candidate files for good but unselected proposals.
 
 5. Explore `.task/task_pack/`.
-   - If no active pack exists, agents may propose a new pack only when a sequence of 2-5 ordered tasks is necessary to avoid repeated myopic derivation. Otherwise derive a single standalone task.
+   - If no active pack exists, agents may propose `pack_disposition: create_pack` only when a sequence of 2-5 ordered tasks is necessary to avoid repeated myopic derivation. Otherwise derive a single standalone task.
    - If an active pack exists, classify the next item as `promote_now`, `blocked`, `obsolete`, `needs_insert_before`, `needs_reorder`, `superseded`, or `terminal_blocked`.
    - Do not create multiple active packs. Supersede the old pack before activating a replacement.
-   - Treat pack insertion/reordering as workflow-state mutation that must cite new evidence, repeated blocker signature, missing positive input delta, provider-neutral retargeting, or terminal blocker state.
+   - Treat pack creation, insertion, reordering, skipping/exclusion, supersession, and terminal blocking as workflow-state mutations that must cite new evidence, repeated blocker signature, missing positive input delta, provider-neutral retargeting, dependency repair, user-supplied exclusion direction, or terminal blocker state.
    - Keep `.task/task_pack/*.json` canonical and refresh the user-language Markdown render after any pack change.
 
 6. Analyze implementation issues with one issue goal-fit agent.
@@ -170,7 +171,7 @@ Keep task derivation conservative, but avoid selecting another task whose main e
    - Each agent must receive the issue goal-fit report and explain whether any issue should drive, constrain, or be ignored by its proposals.
    - Each agent must identify whether its proposal changes any `.schema` or `.contract` contract and whether `$manage-schema-contracts` should update versions, target modules/scripts, minimum fields, mandatory rules, or causal links required by `.agent_goal/goal_schema_contract.md`.
    - Each agent must explain how active advice affects the proposal: `incorporate`, `defer`, `reject`, or `not_applicable`, with conflict evidence when relevant.
-   - Each agent must explain whether the proposal should be standalone, promoted from the active task pack, inserted into the task pack, or used to terminal-block/supersede the pack.
+   - Each agent must explain whether the proposal should be standalone, used to create a bounded pack, promoted from the active task pack, inserted/reordered/skipped inside the task pack, or used to terminal-block/supersede the pack.
    - Use [agent-prompts.md](references/agent-prompts.md).
    - If ID context exists and the workflow authorizes agents, spawn one separate read-only ID consistency agent. It is not one of the three improvement-analysis agents and must only analyze task-state IDs, lifecycle transitions, and candidate/miss/log link integrity.
    - Spawn the separate ID consistency agent with fixed `reasoning_effort: xhigh`.
@@ -180,7 +181,8 @@ Keep task derivation conservative, but avoid selecting another task whose main e
    - Spawn one synthesis agent after the three improvement agents return.
    - Spawn the synthesis agent with fixed `reasoning_effort: xhigh`.
    - The synthesis agent must select one final improvement to become `task.md`, or write a terminal blocker result when no viable task or pack item remains.
-   - If an active task pack exists, the synthesis agent must choose exactly one pack disposition: `promote_next_item`, `insert_item`, `reorder_items`, `supersede_pack`, `derive_standalone`, or `terminal_blocked`.
+   - The synthesis agent must choose exactly one pack disposition when a pack is in scope: `create_pack`, `promote_next_item`, `insert_items`, `reorder_items`, `skip_items`, `supersede_pack`, `derive_standalone`, or `terminal_blocked`.
+   - For `insert_items`, `reorder_items`, `skip_items`, `supersede_pack`, `create_pack`, or `terminal_blocked`, it must emit a `pack_mutation_plan` with `action`, `reason`, `evidence_paths`, `pack_path` when mutating an existing pack, changed item IDs, `before_order` and `after_order` when order changes, and `terminal_blocker` when terminal-blocking.
    - The synthesis agent must prefer a state-transition or batched-boundary task over a single additional no-live scalar/check contract unless the single contract unlocks a concrete next execution state or prevents a named unsafe transition.
    - If it selects a `safety_only` task while the same issue blocker has remained through the last two completed tasks, it must explicitly justify why evidence supply, bounded preflight/run, or batch consolidation is not currently possible.
    - If the caller's goal-distance gate requires goal-productive work, it must select `progress_kind: goal_productive` or emit `selected_task_source: terminal_blocked` with required handoff/input/authority. It must not choose another governance-only sidecar/reconciliation task as progress.
@@ -218,7 +220,7 @@ Keep task derivation conservative, but avoid selecting another task whose main e
    - Rank environment choices in this order: conda environment, project virtualenv/venv, local/system Python interpreter.
    - Record the selected environment type, interpreter or env name/path, exact run prefix, dependency gaps, and discovery source in the top environment section.
    - It must also list unselected but still useful candidates for `.task/candidate_task/`.
-   - It must list task-pack JSON changes when applicable, including inserted/reordered item IDs, terminal blocker content, mutation-log reason, and Markdown render path.
+   - It must list task-pack JSON changes when applicable, including `pack_disposition`, inserted/reordered/skipped/superseded item IDs, terminal blocker content, mutation-log reason, and Markdown render path.
    - It must cite any issue that the selected task tracks or intentionally ignores, and it must include issue links or local `.issue/` paths when known.
    - It must cite any `adv-*` ID or `.agent_advice` path that the selected task incorporates, defers, rejects, or intentionally ignores.
    - Use [agent-prompts.md](references/agent-prompts.md) and [task-and-candidate-templates.md](references/task-and-candidate-templates.md).
@@ -236,9 +238,9 @@ Keep task derivation conservative, but avoid selecting another task whose main e
    - Do not write a Python-execution task without environment information. If `$find-local-python-envs` cannot identify a usable environment, write the environment section with `Status: unresolved`, the commands attempted, and the exact blocker.
    - If the selected task does not require executable code or Python, write `Status: not_applicable` and explain the basis briefly.
    - Create `.task/candidate_task/` if needed.
-   - Create `.task/task_pack/` if the synthesis selected a new task pack. Write the JSON queue first, then render the Markdown view in the user-requested language.
+   - Create `.task/task_pack/` if the synthesis selected a new task pack. Write the JSON queue first, then render the Markdown view in the user-requested language. Prefer `$orchestrate-task-cycle` `scripts/task_pack_queue.py --root . apply-mutation --plan <derive-pack-plan.json> --render --language <user-language>` for `create_pack` when available.
    - If promoting from an active pack, update that pack item's promotion metadata and set the pack `current_item_id` to the next planned item after the new `task.md` is written.
-   - If inserting or reordering pack items, append `mutation_log` entries with evidence paths and refresh the Markdown render.
+   - If inserting, reordering, skipping, superseding, or terminal-blocking pack items, append `mutation_log` entries with evidence paths and refresh the Markdown render. Prefer `task_pack_queue.py apply-mutation` over manual JSON edits when available.
    - If terminal-blocking a pack or zero-candidate state, write `terminal_blocker` with semantic signature, blocker signature, reason, required handoff/input/authority, root-cause attempt status, authorized-alternative-path status, provider re-attempt status, dual-track attempt evidence when a hard loop gate applies, recent cycle IDs, and evidence paths. Also update `.task/sealed_blocker_families.json` with the semantic signature when possible. Do not write another narrowing `task.md` as a substitute for terminal state.
    - Save each unapplied improvement as `.task/candidate_task/YYYYMMDD-HHMMSS-<slug>.md`.
    - If the final task came from an existing candidate file, delete that candidate file from `.task/candidate_task/` after writing `task.md`.
@@ -248,7 +250,7 @@ Keep task derivation conservative, but avoid selecting another task whose main e
 
 11. Report outcome.
    - Summarize the selected task, why it won, issue insights used or ignored, where `past_task` was logged, which candidates were retained, which applied candidate file was deleted, and the relevant task/candidate/issue/past/log IDs.
-   - Include `selected_task_source: task_pack | candidate_task | standalone | terminal_blocked`, `progress_kind: goal_productive | governance_only`, selected or terminal `semantic_signature`, `task_pack_status` when a pack exists, and `loop_breaker_disposition`.
+   - Include `selected_task_source: task_pack | candidate_task | standalone | terminal_blocked`, `pack_disposition` when a pack is in scope, `progress_kind: goal_productive | governance_only`, selected or terminal `semantic_signature`, `task_pack_status` when a pack exists, mutation evidence paths, and `loop_breaker_disposition`.
    - In `initial_init` mode, report that no `past_task` log was created because there was no previous `task.md`.
 
 ## Initial Init Mode
@@ -300,7 +302,7 @@ Prefer the improvement that:
 - Advances the blocker state or final-goal state more than it adds another isolated safety proof.
 - Minimizes repeated prerequisite work by declaring `current_only` or `affected_chain` validation when full historical reruns are not needed.
 - Is narrow enough to become one actionable `task.md`, or narrow enough to become the next item in a bounded task pack.
-- Consumes an active task-pack item when that item is still safe, aligned, and not blocked by repeated blocker signatures or missing input delta.
+- Consumes an active task-pack item when that item is still safe, aligned, and not blocked by repeated blocker signatures or missing input delta; otherwise records the pack mutation needed before the next execution item.
 
 ## Guardrails
 
@@ -326,7 +328,7 @@ Prefer the improvement that:
 - Do not derive repeated `safety_only` no-live micro-contracts on the same blocker without either batching them, naming the unlocked transition, or recording why evidence supply/bounded execution is blocked.
 - Do not let `$optimize-task-slice` write `task.md`, apply/delete candidates, or downgrade this skill's fixed `reasoning_effort: xhigh` routing.
 - Do not create multiple active `task.md` files or multiple active task packs to simulate parallelism.
-- Do not reorder or insert task-pack items without citing new evidence, repeated blocker signature, missing supplied positive input delta, provider-neutral retargeting, or terminal blocker state.
+- Do not create, reorder, insert, skip, supersede, or terminal-block task-pack items without citing new evidence, repeated blocker signature, missing supplied positive input delta, provider-neutral retargeting, dependency repair, user-supplied exclusion direction, or terminal blocker state.
 - Do not use task packs as `.agent_goal` goal truth, authority, or completion evidence.
 - Do not derive another narrowing/handoff task when zero viable candidates remain; write `terminal_blocked` with required handoff/input/authority details instead.
 - Do not satisfy a positive input delta gate with `new_input_kinds` alone; require non-empty supplied artifact evidence or `produced_domain_delta=true`.

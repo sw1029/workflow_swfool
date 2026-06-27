@@ -2,6 +2,15 @@
 
 This reference defines optional long-range task packs for `$orchestrate-task-cycle`. Task packs are workflow planning state, not `.agent_goal` goal truth.
 
+## Contents
+
+- [Core Invariant](#core-invariant)
+- [Artifacts](#artifacts)
+- [JSON Shape](#json-shape)
+- [Pack Transactions](#pack-transactions)
+- [Promotion](#promotion)
+- [Loop Breaker Fields](#loop-breaker-fields)
+
 ## Core Invariant
 
 Keep one canonical active `task.md`. A task pack may contain a sequence of planned items, but each cycle consumes at most one item by promoting it into `task.md`.
@@ -93,6 +102,38 @@ Allowed item statuses:
 - `terminal_blocked`
 - `superseded`
 
+## Pack Transactions
+
+`$derive-improvement-task` owns the decision. `scripts/task_pack_queue.py` owns deterministic queue mutation when available. Prefer:
+
+```text
+scripts/task_pack_queue.py --root . apply-mutation --plan <derive-pack-plan.json> --render --language <user-language>
+```
+
+Allowed `pack_disposition` values:
+
+- `create_pack`: create a bounded 2-5 item pack when a known sequence prevents repeated myopic derivation.
+- `promote_next_item`: promote one safe item into `task.md`; no other item becomes executable.
+- `insert_items`: insert prerequisite or retarget items before the current item.
+- `reorder_items`: reorder existing items when the old order is unsafe, stale, or stationary.
+- `skip_items`: exclude item(s) by setting `status: skipped`; do not delete them.
+- `supersede_pack`: set the old pack and remaining planned items to `superseded`.
+- `derive_standalone`: bypass the active pack only with a rationale showing why the pack is unsafe, stale, blocked, or not goal-fit.
+- `terminal_blocked`: record terminal blocker state when no viable item or candidate remains.
+
+Every non-promotion mutation must produce a `pack_mutation_plan` with:
+
+- `action`
+- `reason`
+- `evidence_paths`
+- `pack_path` when mutating an existing pack
+- changed item IDs
+- `before_order` and `after_order` when order changes
+- `terminal_blocker` for `terminal_blocked`
+- Markdown `render_path` after applying the mutation
+
+The mutation reason must cite one of: new blocker evidence, repeated blocker/semantic/root-axis evidence, missing supplied positive input delta, provider-neutral retarget evidence, task-state/schema/validation/issue dependency repair, user-supplied direction, or terminal blocker evidence. Do not mutate a pack merely to prefer a newer idea, rename a version, or avoid executing the next item.
+
 ## Promotion
 
 When an active pack exists, `$derive-improvement-task` should consider the next `planned` item before creating unrelated one-off candidates. Promote the item into `task.md` only after:
@@ -110,27 +151,28 @@ The promoted `task.md` must include these fields in `## Execution Environment`:
 
 After promotion, record `promotion.task_id`, `promotion.task_path`, and `promotion.promoted_at` in the JSON queue and render the Markdown view.
 
-## Insert And Reorder
+## Insert, Reorder, Skip, Supersede
 
-Late-cycle derivation may insert or reorder pack items only when new evidence makes the existing order unsafe, stale, or stationary. Valid reasons:
+Late-cycle derivation may insert, reorder, skip, or supersede pack items only when new evidence makes the existing order unsafe, stale, or stationary. Valid reasons:
 
 - a new blocker signature appeared;
 - a repeated blocker signature would otherwise be selected again without new input;
 - an evidence-family task lacks the required positive input delta;
 - a provider/runtime/output blocker repeats while provider-neutral work can advance;
 - a task-state, schema, validation-set, or issue-lifecycle dependency must be repaired before the next planned item.
+- user-supplied direction explicitly excludes an item, in which case set the item to `skipped` or `superseded` and keep traceability.
 
-Every insertion or reorder must append a `mutation_log` entry with:
+Every insert, reorder, skip, supersede, or terminal-block mutation must append a `mutation_log` entry with:
 
 - `timestamp`
-- `action: insert | reorder | supersede | terminal_block`
+- `action: insert | reorder | skip | supersede | terminal_block`
 - `reason`
 - `evidence_paths`
 - `before_order`
 - `after_order`
 - `actor: $derive-improvement-task`
 
-Do not reorder merely to prefer a newer idea or sequential version number.
+Do not reorder merely to prefer a newer idea or sequential version number. Do not delete skipped/excluded items during derivation; deletion is a separate cleanup action that requires ID audit evidence and an owning workflow decision.
 
 ## Loop Breaker Fields
 
