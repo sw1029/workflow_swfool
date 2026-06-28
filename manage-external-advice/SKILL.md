@@ -54,6 +54,7 @@ If advice conflicts with a higher-priority source, reject or defer the advice in
    - Extract claims, actionable directives, conflicts, task integration, design integration, application gates, evidence required to mark applied, and exclusions.
    - Mark `not_goal_truth: true`.
    - When the raw advice declares headline metric snapshots, artifact fingerprints, or output fingerprints, record them under `Advice Freshness` and compare them with current repository/adapter output fingerprints when available. If they do not match, set `advice_metrics_stale: true` and require refresh, defer, or reject rationale before downstream workflows rely on those headline claims.
+   - When the advice declares root-cause hypotheses, let `audit` compare them with `.task/anti_loop/root_cause_ledger.jsonl`. If a claimed hypothesis was already `repair_attempted` with `terminal_outcome_changed=false`, set `re_advised_dead_hypothesis: true` and do not use that advice as fresh untried evidence without a new supplied input delta.
    - Emit `Normalization Fidelity` with `fidelity_status`, `fidelity_reason`, and `raw_direct_reference_required`. If extracted claims and actionable directives are identical, empty, or metadata-only, set `fidelity_status: degenerate|needs_review`, keep the advice active only as a warning-bearing packet, and require downstream workflows to consult the raw advice before applying it.
    - If the advice is too ambiguous to normalize, create a rejected or deferred record with the reason.
 
@@ -72,6 +73,7 @@ If advice conflicts with a higher-priority source, reject or defer the advice in
 5. Audit and index.
    - Run `scripts/advice_registry.py --root . audit` after intake, apply, or reject.
    - When an adapter or loopback packet has a current output fingerprint, run `scripts/advice_registry.py --root . audit --current-output-fingerprint <fingerprint>` or `--current-output-fingerprint-json <packet.json>` so audit emits `advice_freshness_gate` and `advice_metrics_stale` findings.
+   - When a root-cause ledger exists, audit also emits `re_advised_dead_hypothesis` and `dead_hypothesis_claims`; downstream workflows must refresh, defer, reject, or require a new input delta before treating that advice as untried root-cause provenance.
    - Treat root steering docs that remain outside `.agent_advice/active/` as warn-only orphan advice until they are intaken, deferred, rejected, or explicitly ignored with a recorded rationale.
    - Run `$manage-task-state-index scan` and `audit` when task-state artifacts exist.
 
@@ -82,6 +84,7 @@ If advice conflicts with a higher-priority source, reject or defer the advice in
 - `$derive-improvement-task`: treat active advice as planning evidence and explain whether selected or rejected advice affected the next task.
 - `$derive-improvement-task`: if an active advice packet has `raw_direct_reference_required=true`, cite the raw advice path in `used_advice` and avoid relying on the normalized claims/directives alone.
 - `$derive-improvement-task`: if an active advice packet or `anti_loop_progress_gate.advice_freshness_gate` reports `advice_metrics_stale=true`, refresh, defer, reject, or explicitly justify use against current repository evidence.
+- `$derive-improvement-task`: if advice audit reports `re_advised_dead_hypothesis=true`, do not treat that advice as fresh untried root-cause evidence unless it supplies a new input delta, authority change, or external-state change.
 - `$audit-cycle-loopback` and advice audit may both emit `advice_freshness_gate`; downstream workflows should treat either stale finding as warning-level evidence that headline advice metrics cannot be used without refresh, deferral, rejection, or current-evidence rationale.
 - `$task-md-agent-governance`: include relevant active advice in worker and audit prompts as non-GT design/task constraints.
 - `$validate-task-completion`: check whether task-referenced advice was applied, rejected, or deferred with evidence.
@@ -97,4 +100,5 @@ If advice conflicts with a higher-priority source, reject or defer the advice in
 - Do not mark advice applied without evidence or a recorded rationale.
 - Do not mark advice applied when `fidelity_status: degenerate` unless the application evidence cites the raw advice path or records that the raw text was manually reviewed.
 - Do not rely on stale headline metrics or fingerprint claims when `advice_metrics_stale: true`; refresh, defer, reject, or cite current evidence that supersedes the stale claim.
+- Do not rely on advice as fresh untried root-cause evidence when `re_advised_dead_hypothesis: true`; require a supplied input delta or retire/defer/reject the advice.
 - Do not leave used active/applied advice untracked in a Git-backed task cycle unless sensitivity or explicit user direction requires local-only handling and the reason is reported.

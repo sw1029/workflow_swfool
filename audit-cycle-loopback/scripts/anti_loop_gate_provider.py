@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import difflib
 import hashlib
 import inspect
 import importlib.util
@@ -26,6 +27,8 @@ CONSOLIDATION_STREAK_CAP_DEFAULT = 2
 MEASUREMENT_STREAK_CAP_DEFAULT = 1
 MAX_FORWARD_MUTATIONS_DEFAULT = 3
 DETECTION_ONLY_STREAK_CAP_DEFAULT = 2
+UNTRIED_PROMOTION_BUDGET_DEFAULT = 2
+ROOT_CAUSE_LEDGER_MAX_ROWS_PER_FAMILY_DEFAULT = 200
 ROOT_STEERING_DOC_NAMES = {"task_advice.md", "skill_advice.md", "task_doctor_steering.md"}
 QUALITY_DELTA_KEYS = (
     "event_named_ratio",
@@ -72,8 +75,15 @@ IDEMPOTENT_REPLAY_KEYS = (
     "root_cause_ledger_path",
     "root_cause_ledger_status",
     "root_cause_ledger_entries",
+    "root_cause_unverified_hypotheses",
+    "root_cause_duplicate_hypotheses",
     "untried_actionable_root_cause_exists",
     "untried_root_cause_hypotheses",
+    "untried_promotion_budget",
+    "vacuous_untried_attempt_count",
+    "vacuous_untried_streak",
+    "hypothesis_exhausted",
+    "hypothesis_exhaustion_seal_path",
     "terminal_blocked_invalid_due_to_untried_root_cause",
     "force_implementation_cycle",
     "task_correction_class",
@@ -551,7 +561,39 @@ def write_registry(path: Path, rows: list[dict[str, Any]]) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def append_root_cause_ledger(path: Path, entries: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+def compact_root_cause_ledger(rows: list[dict[str, Any]], max_rows_per_family: int) -> list[dict[str, Any]]:
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        family = str(row.get("family_key") or "unknown")
+        buckets.setdefault(family, []).append(row)
+    compacted: list[dict[str, Any]] = []
+    for family_rows in buckets.values():
+        latest_by_equivalence: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for row in family_rows:
+            key = root_cause_distinct_key(row)
+            existing = latest_by_equivalence.get(key)
+            merged = dict(row)
+            attempted_increment = 1 if bool_value(row.get("repair_attempted")) else 0
+            vacuous_increment = attempted_increment if not bool_value(row.get("terminal_outcome_changed")) else 0
+            if existing:
+                merged["attempt_count"] = root_cause_attempt_weight(existing, "attempt_count") + attempted_increment
+                merged["vacuous_attempt_count"] = root_cause_attempt_weight(existing, "vacuous_attempt_count") + vacuous_increment
+                merged["terminal_outcome_changed"] = bool_value(existing.get("terminal_outcome_changed")) or bool_value(row.get("terminal_outcome_changed"))
+                merged["first_cycle_id"] = existing.get("first_cycle_id") or existing.get("cycle_id")
+                merged["previous_cycle_id"] = existing.get("cycle_id")
+                aliases = set(list_values(existing.get("hypothesis_aliases")))
+                aliases.add(str(existing.get("hypothesized_root_cause") or ""))
+                aliases.add(str(row.get("hypothesized_root_cause") or ""))
+                merged["hypothesis_aliases"] = sorted(alias for alias in aliases if alias)[:20]
+            else:
+                merged["attempt_count"] = root_cause_attempt_weight(row, "attempt_count", attempted_increment)
+                merged["vacuous_attempt_count"] = root_cause_attempt_weight(row, "vacuous_attempt_count", vacuous_increment)
+            latest_by_equivalence[key] = merged
+        compacted.extend(list(latest_by_equivalence.values())[-max_rows_per_family:])
+    return compacted
+
+
+def append_root_cause_ledger(path: Path, entries: list[dict[str, Any]], max_rows_per_family: int = ROOT_CAUSE_LEDGER_MAX_ROWS_PER_FAMILY_DEFAULT) -> tuple[list[dict[str, Any]], bool]:
     rows = read_jsonl(path)
     seen = {
         (
@@ -576,8 +618,58 @@ def append_root_cause_ledger(path: Path, entries: list[dict[str, Any]]) -> tuple
         seen.add(key)
         changed = True
     if changed:
+        rows = compact_root_cause_ledger(rows, max_rows_per_family)
         write_registry(path, rows)
     return rows, changed
+
+
+def feed_exhausted_family_seal(root: Path, packet: dict[str, Any]) -> str | None:
+    path = root / ".task" / "sealed_blocker_families.json"
+    existing = read_json(path)
+    if isinstance(existing, dict) and isinstance(existing.get("families"), list):
+        data = existing
+        records = [item for item in existing["families"] if isinstance(item, dict)]
+    elif isinstance(existing, list):
+        data = {"schema_version": "sealed-blocker-families-v1", "families": [item for item in existing if isinstance(item, dict)]}
+        records = data["families"]
+    elif isinstance(existing, dict):
+        records = [existing]
+        data = {"schema_version": "sealed-blocker-families-v1", "families": records}
+    else:
+        data = {"schema_version": "sealed-blocker-families-v1", "families": []}
+        records = data["families"]
+    semantic = str(packet.get("semantic_signature") or "").lower()
+    blocker = str(packet.get("blocker_signature") or "").lower()
+    root_family = str(packet.get("root_family_key") or packet.get("blocker_root_family") or "").lower()
+    root_key = str(packet.get("root_key") or "").lower()
+    record = {
+        "semantic_signature": semantic or None,
+        "blocker_signature": blocker or None,
+        "root_key": root_key or None,
+        "root_family_key": root_family or None,
+        "hypothesis_exhausted": True,
+        "vacuous_untried_attempt_count": packet.get("vacuous_untried_attempt_count"),
+        "untried_promotion_budget": packet.get("untried_promotion_budget"),
+        "reason": "root-cause hypothesis budget exhausted without terminal_outcome_changed",
+        "updated_at": now_iso(),
+        "source": "audit-cycle-loopback",
+    }
+    replaced = False
+    for index, item in enumerate(records):
+        if (
+            str(item.get("semantic_signature") or "").lower() == semantic
+            and str(item.get("blocker_signature") or "").lower() == blocker
+            and str(item.get("root_family_key") or "").lower() == root_family
+        ):
+            records[index] = {**item, **record}
+            replaced = True
+            break
+    if not replaced:
+        records.append(record)
+    data["families"] = records[-200:]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return rel_path(root, path)
 
 
 def bool_value(value: Any) -> bool:
@@ -693,6 +785,13 @@ def normalize_root_cause_slug(value: Any) -> str:
     return normalize_root_family_key(str(value or "unknown_root_cause"))
 
 
+def normalize_root_cause_equivalence_slug(value: Any) -> str:
+    slug = normalize_root_cause_slug(value)
+    slug = re.sub(r"([_.:/-])v(?:nnn|\d+)$", "", slug)
+    slug = re.sub(r"([_.:/-])(?:variant|facet|phase|stage|case|mode|fix|repair)$", "", slug)
+    return slug.strip("-_.:/|") or "unknown_root_cause"
+
+
 def normalize_root_cause_hypotheses(value: Any) -> list[dict[str, Any]]:
     if value is None:
         return []
@@ -723,13 +822,58 @@ def normalize_root_cause_hypotheses(value: Any) -> list[dict[str, Any]]:
     return hypotheses
 
 
+ROOT_CAUSE_PROVENANCE_KEYS = (
+    "provenance_refs",
+    "provenance",
+    "advice_id",
+    "advice_path",
+    "issue_id",
+    "issue_path",
+    "run_id",
+    "run_evidence_path",
+    "evidence_path",
+    "evidence_paths",
+    "source_evidence_path",
+    "source_evidence_paths",
+)
+
+
+def root_cause_provenance_refs(entry: dict[str, Any]) -> list[str]:
+    refs: list[str] = []
+    for key in ROOT_CAUSE_PROVENANCE_KEYS:
+        value = entry.get(key)
+        if isinstance(value, list):
+            refs.extend(str(item).strip() for item in value if item is not None and str(item).strip())
+        elif isinstance(value, dict):
+            refs.extend(str(item).strip() for item in value.values() if item is not None and str(item).strip())
+        elif value is not None and str(value).strip():
+            refs.append(str(value).strip())
+    return sorted(set(refs))[:12]
+
+
+def root_cause_actionability(entry: dict[str, Any]) -> dict[str, Any]:
+    structural_fields = ("local", "bounded", "provider_free", "in_scope", "authority_allowed")
+    structural = all(bool_value(entry.get(field)) for field in structural_fields)
+    asserted = bool_value(entry.get("actionable")) or bool_value(entry.get("root_cause_actionable"))
+    provenance = root_cause_provenance_refs(entry)
+    actionable = structural or (asserted and bool(provenance))
+    if actionable:
+        status = "verified"
+    elif asserted:
+        status = "unverified"
+    else:
+        status = "not_actionable"
+    basis = {
+        "asserted_actionable": asserted,
+        "structural_actionable": structural,
+        "provenance_ref_count": len(provenance),
+        "required_structural_fields": list(structural_fields),
+    }
+    return {"actionable": actionable, "status": status, "basis": basis, "provenance_refs": provenance}
+
+
 def root_cause_actionable(entry: dict[str, Any]) -> bool:
-    if bool_value(entry.get("actionable")) or bool_value(entry.get("root_cause_actionable")):
-        return True
-    return all(
-        bool_value(entry.get(field))
-        for field in ("local", "bounded", "provider_free", "in_scope", "authority_allowed")
-    )
+    return bool(root_cause_actionability(entry)["actionable"])
 
 
 def same_root_cause_scope(row: dict[str, Any], family_key: str, root_key: str, root_family_key: str) -> bool:
@@ -742,24 +886,132 @@ def same_root_cause_scope(row: dict[str, Any], family_key: str, root_key: str, r
     return False
 
 
-def untried_root_cause_hypotheses(
+def root_cause_target_surface(row: dict[str, Any]) -> str:
+    return normalize_root_family_key(
+        row.get("target_surface")
+        or row.get("blocker_signature")
+        or row.get("root_key")
+        or row.get("root_family_key")
+        or row.get("family_key")
+        or "unknown_surface"
+    )
+
+
+def root_cause_delta_class(row: dict[str, Any]) -> str:
+    return normalize_root_family_key(row.get("observed_delta_class") or "unknown_delta")
+
+
+def root_cause_distinct_key(row: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        normalize_root_cause_equivalence_slug(row.get("hypothesized_root_cause")),
+        root_cause_target_surface(row),
+        root_cause_delta_class(row),
+    )
+
+
+def equivalent_root_cause(row: dict[str, Any], attempted_row: dict[str, Any]) -> bool:
+    row_key = root_cause_distinct_key(row)
+    attempted_key = root_cause_distinct_key(attempted_row)
+    if row_key == attempted_key:
+        return True
+    if row_key[1:] != attempted_key[1:]:
+        return False
+    ratio = difflib.SequenceMatcher(None, row_key[0], attempted_key[0]).ratio()
+    return ratio >= 0.88
+
+
+def root_cause_attempt_weight(row: dict[str, Any], field: str, default: int = 0) -> int:
+    value = row.get(field)
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return max(0, int(value))
+    if isinstance(value, str) and value.strip().isdigit():
+        return max(0, int(value.strip()))
+    return default
+
+
+def root_cause_exhaustion_state(
     rows: list[dict[str, Any]],
     family_key: str,
     root_key: str,
     root_family_key: str,
-) -> list[dict[str, Any]]:
+    budget: int,
+) -> dict[str, Any]:
+    scoped = [row for row in rows if same_root_cause_scope(row, family_key, root_key, root_family_key)]
+    attempted_rows = [row for row in scoped if bool_value(row.get("repair_attempted"))]
+    positive_attempts = [
+        row for row in attempted_rows if bool_value(row.get("terminal_outcome_changed"))
+    ]
+    vacuous_rows = [
+        row for row in attempted_rows if not bool_value(row.get("terminal_outcome_changed"))
+    ]
+    vacuous_attempt_count = sum(root_cause_attempt_weight(row, "vacuous_attempt_count", 1) for row in vacuous_rows)
+    streak = 0
+    for row in reversed(scoped):
+        if not bool_value(row.get("repair_attempted")):
+            continue
+        if bool_value(row.get("terminal_outcome_changed")):
+            break
+        streak += root_cause_attempt_weight(row, "vacuous_attempt_count", 1)
+    exhausted = vacuous_attempt_count >= max(1, budget) and not positive_attempts
+    return {
+        "hypothesis_exhausted": exhausted,
+        "untried_promotion_budget": max(1, budget),
+        "vacuous_untried_attempt_count": vacuous_attempt_count,
+        "vacuous_untried_streak": streak,
+        "successful_untried_attempt_count": len(positive_attempts),
+        "attempted_hypothesis_count": len(attempted_rows),
+    }
+
+
+def root_cause_hypothesis_gate(
+    rows: list[dict[str, Any]],
+    family_key: str,
+    root_key: str,
+    root_family_key: str,
+    budget: int,
+) -> dict[str, Any]:
     latest_by_root: dict[str, dict[str, Any]] = {}
-    attempted: set[str] = set()
+    attempted_rows: list[dict[str, Any]] = []
     for row in rows:
         if not same_root_cause_scope(row, family_key, root_key, root_family_key):
             continue
         root = normalize_root_cause_slug(row.get("hypothesized_root_cause"))
         latest_by_root[root] = row
         if bool_value(row.get("repair_attempted")):
-            attempted.add(root)
+            attempted_rows.append(row)
     untried = []
+    unverified = []
+    duplicates = []
     for root, row in sorted(latest_by_root.items()):
-        if root in attempted or not root_cause_actionable(row):
+        actionability = root_cause_actionability(row)
+        if not actionability["actionable"]:
+            if actionability["status"] == "unverified":
+                unverified.append(
+                    {
+                        "family_key": row.get("family_key"),
+                        "root_key": row.get("root_key"),
+                        "root_family_key": row.get("root_family_key"),
+                        "hypothesized_root_cause": root,
+                        "actionability_status": "unverified",
+                        "actionability_basis": actionability["basis"],
+                    }
+                )
+            continue
+        duplicate = next((attempted for attempted in attempted_rows if equivalent_root_cause(row, attempted)), None)
+        if duplicate is not None:
+            duplicates.append(
+                {
+                    "family_key": row.get("family_key"),
+                    "root_key": row.get("root_key"),
+                    "root_family_key": row.get("root_family_key"),
+                    "hypothesized_root_cause": root,
+                    "attempted_equivalent": normalize_root_cause_slug(duplicate.get("hypothesized_root_cause")),
+                    "target_surface": root_cause_target_surface(row),
+                    "observed_delta_class": row.get("observed_delta_class"),
+                }
+            )
             continue
         untried.append(
             {
@@ -771,11 +1023,38 @@ def untried_root_cause_hypotheses(
                 "repair_task_id": row.get("repair_task_id"),
                 "terminal_outcome_changed": bool_value(row.get("terminal_outcome_changed")),
                 "observed_delta_class": row.get("observed_delta_class"),
+                "target_surface": root_cause_target_surface(row),
                 "cycle_id": row.get("cycle_id"),
                 "actionable": True,
+                "actionability_status": "verified",
+                "actionability_basis": actionability["basis"],
+                "provenance_refs": actionability["provenance_refs"],
             }
         )
-    return untried
+    exhaustion = root_cause_exhaustion_state(rows, family_key, root_key, root_family_key, budget)
+    if exhaustion["hypothesis_exhausted"]:
+        untried = []
+    return {
+        **exhaustion,
+        "untried_root_cause_hypotheses": untried,
+        "root_cause_unverified_hypotheses": unverified,
+        "root_cause_duplicate_hypotheses": duplicates,
+    }
+
+
+def untried_root_cause_hypotheses(
+    rows: list[dict[str, Any]],
+    family_key: str,
+    root_key: str,
+    root_family_key: str,
+) -> list[dict[str, Any]]:
+    return root_cause_hypothesis_gate(
+        rows,
+        family_key,
+        root_key,
+        root_family_key,
+        UNTRIED_PROMOTION_BUDGET_DEFAULT,
+    )["untried_root_cause_hypotheses"]
 
 
 def string_list(value: Any) -> list[str]:
@@ -2208,6 +2487,7 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
             or bool_value(getattr(args, "root_cause_repair_attempted", False))
             or bool(repair_task_id)
         )
+        hypothesis_evidence_paths = sorted(set(string_list(hypothesis.get("evidence_paths")) + evidence_paths))
         entry: dict[str, Any] = {
             "schema_version": "root-cause-hypothesis-ledger-v1",
             "cycle_id": args.cycle_id,
@@ -2215,6 +2495,8 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
             "root_key": str(hypothesis.get("root_key") or current_root_key),
             "root_family_key": str(hypothesis.get("root_family_key") or current_root_family_key),
             "hypothesized_root_cause": normalize_root_cause_slug(hypothesis.get("hypothesized_root_cause")),
+            "target_surface": str(hypothesis.get("target_surface") or current_blocker_signature or current_root_key),
+            "blocker_signature": current_blocker_signature,
             "repair_attempted": repair_attempted,
             "repair_task_id": repair_task_id or None,
             "terminal_outcome_changed": outcome_changed,
@@ -2225,25 +2507,48 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
             "in_scope": bool_value(hypothesis.get("in_scope")),
             "authority_allowed": bool_value(hypothesis.get("authority_allowed")),
             "actionable": bool_value(hypothesis.get("actionable") or hypothesis.get("root_cause_actionable")),
-            "evidence_paths": evidence_paths,
+            "provenance_refs": root_cause_provenance_refs({**hypothesis, "evidence_paths": hypothesis_evidence_paths}),
+            "evidence_paths": hypothesis_evidence_paths,
             "updated_at": now_iso(),
         }
+        actionability = root_cause_actionability(entry)
+        entry["actionability_status"] = actionability["status"]
+        entry["actionability_basis"] = actionability["basis"]
         ledger_entries.append(entry)
     existing_root_cause_rows = read_jsonl(root_cause_ledger_path)
     root_cause_rows = [*existing_root_cause_rows, *ledger_entries]
     root_cause_ledger_updated = False
     if getattr(args, "write_registry", False) and ledger_entries:
-        root_cause_rows, root_cause_ledger_updated = append_root_cause_ledger(root_cause_ledger_path, ledger_entries)
-    untried = untried_root_cause_hypotheses(root_cause_rows, family_key, current_root_key, current_root_family_key)
+        root_cause_rows, root_cause_ledger_updated = append_root_cause_ledger(
+            root_cause_ledger_path,
+            ledger_entries,
+            args.max_root_cause_rows_per_family,
+        )
+    root_cause_gate = root_cause_hypothesis_gate(
+        root_cause_rows,
+        family_key,
+        current_root_key,
+        current_root_family_key,
+        args.untried_promotion_budget,
+    )
+    untried = root_cause_gate["untried_root_cause_hypotheses"]
     row["root_cause_ledger_path"] = rel_path(root, root_cause_ledger_path)
     row["root_cause_ledger_status"] = "recorded" if ledger_entries else "not_applicable_no_hypotheses"
     row["root_cause_ledger_updated"] = root_cause_ledger_updated
     row["root_cause_ledger_entries"] = ledger_entries
+    row["root_cause_unverified_hypotheses"] = root_cause_gate["root_cause_unverified_hypotheses"][:10]
+    row["root_cause_duplicate_hypotheses"] = root_cause_gate["root_cause_duplicate_hypotheses"][:10]
+    row["untried_promotion_budget"] = root_cause_gate["untried_promotion_budget"]
+    row["vacuous_untried_attempt_count"] = root_cause_gate["vacuous_untried_attempt_count"]
+    row["vacuous_untried_streak"] = root_cause_gate["vacuous_untried_streak"]
+    row["hypothesis_exhausted"] = root_cause_gate["hypothesis_exhausted"]
     row["untried_actionable_root_cause_exists"] = bool(untried)
     row["untried_root_cause_hypotheses"] = untried[:10]
     row["terminal_blocked_invalid_due_to_untried_root_cause"] = bool(untried)
     if root_cause_adapter_error:
         row["root_cause_ledger_adapter_error"] = root_cause_adapter_error
+    if row["hypothesis_exhausted"] and getattr(args, "write_registry", False):
+        row["hypothesis_exhaustion_seal_path"] = feed_exhausted_family_seal(root, row)
 
     effective_allowed, basis = effective_allowed_dispositions(gate_inputs)
     recent_progress = load_json_value(root, getattr(args, "recent_progress_json", None))
@@ -2258,7 +2563,23 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
     row["consolidation_reduces_goal_distance"] = False
     row["consolidation_streak_cap"] = args.consolidation_streak_cap
     findings = list(row.get("findings") or [])
-    if untried:
+    if row["hypothesis_exhausted"]:
+        row["hard_stop_required"] = True
+        row["recommended_disposition"] = "terminal_blocked"
+        findings.append(
+            {
+                "severity": "block",
+                "code": "root_cause_hypothesis_exhausted",
+                "message": "root-cause untried promotion budget is exhausted without terminal_outcome_changed; derive must not promote another same-family untried repair without supplied input delta.",
+                "evidence": {
+                    "root_cause_ledger_path": row["root_cause_ledger_path"],
+                    "untried_promotion_budget": row["untried_promotion_budget"],
+                    "vacuous_untried_attempt_count": row["vacuous_untried_attempt_count"],
+                    "hypothesis_exhaustion_seal_path": row.get("hypothesis_exhaustion_seal_path"),
+                },
+            }
+        )
+    elif untried:
         row["hard_stop_required"] = True
         row["recommended_disposition"] = "untried_root_cause_repair_required"
         if "goal_productive" not in row["effective_allowed_dispositions"]:
@@ -2272,6 +2593,24 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
                     "root_cause_ledger_path": row["root_cause_ledger_path"],
                     "untried_root_cause_hypotheses": untried[:5],
                 },
+            }
+        )
+    if row["root_cause_unverified_hypotheses"]:
+        findings.append(
+            {
+                "severity": "warn",
+                "code": "root_cause_actionability_unverified",
+                "message": "root-cause hypotheses with only self-asserted actionability were excluded from untried promotion.",
+                "evidence": {"root_cause_unverified_hypotheses": row["root_cause_unverified_hypotheses"][:5]},
+            }
+        )
+    if row["root_cause_duplicate_hypotheses"]:
+        findings.append(
+            {
+                "severity": "warn",
+                "code": "root_cause_duplicate_or_rename",
+                "message": "root-cause hypotheses equivalent to prior attempted hypotheses were excluded from untried promotion.",
+                "evidence": {"root_cause_duplicate_hypotheses": row["root_cause_duplicate_hypotheses"][:5]},
             }
         )
     if streak >= args.consolidation_streak_cap and "consolidation" in row["effective_allowed_dispositions"]:
@@ -2536,7 +2875,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--hypothesized-root-cause", help="Single root-cause hypothesis slug to record when no JSON/adapter list is supplied.")
     parser.add_argument("--root-cause-repair-attempted", action="store_true", help="Mark the supplied root-cause hypothesis as explicitly attempted by this cycle.")
     parser.add_argument("--root-cause-repair-task-id", help="Task id for the repair attempt targeting the supplied root-cause hypothesis.")
-    parser.add_argument("--root-cause-actionable", action="store_true", help="Mark the supplied root-cause hypothesis as local, bounded, provider-free, in-scope, and authority-allowed.")
+    parser.add_argument("--root-cause-actionable", action="store_true", help="Assert the supplied root-cause hypothesis is actionable; untried promotion still requires structural fields or provenance evidence.")
+    parser.add_argument("--untried-promotion-budget", type=int, default=UNTRIED_PROMOTION_BUDGET_DEFAULT, help="Same-family vacuous untried repairs allowed before hypothesis_exhausted=true.")
     parser.add_argument("--measurement-check-id", action="append", default=[], help="Stable check/oracle ID introduced or exercised by this cycle.")
     parser.add_argument("--measurement-check-ids-json", help="Path or JSON list/dict containing check or oracle IDs.")
     parser.add_argument("--measurement-frontier", action="append", default=[], help="Named measurement frontier observed by this cycle.")
@@ -2551,6 +2891,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--threshold", type=int, default=3)
     parser.add_argument("--epsilon", type=float, default=1e-9)
     parser.add_argument("--max-rows-per-family", type=int, default=200)
+    parser.add_argument("--max-root-cause-rows-per-family", type=int, default=ROOT_CAUSE_LEDGER_MAX_ROWS_PER_FAMILY_DEFAULT)
     parser.add_argument("--write-registry", action="store_true")
     parser.add_argument("--output")
     args = parser.parse_args(argv)

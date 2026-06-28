@@ -192,6 +192,21 @@ def analyze(root: Path, events: list[dict[str, Any]], index_records: list[dict[s
     duplicate_artifacts = [{"artifact": key, "count": count} for key, count in Counter(artifacts).most_common() if count >= 2]
     progress_events = [event for event in events if event.get("progress_verdict") or first_present(event, ("progress_kind", "effective_progress_kind"))]
     metadata_only_events = [event for event in progress_events if is_metadata_only(event)]
+    vacuous_untried_streak = max(
+        [
+            int(value)
+            for event in events
+            if (value := first_present(event, ("vacuous_untried_streak", "anti_loop_progress_gate.vacuous_untried_streak"))) is not None
+            and str(value).isdigit()
+        ]
+        or [0]
+    )
+    hypothesis_exhausted = any(boolish(first_present(event, ("hypothesis_exhausted", "anti_loop_progress_gate.hypothesis_exhausted"))) for event in events)
+    forward_mutation_vacuous_count = sum(
+        1
+        for event in events
+        if boolish(first_present(event, ("forward_mutation_vacuous", "anti_loop_progress_gate.forward_mutation_vacuous")))
+    )
     full_chain_without_reason = [
         event
         for event in events
@@ -217,6 +232,32 @@ def analyze(root: Path, events: list[dict[str, Any]], index_records: list[dict[s
         findings.append({"severity": "warn", "code": "duplicate_artifact_paths", "message": "Artifact paths repeat across events.", "evidence": duplicate_artifacts[:5]})
     if full_chain_without_reason:
         findings.append({"severity": "warn", "code": "full_chain_without_escalation_reason", "message": "Full-chain validation was recorded without escalation reason.", "count": len(full_chain_without_reason)})
+    if vacuous_untried_streak:
+        findings.append(
+            {
+                "severity": "warn",
+                "code": "vacuous_untried_streak",
+                "message": "Untried root-cause repairs repeated without terminal_outcome_changed.",
+                "evidence": {"vacuous_untried_streak": vacuous_untried_streak},
+            }
+        )
+    if hypothesis_exhausted:
+        findings.append(
+            {
+                "severity": "warn",
+                "code": "hypothesis_exhausted",
+                "message": "Root-cause hypothesis budget is exhausted; next work should stop, user-escalate, or require a supplied input delta.",
+            }
+        )
+    if forward_mutation_vacuous_count:
+        findings.append(
+            {
+                "severity": "warn",
+                "code": "forward_mutation_vacuous_streak",
+                "message": "Capability-ladder movement occurred without observed terminal outcome change.",
+                "evidence": {"forward_mutation_vacuous_count": forward_mutation_vacuous_count},
+            }
+        )
     if validation_set_blockers and not validation_set_events:
         findings.append(
             {
@@ -266,6 +307,10 @@ def analyze(root: Path, events: list[dict[str, Any]], index_records: list[dict[s
         recommendations.append("batch_micro_contracts")
     if "validation_set_gap_without_build_phase" in codes:
         recommendations.append("route_validation_set_plan_or_build")
+    if "vacuous_untried_streak" in codes or "forward_mutation_vacuous_streak" in codes:
+        recommendations.append("root_cause_repair_or_stop_with_blocker")
+    if "hypothesis_exhausted" in codes:
+        recommendations.append("stop_with_blocker")
     recommendation = recommendations[0] if recommendations else "continue"
     return {
         "status": "warn" if any(item["severity"] == "warn" for item in findings) else "ok",
@@ -273,6 +318,9 @@ def analyze(root: Path, events: list[dict[str, Any]], index_records: list[dict[s
         "progress_counts": dict(Counter(progress_values)),
         "progress_kind_counts": dict(Counter(progress_kinds)),
         "metadata_only_count": len(metadata_only_events),
+        "vacuous_untried_streak": vacuous_untried_streak,
+        "hypothesis_exhausted": hypothesis_exhausted,
+        "forward_mutation_vacuous_count": forward_mutation_vacuous_count,
         "validation_profile_counts": dict(Counter(validation_profiles)),
         "blocker_signature_counts": dict(Counter(blocker_signatures)),
         "validation_set_build_count": len(validation_set_events),

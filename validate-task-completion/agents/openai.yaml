@@ -1,4 +1,4 @@
 interface:
   display_name: "Validate Task Completion"
   short_description: "Run common completion gates and classify task outcomes."
-  default_prompt: "Validate whether the current task is complete using $validate-task-completion; when called from $orchestrate-task-cycle, consume references/workflow-routing.md context, check audits, environment, execution logs, task_miss, issue status, .agent_advice non-GT handling, goal schema-contract compliance, run repository/OOM audits with reasoning_effort xhigh, and return complete, partial, or failed plus progress_verdict."
+  default_prompt: "Validate whether the current task is complete using $validate-task-completion; when called from $orchestrate-task-cycle, consume references/workflow-routing.md context, check audits, environment, execution logs, task_miss, issue status, .agent_advice non-GT handling, goal schema-contract compliance, run repository/OOM audits with reasoning_effort xhigh, and return complete, partial, or failed plus progress_verdict capped by terminal_outcome_changed or strict observed output delta."

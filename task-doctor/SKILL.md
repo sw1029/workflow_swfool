@@ -73,6 +73,7 @@ If the task direction change reveals a required code change, write it into the n
    - When `.task/task_pack/` is relevant, run or request `$orchestrate-task-cycle` `scripts/task_pack_queue.py --root . status --format json` and `validate` for the active or named pack.
    - When the requested doctoring changes provider, OpenAI, credential, `.env`, terminal-blocker, or seal constraints, run `$orchestrate-task-cycle` `scripts/detect_gt_constraint_conflict.py --root .` on the current task and account for any conflict before writing the replacement.
    - When the requested doctoring cites workflow loop/dedup advice, run or request `$orchestrate-task-cycle` `scripts/detect_progress_loop.py --root .` and account for `feature_symbol_gate` without treating the advice itself as goal truth.
+   - When the requested retarget touches a quiesced, sealed, or root-cause-exhausted family, run or request `$orchestrate-task-cycle` `scripts/detect_progress_loop.py --root .` and read the latest `anti_loop_progress_gate` if available. Account for `terminal_quiescence_gate`, `quiescence_untried_reconcile`, `hypothesis_exhausted`, and `.task/anti_loop/root_cause_ledger.jsonl` before writing the replacement.
    - Keep inspection at workflow and convention level. Do not inspect implementation source to solve the task.
 
 3. Refresh traceability before replacement.
@@ -93,6 +94,7 @@ If the task direction change reveals a required code change, write it into the n
    - Do not write a replacement task that forbids a `.agent_goal` allowed or required provider/credential action unless the new task explicitly resolves the conflict or cites a newer explicit user instruction that supersedes the GT with a verifiable source. A bare phrase such as "latest user instruction" is not enough; include a timestamp or log/transcript path plus the quoted instruction text, or keep the prior supersession/authority state and ask the user for confirmation.
    - Do not write a replacement task whose progress case depends only on self-declared `produced_domain_delta=true`; require observed output evidence, legitimate provider-terminal evidence, consolidation, or explicit terminal/user escalation.
    - Do not write a replacement task that treats a new oracle, validator, metric, ladder record, dashboard, lineage, or gap report as `goal_productive` unless `coverage_quality_delta_gate.quality_delta_pass=true` or strict changed-and-semantic output-delta evidence exists.
+   - Do not retarget a quiesced or `hypothesis_exhausted=true` family silently. A user-directed retarget is allowed, but the new `task.md` or task-pack mutation must record `quiescence_override` with the user instruction, supplied input delta, authority change, external-state change, or verified unexhausted root-cause evidence.
    - Do not preserve `single_work_id:true` as an indefinite generalization blocker. When `.agent_goal` or the current task requires corpus/generalization progress, require a bounded multi-work path with `single_work_id` separation, or terminal-block on the exact missing source/authority/provider condition.
    - Put `## Execution Environment` immediately after `# Task`.
 
@@ -205,6 +207,7 @@ If the task direction change reveals a required code change, write it into the n
 - Use `$manage-task-state-index` before and after task replacement whenever task-state artifacts exist.
 - Use `$manage-task-state-index` before and after task-pack proposal changes whenever `.task/` exists.
 - Keep `.agent_advice` separate from `.agent_goal`: advice can explain task direction but cannot override GT, grant authority, or satisfy `기준 GT`.
+- Keep quiescence overrides explicit: when doctoring re-enters a terminal/quiesced/exhausted family, record the override reason and evidence instead of relying on renamed task wording.
 - Link the new active task to the archived old task with `supersedes` or `archived_as` when IDs are known.
 - Link task-pack proposals to the active/new task with `pack_for_task` or `promoted_from_pack` when IDs are known.
 - Keep `task.md` formatted so `$task-md-agent-governance` can implement it without additional interpretation.

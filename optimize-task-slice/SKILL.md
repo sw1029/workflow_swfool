@@ -11,7 +11,7 @@ Use this skill as an advisory pre-derive classifier. It helps prevent repeated t
 
 ## Workflow
 
-1. Review progress-loop output, active blockers, recent completed tasks, candidate tasks, and validation scope.
+1. Review progress-loop output, active blockers, recent completed tasks, candidate tasks, validation scope, and anti-loop signals such as `vacuous_untried_streak`, `hypothesis_exhausted`, and `forward_mutation_vacuous`.
 2. Classify the next slice:
    - `state_transition`
    - `batchable_micro_contract`
@@ -19,6 +19,7 @@ Use this skill as an advisory pre-derive classifier. It helps prevent repeated t
    - `bounded_preflight`
    - `narrow_current_only`
    - `stop_with_blocker`
+   - `root_cause_repair_or_stop`
 3. Explain the blocker-state transition the next task should unlock.
 4. Pass the advisory packet to `$derive-improvement-task`.
 
@@ -28,3 +29,4 @@ Use this skill as an advisory pre-derive classifier. It helps prevent repeated t
 - Do not delete or apply candidates.
 - Do not downgrade `$derive-improvement-task` fixed `reasoning_effort: xhigh` routing.
 - Do not claim final next-task choice authority.
+- Do not recommend another same-family untried repair when `hypothesis_exhausted=true`; recommend `stop_with_blocker` unless a supplied input delta or explicit user override exists.

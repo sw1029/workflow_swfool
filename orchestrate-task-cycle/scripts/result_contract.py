@@ -1257,7 +1257,20 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                 ],
             )
         )
-        if terminal_or_seal and untried_root_cause_exists:
+        hypothesis_exhausted = boolish(
+            first_present(
+                result,
+                [
+                    "hypothesis_exhausted",
+                    "anti_loop_progress_gate.hypothesis_exhausted",
+                    "loop_breaker_packet.hypothesis_exhausted",
+                    "terminal_blocker.hypothesis_exhausted",
+                    "result.anti_loop_progress_gate.hypothesis_exhausted",
+                    "result.terminal_blocker.hypothesis_exhausted",
+                ],
+            )
+        )
+        if terminal_or_seal and untried_root_cause_exists and not hypothesis_exhausted:
             add(
                 findings,
                 "block" if mode == "block" else "warn",
@@ -1648,6 +1661,91 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                 "block" if mode == "block" else "warn",
                 "loopback_vacuous_corrective_claimed_semantic_progress",
                 "`loopback_audit` reported semantic_progress while G-VACUOUS found attempted corrective lanes with zero resolved items.",
+            )
+    if target == "validate":
+        progress_verdict = str(value_for(result, "progress_verdict") or "").strip().lower()
+        terminal_outcome_value = first_present(
+            result,
+            [
+                "terminal_outcome_changed",
+                "anti_loop_progress_gate.terminal_outcome_changed",
+                "loopback_audit.terminal_outcome_changed",
+                "output_delta.terminal_outcome_changed",
+                "result.terminal_outcome_changed",
+                "result.anti_loop_progress_gate.terminal_outcome_changed",
+            ],
+        )
+        changed_vs_previous = first_present(
+            result,
+            [
+                "changed_vs_previous",
+                "output_delta.changed_vs_previous",
+                "output_delta_gate.changed_vs_previous",
+                "anti_loop_progress_gate.changed_vs_previous",
+                "result.output_delta.changed_vs_previous",
+                "result.anti_loop_progress_gate.changed_vs_previous",
+            ],
+        )
+        semantic_progress = first_present(
+            result,
+            [
+                "semantic_progress",
+                "output_delta.semantic_progress",
+                "output_delta_gate.semantic_progress",
+                "anti_loop_progress_gate.semantic_progress",
+                "result.output_delta.semantic_progress",
+                "result.anti_loop_progress_gate.semantic_progress",
+            ],
+        )
+        produced_domain_delta = first_present(
+            result,
+            [
+                "produced_domain_delta",
+                "output_delta.produced_domain_delta",
+                "output_delta_gate.produced_domain_delta",
+                "result.output_delta.produced_domain_delta",
+            ],
+        )
+        observed_delta_class = str(
+            first_present(
+                result,
+                [
+                    "observed_delta_class",
+                    "observed_output_class",
+                    "output_delta.observed_delta_class",
+                    "output_delta_gate.observed_output_class",
+                    "anti_loop_progress_gate.observed_delta_class",
+                    "result.anti_loop_progress_gate.observed_delta_class",
+                ],
+            )
+            or ""
+        ).lower()
+        strict_observed_change = (
+            boolish(terminal_outcome_value)
+            if terminal_outcome_value is not None
+            else (
+                boolish(changed_vs_previous)
+                and boolish(semantic_progress)
+                and (
+                    boolish(produced_domain_delta)
+                    or observed_delta_class
+                    in {"node_edge_delta", "semantic_delta", "changed_semantic_output", "primary_output_delta"}
+                )
+            )
+        )
+        if progress_verdict == "advanced" and not strict_observed_change:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_advanced_without_terminal_outcome_changed",
+                "`validate` cannot report progress_verdict: advanced without terminal_outcome_changed=true or strict changed-and-semantic observed output delta.",
+                {
+                    "terminal_outcome_changed": terminal_outcome_value,
+                    "changed_vs_previous": changed_vs_previous,
+                    "semantic_progress": semantic_progress,
+                    "produced_domain_delta": produced_domain_delta,
+                    "observed_delta_class": observed_delta_class or None,
+                },
             )
     if target == "report" and task_pack_in_scope(result):
         require_context_field("task_pack_status", "report_task_pack_status_missing", "`report` result references task-pack evidence but lacks `task_pack_status`.")

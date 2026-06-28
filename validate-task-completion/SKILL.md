@@ -94,11 +94,12 @@ When `task.md`, a caller packet, or active workflow evidence references `.agent_
    - `failed`: implementation is absent, required execution fails, audit finds blocking defects, severe task_miss remains open, or the task cannot be safely validated.
    - If ID audit finds high-severity broken links, multiple active tasks, missing validation/run/audit evidence links, or unsafe candidate/miss deletion ambiguity, cap the verdict at `partial` or `failed` depending on whether the missing traceability blocks the task objective.
    - Separately decide `progress_verdict`:
-     - `advanced`: the task unlocked a new execution/readiness/goal state, supplied or validated previously missing evidence, produced useful dataset/KG artifacts, improved qualitative output, or materially reduced an active blocker.
+     - `advanced`: the task unlocked a new execution/readiness/goal state, supplied or validated previously missing evidence, produced useful dataset/KG artifacts, improved qualitative output, or materially reduced an active blocker, and the evidence includes `terminal_outcome_changed=true` or strict observed `changed_vs_previous=true` plus `semantic_progress=true`.
      - `safety_only`: the task passed by proving fail-closed, no-live, non-dispatchable, or guardrail behavior without supplying source-backed evidence, producing dataset/KG artifacts, advancing readiness, or reducing the final-goal blocker.
      - `no_progress`: the task produced no new durable evidence or repeated already-proven safety checks without a new blocker-state transition.
      - `regressed`: the task weakened or broke a required state, contract, validation gate, safety boundary, or goal requirement.
    - Do not classify progress as `advanced` merely because a new input kind was named. Evidence-family progress requires a non-empty supplied artifact path, `produced_domain_delta=true`, or another validated positive domain/output artifact.
+   - Do not classify progress as `advanced` from self-declared `produced_domain_delta`, non-empty counts, fixture-only success, or a blocker-state label unless `terminal_outcome_changed=true` or strict observed changed-and-semantic output-delta evidence is present. Otherwise cap progress at `safety_only`.
    - Do not let `validation_verdict: complete` imply final-goal progress when `progress_verdict` is `safety_only` or `no_progress`.
 
 11. Write a validation report.
@@ -160,6 +161,7 @@ Include an `External advice` gate whenever `.agent_advice/` exists, the caller s
 - Do not delete `.task/task_miss` files from this skill unless the user explicitly requested cleanup and evidence is already recorded.
 - Do not mark unresolved task_miss as complete merely because implementation progressed.
 - Do not mark `progress_verdict: advanced` merely because a no-live/fail-closed safety check passed; name the blocker-state transition or classify it as `safety_only`.
+- Do not mark `progress_verdict: advanced` unless `terminal_outcome_changed=true` or strict observed `changed_vs_previous=true` and `semantic_progress=true` evidence is present.
 - Do not mark named-only input changes as a positive input delta; require supplied artifact evidence or `produced_domain_delta=true`.
 - Do not store secrets, credentials, private tokens, raw sensitive data, or large copyrighted excerpts in validation reports or logs.
 - Do not count a repo, OOM, env, or execution agent as the ID consistency agent; ID validation is additional when agent-based insight is used.

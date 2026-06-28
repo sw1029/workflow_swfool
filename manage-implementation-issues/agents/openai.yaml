@@ -1,4 +1,4 @@
 interface:
   display_name: "Manage Implementation Issues"
   short_description: "Track task-cycle implementation issues"
-  default_prompt: "Use $manage-implementation-issues to create, track, index, and close GitHub or local .issue implementation issues for the current task cycle."
+  default_prompt: "Use $manage-implementation-issues to create, track, index, reopen with quiescence evidence, and close GitHub or local .issue implementation issues for the current task cycle."

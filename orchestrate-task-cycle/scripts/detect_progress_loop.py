@@ -520,44 +520,102 @@ def terminal_progress_item(item: dict[str, Any]) -> bool:
     return False
 
 
+def untried_root_cause_repair_item(item: dict[str, Any]) -> bool:
+    disposition_values = [
+        item.get("selected_task_source"),
+        item.get("selected_task_kind"),
+        item.get("disposition"),
+        item.get("progress_target"),
+        item.get("recommended_disposition"),
+    ]
+    if any("untried_root_cause_repair_required" in str(value or "").lower() for value in disposition_values):
+        return True
+    return boolish(item.get("untried_actionable_root_cause_exists"))
+
+
+def quiescence_progress_item(item: dict[str, Any]) -> bool:
+    if terminal_progress_item(item):
+        return True
+    if not untried_root_cause_repair_item(item):
+        return False
+    terminal_outcome = item.get("terminal_outcome_changed")
+    produced = (item.get("output_delta_gate") or {}).get("produced_domain_delta")
+    semantic = (item.get("output_delta_gate") or {}).get("semantic_progress")
+    return not (boolish(terminal_outcome) or (boolish(produced) and boolish(semantic)))
+
+
+def untried_quiescence_reconcile(progress_items: list[dict[str, Any]], raw_quiescence_required: bool) -> dict[str, Any]:
+    untried_exists = any(boolish(item.get("untried_actionable_root_cause_exists")) for item in progress_items)
+    exhausted = any(boolish(item.get("hypothesis_exhausted")) for item in progress_items)
+    unverified_count = sum(int(item.get("root_cause_unverified_count") or 0) for item in progress_items)
+    actionable_verified = untried_exists and not exhausted and unverified_count == 0
+    override = bool(raw_quiescence_required and actionable_verified)
+    return {
+        "raw_quiescence_required": raw_quiescence_required,
+        "untried_actionable_root_cause_exists": untried_exists,
+        "hypothesis_exhausted": exhausted,
+        "actionability_unverified_count": unverified_count,
+        "overridden_by_untried_root_cause": override,
+        "quiescence_required": raw_quiescence_required and not override,
+        "override_rule": "verified_untried_root_cause_can_override_quiescence_until_budget_exhaustion",
+    }
+
+
 def terminal_quiescence_gate(progress_items: list[dict[str, Any]], has_supplied_input_delta: bool, threshold: int) -> dict[str, Any]:
-    first_terminal = next((item for item in progress_items if terminal_progress_item(item)), None)
+    first_terminal = next((item for item in progress_items if quiescence_progress_item(item)), None)
     if not first_terminal:
+        reconcile = untried_quiescence_reconcile(progress_items, False)
         return {
             "gate": "T-QUIESCENCE",
             "status": "not_applicable",
             "threshold": threshold,
             "terminal_streak": 0,
             "quiescence_required": False,
+            "raw_quiescence_required": False,
             "commit_skipped_reason": None,
             "terminal_root_key": None,
             "has_supplied_input_delta": has_supplied_input_delta,
+            "overridden_by_untried_root_cause": False,
+            "quiescence_untried_reconcile": reconcile,
         }
     root_key_value = str(first_terminal.get("root_key") or first_terminal.get("semantic_signature") or first_terminal.get("blocker_signature") or "unknown")
     streak = 0
+    untried_repair_streak = 0
     evidence_paths: list[str] = []
+    streak_item_kinds: list[str] = []
     for item in progress_items:
         item_root = str(item.get("root_key") or item.get("semantic_signature") or item.get("blocker_signature") or "unknown")
-        if item_root != root_key_value or not terminal_progress_item(item):
+        if item_root != root_key_value or not quiescence_progress_item(item):
             break
         streak += 1
+        if untried_root_cause_repair_item(item):
+            untried_repair_streak += 1
+            streak_item_kinds.append("untried_root_cause_repair_required")
+        else:
+            streak_item_kinds.append("terminal")
         if item.get("path"):
             evidence_paths.append(str(item["path"]))
-    required = streak >= threshold and not has_supplied_input_delta
+    raw_required = streak >= threshold and not has_supplied_input_delta
+    reconcile = untried_quiescence_reconcile(progress_items, raw_required)
+    required = bool(reconcile["quiescence_required"])
     return {
         "gate": "T-QUIESCENCE",
         "status": "block" if required else "ok",
         "threshold": threshold,
         "terminal_streak": streak,
+        "untried_repair_required_streak": untried_repair_streak,
+        "streak_item_kinds": streak_item_kinds[:10],
         "terminal_root_key": root_key_value,
         "quiescence_required": required,
+        "raw_quiescence_required": raw_required,
         "has_supplied_input_delta": has_supplied_input_delta,
         "commit_skipped_reason": "terminal_quiescence" if required else None,
-        "allowed_dispositions": ["terminal_blocked", "user_escalation"],
+        "allowed_dispositions": ["terminal_blocked", "user_escalation"] if required else ["goal_productive", "terminal_blocked", "user_escalation"],
         "evidence_paths": evidence_paths[:10],
         "handoff_only": required,
         "closeout_reproduction_allowed": not required,
-        "overridden_by_untried_root_cause": False,
+        "overridden_by_untried_root_cause": reconcile["overridden_by_untried_root_cause"],
+        "quiescence_untried_reconcile": reconcile,
     }
 
 
@@ -1780,6 +1838,14 @@ def evidence_item_from_value(
     validator_gate = validator_integrity_gate(value)
     correction_class = task_correction_class(value, delta, coverage_gate, dispatch_gate)
     detection_only = correction_class == "detection" and kind != "goal_productive"
+    unverified_hypotheses = first_value(
+        value,
+        (
+            "root_cause_unverified_hypotheses",
+            "anti_loop_progress_gate.root_cause_unverified_hypotheses",
+            "result.anti_loop_progress_gate.root_cause_unverified_hypotheses",
+        ),
+    )
     return {
         "path": rel_path(root, path),
         "source": source,
@@ -1789,7 +1855,8 @@ def evidence_item_from_value(
         "progress_target": first_value(value, ("progress_target", "target_progress", "selected_progress_target")),
         "selected_task_source": first_value(value, ("selected_task_source", "derive.selected_task_source")),
         "selected_task_kind": first_value(value, ("selected_task_kind", "derive.selected_task_kind")),
-        "disposition": first_value(value, ("selected_disposition", "disposition")),
+        "disposition": first_value(value, ("selected_disposition", "disposition", "recommended_disposition")),
+        "recommended_disposition": first_value(value, ("recommended_disposition", "anti_loop_progress_gate.recommended_disposition")),
         "blockers": blockers,
         "blocker_signature": signature,
         "semantic_signature": semantic,
@@ -1807,6 +1874,13 @@ def evidence_item_from_value(
         "provider_scale_dispatch_gate": dispatch_gate,
         "provider_reattempt_gate": provider_gate,
         "validator_integrity_gate": validator_gate,
+        "terminal_outcome_changed": boolish(first_value(value, ("terminal_outcome_changed", "anti_loop_progress_gate.terminal_outcome_changed"))),
+        "observed_delta_class": first_value(value, ("observed_delta_class", "anti_loop_progress_gate.observed_delta_class")),
+        "untried_actionable_root_cause_exists": boolish(first_value(value, ("untried_actionable_root_cause_exists", "anti_loop_progress_gate.untried_actionable_root_cause_exists"))),
+        "hypothesis_exhausted": boolish(first_value(value, ("hypothesis_exhausted", "anti_loop_progress_gate.hypothesis_exhausted"))),
+        "vacuous_untried_streak": number_value(first_value(value, ("vacuous_untried_streak", "anti_loop_progress_gate.vacuous_untried_streak"))) or 0,
+        "vacuous_untried_attempt_count": number_value(first_value(value, ("vacuous_untried_attempt_count", "anti_loop_progress_gate.vacuous_untried_attempt_count"))) or 0,
+        "root_cause_unverified_count": len(unverified_hypotheses) if isinstance(unverified_hypotheses, list) else 0,
         "task_correction_class": correction_class,
         "detection_only": detection_only,
         "metadata_only": delta["metadata_only"] or kind == "governance_only",
@@ -2543,6 +2617,15 @@ def analyze(
                 "evidence": terminal_quiescence_gate_result,
             }
         )
+    elif (terminal_quiescence_gate_result.get("quiescence_untried_reconcile") or {}).get("overridden_by_untried_root_cause"):
+        findings.append(
+            {
+                "severity": "warn",
+                "code": "terminal_quiescence_overridden_by_untried_root_cause",
+                "message": "Terminal quiescence was reached but a verified, unexhausted untried root-cause repair may still be promoted.",
+                "evidence": terminal_quiescence_gate_result,
+            }
+        )
     if consolidation_streak_count >= CONSOLIDATION_STREAK_CAP:
         if "consolidation" in effective_allowed:
             effective_allowed = [item for item in effective_allowed if item != "consolidation"]
@@ -2621,6 +2704,7 @@ def analyze(
         "validator_integrity_gate": validator_integrity_gate_result,
         "detection_balance_gate": detection_balance_gate,
         "terminal_quiescence_gate": terminal_quiescence_gate_result,
+        "quiescence_untried_reconcile": terminal_quiescence_gate_result.get("quiescence_untried_reconcile"),
         "root_axis_gate": root_axis_gate,
         "autonomous_retarget_disabled": autonomous_retarget_disabled,
         "hard_stop_required": (

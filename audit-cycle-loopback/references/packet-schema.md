@@ -66,8 +66,14 @@ Additive anti-loop gate fields:
 - `root_cause_ledger_path`: `.task/anti_loop/root_cause_ledger.jsonl` unless overridden.
 - `root_cause_ledger_status`: `recorded` or `not_applicable_no_hypotheses`.
 - `root_cause_ledger_entries`: ledger rows proposed or written for this cycle.
-- `untried_actionable_root_cause_exists`: boolean terminal-blocker veto when at least one local, bounded, provider-free, in-scope, authority-allowed hypothesis remains untried.
+- `root_cause_unverified_hypotheses`: asserted-actionable hypotheses excluded because they lack structural actionability or provenance.
+- `root_cause_duplicate_hypotheses`: hypotheses excluded because they are equivalent to an attempted hypothesis by normalized slug, target surface, and observed delta class.
+- `untried_actionable_root_cause_exists`: boolean terminal-blocker veto when at least one verified local, bounded, provider-free, in-scope, authority-allowed or provenance-backed hypothesis remains untried and `hypothesis_exhausted=false`.
 - `untried_root_cause_hypotheses`: compact list of remaining actionable untried hypotheses.
+- `untried_promotion_budget`: same-family vacuous untried repair cap, default `2`.
+- `vacuous_untried_attempt_count` and `vacuous_untried_streak`: count attempted untried repairs with `terminal_outcome_changed=false`.
+- `hypothesis_exhausted`: boolean hard stop when the untried budget is spent without terminal outcome change.
+- `hypothesis_exhaustion_seal_path`: `.task/sealed_blocker_families.json` path when exhaustion is fed into sealed-family workflow state.
 - `terminal_blocked_invalid_due_to_untried_root_cause`: alias boolean for derive/result-contract consumers.
 - `force_implementation_cycle`: boolean requiring derive to choose implementation work after the forward-mutation budget is exhausted.
 - `task_correction_class`: `detection`, `correction`, `mixed`, or `unknown`.
@@ -99,7 +105,7 @@ Integrity rule: `validator_integrity_gate.status=block` prevents validator-deriv
 
 Mutation rule: `blocker_mutation_kind=facet_rename` is same-family churn. `blocker_mutation_kind=forward_mutation` counts as blocker-state movement only when stricter gates are clear and `terminal_outcome_changed=true`. If `forward_mutation_vacuous=true`, consumers must not reset loop counters or promote `goal_productive`; route to untried root-cause repair when available, otherwise terminal/user escalation. If `force_implementation_cycle=true`, consumers must choose an in-place implementation task or terminal/user escalation when implementation is not authorized.
 
-Root-cause ledger rule: `root_cause_ledger_entries` are non-GT workflow evidence keyed by `family_key`, `root_key`, and `hypothesized_root_cause`. If `untried_actionable_root_cause_exists=true`, `terminal_blocked` is invalid unless current authority, safety, or external state makes that hypothesis non-actionable. Derive must promote the untried hypothesis as the next goal-productive repair task.
+Root-cause ledger rule: `root_cause_ledger_entries` are non-GT workflow evidence keyed by `family_key`, `root_key`, and `hypothesized_root_cause`. A hypothesis is untried only when it is actionability-verified and distinct from attempted hypotheses by normalized root cause, target surface, and observed delta class. Assertion-only `actionable=true` rows are `unverified`; version-suffix or rename equivalents are duplicates. If `untried_actionable_root_cause_exists=true` and `hypothesis_exhausted=false`, `terminal_blocked` is invalid unless current authority, safety, or external state makes that hypothesis non-actionable. If `hypothesis_exhausted=true`, derive must stop, terminal-block, or user-escalate unless a supplied input delta changes the family.
 
 Facet rule: adapter-supplied `facet_root_map` entries collapse facet labels before root-family streaks and measurement caps are computed. Without a map, the producer applies only conservative suffix/date/run/facet normalization.
 

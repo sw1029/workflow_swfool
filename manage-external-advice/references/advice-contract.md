@@ -54,6 +54,8 @@ This contract defines `.agent_advice/` artifacts. Advice is direction evidence, 
 - advice_metrics_stale: true | false | unknown
 - declared_output_fingerprints: []
 - current_output_fingerprint: <fingerprint or unknown>
+- re_advised_dead_hypothesis: true | false | unknown
+- dead_hypothesis_claims: []
 - freshness_reason: <why the advice is current, stale, or unknown>
 
 ## Conflicts
@@ -97,6 +99,7 @@ Record advice in `.agent_advice/index.jsonl` and `$manage-task-state-index`:
 - useful fields: `not_goal_truth`, `status`, `raw_source_path`, `scope`, `priority`, `source_label`
 - fidelity fields: `fidelity_status`, `fidelity_reason`, `raw_direct_reference_required`
 - freshness fields: `advice_metrics_stale`, `declared_output_fingerprints`, `current_output_fingerprint`, `freshness_reason`
+- root-cause freshness fields: `re_advised_dead_hypothesis`, `dead_hypothesis_claims`, `root_cause_ledger_path`
 - useful links: `advice_for`, `incorporated_into`, `applied_by`, `rejected_by`, `superseded_by`, `conflicts_with_goal`, `conflicts_with_authority`
 
 ## Audit Freshness Gate
@@ -107,9 +110,12 @@ When `scripts/advice_registry.py audit` receives `--current-output-fingerprint` 
 - `advice_freshness_gate.declared_fingerprint_claims`
 - `advice_freshness_gate.advice_metrics_stale`
 - `advice_freshness_gate.stale_advice`
+- `advice_freshness_gate.re_advised_dead_hypothesis`
+- `advice_freshness_gate.dead_hypothesis_claims`
 - warn-level `advice_metrics_stale` findings for each stale active advice item
+- warn-level `re_advised_dead_hypothesis` findings for each active advice item that re-supplies an already attempted root-cause hypothesis with `terminal_outcome_changed=false`
 
-This gate recommends refresh, deferral, rejection, or current-evidence justification. It does not auto-promote advice to goal truth and does not by itself mark advice applied.
+This gate recommends refresh, deferral, rejection, current-evidence justification, or a required supplied input delta. It does not auto-promote advice to goal truth and does not by itself mark advice applied.
 
 ## Precedence
 
@@ -118,3 +124,5 @@ Advice is below system/developer/user instructions, `.agent_goal` GT, authority 
 If `fidelity_status` is `degenerate` or `needs_review`, downstream workflows must cite or inspect `raw_source_path` before applying directives. Normalized claims/directives alone are not sufficient application evidence in that state.
 
 If `advice_metrics_stale` is `true`, downstream workflows must refresh, defer, reject, or explicitly justify use against current repository evidence before relying on headline metric or fingerprint claims. Advice freshness is a warning gate, not goal truth.
+
+If `re_advised_dead_hypothesis` is `true`, downstream workflows must not use that advice as fresh untried root-cause evidence unless it supplies a new input delta, authority change, or external-state change.

@@ -214,7 +214,7 @@ The producer must compute `anti_loop_progress_gate` from raw artifact content an
 - `provider_request_count` and other safe provider/env behavior scalars when available
 - `quality_vector`, including confidence and domain-context fields when the adapter supplies them
 - `previous_accepted_baseline`, `coverage_quality_delta_reconciliation_gate`, `substance_delta_gate`, `vacuous_corrective_gate`, `facet_root_map_applied`, `advice_freshness_gate`, and `structure_metrics_gate`
-- `terminal_outcome_changed`, `observed_delta_class`, `forward_mutation_vacuous`, `root_cause_ledger_path`, `untried_actionable_root_cause_exists`, and `untried_root_cause_hypotheses` when applicable
+- `terminal_outcome_changed`, `observed_delta_class`, `forward_mutation_vacuous`, `root_cause_ledger_path`, `root_cause_unverified_hypotheses`, `root_cause_duplicate_hypotheses`, `untried_actionable_root_cause_exists`, `untried_root_cause_hypotheses`, `untried_promotion_budget`, `vacuous_untried_streak`, and `hypothesis_exhausted` when applicable
 - `recommended_disposition`, `hard_stop_required`, `evidence_class`, and evidence paths
 
 The repository adapter or shared module must fail closed on noisy quality inputs. If confidence is low, artifacts are missing/malformed, adapter output is missing, or domain interpretation is uncertain, emit `evidence_class: insufficient_evidence`, `recommended_disposition: conservative_hold`, and `hard_stop_required: true`. Legacy repository quality modules may remain as compatibility fallbacks, but new domain-specific metrics, paths, lexicons, and thresholds belong behind the adapter interface.
@@ -227,7 +227,9 @@ Use the packet as a derive gate:
 - `effective_allowed_dispositions` bounds the next selected disposition. Do not choose a disposition by taking a union of individual gates.
 - `substance_delta_gate.substance_delta_pass=false` blocks measurement promotion unless strict changed-and-semantic primary-output evidence exists.
 - `blocker_mutation_kind=forward_mutation` blocks rung promotion unless `terminal_outcome_changed=true`; set `forward_mutation_vacuous=true` when the ladder moved but observed domain output did not.
-- `untried_actionable_root_cause_exists=true` invalidates terminal blocking and forces derive to select the untried root-cause repair when it remains local, bounded, provider-free, in-scope, and authority-allowed.
+- `untried_actionable_root_cause_exists=true` invalidates terminal blocking and forces derive to select the untried root-cause repair only when `hypothesis_exhausted=false` and the hypothesis is actionability-verified.
+- `root_cause_unverified_hypotheses` and `root_cause_duplicate_hypotheses` never override terminal/quiescence. Self-asserted actionability without structural fields or provenance is not enough, and rename/version suffix equivalents are not fresh hypotheses.
+- `hypothesis_exhausted=true` means the same family has spent the untried repair budget on vacuous attempts; derive must terminal-block or user-escalate unless a supplied input delta changes the family.
 - `vacuous_corrective_gate.surface_corrective_noop=true` blocks counting unresolved corrective rows as output delta.
 
 ## A1 Measurement Progress Exemption
@@ -250,9 +252,9 @@ Track `forward_mutation_budget_remaining`. When it reaches zero, set `force_impl
 
 ## A2b Root-Cause Hypothesis Ledger
 
-`$audit-cycle-loopback` may append `.task/anti_loop/root_cause_ledger.jsonl` rows keyed by `family_key`, `root_key`, and `hypothesized_root_cause`. The hypothesis slug is domain-owned; the generic workflow only evaluates whether it was attempted, whether terminal outcome changed, and whether it is actionable under `local`, `bounded`, `provider_free`, `in_scope`, and `authority_allowed`.
+`$audit-cycle-loopback` may append `.task/anti_loop/root_cause_ledger.jsonl` rows keyed by `family_key`, `root_key`, and `hypothesized_root_cause`. The hypothesis slug is domain-owned; the generic workflow evaluates whether it was attempted, whether terminal outcome changed, whether it is actionability-verified, and whether it is distinct from attempted hypotheses by normalized `(hypothesized_root_cause, target_surface, observed_delta_class)`.
 
-Before terminal blocking or sealing, `$derive-improvement-task` must check the loopback packet or ledger summary. If `untried_actionable_root_cause_exists=true`, terminal blocking is invalid. Promote that hypothesis as the next `goal_productive` repair task unless authority, safety, or external state makes it non-actionable and records that rationale.
+Before terminal blocking or sealing, `$derive-improvement-task` must check the loopback packet or ledger summary. If `untried_actionable_root_cause_exists=true` and `hypothesis_exhausted=false`, terminal blocking is invalid. Promote that hypothesis as the next `goal_productive` repair task unless authority, safety, or external state makes it non-actionable and records that rationale. If `hypothesis_exhausted=true`, do not promote another same-family untried repair without supplied input delta; terminal-block or user-escalate.
 
 ## A3 Terminal-Blocked Exit Guard
 
@@ -266,7 +268,7 @@ Before derive writes `terminal_blocked`, check the next unsatisfied capability-l
 
 When loop detection reports `terminal_quiescence_gate.quiescence_required=true`, the orchestrator must not automatically start another domain cycle for the same `root_key`. Record one user-handoff note and skip closeout/dashboard/report/recheck reproduction with `commit_skipped_reason: terminal_quiescence`.
 
-This gate applies only when `has_supplied_input_delta=false` and the same root has reached terminal state at least `terminal_quiescence_threshold` consecutive times, default `2`. If the root-cause ledger exposes an untried actionable hypothesis, select that repair task instead of quiescing.
+This gate applies only when `has_supplied_input_delta=false` and the same root has reached terminal state at least `terminal_quiescence_threshold` consecutive times, default `2`. Count `untried_root_cause_repair_required` records with no terminal outcome change as same-root no-progress records for the streak. Use `quiescence_untried_reconcile` as the single source of truth for priority: a verified, unexhausted untried hypothesis may override quiescence; exhausted or unverified hypotheses may not.
 
 ## A4 Advice-Intake Coherence Gate
 

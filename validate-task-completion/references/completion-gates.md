@@ -15,12 +15,12 @@ Use these values in validation reports:
 
 Report progress separately from validation status:
 
-- `advanced`: the task moved a blocker, execution state, schema/contract state, issue state, or final-goal state forward.
+- `advanced`: the task moved a blocker, execution state, schema/contract state, issue state, or final-goal state forward with `terminal_outcome_changed=true` or strict observed `changed_vs_previous=true` plus `semantic_progress=true`.
 - `safety_only`: validation passed, but the task only proved fail-closed/no-live behavior or added a defensive guard without reducing the active blocker.
 - `no_progress`: the task did not produce meaningful new evidence or state movement.
 - `regressed`: the task weakened, broke, or contradicted a required state.
 
-Validation can be `complete` while progress is only `safety_only`; do not describe that as final-goal completion or issue closure unless the task explicitly defined that safety proof as the required state transition.
+Validation can be `complete` while progress is only `safety_only`; do not describe that as final-goal completion or issue closure unless the task explicitly defined that safety proof as the required state transition. Self-declared `produced_domain_delta`, fixture-only success, non-empty counts, or blocker label movement cannot make progress `advanced` without `terminal_outcome_changed=true` or strict observed changed-and-semantic output-delta evidence.
 
 ## Validation Profiles
 

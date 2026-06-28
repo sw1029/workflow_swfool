@@ -19,6 +19,7 @@ The skill is workflow evidence only. It is not goal truth, authority, validation
    - Pass `--measurement-frontier` for first-observed frontiers such as `event_sequence_oracle`, `reconstruction_coverage`, `relation_class_filled`, or `story_vs_narrative_split`.
    - Pass `--blocker-signature` and `--blocker-rung` when qualitative review, loop detection, or a task pack identifies the current blocker and capability-ladder rung.
    - Pass root-cause hypotheses with `--root-cause-hypotheses-json` or `--hypothesized-root-cause`; mark `--root-cause-repair-attempted` only when the active task explicitly targeted that hypothesis. Domain adapters may instead expose `root_cause_hypotheses(...)`.
+   - Treat `--root-cause-actionable` or `actionable=true` as an assertion that still needs either all structural fields (`local`, `bounded`, `provider_free`, `in_scope`, `authority_allowed`) or at least one provenance reference such as advice, issue, run, or evidence path. Assertion-only hypotheses are `unverified` and are excluded from untried promotion.
    - Keep `--detection-only-streak-cap` at the default `2` unless the active workflow explicitly records a different cap. This cap is root-family scoped and only controls detection-only repetition.
 3. Write the resulting packet under `.task/cycle/<cycle-id>/packets/loopback_audit_packet.json` when `$orchestrate-task-cycle` owns durable cycle artifacts.
 4. Pass the packet into `$derive-improvement-task` as `anti_loop_progress_gate`.
@@ -35,7 +36,7 @@ Prefer a repository-supplied domain adapter over producer-local domain assumptio
 - `output_fingerprint(...) -> str`: current primary-output fingerprint for G-ADVICE-FRESH.
 - `previous_accepted_fp(...) -> str|dict`: previous accepted primary-output fingerprint, and optionally previous quality/high-water vector, for R-GCOV baseline selection.
 - `structure_metrics(...) -> dict`: optional entrypoint/module structure metrics such as LOC, command count, function count, or consolidation recommendation for S-STRUCT.
-- `root_cause_hypotheses(...) -> list|dict`: domain-owned root-cause hypothesis slugs plus optional `repair_attempted`, `repair_task_id`, `local`, `bounded`, `provider_free`, `in_scope`, `authority_allowed`, and `actionable` booleans.
+- `root_cause_hypotheses(...) -> list|dict`: domain-owned root-cause hypothesis slugs plus optional `target_surface`, `observed_delta_class`, `repair_attempted`, `repair_task_id`, `local`, `bounded`, `provider_free`, `in_scope`, `authority_allowed`, `actionable`, and provenance fields such as `advice_id`, `issue_id`, `run_id`, `evidence_paths`, or `provenance_refs`.
 
 The adapter must keep domain-specific file paths, metric names, lexicons, and thresholds outside this skill. If no adapter is registered, the producer keeps the legacy repository fallback for `scripts/novel_kg_quality_metrics.py` or `NOVEL_KG_QUALITY_METRICS_PATH`, but missing substance metrics fail closed for measurement or capability-ladder promotion.
 
@@ -67,6 +68,7 @@ python3 /home/swfool/.codex/skills/audit-cycle-loopback/scripts/anti_loop_gate_p
   --blocker-rung pov_timeline \
   --hypothesized-root-cause prompt_candidate_row_gate \
   --root-cause-actionable \
+  --untried-promotion-budget 2 \
   --write-registry \
   --output .task/cycle/cycle-YYYYMMDD-HHMMSS/packets/loopback_audit_packet.json
 ```
@@ -94,7 +96,10 @@ Use `--artifact-paths-json` when a run packet already lists artifact paths.
 - Treat `blocker_mutation_kind=forward_mutation` as changed blocker-state progress only when `terminal_outcome_changed=true` from observed output-delta evidence. If the ladder rung changes but the terminal outcome does not, emit `forward_mutation_vacuous=true`, keep/raise the hard stop, and route to untried root-cause repair or terminal/user escalation.
 - Treat `blocker_mutation_kind=facet_rename` as lateral churn, not forward mutation. Facet names, suffixes, dates, run directories, and version labels do not reset the root-family cap.
 - Treat `requires_correction_or_terminal=true` as G-BALANCE: detection-only work has repeated for the same root blocker family while semantic progress remains false. Downstream derivation must choose correction/implementation work, `terminal_blocked`, or `user_escalation`; another validator, metric, gate, dashboard, lineage, or report is not goal-productive.
-- Treat `untried_actionable_root_cause_exists=true` as a terminal-blocker veto. Downstream derivation must promote the untried local, bounded, provider-free, in-scope, authority-allowed hypothesis as the next goal-productive repair task instead of sealing the family.
+- Treat `untried_actionable_root_cause_exists=true` as a terminal-blocker veto only while `hypothesis_exhausted=false`. Downstream derivation must promote the verified untried hypothesis as the next goal-productive repair task instead of sealing the family.
+- Treat `root_cause_unverified_hypotheses` as excluded from untried promotion. A self-asserted `actionable` flag without structural fields or provenance must not override terminal/quiescence.
+- Treat `root_cause_duplicate_hypotheses` as excluded from untried promotion. Version suffixes, renamed slugs, and same `(root cause, target surface, observed delta class)` equivalents do not create fresh untried hypotheses.
+- Treat `hypothesis_exhausted=true` as a hard stop equivalent to quiescence: after the same family spends the `untried_promotion_budget` on vacuous repairs with `terminal_outcome_changed=false`, route to `terminal_blocked` or `user_escalation` unless a supplied input delta changes the family.
 - Treat `orphan_advice_not_intaken` findings as warn-only coherence findings: root steering docs such as `task_advice.md`, `skill_advice.md`, or `task_doctor_steering.md` need `$manage-external-advice intake` before derive can reliably consume them as active non-GT advice.
 - Never use `produced_domain_delta`, `progress=advanced`, non-empty row counts, lineage, gap reports, task-state records, or renamed command families as truth by themselves.
 
@@ -104,7 +109,9 @@ The producer owns `.task/anti_loop/family_progress_registry.jsonl` and the addit
 
 - Key rows by suffix-normalized `family_key`; do not include input fingerprints, run directories, timestamps, or sampled work ids in the key.
 - Append or compact only this registry. Do not edit candidate outputs, task packs, issues, schema records, advice files, or implementation code.
-- Append root-cause ledger rows idempotently by `(cycle_id, family_key, root_key, hypothesized_root_cause)`. The ledger is non-GT workflow evidence and records only whether a domain-owned hypothesis was attempted and whether the terminal outcome changed.
+- Append root-cause ledger rows idempotently by `(cycle_id, family_key, root_key, hypothesized_root_cause)`. The ledger is non-GT workflow evidence and records only whether a domain-owned hypothesis was attempted, whether the terminal outcome changed, actionability provenance, and compact distinctness fields.
+- Compact root-cause ledger rows by family and equivalent `(root cause, target_surface, observed_delta_class)` while preserving `attempt_count` and `vacuous_attempt_count`; do not let version suffixes or renamed slugs grow the ledger indefinitely.
+- When `hypothesis_exhausted=true`, feed the exhausted family into `.task/sealed_blocker_families.json` as workflow state so later cycles cannot silently regenerate untried repair tasks for the same family without new input.
 - Re-running the same `cycle_id` for the same `family_key` must be idempotent.
 - On idempotent replay, preserve recorded measurement, blocker-mutation, disposition, consolidation, and finding fields from the existing registry row; do not let the replay treat its own check IDs or frontiers as already-known evidence and erase A1/A2 progress fields.
 - Missing or malformed artifacts must not increment counters or update high-water marks.

@@ -18,6 +18,11 @@ FINGERPRINT_CLAIM_RE = re.compile(
     r"(?:output[_ -]?fingerprints?|current[_ -]?output[_ -]?fingerprints?|artifact[_ -]?fingerprints?|fingerprints?)\s*[:=]\s*([A-Za-z0-9_.:/-]{8,128})",
     re.IGNORECASE,
 )
+ROOT_CAUSE_CLAIM_RE = re.compile(
+    r"(?:hypothesized[_ -]?root[_ -]?cause|root[_ -]?cause|root cause|가설|원인)\s*[:=：]\s*`?([A-Za-z0-9가-힣_.:/-]{3,128})`?",
+    re.IGNORECASE,
+)
+ROOT_CAUSE_LEDGER_REL_PATH = ".task/anti_loop/root_cause_ledger.jsonl"
 METADATA_LINE_RE = re.compile(
     r"^\s*(?:[-*]\s*)?(?:문서\s*종류|작성일|작성\s*근거|성격|동반\s*문서|advice_id|status|"
     r"not_goal_truth|raw_source_path|received_at|normalized_at|scope|priority|source_label)\s*[:：]",
@@ -68,6 +73,78 @@ def sha256_file(path: Path) -> str | None:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if not path.is_file():
+        return rows
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                rows.append(value)
+    return rows
+
+
+def bool_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "yes", "1", "present"}
+    return False
+
+
+def normalize_root_cause_slug(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    raw = re.sub(r"\bcycle-\d{8}-\d{6}\b", "cycle", raw)
+    raw = re.sub(r"\b20\d{6}(?:[-_]\d{2,6})?\b", "date", raw)
+    raw = re.sub(r"\b\d{8,14}\b", "date", raw)
+    raw = re.sub(r"\b[0-9a-f]{7,40}\b", "hash", raw)
+    raw = re.sub(r"\bv\d+\b|[-_]v\d+\b", "vnnn", raw)
+    raw = re.sub(r"[^a-z0-9가-힣_.:/-]+", "-", raw)
+    raw = re.sub(r"([_.:/-])v(?:nnn|\d+)$", "", raw)
+    raw = re.sub(r"-{2,}", "-", raw).strip("-_.:/|")
+    return raw or "unknown_root_cause"
+
+
+def extract_root_cause_claims(text: str) -> list[str]:
+    claims = {normalize_root_cause_slug(match.group(1)) for match in ROOT_CAUSE_CLAIM_RE.finditer(text)}
+    for match in re.finditer(r"root_cause_claims\s*:\s*(\[[^\]\n]*\])", text, re.IGNORECASE):
+        try:
+            loaded = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(loaded, list):
+            claims.update(normalize_root_cause_slug(item) for item in loaded)
+    return sorted(claim for claim in claims if claim != "unknown_root_cause")
+
+
+def dead_root_cause_rows(root: Path, raw_path: str | None = None) -> list[dict[str, Any]]:
+    path = Path(raw_path or ROOT_CAUSE_LEDGER_REL_PATH)
+    if not path.is_absolute():
+        path = root / path
+    dead: list[dict[str, Any]] = []
+    for row in read_jsonl(path):
+        if bool_value(row.get("repair_attempted")) and not bool_value(row.get("terminal_outcome_changed")):
+            dead.append(
+                {
+                    "hypothesized_root_cause": normalize_root_cause_slug(row.get("hypothesized_root_cause")),
+                    "family_key": row.get("family_key"),
+                    "root_key": row.get("root_key"),
+                    "root_family_key": row.get("root_family_key"),
+                    "cycle_id": row.get("cycle_id"),
+                    "path": rel_path(root, path),
+                }
+            )
+    return dead
 
 
 def load_json_value(root: Path, raw: str | None) -> Any:
@@ -624,12 +701,39 @@ def cmd_audit(args: argparse.Namespace) -> None:
     current_output_fingerprint = current_fingerprint_from_args(root, args)
     declared_claims: list[dict[str, Any]] = []
     stale_advice: list[dict[str, Any]] = []
+    dead_rows = dead_root_cause_rows(root, getattr(args, "root_cause_ledger_path", None))
+    dead_by_slug: dict[str, list[dict[str, Any]]] = {}
+    for row in dead_rows:
+        dead_by_slug.setdefault(str(row["hypothesized_root_cause"]), []).append(row)
+    dead_hypothesis_claims: list[dict[str, Any]] = []
     for item in state.values():
         path_value = item.get("path")
         if path_value and not (root / str(path_value)).exists() and item.get("status") != "deleted":
             findings.append({"severity": "high", "code": "missing_path", "advice_id": item.get("advice_id"), "path": path_value})
         if item.get("status") == "active":
             text = (root / str(path_value)).read_text(encoding="utf-8", errors="replace") if path_value and (root / str(path_value)).is_file() else ""
+            root_cause_claims = extract_root_cause_claims(text)
+            for claim in root_cause_claims:
+                matches = dead_by_slug.get(claim) or []
+                if not matches:
+                    continue
+                dead_claim = {
+                    "advice_id": item.get("advice_id"),
+                    "path": path_value,
+                    "hypothesized_root_cause": claim,
+                    "dead_ledger_rows": matches[:5],
+                }
+                dead_hypothesis_claims.append(dead_claim)
+                findings.append(
+                    {
+                        "severity": "warn",
+                        "code": "re_advised_dead_hypothesis",
+                        "advice_id": item.get("advice_id"),
+                        "path": path_value,
+                        "message": "active advice re-supplies a root-cause hypothesis already attempted without terminal_outcome_changed; do not use it as fresh untried evidence without new input delta.",
+                        "evidence": dead_claim,
+                    }
+                )
             declared_fingerprints = extract_fingerprint_claims(text)
             if declared_fingerprints:
                 claim = {
@@ -671,7 +775,10 @@ def cmd_audit(args: argparse.Namespace) -> None:
             "declared_fingerprint_claims": declared_claims,
             "advice_metrics_stale": bool(stale_advice),
             "stale_advice": stale_advice,
-            "status": "warn" if stale_advice else ("not_applicable" if not declared_claims else "pass"),
+            "re_advised_dead_hypothesis": bool(dead_hypothesis_claims),
+            "dead_hypothesis_claims": dead_hypothesis_claims,
+            "root_cause_ledger_path": (dead_rows[0]["path"] if dead_rows else rel_path(root, root / (getattr(args, "root_cause_ledger_path", None) or ROOT_CAUSE_LEDGER_REL_PATH))),
+            "status": "warn" if stale_advice or dead_hypothesis_claims else ("not_applicable" if not declared_claims and not dead_hypothesis_claims else "pass"),
         },
     }
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
@@ -742,6 +849,7 @@ def build_parser() -> argparse.ArgumentParser:
     audit = sub.add_parser("audit", help="Audit advice registry consistency.")
     audit.add_argument("--current-output-fingerprint", help="Current adapter/output fingerprint to compare against active advice claims.")
     audit.add_argument("--current-output-fingerprint-json", help="Path or JSON packet containing current_output_fingerprint or equivalent.")
+    audit.add_argument("--root-cause-ledger-path", default=ROOT_CAUSE_LEDGER_REL_PATH, help="Root-cause ledger used to flag re-advised dead hypotheses.")
     audit.set_defaults(func=cmd_audit)
     return parser
 

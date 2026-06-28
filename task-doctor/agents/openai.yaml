@@ -1,4 +1,4 @@
 interface:
   display_name: "Task Doctor"
   short_description: "Adjust task direction and packs"
-  default_prompt: "Use $task-doctor to replace or retarget task.md from explicit direction, optionally create/update .task/task_pack proposals that include the current task, incorporate named .agent_advice as non-GT direction evidence, and prepare the repository for the next orchestrated cycle."
+  default_prompt: "Use $task-doctor to replace or retarget task.md from explicit direction, record quiescence overrides when needed, optionally create/update .task/task_pack proposals that include the current task, incorporate named .agent_advice as non-GT direction evidence, and prepare the repository for the next orchestrated cycle."
