@@ -15,6 +15,7 @@ from typing import Any
 
 
 REGISTRY_REL_PATH = ".task/anti_loop/family_progress_registry.jsonl"
+ROOT_CAUSE_LEDGER_REL_PATH = ".task/anti_loop/root_cause_ledger.jsonl"
 SCHEMA_VERSION = "anti-loop-progress-gate-v1"
 LEGACY_QUALITY_MODULE_NAME = "novel_kg_quality_metrics.py"
 DOMAIN_ADAPTER_ENV = "TASK_CYCLE_DOMAIN_ADAPTER_PATH"
@@ -65,6 +66,15 @@ IDEMPOTENT_REPLAY_KEYS = (
     "blocker_ladder_rung",
     "blocker_mutation_kind",
     "forward_mutation_budget_remaining",
+    "terminal_outcome_changed",
+    "observed_delta_class",
+    "forward_mutation_vacuous",
+    "root_cause_ledger_path",
+    "root_cause_ledger_status",
+    "root_cause_ledger_entries",
+    "untried_actionable_root_cause_exists",
+    "untried_root_cause_hypotheses",
+    "terminal_blocked_invalid_due_to_untried_root_cause",
     "force_implementation_cycle",
     "task_correction_class",
     "detection_only",
@@ -541,6 +551,35 @@ def write_registry(path: Path, rows: list[dict[str, Any]]) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def append_root_cause_ledger(path: Path, entries: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+    rows = read_jsonl(path)
+    seen = {
+        (
+            str(row.get("cycle_id") or ""),
+            str(row.get("family_key") or ""),
+            str(row.get("root_key") or ""),
+            str(row.get("hypothesized_root_cause") or ""),
+        )
+        for row in rows
+    }
+    changed = False
+    for entry in entries:
+        key = (
+            str(entry.get("cycle_id") or ""),
+            str(entry.get("family_key") or ""),
+            str(entry.get("root_key") or ""),
+            str(entry.get("hypothesized_root_cause") or ""),
+        )
+        if key in seen:
+            continue
+        rows.append(entry)
+        seen.add(key)
+        changed = True
+    if changed:
+        write_registry(path, rows)
+    return rows, changed
+
+
 def bool_value(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -601,6 +640,142 @@ def load_json_value(root: Path, raw: str | None) -> Any:
         return json.loads(raw)
     except json.JSONDecodeError:
         return None
+
+
+def first_scalar_by_key(value: Any, keys: set[str]) -> str | None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if str(key).strip().lower() in keys:
+                scalars = scalar_strings(child)
+                if scalars:
+                    return scalars[0]
+            found = first_scalar_by_key(child, keys)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for child in value:
+            found = first_scalar_by_key(child, keys)
+            if found:
+                return found
+    return None
+
+
+def observed_delta_class(output_delta: Any, changed_vs_previous: bool, semantic_progress: bool) -> str:
+    observed = first_scalar_by_key(
+        output_delta,
+        {"observed_delta_class", "observed_output_class", "output_class", "effective_progress_kind"},
+    )
+    if observed:
+        return observed.strip().lower()
+    if changed_vs_previous and semantic_progress:
+        return "changed_semantic_output"
+    return "no_observed_domain_delta"
+
+
+def terminal_outcome_changed(output_delta: Any, changed_vs_previous: bool, semantic_progress: bool) -> bool:
+    produced = first_scalar_by_key(output_delta, {"produced_domain_delta", "domain_delta", "positive_output_delta"})
+    changed = first_scalar_by_key(output_delta, {"changed_vs_previous"})
+    semantic = first_scalar_by_key(output_delta, {"semantic_progress"})
+    metadata = first_scalar_by_key(output_delta, {"metadata_only"})
+    observed = observed_delta_class(output_delta, changed_vs_previous, semantic_progress)
+    strict_changed = bool_value(changed) if changed is not None else changed_vs_previous
+    strict_semantic = bool_value(semantic) if semantic is not None else semantic_progress
+    if bool_value(metadata):
+        return False
+    if observed in {"node_edge_delta", "semantic_delta", "changed_semantic_output", "primary_output_delta"}:
+        return strict_changed and strict_semantic
+    if produced is not None and not bool_value(produced):
+        return False
+    return bool_value(produced) and strict_changed and strict_semantic
+
+
+def normalize_root_cause_slug(value: Any) -> str:
+    return normalize_root_family_key(str(value or "unknown_root_cause"))
+
+
+def normalize_root_cause_hypotheses(value: Any) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if isinstance(value, dict):
+        for key in ("root_cause_hypotheses", "hypotheses", "items", "root_causes"):
+            if isinstance(value.get(key), list):
+                value = value[key]
+                break
+        else:
+            value = [value]
+    if isinstance(value, str):
+        value = [{"hypothesized_root_cause": value}]
+    if not isinstance(value, list):
+        return []
+    hypotheses: list[dict[str, Any]] = []
+    for item in value:
+        if isinstance(item, str):
+            item = {"hypothesized_root_cause": item}
+        if not isinstance(item, dict):
+            continue
+        raw = item.get("hypothesized_root_cause") or item.get("root_cause") or item.get("root_key") or item.get("root")
+        slug = normalize_root_cause_slug(raw)
+        if slug == "unknown_root_cause":
+            continue
+        normalized = dict(item)
+        normalized["hypothesized_root_cause"] = slug
+        hypotheses.append(normalized)
+    return hypotheses
+
+
+def root_cause_actionable(entry: dict[str, Any]) -> bool:
+    if bool_value(entry.get("actionable")) or bool_value(entry.get("root_cause_actionable")):
+        return True
+    return all(
+        bool_value(entry.get(field))
+        for field in ("local", "bounded", "provider_free", "in_scope", "authority_allowed")
+    )
+
+
+def same_root_cause_scope(row: dict[str, Any], family_key: str, root_key: str, root_family_key: str) -> bool:
+    if str(row.get("family_key") or "") == family_key:
+        return True
+    if root_key and str(row.get("root_key") or "") == root_key:
+        return True
+    if root_family_key and str(row.get("root_family_key") or row.get("blocker_root_family") or "") == root_family_key:
+        return True
+    return False
+
+
+def untried_root_cause_hypotheses(
+    rows: list[dict[str, Any]],
+    family_key: str,
+    root_key: str,
+    root_family_key: str,
+) -> list[dict[str, Any]]:
+    latest_by_root: dict[str, dict[str, Any]] = {}
+    attempted: set[str] = set()
+    for row in rows:
+        if not same_root_cause_scope(row, family_key, root_key, root_family_key):
+            continue
+        root = normalize_root_cause_slug(row.get("hypothesized_root_cause"))
+        latest_by_root[root] = row
+        if bool_value(row.get("repair_attempted")):
+            attempted.add(root)
+    untried = []
+    for root, row in sorted(latest_by_root.items()):
+        if root in attempted or not root_cause_actionable(row):
+            continue
+        untried.append(
+            {
+                "family_key": row.get("family_key"),
+                "root_key": row.get("root_key"),
+                "root_family_key": row.get("root_family_key"),
+                "hypothesized_root_cause": root,
+                "repair_attempted": False,
+                "repair_task_id": row.get("repair_task_id"),
+                "terminal_outcome_changed": bool_value(row.get("terminal_outcome_changed")),
+                "observed_delta_class": row.get("observed_delta_class"),
+                "cycle_id": row.get("cycle_id"),
+                "actionable": True,
+            }
+        )
+    return untried
 
 
 def string_list(value: Any) -> list[str]:
@@ -1874,7 +2049,12 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
             disposition = "prefer_provider_or_semantic"
             hard_stop = False
 
-    if mutation_kind == "forward_mutation" and substance_delta_pass and not coverage_reconciliation_blocks:
+    outcome_changed = terminal_outcome_changed(output_delta, changed_vs_previous, semantic_progress)
+    delta_class = observed_delta_class(output_delta, changed_vs_previous, semantic_progress)
+    forward_mutation_vacuous = mutation_kind == "forward_mutation" and not outcome_changed
+    if forward_mutation_vacuous:
+        hard_stop = True
+    if mutation_kind == "forward_mutation" and outcome_changed and not disagreement and not coverage_reconciliation_blocks:
         changed_vs_previous = True
         count = 0
         hard_stop = False
@@ -1951,6 +2131,9 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
         "blocker_ladder_rung": current_rung,
         "blocker_mutation_kind": mutation_kind,
         "forward_mutation_budget_remaining": forward_budget_remaining,
+        "terminal_outcome_changed": outcome_changed,
+        "observed_delta_class": delta_class,
+        "forward_mutation_vacuous": forward_mutation_vacuous,
         "force_implementation_cycle": force_implementation_cycle,
         "task_correction_class": task_correction_class,
         "detection_only": detection_only,
@@ -1980,6 +2163,88 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
         "not_ready": True,
         "updated_at": now_iso(),
     }
+    root_cause_ledger_path = Path(getattr(args, "root_cause_ledger_path", ROOT_CAUSE_LEDGER_REL_PATH))
+    if not root_cause_ledger_path.is_absolute():
+        root_cause_ledger_path = root / root_cause_ledger_path
+    hypotheses_value = load_json_value(root, getattr(args, "root_cause_hypotheses_json", None))
+    root_cause_adapter_error: str | None = None
+    if hypotheses_value is None:
+        hypotheses_value, root_cause_adapter_error = call_adapter(
+            domain_adapter,
+            "root_cause_hypotheses",
+            root=root,
+            artifact_paths=[rel_path(root, path) for path in paths],
+            quality_vector=quality,
+            output_delta=output_delta,
+            runner_validation=runner_validation,
+            family_key=family_key,
+            root_key=current_root_key,
+            root_family_key=current_root_family_key,
+            blocker_signature=current_blocker_signature,
+            blocker_ladder_rung=current_rung,
+        )
+    hypotheses = normalize_root_cause_hypotheses(hypotheses_value)
+    if getattr(args, "hypothesized_root_cause", None):
+        hypotheses.append(
+            {
+                "hypothesized_root_cause": normalize_root_cause_slug(args.hypothesized_root_cause),
+                "repair_attempted": bool_value(getattr(args, "root_cause_repair_attempted", False)),
+                "repair_task_id": getattr(args, "root_cause_repair_task_id", None),
+                "actionable": bool_value(getattr(args, "root_cause_actionable", False)),
+            }
+        )
+    ledger_entries: list[dict[str, Any]] = []
+    for hypothesis in hypotheses:
+        repair_task_id_raw = (
+            hypothesis.get("repair_task_id")
+            or hypothesis.get("task_id")
+            or getattr(args, "root_cause_repair_task_id", None)
+        )
+        repair_task_id = str(repair_task_id_raw).strip() if repair_task_id_raw is not None else ""
+        if repair_task_id.lower() in {"", "unknown", "none", "null"}:
+            repair_task_id = ""
+        repair_attempted = (
+            bool_value(hypothesis.get("repair_attempted"))
+            or bool_value(getattr(args, "root_cause_repair_attempted", False))
+            or bool(repair_task_id)
+        )
+        entry: dict[str, Any] = {
+            "schema_version": "root-cause-hypothesis-ledger-v1",
+            "cycle_id": args.cycle_id,
+            "family_key": str(hypothesis.get("family_key") or family_key),
+            "root_key": str(hypothesis.get("root_key") or current_root_key),
+            "root_family_key": str(hypothesis.get("root_family_key") or current_root_family_key),
+            "hypothesized_root_cause": normalize_root_cause_slug(hypothesis.get("hypothesized_root_cause")),
+            "repair_attempted": repair_attempted,
+            "repair_task_id": repair_task_id or None,
+            "terminal_outcome_changed": outcome_changed,
+            "observed_delta_class": hypothesis.get("observed_delta_class") or delta_class,
+            "local": bool_value(hypothesis.get("local")),
+            "bounded": bool_value(hypothesis.get("bounded")),
+            "provider_free": bool_value(hypothesis.get("provider_free") or hypothesis.get("provider-free")),
+            "in_scope": bool_value(hypothesis.get("in_scope")),
+            "authority_allowed": bool_value(hypothesis.get("authority_allowed")),
+            "actionable": bool_value(hypothesis.get("actionable") or hypothesis.get("root_cause_actionable")),
+            "evidence_paths": evidence_paths,
+            "updated_at": now_iso(),
+        }
+        ledger_entries.append(entry)
+    existing_root_cause_rows = read_jsonl(root_cause_ledger_path)
+    root_cause_rows = [*existing_root_cause_rows, *ledger_entries]
+    root_cause_ledger_updated = False
+    if getattr(args, "write_registry", False) and ledger_entries:
+        root_cause_rows, root_cause_ledger_updated = append_root_cause_ledger(root_cause_ledger_path, ledger_entries)
+    untried = untried_root_cause_hypotheses(root_cause_rows, family_key, current_root_key, current_root_family_key)
+    row["root_cause_ledger_path"] = rel_path(root, root_cause_ledger_path)
+    row["root_cause_ledger_status"] = "recorded" if ledger_entries else "not_applicable_no_hypotheses"
+    row["root_cause_ledger_updated"] = root_cause_ledger_updated
+    row["root_cause_ledger_entries"] = ledger_entries
+    row["untried_actionable_root_cause_exists"] = bool(untried)
+    row["untried_root_cause_hypotheses"] = untried[:10]
+    row["terminal_blocked_invalid_due_to_untried_root_cause"] = bool(untried)
+    if root_cause_adapter_error:
+        row["root_cause_ledger_adapter_error"] = root_cause_adapter_error
+
     effective_allowed, basis = effective_allowed_dispositions(gate_inputs)
     recent_progress = load_json_value(root, getattr(args, "recent_progress_json", None))
     if isinstance(recent_progress, dict):
@@ -1993,6 +2258,22 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
     row["consolidation_reduces_goal_distance"] = False
     row["consolidation_streak_cap"] = args.consolidation_streak_cap
     findings = list(row.get("findings") or [])
+    if untried:
+        row["hard_stop_required"] = True
+        row["recommended_disposition"] = "untried_root_cause_repair_required"
+        if "goal_productive" not in row["effective_allowed_dispositions"]:
+            row["effective_allowed_dispositions"] = sorted(set(row["effective_allowed_dispositions"]) | {"goal_productive"})
+        findings.append(
+            {
+                "severity": "block",
+                "code": "untried_actionable_root_cause",
+                "message": "terminal_blocked is invalid while an actionable root-cause hypothesis remains untried; derive must promote that hypothesis as the next goal-productive repair task.",
+                "evidence": {
+                    "root_cause_ledger_path": row["root_cause_ledger_path"],
+                    "untried_root_cause_hypotheses": untried[:5],
+                },
+            }
+        )
     if streak >= args.consolidation_streak_cap and "consolidation" in row["effective_allowed_dispositions"]:
         row["effective_allowed_dispositions"] = [item for item in row["effective_allowed_dispositions"] if item != "consolidation"]
         findings.append(
@@ -2080,29 +2361,31 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
                 },
             }
         )
-    if mutation_kind == "forward_mutation" and not disagreement and substance_delta_pass and not coverage_reconciliation_blocks:
+    if mutation_kind == "forward_mutation" and not disagreement and outcome_changed and not coverage_reconciliation_blocks:
         if "goal_productive" not in row["effective_allowed_dispositions"]:
             row["effective_allowed_dispositions"] = sorted(set(row["effective_allowed_dispositions"]) | {"goal_productive"})
         findings.append(
             {
                 "severity": "info" if not force_implementation_cycle else "warn",
                 "code": "blocker_forward_mutation",
-                "message": "blocker moved forward within the capability ladder; treat it as changed rather than a same-family repeat.",
+                "message": "blocker moved forward within the capability ladder and strict output-delta evidence changed the terminal outcome; treat it as changed rather than a same-family repeat.",
                 "evidence": {
                     "blocker_signature": current_blocker_signature,
                     "blocker_ladder_rung": current_rung,
+                    "terminal_outcome_changed": outcome_changed,
+                    "observed_delta_class": delta_class,
                     "forward_mutation_budget_remaining": forward_budget_remaining,
                     "force_implementation_cycle": force_implementation_cycle,
                 },
             }
         )
-    elif mutation_kind == "forward_mutation" and (not substance_delta_pass or coverage_reconciliation_blocks):
-        if not substance_delta_pass:
+    elif mutation_kind == "forward_mutation" and (not outcome_changed or coverage_reconciliation_blocks):
+        if not outcome_changed:
             row["force_substance_progress"] = True
         if coverage_reconciliation_blocks:
             row["force_gcov_reconciliation"] = True
-        reason = "forward_mutation_without_substance_delta"
-        message = "capability-ladder movement cannot be promoted from validator/oracle existence alone; require adapter-supplied substance delta or strict primary-output evidence."
+        reason = "forward_mutation_vacuous"
+        message = "capability-ladder movement cannot be promoted when the observed terminal outcome did not change; require strict changed-and-semantic primary-output evidence."
         if coverage_reconciliation_blocks:
             reason = "forward_mutation_with_gcov_disagreement"
             message = "capability-ladder movement cannot be promoted while output_delta and loopback G-COV disagree."
@@ -2114,6 +2397,8 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
                 "evidence": {
                     "blocker_signature": current_blocker_signature,
                     "blocker_ladder_rung": current_rung,
+                    "terminal_outcome_changed": outcome_changed,
+                    "observed_delta_class": delta_class,
                     "coverage_quality_delta_reconciliation_gate": coverage_reconciliation_gate,
                     "substance_delta_gate": substance_gate,
                 },
@@ -2247,6 +2532,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--substance-metrics-json", help="Path or JSON object with adapter-compatible substance_metrics/current_substance_vector values.")
     parser.add_argument("--corrective-resolution-json", help="Path or JSON with corrective lane attempted/resolved counts.")
     parser.add_argument("--facet-root-map-json", help="Path or JSON mapping facet labels to root families.")
+    parser.add_argument("--root-cause-hypotheses-json", help="Path or JSON list/dict of root-cause hypotheses for the generic root-cause ledger.")
+    parser.add_argument("--hypothesized-root-cause", help="Single root-cause hypothesis slug to record when no JSON/adapter list is supplied.")
+    parser.add_argument("--root-cause-repair-attempted", action="store_true", help="Mark the supplied root-cause hypothesis as explicitly attempted by this cycle.")
+    parser.add_argument("--root-cause-repair-task-id", help="Task id for the repair attempt targeting the supplied root-cause hypothesis.")
+    parser.add_argument("--root-cause-actionable", action="store_true", help="Mark the supplied root-cause hypothesis as local, bounded, provider-free, in-scope, and authority-allowed.")
     parser.add_argument("--measurement-check-id", action="append", default=[], help="Stable check/oracle ID introduced or exercised by this cycle.")
     parser.add_argument("--measurement-check-ids-json", help="Path or JSON list/dict containing check or oracle IDs.")
     parser.add_argument("--measurement-frontier", action="append", default=[], help="Named measurement frontier observed by this cycle.")
@@ -2257,6 +2547,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-forward-mutations", type=int, default=MAX_FORWARD_MUTATIONS_DEFAULT)
     parser.add_argument("--consolidation-streak-cap", type=int, default=CONSOLIDATION_STREAK_CAP_DEFAULT)
     parser.add_argument("--registry-path", default=REGISTRY_REL_PATH)
+    parser.add_argument("--root-cause-ledger-path", default=ROOT_CAUSE_LEDGER_REL_PATH)
     parser.add_argument("--threshold", type=int, default=3)
     parser.add_argument("--epsilon", type=float, default=1e-9)
     parser.add_argument("--max-rows-per-family", type=int, default=200)

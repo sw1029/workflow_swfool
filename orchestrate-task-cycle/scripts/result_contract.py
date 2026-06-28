@@ -924,6 +924,29 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
             or ""
         ).lower()
         forward_mutation_progress = blocker_mutation_kind == "forward_mutation"
+        terminal_outcome_value = first_present(
+            result,
+            [
+                "terminal_outcome_changed",
+                "anti_loop_progress_gate.terminal_outcome_changed",
+                "result.anti_loop_progress_gate.terminal_outcome_changed",
+            ],
+        )
+        terminal_outcome_changed = (
+            boolish(terminal_outcome_value)
+            if terminal_outcome_value is not None
+            else boolish(changed_vs_previous) and boolish(semantic_progress)
+        )
+        forward_mutation_vacuous = boolish(
+            first_present(
+                result,
+                [
+                    "forward_mutation_vacuous",
+                    "anti_loop_progress_gate.forward_mutation_vacuous",
+                    "result.anti_loop_progress_gate.forward_mutation_vacuous",
+                ],
+            )
+        )
         force_implementation_cycle = boolish(
             first_present(
                 result,
@@ -980,6 +1003,18 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                     "substance_delta_pass": substance_delta_pass,
                     "changed_vs_previous": changed_vs_previous,
                     "semantic_progress": semantic_progress,
+                },
+            )
+        if progress_kind == "goal_productive" and forward_mutation_progress and (forward_mutation_vacuous or not terminal_outcome_changed):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "goal_productive_forward_mutation_without_terminal_outcome_delta",
+                "`derive` cannot promote capability-ladder forward mutation when the observed terminal outcome did not change.",
+                {
+                    "blocker_mutation_kind": blocker_mutation_kind,
+                    "terminal_outcome_changed": terminal_outcome_changed,
+                    "forward_mutation_vacuous": forward_mutation_vacuous,
                 },
             )
         if progress_kind == "goal_productive" and vacuous_corrective_noop and not (boolish(changed_vs_previous) and boolish(semantic_progress)):
@@ -1207,6 +1242,27 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                 "block" if mode == "block" else "warn",
                 "sealed_family_without_root_cause_attempt",
                 "Sealing a blocker family requires at least one prior root-cause/autopsy repair attempt or an explicit not-required rationale.",
+            )
+        untried_root_cause_exists = boolish(
+            first_present(
+                result,
+                [
+                    "untried_actionable_root_cause_exists",
+                    "anti_loop_progress_gate.untried_actionable_root_cause_exists",
+                    "anti_loop_progress_gate.terminal_blocked_invalid_due_to_untried_root_cause",
+                    "loop_breaker_packet.untried_actionable_root_cause_exists",
+                    "terminal_blocker.untried_actionable_root_cause_exists",
+                    "result.anti_loop_progress_gate.untried_actionable_root_cause_exists",
+                    "result.terminal_blocker.untried_actionable_root_cause_exists",
+                ],
+            )
+        )
+        if terminal_or_seal and untried_root_cause_exists:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "terminal_blocked_with_untried_actionable_root_cause",
+                "terminal_blocked is invalid while a local, bounded, provider-free, in-scope, authority-allowed root-cause hypothesis remains untried.",
             )
         authorized_alternative_exists = boolish(
             first_present(
@@ -1545,6 +1601,13 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
         substance_delta_pass = boolish(deep_get(result, "substance_delta_gate.substance_delta_pass"))
         vacuous_corrective_noop = boolish(deep_get(result, "vacuous_corrective_gate.surface_corrective_noop"))
         forward_mutation_progress = str(value_for(result, "blocker_mutation_kind") or "").lower() == "forward_mutation"
+        terminal_outcome_value = value_for(result, "terminal_outcome_changed")
+        terminal_outcome_changed = (
+            boolish(terminal_outcome_value)
+            if terminal_outcome_value is not None
+            else boolish(value_for(result, "changed_vs_previous")) and boolish(value_for(result, "semantic_progress"))
+        )
+        forward_mutation_vacuous = boolish(value_for(result, "forward_mutation_vacuous"))
         count_value = value_for(result, "same_family_micro_hardening_count")
         try:
             streak_count = int(str(count_value))
@@ -1565,12 +1628,19 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                 "`loopback_audit` same-family micro-hardening count >=3 without semantic progress must hard-stop.",
                 {"same_family_micro_hardening_count": streak_count},
             )
-        if forward_mutation_progress and not substance_delta_pass and not hard_stop:
+        if forward_mutation_progress and (forward_mutation_vacuous or not terminal_outcome_changed) and not hard_stop:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_forward_mutation_without_terminal_outcome_delta",
+                "`loopback_audit` must not leave ladder forward mutation open without observed terminal outcome change or a hard stop.",
+            )
+        if forward_mutation_progress and not substance_delta_pass and not terminal_outcome_changed and not hard_stop:
             add(
                 findings,
                 "block" if mode == "block" else "warn",
                 "loopback_forward_mutation_without_substance_delta",
-                "`loopback_audit` must not leave ladder forward mutation open without G-SUBSTANCE pass or a hard stop.",
+                "`loopback_audit` must not leave ladder forward mutation open without G-SUBSTANCE pass, strict terminal outcome delta, or a hard stop.",
             )
         if vacuous_corrective_noop and semantic_progress:
             add(

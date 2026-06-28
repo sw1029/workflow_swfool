@@ -189,6 +189,18 @@ def validate_pack(data: dict[str, Any], path: Path | None = None) -> list[dict[s
                 "seal_denied_authorized_alternative_unattempted",
                 "Task pack cannot seal a family while an authority-permitted productive alternative remains unattempted.",
             )
+        if terminal.get("untried_actionable_root_cause_exists") is True:
+            add(
+                "block",
+                "seal_denied_untried_actionable_root_cause",
+                "Task pack cannot terminal-block while a local, bounded, provider-free, in-scope, authority-allowed root-cause hypothesis remains untried.",
+            )
+        if terminal.get("terminal_quiescence") is True and terminal.get("commit_skipped_reason") != "terminal_quiescence":
+            add(
+                "warn",
+                "terminal_quiescence_missing_commit_skip_reason",
+                "Terminal quiescence should record `commit_skipped_reason: terminal_quiescence` to prevent closeout/report/recheck reproduction.",
+            )
     if not isinstance(data.get("mutation_log", []), list):
         add("block", "mutation_log_invalid", "`mutation_log` must be a list.")
     return findings

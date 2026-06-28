@@ -198,6 +198,9 @@ If no viable candidate or pack item remains and no supplied positive input delta
   "reason": "Concrete missing input, authority, or external-state change.",
   "required_handoff": "What the user or external system must provide.",
   "root_cause_attempted_for_family": true,
+  "root_cause_ledger_path": ".task/anti_loop/root_cause_ledger.jsonl",
+  "untried_actionable_root_cause_exists": false,
+  "untried_root_cause_hypotheses": [],
   "authorized_alternative_path": null,
   "authorized_alternative_path_exists": false,
   "authorized_alternative_path_attempted": false,
@@ -209,6 +212,8 @@ If no viable candidate or pack item remains and no supplied positive input delta
   "missing_mitigations": [],
   "provider_reattempt_required": false,
   "dual_track_attempt_evidence": [],
+  "terminal_quiescence": false,
+  "commit_skipped_reason": null,
   "recent_cycle_ids": [],
   "evidence_paths": []
 }
@@ -216,7 +221,9 @@ If no viable candidate or pack item remains and no supplied positive input delta
 
 `terminal_blocked` prevents narrowing -> blocker -> handoff -> narrowing loops. Treat its `semantic_signature` as a sealed family; do not create a new non-terminal narrowing task in that family until a materially supplied input delta, authority change, or external state change exists.
 
-Do not write `terminal_blocked` as a provider-terminal seal when `provider_mitigation_required=true`, `provider_reattempt_required=true`, or when an authority-permitted productive alternative remains unattempted; retarget to bounded retry/probe, record an authority/user-escalation blocker, or use the authorized provider-neutral/quality track first.
+Do not write `terminal_blocked` as a provider-terminal seal when `provider_mitigation_required=true`, `provider_reattempt_required=true`, `untried_actionable_root_cause_exists=true`, or when an authority-permitted productive alternative remains unattempted; retarget to bounded retry/probe, root-cause repair, record an authority/user-escalation blocker, or use the authorized provider-neutral/quality track first.
+
+When repeated terminal state reaches quiescence, set `terminal_quiescence: true` and `commit_skipped_reason: terminal_quiescence`; do not generate another narrowing, dashboard, report, recheck, or closeout-only pack item merely to reconfirm the same terminal family.
 
 When `authorized_alternative_path_exists=true`, also record:
 

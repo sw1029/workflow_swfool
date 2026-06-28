@@ -20,6 +20,7 @@ Gate logic must stay domain-agnostic. A repository may supply a domain adapter t
 - `output_fingerprint(...)`: current primary-output fingerprint for G-ADVICE-FRESH.
 - `previous_accepted_fp(...)`: previous accepted primary-output fingerprint, optionally with previous quality/high-water vector, for R-GCOV baseline selection.
 - `structure_metrics(...)`: optional structure metrics for S-STRUCT, such as entrypoint LOC, command count, active/legacy ratio, and consolidation recommendation.
+- `root_cause_hypotheses(...)`: optional root-cause hypothesis rows with domain-owned slugs and actionability booleans for the generic root-cause ledger.
 
 If the adapter is absent or omits a required vector, promotion must fail closed for the affected gate while packet production continues. Do not hardcode project module paths, metric names, lexicon paths, or artifact filenames in the generic workflow skill body.
 
@@ -213,6 +214,7 @@ The producer must compute `anti_loop_progress_gate` from raw artifact content an
 - `provider_request_count` and other safe provider/env behavior scalars when available
 - `quality_vector`, including confidence and domain-context fields when the adapter supplies them
 - `previous_accepted_baseline`, `coverage_quality_delta_reconciliation_gate`, `substance_delta_gate`, `vacuous_corrective_gate`, `facet_root_map_applied`, `advice_freshness_gate`, and `structure_metrics_gate`
+- `terminal_outcome_changed`, `observed_delta_class`, `forward_mutation_vacuous`, `root_cause_ledger_path`, `untried_actionable_root_cause_exists`, and `untried_root_cause_hypotheses` when applicable
 - `recommended_disposition`, `hard_stop_required`, `evidence_class`, and evidence paths
 
 The repository adapter or shared module must fail closed on noisy quality inputs. If confidence is low, artifacts are missing/malformed, adapter output is missing, or domain interpretation is uncertain, emit `evidence_class: insufficient_evidence`, `recommended_disposition: conservative_hold`, and `hard_stop_required: true`. Legacy repository quality modules may remain as compatibility fallbacks, but new domain-specific metrics, paths, lexicons, and thresholds belong behind the adapter interface.
@@ -223,7 +225,9 @@ Use the packet as a derive gate:
 - `semantic_progress=false` with `same_family_micro_hardening_count >= 3` blocks another same-family micro-hardening task as `goal_productive`.
 - `evidence_class=insufficient_evidence` blocks `goal_productive` unless the next task supplies the missing raw artifacts, runs a bounded provider/semantic transition, or records terminal/user escalation with evidence.
 - `effective_allowed_dispositions` bounds the next selected disposition. Do not choose a disposition by taking a union of individual gates.
-- `substance_delta_gate.substance_delta_pass=false` blocks measurement or rung promotion unless strict changed-and-semantic primary-output evidence exists.
+- `substance_delta_gate.substance_delta_pass=false` blocks measurement promotion unless strict changed-and-semantic primary-output evidence exists.
+- `blocker_mutation_kind=forward_mutation` blocks rung promotion unless `terminal_outcome_changed=true`; set `forward_mutation_vacuous=true` when the ladder moved but observed domain output did not.
+- `untried_actionable_root_cause_exists=true` invalidates terminal blocking and forces derive to select the untried root-cause repair when it remains local, bounded, provider-free, in-scope, and authority-allowed.
 - `vacuous_corrective_gate.surface_corrective_noop=true` blocks counting unresolved corrective rows as output delta.
 
 ## A1 Measurement Progress Exemption
@@ -240,9 +244,15 @@ Use `blocker_signature` and `blocker_ladder_rung` to distinguish same-family rep
 
 - `repeat`: same blocker signature and no forward rung movement; preserve hard-stop behavior.
 - `facet_rename` or `lateral`: changed label/facet without normalized root-family movement; require independent output/input evidence before counting progress.
-- `forward_mutation`: normalized root family changed or a recorded capability ladder transition is not merely a facet rename; treat as changed blocker-state progress, reset micro-hardening count, and allow `goal_productive` unless a stricter gate such as validator disagreement or validator integrity failure blocks it.
+- `forward_mutation`: normalized root family changed or a recorded capability ladder transition is not merely a facet rename. Treat it as changed blocker-state progress only when strict observed output-delta evidence sets `terminal_outcome_changed=true`; otherwise set `forward_mutation_vacuous=true` and do not reset the family loop counter.
 
 Track `forward_mutation_budget_remaining`. When it reaches zero, set `force_implementation_cycle=true`: the next task must implement the next rung in place, terminal-block with a concrete authority/data blocker, or user-escalate. Do not keep climbing the ladder through governance or measurement-only cycles.
+
+## A2b Root-Cause Hypothesis Ledger
+
+`$audit-cycle-loopback` may append `.task/anti_loop/root_cause_ledger.jsonl` rows keyed by `family_key`, `root_key`, and `hypothesized_root_cause`. The hypothesis slug is domain-owned; the generic workflow only evaluates whether it was attempted, whether terminal outcome changed, and whether it is actionable under `local`, `bounded`, `provider_free`, `in_scope`, and `authority_allowed`.
+
+Before terminal blocking or sealing, `$derive-improvement-task` must check the loopback packet or ledger summary. If `untried_actionable_root_cause_exists=true`, terminal blocking is invalid. Promote that hypothesis as the next `goal_productive` repair task unless authority, safety, or external state makes it non-actionable and records that rationale.
 
 ## A3 Terminal-Blocked Exit Guard
 
@@ -251,6 +261,12 @@ Before derive writes `terminal_blocked`, check the next unsatisfied capability-l
 - If the next rung uses only local data, needs no new permission, uses provider dependency `none` or `bounded`, stays inside `.agent_goal` scope, and can be implemented through an allowed command-surface class, terminal blocking is not allowed.
 - Promote that rung as a `goal_productive` task-pack item or standalone implementation task instead.
 - Allow terminal blocking only when no authorized local/bounded rung remains, required input or authority is missing, or safety/GT forbids the implementation path.
+
+## A3b Terminal Quiescence Gate
+
+When loop detection reports `terminal_quiescence_gate.quiescence_required=true`, the orchestrator must not automatically start another domain cycle for the same `root_key`. Record one user-handoff note and skip closeout/dashboard/report/recheck reproduction with `commit_skipped_reason: terminal_quiescence`.
+
+This gate applies only when `has_supplied_input_delta=false` and the same root has reached terminal state at least `terminal_quiescence_threshold` consecutive times, default `2`. If the root-cause ledger exposes an untried actionable hypothesis, select that repair task instead of quiescing.
 
 ## A4 Advice-Intake Coherence Gate
 

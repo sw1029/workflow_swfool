@@ -12,6 +12,7 @@ Required fields:
 - `semantic_signature`
 - `changed_vs_previous`
 - `semantic_progress`
+- `terminal_outcome_changed`: observed terminal/domain outcome changed under strict output-delta evidence.
 - `same_family_micro_hardening_count`
 - `provider_request_count`
 - `quality_vector`
@@ -60,6 +61,14 @@ Additive anti-loop gate fields:
 - `blocker_ladder_rung`: current capability-ladder rung for the blocker family.
 - `blocker_mutation_kind`: `initial`, `repeat`, `facet_rename`, `lateral`, or `forward_mutation`.
 - `forward_mutation_budget_remaining`: remaining count before forward rung movement must force implementation rather than another measurement/governance cycle.
+- `observed_delta_class`: compact observed output-delta class such as `node_edge_delta`, `changed_semantic_output`, or `no_observed_domain_delta`.
+- `forward_mutation_vacuous`: boolean set when a blocker ladder moved but `terminal_outcome_changed=false`.
+- `root_cause_ledger_path`: `.task/anti_loop/root_cause_ledger.jsonl` unless overridden.
+- `root_cause_ledger_status`: `recorded` or `not_applicable_no_hypotheses`.
+- `root_cause_ledger_entries`: ledger rows proposed or written for this cycle.
+- `untried_actionable_root_cause_exists`: boolean terminal-blocker veto when at least one local, bounded, provider-free, in-scope, authority-allowed hypothesis remains untried.
+- `untried_root_cause_hypotheses`: compact list of remaining actionable untried hypotheses.
+- `terminal_blocked_invalid_due_to_untried_root_cause`: alias boolean for derive/result-contract consumers.
 - `force_implementation_cycle`: boolean requiring derive to choose implementation work after the forward-mutation budget is exhausted.
 - `task_correction_class`: `detection`, `correction`, `mixed`, or `unknown`.
 - `detection_only`: boolean indicating detection work without semantic primary-output progress.
@@ -80,7 +89,7 @@ Disposition rule: consumers must select the next-task disposition from `effectiv
 
 Measurement rule: `measurement_progress_allowed=true` may reinclude `goal_productive` without setting `semantic_progress=true`; consumers must still preserve no-overclaim boundaries and must stop using the exemption after the root-key or root-family streak cap.
 
-Substance rule: `measurement_progress_allowed=true` and capability-ladder `forward_mutation` promotion require `substance_delta_gate.substance_delta_pass=true`, unless independent strict output-delta evidence proves changed-and-semantic primary-output progress. Missing adapter substance metrics fail closed for promotion, but must not crash packet production.
+Substance rule: `measurement_progress_allowed=true` requires `substance_delta_gate.substance_delta_pass=true`. Capability-ladder `forward_mutation` promotion requires `terminal_outcome_changed=true` from strict observed output-delta evidence; missing adapter substance metrics still fail closed for measurement promotion, but must not crash packet production.
 
 R-GCOV rule: `coverage_quality_delta_reconciliation_gate.status=block` prevents measurement and capability-ladder promotion from relying on the favorable G-COV source. Consumers must treat the cycle as conservatively blocked until the output-delta and loopback G-COV values agree or the selected next task resolves the disagreement.
 
@@ -88,7 +97,9 @@ Vacuous corrective rule: `vacuous_corrective_gate.surface_corrective_noop=true` 
 
 Integrity rule: `validator_integrity_gate.status=block` prevents validator-derived progress claims. Consumers may choose correction work, but must not cite the validator pass as completion or goal-productive evidence.
 
-Mutation rule: `blocker_mutation_kind=facet_rename` is same-family churn. `blocker_mutation_kind=forward_mutation` counts as blocker-state movement only when stricter gates are clear. If `force_implementation_cycle=true`, consumers must choose an in-place implementation task or terminal/user escalation when implementation is not authorized.
+Mutation rule: `blocker_mutation_kind=facet_rename` is same-family churn. `blocker_mutation_kind=forward_mutation` counts as blocker-state movement only when stricter gates are clear and `terminal_outcome_changed=true`. If `forward_mutation_vacuous=true`, consumers must not reset loop counters or promote `goal_productive`; route to untried root-cause repair when available, otherwise terminal/user escalation. If `force_implementation_cycle=true`, consumers must choose an in-place implementation task or terminal/user escalation when implementation is not authorized.
+
+Root-cause ledger rule: `root_cause_ledger_entries` are non-GT workflow evidence keyed by `family_key`, `root_key`, and `hypothesized_root_cause`. If `untried_actionable_root_cause_exists=true`, `terminal_blocked` is invalid unless current authority, safety, or external state makes that hypothesis non-actionable. Derive must promote the untried hypothesis as the next goal-productive repair task.
 
 Facet rule: adapter-supplied `facet_root_map` entries collapse facet labels before root-family streaks and measurement caps are computed. Without a map, the producer applies only conservative suffix/date/run/facet normalization.
 

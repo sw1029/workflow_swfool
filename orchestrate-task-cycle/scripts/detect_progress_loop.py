@@ -127,6 +127,7 @@ NODE_ID_KEYS = ("id", "node_id", "entity_id", "canonical_id")
 EDGE_ID_KEYS = ("id", "edge_id", "relation_id")
 EDGE_ENDPOINT_KEYS = ("source", "source_id", "from", "target", "target_id", "to", "type", "relation", "predicate")
 DETECTION_ONLY_STREAK_CAP = 2
+TERMINAL_QUIESCENCE_STREAK_DEFAULT = 2
 FACET_SUFFIX_RE = re.compile(
     r"([_.:/|-])(?:v\d+|ver\d+|version\d+|facet|variant|case|mode|phase|stage|"
     r"vocab|pov|timing|typing|schema|contract|gate|metric|oracle|validator|lineage|"
@@ -506,6 +507,58 @@ def terminal_record_like(value: dict[str, Any]) -> bool:
     failure = provider_failure_class(value)
     request_count = number_value(first_value(value, ("provider_request_count", "failure_autopsy.provider_request_count", "result.provider_request_count")))
     return bool(failure and request_count and request_count > 1)
+
+
+def terminal_progress_item(item: dict[str, Any]) -> bool:
+    for key in ("selected_task_source", "selected_task_kind", "disposition", "progress_target"):
+        value = str(item.get(key) or "").strip().lower()
+        if "terminal" in value:
+            return True
+    observed = item.get("observed_output")
+    if isinstance(observed, dict) and str(observed.get("observed_output_class") or "").lower() == "terminal_record":
+        return True
+    return False
+
+
+def terminal_quiescence_gate(progress_items: list[dict[str, Any]], has_supplied_input_delta: bool, threshold: int) -> dict[str, Any]:
+    first_terminal = next((item for item in progress_items if terminal_progress_item(item)), None)
+    if not first_terminal:
+        return {
+            "gate": "T-QUIESCENCE",
+            "status": "not_applicable",
+            "threshold": threshold,
+            "terminal_streak": 0,
+            "quiescence_required": False,
+            "commit_skipped_reason": None,
+            "terminal_root_key": None,
+            "has_supplied_input_delta": has_supplied_input_delta,
+        }
+    root_key_value = str(first_terminal.get("root_key") or first_terminal.get("semantic_signature") or first_terminal.get("blocker_signature") or "unknown")
+    streak = 0
+    evidence_paths: list[str] = []
+    for item in progress_items:
+        item_root = str(item.get("root_key") or item.get("semantic_signature") or item.get("blocker_signature") or "unknown")
+        if item_root != root_key_value or not terminal_progress_item(item):
+            break
+        streak += 1
+        if item.get("path"):
+            evidence_paths.append(str(item["path"]))
+    required = streak >= threshold and not has_supplied_input_delta
+    return {
+        "gate": "T-QUIESCENCE",
+        "status": "block" if required else "ok",
+        "threshold": threshold,
+        "terminal_streak": streak,
+        "terminal_root_key": root_key_value,
+        "quiescence_required": required,
+        "has_supplied_input_delta": has_supplied_input_delta,
+        "commit_skipped_reason": "terminal_quiescence" if required else None,
+        "allowed_dispositions": ["terminal_blocked", "user_escalation"],
+        "evidence_paths": evidence_paths[:10],
+        "handoff_only": required,
+        "closeout_reproduction_allowed": not required,
+        "overridden_by_untried_root_cause": False,
+    }
 
 
 def observed_output_class(root: Path, value: dict[str, Any], previous: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1936,6 +1989,7 @@ def analyze(
     goal_productive_threshold: int,
     root_axis_threshold: int = 6,
     feature_symbol_threshold: int = 6,
+    terminal_quiescence_threshold: int = TERMINAL_QUIESCENCE_STREAK_DEFAULT,
     write_registry: bool = False,
 ) -> dict[str, Any]:
     evidence: list[dict[str, Any]] = structured_evidence(root, max(1, recent))
@@ -2271,6 +2325,11 @@ def analyze(
         "allowed_dispositions": ["goal_productive", "terminal_blocked", "user_escalation"],
         "status": "block" if detection_balance_required else "ok",
     }
+    terminal_quiescence_gate_result = terminal_quiescence_gate(
+        progress_items,
+        has_supplied_input_delta,
+        max(1, terminal_quiescence_threshold),
+    )
     effective_allowed, disposition_basis = effective_allowed_dispositions(
         [
             ("command_surface_budget", surface_budget),
@@ -2280,6 +2339,7 @@ def analyze(
             ("provider_scale_dispatch_gate", provider_scale_dispatch_gate_result),
             ("validator_integrity_gate", validator_integrity_gate_result),
             ("detection_balance_gate", detection_balance_gate),
+            ("terminal_quiescence_gate", terminal_quiescence_gate_result),
         ]
     )
     consolidation_streak_count = consolidation_streak(progress_items)
@@ -2474,6 +2534,15 @@ def analyze(
                 "evidence": detection_balance_gate,
             }
         )
+    if terminal_quiescence_gate_result.get("quiescence_required"):
+        findings.append(
+            {
+                "severity": "block",
+                "code": "terminal_quiescence_required",
+                "message": "The same terminal root recurred without supplied input delta; orchestrator must stop automatic domain-cycle restart and record only one user handoff note.",
+                "evidence": terminal_quiescence_gate_result,
+            }
+        )
     if consolidation_streak_count >= CONSOLIDATION_STREAK_CAP:
         if "consolidation" in effective_allowed:
             effective_allowed = [item for item in effective_allowed if item != "consolidation"]
@@ -2551,6 +2620,7 @@ def analyze(
         "provider_scale_dispatch_gate": provider_scale_dispatch_gate_result,
         "validator_integrity_gate": validator_integrity_gate_result,
         "detection_balance_gate": detection_balance_gate,
+        "terminal_quiescence_gate": terminal_quiescence_gate_result,
         "root_axis_gate": root_axis_gate,
         "autonomous_retarget_disabled": autonomous_retarget_disabled,
         "hard_stop_required": (
@@ -2558,6 +2628,7 @@ def analyze(
             or provider_scale_dispatch_gate_result["dispatch_required"]
             or validator_integrity_gate_result["hard_stop_required"]
             or detection_balance_gate["hard_stop_required"]
+            or terminal_quiescence_gate_result["quiescence_required"]
         ),
         "requires_goal_productive_or_user_escalation": autonomous_retarget_disabled
         or provider_scale_dispatch_gate_result["dispatch_required"]
@@ -2603,6 +2674,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--goal-productive-threshold", type=int, default=5, help="Warn/block when this many recent progress cycles lack goal-productive output.")
     parser.add_argument("--root-axis-threshold", type=int, default=6, help="Hard-stop after this many same-root-axis governance-only/provider-neutral records without domain delta.")
     parser.add_argument("--feature-symbol-threshold", type=int, default=6, help="Hard-stop after this many same-feature-symbol records without observed node/edge delta.")
+    parser.add_argument("--terminal-quiescence-threshold", type=int, default=TERMINAL_QUIESCENCE_STREAK_DEFAULT, help="Stop automatic domain-cycle restart after this many same-root terminal records without input delta.")
     parser.add_argument("--write-registry", action="store_true", help=f"Append the newest progress feature symbol to {REGISTRY_REL_PATH}.")
     args = parser.parse_args(argv)
 
@@ -2613,6 +2685,7 @@ def main(argv: list[str] | None = None) -> int:
         max(1, args.goal_productive_threshold),
         max(1, args.root_axis_threshold),
         max(1, args.feature_symbol_threshold),
+        max(1, args.terminal_quiescence_threshold),
         args.write_registry,
     )
     json.dump(result, sys.stdout, ensure_ascii=False, indent=2, sort_keys=True)
