@@ -128,6 +128,7 @@ EDGE_ID_KEYS = ("id", "edge_id", "relation_id")
 EDGE_ENDPOINT_KEYS = ("source", "source_id", "from", "target", "target_id", "to", "type", "relation", "predicate")
 DETECTION_ONLY_STREAK_CAP = 2
 TERMINAL_QUIESCENCE_STREAK_DEFAULT = 2
+TERMINAL_ESCALATION_STREAK_DEFAULT = 2
 FACET_SUFFIX_RE = re.compile(
     r"([_.:/|-])(?:v\d+|ver\d+|version\d+|facet|variant|case|mode|phase|stage|"
     r"vocab|pov|timing|typing|schema|contract|gate|metric|oracle|validator|lineage|"
@@ -456,9 +457,13 @@ def kg_node_edge_summary(root: Path, paths: list[Path]) -> dict[str, Any]:
             candidates.extend([path.parent / "kg_nodes.jsonl", path.parent / "kg_edges.jsonl"])
         elif path.is_dir():
             candidates.extend([path / "kg_nodes.jsonl", path / "kg_edges.jsonl"])
-            if path.name != "novel_kg_candidate":
-                candidates.extend(list(path.rglob("kg_nodes.jsonl"))[:80])
-                candidates.extend(list(path.rglob("kg_edges.jsonl"))[:80])
+            for pattern in ("kg_nodes.jsonl", "kg_edges.jsonl"):
+                found = 0
+                for discovered in path.rglob(pattern):
+                    candidates.append(discovered)
+                    found += 1
+                    if found >= 80:
+                        break
         for candidate in candidates:
             if not candidate.is_file():
                 continue
@@ -510,7 +515,7 @@ def terminal_record_like(value: dict[str, Any]) -> bool:
 
 
 def terminal_progress_item(item: dict[str, Any]) -> bool:
-    for key in ("selected_task_source", "selected_task_kind", "disposition", "progress_target"):
+    for key in ("selected_task_source", "selected_task_kind", "disposition", "progress_target", "recommended_disposition"):
         value = str(item.get(key) or "").strip().lower()
         if "terminal" in value:
             return True
@@ -616,6 +621,111 @@ def terminal_quiescence_gate(progress_items: list[dict[str, Any]], has_supplied_
         "closeout_reproduction_allowed": not required,
         "overridden_by_untried_root_cause": reconcile["overridden_by_untried_root_cause"],
         "quiescence_untried_reconcile": reconcile,
+    }
+
+
+def terminal_recheck_item(item: dict[str, Any]) -> bool:
+    if not terminal_progress_item(item):
+        return False
+    text = " ".join(
+        str(item.get(key) or "")
+        for key in (
+            "selected_task_source",
+            "selected_task_kind",
+            "disposition",
+            "recommended_disposition",
+            "progress_target",
+            "path",
+        )
+    ).lower()
+    return any(token in text for token in ("terminal", "recheck", "blocked", "handoff", "quiescence"))
+
+
+def terminal_escalation_missing_input(item: dict[str, Any] | None) -> dict[str, str]:
+    text = json.dumps(item or {}, ensure_ascii=False, sort_keys=True).lower()
+    if "self_inflicted_gate_defect" in text or "gate_defect" in text or "unsatisfiable" in text:
+        return {
+            "kind": "gate_contract_fix_approval",
+            "description": "Approve or supply a gate contract/source change that makes the fail-closed gate satisfiable.",
+        }
+    if "authority" in text or "permission" in text or "approval" in text:
+        return {
+            "kind": "authority_change",
+            "description": "Provide an authority or permission change that permits the blocked transition.",
+        }
+    if "external" in text or "provider" in text or "runtime" in text or "service" in text:
+        return {
+            "kind": "external_state_change",
+            "description": "Change the external runtime/provider/service state required for the blocked transition.",
+        }
+    return {
+        "kind": "new_input_kind",
+        "description": "Provide one new material input artifact or input kind that changes the sealed family.",
+    }
+
+
+def terminal_escalation_gate(
+    progress_items: list[dict[str, Any]],
+    has_supplied_input_delta: bool,
+    threshold: int,
+) -> dict[str, Any]:
+    first_terminal = next((item for item in progress_items if terminal_recheck_item(item)), None)
+    if not first_terminal:
+        return {
+            "gate": "G2-TERMINAL-ESCALATION",
+            "status": "not_applicable",
+            "threshold": threshold,
+            "terminal_recheck_streak": 0,
+            "root_family": None,
+            "escalation_required": False,
+            "forced_disposition": None,
+            "has_supplied_input_delta": has_supplied_input_delta,
+            "missing_input": None,
+            "seal_required": False,
+            "seal_family_path": ".task/sealed_blocker_families.json",
+            "evidence_paths": [],
+        }
+    root_family = str(
+        first_terminal.get("blocker_root_family")
+        or first_terminal.get("root_key")
+        or first_terminal.get("semantic_signature")
+        or first_terminal.get("blocker_signature")
+        or "unknown"
+    )
+    streak = 0
+    evidence_paths: list[str] = []
+    for item in progress_items:
+        item_family = str(
+            item.get("blocker_root_family")
+            or item.get("root_key")
+            or item.get("semantic_signature")
+            or item.get("blocker_signature")
+            or "unknown"
+        )
+        if item_family != root_family or not terminal_recheck_item(item):
+            break
+        streak += 1
+        if item.get("path"):
+            evidence_paths.append(str(item["path"]))
+    required = streak >= threshold and not has_supplied_input_delta
+    return {
+        "gate": "G2-TERMINAL-ESCALATION",
+        "status": "block" if required else "ok",
+        "threshold": threshold,
+        "terminal_recheck_streak": streak,
+        "root_family": root_family,
+        "escalation_required": required,
+        "forced_disposition": "user_escalation" if required else None,
+        "has_supplied_input_delta": has_supplied_input_delta,
+        "missing_input": terminal_escalation_missing_input(first_terminal) if required else None,
+        "missing_input_count": 1 if required else 0,
+        "seal_required": required,
+        "seal_family_path": ".task/sealed_blocker_families.json",
+        "allowed_dispositions": ["user_escalation"] if required else ["goal_productive", "terminal_blocked", "user_escalation"],
+        "constrains_disposition": required,
+        "hard_stop_required": required,
+        "evidence_paths": evidence_paths[:10],
+        "recheck_counts_as_progress": False,
     }
 
 
@@ -2064,6 +2174,7 @@ def analyze(
     root_axis_threshold: int = 6,
     feature_symbol_threshold: int = 6,
     terminal_quiescence_threshold: int = TERMINAL_QUIESCENCE_STREAK_DEFAULT,
+    terminal_escalation_threshold: int = TERMINAL_ESCALATION_STREAK_DEFAULT,
     write_registry: bool = False,
 ) -> dict[str, Any]:
     evidence: list[dict[str, Any]] = structured_evidence(root, max(1, recent))
@@ -2404,6 +2515,11 @@ def analyze(
         has_supplied_input_delta,
         max(1, terminal_quiescence_threshold),
     )
+    terminal_escalation_gate_result = terminal_escalation_gate(
+        progress_items,
+        has_supplied_input_delta,
+        max(1, terminal_escalation_threshold),
+    )
     effective_allowed, disposition_basis = effective_allowed_dispositions(
         [
             ("command_surface_budget", surface_budget),
@@ -2414,6 +2530,7 @@ def analyze(
             ("validator_integrity_gate", validator_integrity_gate_result),
             ("detection_balance_gate", detection_balance_gate),
             ("terminal_quiescence_gate", terminal_quiescence_gate_result),
+            ("terminal_escalation_gate", terminal_escalation_gate_result),
         ]
     )
     consolidation_streak_count = consolidation_streak(progress_items)
@@ -2626,6 +2743,15 @@ def analyze(
                 "evidence": terminal_quiescence_gate_result,
             }
         )
+    if terminal_escalation_gate_result.get("escalation_required"):
+        findings.append(
+            {
+                "severity": "block",
+                "code": "terminal_blocked_recheck_escalated",
+                "message": "terminal_blocked/recheck repeated for the same root family without supplied input delta; derive must seal the family and emit user_escalation with exactly one missing input.",
+                "evidence": terminal_escalation_gate_result,
+            }
+        )
     if consolidation_streak_count >= CONSOLIDATION_STREAK_CAP:
         if "consolidation" in effective_allowed:
             effective_allowed = [item for item in effective_allowed if item != "consolidation"]
@@ -2656,7 +2782,21 @@ def analyze(
         )
 
     terminal_blocker_candidate = None
-    if (
+    if terminal_escalation_gate_result.get("escalation_required"):
+        terminal_blocker_candidate = {
+            "root_key": terminal_escalation_gate_result.get("root_family"),
+            "semantic_signature": None,
+            "blocker_signature": None,
+            "feature_symbol": None,
+            "reason": "Repeated terminal_blocked/recheck for the same root family without a detected supplied input delta.",
+            "required_handoff": (terminal_escalation_gate_result.get("missing_input") or {}).get("description"),
+            "required_missing_input": terminal_escalation_gate_result.get("missing_input"),
+            "required_missing_input_count": 1,
+            "forced_disposition": "user_escalation",
+            "recent_evidence_paths": terminal_escalation_gate_result.get("evidence_paths") or [],
+            "seal_family_path": terminal_escalation_gate_result.get("seal_family_path"),
+        }
+    elif (
         repeated_root_keys
         or repeated_semantic_signatures
         or repeated_signatures
@@ -2704,6 +2844,8 @@ def analyze(
         "validator_integrity_gate": validator_integrity_gate_result,
         "detection_balance_gate": detection_balance_gate,
         "terminal_quiescence_gate": terminal_quiescence_gate_result,
+        "terminal_escalation_gate": terminal_escalation_gate_result,
+        "terminal_recheck_streak": terminal_escalation_gate_result.get("terminal_recheck_streak", 0),
         "quiescence_untried_reconcile": terminal_quiescence_gate_result.get("quiescence_untried_reconcile"),
         "root_axis_gate": root_axis_gate,
         "autonomous_retarget_disabled": autonomous_retarget_disabled,
@@ -2713,10 +2855,13 @@ def analyze(
             or validator_integrity_gate_result["hard_stop_required"]
             or detection_balance_gate["hard_stop_required"]
             or terminal_quiescence_gate_result["quiescence_required"]
+            or terminal_escalation_gate_result["hard_stop_required"]
         ),
         "requires_goal_productive_or_user_escalation": autonomous_retarget_disabled
         or provider_scale_dispatch_gate_result["dispatch_required"]
-        or detection_balance_gate["hard_stop_required"],
+        or detection_balance_gate["hard_stop_required"]
+        or terminal_escalation_gate_result["hard_stop_required"],
+        "recommended_disposition": "user_escalation" if terminal_escalation_gate_result.get("escalation_required") else None,
         "semantic_signature_gate": {
             "preferred_for_loop_comparison": True,
             "sealed_matches": sealed_matches,
@@ -2759,6 +2904,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root-axis-threshold", type=int, default=6, help="Hard-stop after this many same-root-axis governance-only/provider-neutral records without domain delta.")
     parser.add_argument("--feature-symbol-threshold", type=int, default=6, help="Hard-stop after this many same-feature-symbol records without observed node/edge delta.")
     parser.add_argument("--terminal-quiescence-threshold", type=int, default=TERMINAL_QUIESCENCE_STREAK_DEFAULT, help="Stop automatic domain-cycle restart after this many same-root terminal records without input delta.")
+    parser.add_argument("--terminal-escalation-threshold", type=int, default=TERMINAL_ESCALATION_STREAK_DEFAULT, help="Escalate repeated terminal_blocked/recheck records for the same root family to user_escalation after this many records without input delta.")
     parser.add_argument("--write-registry", action="store_true", help=f"Append the newest progress feature symbol to {REGISTRY_REL_PATH}.")
     args = parser.parse_args(argv)
 
@@ -2770,6 +2916,7 @@ def main(argv: list[str] | None = None) -> int:
         max(1, args.root_axis_threshold),
         max(1, args.feature_symbol_threshold),
         max(1, args.terminal_quiescence_threshold),
+        max(1, args.terminal_escalation_threshold),
         args.write_registry,
     )
     json.dump(result, sys.stdout, ensure_ascii=False, indent=2, sort_keys=True)

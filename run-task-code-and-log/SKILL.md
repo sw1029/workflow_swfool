@@ -43,6 +43,10 @@ When task-state IDs are available, link the run evidence and log entry through `
    - For destructive, credential-touching, network-heavy, package-installing, or large-data commands, surface the risk and require clear user instruction before proceeding.
    - For long-running commands, clear authorization may come from the user, `task.md`, an issue-resolution request, `$orchestrate-task-cycle`, or a governance result. If authorization or monitoring details are ambiguous, ask before leaving a process running.
    - Keep secrets, tokens, private paths, and sensitive raw data out of logs; summarize or redact them.
+   - For fail-closed gates named by `task.md`, the caller packet, or the command harness, run a gate satisfiability precheck before evaluating the gate. Use a repository or environment adapter when available through `--domain-adapter`, `TASK_CYCLE_DOMAIN_ADAPTER_PATH`, or the caller-provided run packet. The adapter contract is `gate_satisfiability(gate_id, env, **context) -> {satisfiable: bool, reason, alternative_evidence_source?}`.
+   - If `satisfiable=false` and `alternative_evidence_source` is present, evaluate the original gate against that alternative source and record `gate_satisfiability` plus `gate_evidence_source: alternative` in the run packet.
+   - If `satisfiable=false` and no alternative source is present, classify the result as `self_inflicted_gate_defect`, not as an environment/runtime blocker. Stop before rechecking the same gate, record the exact gate id, reason, adapter/probe evidence, and required gate-contract/code correction, and let `$derive-improvement-task` route a gate-fix task or user escalation.
+   - If `satisfiable=true`, keep the original fail-closed gate unchanged. This precheck must not weaken no-overclaim, no-raw-body, source-backed, cache, OOM, permission, or provider-safety gates.
 
 3. Execute the specified code.
    - Run the command in the requested working directory.
@@ -71,6 +75,7 @@ When task-state IDs are available, link the run evidence and log entry through `
      - `result`: exit status, output summary, artifacts, active `running` metadata when applicable, and whether expectations were met.
      - `shortcomings`: failures, missing inputs, ambiguity, skipped steps, unverified assumptions, or unsafe details omitted.
    - Include the validation profile used, prerequisite manifest/hash evidence used, and whether the run was fresh or reused identical evidence.
+   - Include `gate_satisfiability` entries for every fail-closed gate that was prechecked: `gate_id`, `satisfiable`, `reason`, `evidence_source`, `alternative_evidence_source`, and `classification`. Use `classification: self_inflicted_gate_defect` when the gate's required evidence shape is impossible in the current environment and no valid alternative source exists.
    - Include `failure_autopsy` for failed runs when safe scalar extraction was possible. For provider/runtime failures, include `provider_request_count`, `failure_class`, provider empty/parse flags, and mitigation fields when available so downstream derivation can distinguish transient/unmitigated failure from terminal state. Treat it as direction evidence for root-cause repair, not as remediation or validation success.
    - For `running` results, include PID/session/job identifiers, log and checkpoint paths, latest observed output or heartbeat, monitor and stop commands, expected completion signal, and remaining validation.
    - Use [execution-log-checklist.md](references/execution-log-checklist.md) when assembling the log fields.
@@ -118,6 +123,7 @@ Add `--changed-file`, `--follow-up`, and additional `--command` values when rele
 - Do not leave a process running unless long-term execution is authorized and durable PID/session, log, monitor, and stop details are captured.
 - Do not omit a failed command from the `.agent_log` record.
 - Do not let redaction rules turn a failed run into an opaque terminal blocker when safe scalar autopsy can identify the failing file/line, exception class, HTTP status, or missing env key name without storing bodies or secrets.
+- Do not rerun a fail-closed gate as an environment blocker after `gate_satisfiability.satisfiable=false` proves the gate's evidence shape is unsatisfiable and no alternative source exists. Record `self_inflicted_gate_defect` and route gate-contract correction instead of rechecking.
 - Do not store full sensitive transcripts, credentials, raw tokens, private keys, or large copyrighted text in `.agent_log`.
 - Do not let a helper or subagent write the log. The main agent runs `$record-agent-work-log`'s writer.
 - Do not let an ID insight agent run commands, retry failures, or decide success; it only reviews traceability after the run evidence exists.

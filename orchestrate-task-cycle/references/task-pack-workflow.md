@@ -215,6 +215,11 @@ If no viable candidate or pack item remains and no supplied positive input delta
   "provider_reattempt_required": false,
   "dual_track_attempt_evidence": [],
   "terminal_quiescence": false,
+  "terminal_escalation": false,
+  "terminal_recheck_streak": 0,
+  "forced_disposition": null,
+  "required_missing_input": null,
+  "required_missing_input_count": 0,
   "commit_skipped_reason": null,
   "recent_cycle_ids": [],
   "evidence_paths": []
@@ -226,6 +231,8 @@ If no viable candidate or pack item remains and no supplied positive input delta
 Do not write `terminal_blocked` as a provider-terminal seal when `provider_mitigation_required=true`, `provider_reattempt_required=true`, `untried_actionable_root_cause_exists=true` with `hypothesis_exhausted=false`, or when an authority-permitted productive alternative remains unattempted; retarget to bounded retry/probe, verified root-cause repair, record an authority/user-escalation blocker, or use the authorized provider-neutral/quality track first. If `hypothesis_exhausted=true`, record the exhausted budget and do not create another same-family untried repair without supplied input delta.
 
 When repeated terminal state reaches quiescence, set `terminal_quiescence: true` and `commit_skipped_reason: terminal_quiescence`; do not generate another narrowing, dashboard, report, recheck, or closeout-only pack item merely to reconfirm the same terminal family. Use `quiescence_untried_reconcile` when present: only verified, unexhausted untried repairs may override quiescence.
+
+When repeated terminal state reaches G2 escalation, set `terminal_escalation: true`, `forced_disposition: user_escalation`, `terminal_recheck_streak`, `required_missing_input_count: 1`, and exactly one `required_missing_input` object. The input kind must be one of `new_input_kind`, `authority_change`, `external_state_change`, or `gate_contract_fix_approval`. Seal the family in `.task/sealed_blocker_families.json` through the derive/task-pack mutation. Do not add another `terminal_blocked` recheck, dashboard, report, or closeout item to the pack as a substitute for user escalation.
 
 When `authorized_alternative_path_exists=true`, also record:
 

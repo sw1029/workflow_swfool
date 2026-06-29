@@ -48,6 +48,7 @@ IDEMPOTENT_REPLAY_KEYS = (
     "measurement_progress_basis",
     "measurement_progress_streak_for_root_key",
     "measurement_progress_streak_for_root_family",
+    "legacy_family_key",
     "root_family_key",
     "blocker_root_family",
     "root_key",
@@ -58,7 +59,12 @@ IDEMPOTENT_REPLAY_KEYS = (
     "substance_delta_gate",
     "vacuous_corrective_gate",
     "facet_root_map_applied",
+    "facet_root_map_missing",
     "facet_root_map_size",
+    "terminal_outcome_key",
+    "terminal_outcome_family_key",
+    "terminal_outcome_family_fallback_applied",
+    "terminal_outcome_family_previous_count",
     "advice_freshness_gate",
     "structure_metrics_gate",
     "previous_accepted_baseline",
@@ -779,6 +785,59 @@ def terminal_outcome_changed(output_delta: Any, changed_vs_previous: bool, seman
     if produced is not None and not bool_value(produced):
         return False
     return bool_value(produced) and strict_changed and strict_semantic
+
+
+def terminal_outcome_key(output_delta: Any, changed_vs_previous: bool, semantic_progress: bool) -> str:
+    observed = observed_delta_class(output_delta, changed_vs_previous, semantic_progress)
+    status = first_scalar_by_key(
+        output_delta,
+        {
+            "terminal_outcome",
+            "output_delta_status",
+            "status",
+            "failure_class",
+            "blocked_reason",
+            "blocker_signature",
+        },
+    )
+    produced = first_scalar_by_key(output_delta, {"produced_domain_delta", "domain_delta", "positive_output_delta"})
+    metadata = first_scalar_by_key(output_delta, {"metadata_only"})
+    if bool_value(metadata):
+        base = "metadata_only"
+    elif terminal_outcome_changed(output_delta, changed_vs_previous, semantic_progress):
+        base = "changed_semantic_output"
+    elif produced is not None and not bool_value(produced):
+        base = "no_primary_output_delta"
+    elif observed and observed not in {"unknown", "none", "null"}:
+        base = observed
+    else:
+        base = "no_semantic_output_delta"
+    return normalize_root_family_key(base, status or "")
+
+
+def terminal_outcome_root_family(
+    facet_map: dict[str, str],
+    *,
+    artifact_family: str,
+    outcome_key: str,
+    root_key: str,
+    semantic_signature: str,
+) -> tuple[str, str, bool]:
+    if facet_map:
+        mapped = collapse_root_family(facet_map, root_key, semantic_signature, artifact_family, outcome_key)
+        return mapped, "facet_root_map", False
+    return normalize_root_family_key(artifact_family, outcome_key), "terminal_outcome_fallback", True
+
+
+def latest_root_family_row(rows: list[dict[str, Any]], root_family_key: str) -> dict[str, Any] | None:
+    return next((row for row in reversed(rows) if row_root_family(row) == root_family_key), None)
+
+
+def previous_micro_hardening_count(rows: list[dict[str, Any]], root_family_key: str) -> int:
+    family_rows = [row for row in rows if row_root_family(row) == root_family_key]
+    if not family_rows:
+        return 0
+    return max(int_metric(row.get("same_family_micro_hardening_count") or row.get("micro_hardening_count") or 0) for row in family_rows)
 
 
 def normalize_root_cause_slug(value: Any) -> str:
@@ -2109,7 +2168,8 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
     registry_path = Path(args.registry_path)
     if not registry_path.is_absolute():
         registry_path = root / registry_path
-    family_key = normalize_family_key(args.artifact_family, args.semantic_signature)
+    legacy_family_key = normalize_family_key(args.artifact_family, args.semantic_signature)
+    family_key = legacy_family_key
     registry_rows = load_registry(registry_path)
     existing_cycle = next(
         (row for row in reversed(registry_rows) if row.get("family_key") == family_key and row.get("cycle_id") == args.cycle_id),
@@ -2181,7 +2241,28 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
         if facet_map_error:
             facet_map_value = None
     facet_root_map = normalize_facet_root_map(facet_map_value)
-    current_root_family_key = collapse_root_family(facet_root_map, current_root_key, args.semantic_signature, args.artifact_family)
+    preliminary_changed = bool(prev_fingerprint and quality.get("current_output_fingerprint") != prev_fingerprint)
+    preliminary_semantic = False if insufficient_reason else semantic_progress_from_high_water(quality, prev_high, provider_request_count, args.epsilon)
+    current_terminal_outcome_key = terminal_outcome_key(output_delta, preliminary_changed, preliminary_semantic)
+    raw_root_family_key = collapse_root_family(facet_root_map, current_root_key, args.semantic_signature, args.artifact_family)
+    terminal_family_key, terminal_family_source, terminal_family_fallback = terminal_outcome_root_family(
+        facet_root_map,
+        artifact_family=args.artifact_family,
+        outcome_key=current_terminal_outcome_key,
+        root_key=current_root_key,
+        semantic_signature=args.semantic_signature,
+    )
+    facet_root_map_missing = not bool(facet_root_map)
+    current_root_family_key = terminal_family_key if facet_root_map_missing else raw_root_family_key
+    latest_terminal_family = latest_root_family_row(registry_rows, current_root_family_key)
+    if facet_root_map_missing:
+        family_key = terminal_family_key
+        existing_cycle = existing_cycle or next(
+            (row for row in reversed(registry_rows) if row.get("family_key") == family_key and row.get("cycle_id") == args.cycle_id),
+            None,
+        )
+        latest = latest_terminal_family or latest
+        prev_count = max(prev_count, int((latest or {}).get("micro_hardening_count") or 0))
     current_check_ids = set(getattr(args, "measurement_check_id", []) or [])
     current_check_ids.update(extract_check_ids(measurement_ids_value, runner_validation, output_delta, quality, gate_inputs))
     current_frontiers = {frontier_key(item) for item in getattr(args, "measurement_frontier", []) or [] if item}
@@ -2295,8 +2376,8 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
         or args.semantic_signature
         or "unknown"
     )
-    blocker_root_family = collapse_root_family(facet_root_map, current_root_key, current_blocker_signature)
-    latest_blocker = next((row for row in reversed(registry_rows) if row_root_family(row) == blocker_root_family), latest)
+    blocker_root_family = current_root_family_key if facet_root_map_missing else collapse_root_family(facet_root_map, current_root_key, current_blocker_signature)
+    latest_blocker = next((row for row in reversed(registry_rows) if row_root_family(row) == blocker_root_family), latest_terminal_family or latest)
     current_rung = normalize_ladder_rung(args.blocker_rung) or infer_ladder_rung(*blocker_sources)
     mutation_kind = blocker_mutation_kind(current_blocker_signature, current_rung, blocker_root_family, latest_blocker)
     previous_forward_count = forward_mutation_streak(registry_rows, family_key)
@@ -2310,14 +2391,15 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
         semantic_progress = False
         evidence_class = "insufficient_evidence"
         high_water = prev_high
-        count = prev_count
+        count = max(prev_count, previous_micro_hardening_count(registry_rows, current_root_family_key)) + 1
         disposition = "conservative_hold"
         hard_stop = True
     else:
         semantic_progress = semantic_progress_from_high_water(quality, prev_high, provider_request_count, args.epsilon)
         evidence_class = "computed"
         high_water = updated_high_water(quality, prev_high, provider_request_count) if semantic_progress else prev_high
-        count = 0 if semantic_progress else prev_count + 1
+        previous_family_count = previous_micro_hardening_count(registry_rows, current_root_family_key)
+        count = 0 if semantic_progress else max(prev_count, previous_family_count) + 1
         if semantic_progress:
             disposition = "open"
             hard_stop = False
@@ -2370,6 +2452,7 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
         "cycle_id": args.cycle_id,
         "task_id": args.task_id,
         "family_key": family_key,
+        "legacy_family_key": legacy_family_key,
         "root_key": current_root_key,
         "root_family_key": current_root_family_key,
         "artifact_family": args.artifact_family,
@@ -2384,7 +2467,15 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
         "substance_delta_gate": substance_gate,
         "vacuous_corrective_gate": corrective_gate,
         "facet_root_map_applied": bool(facet_root_map),
+        "facet_root_map_missing": facet_root_map_missing,
         "facet_root_map_size": len(facet_root_map),
+        "raw_root_family_key": raw_root_family_key,
+        "terminal_outcome_key": current_terminal_outcome_key,
+        "terminal_outcome_family_key": terminal_family_key,
+        "terminal_outcome_family_source": terminal_family_source,
+        "terminal_outcome_family_fallback_applied": terminal_family_fallback,
+        "terminal_outcome_family_previous_count": previous_micro_hardening_count(registry_rows, current_root_family_key),
+        "terminal_outcome_family_previous_cycle_id": (latest_terminal_family or {}).get("cycle_id"),
         "advice_freshness_gate": advice_gate,
         "structure_metrics_gate": structure_gate,
         "provider_scale_dispatch_gate": dispatch_gate,
@@ -2812,8 +2903,26 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
             {
                 "severity": "warn",
                 "code": "domain_adapter_facet_root_map_failed",
-                "message": "domain adapter facet_root_map() failed; root-family normalization used only the conservative built-in suffix/facet collapse.",
-                "evidence": {"error": facet_map_error},
+                "message": "domain adapter facet_root_map() failed; terminal-outcome fallback grouped this cycle by artifact family and terminal outcome.",
+                "evidence": {
+                    "error": facet_map_error,
+                    "terminal_outcome_key": current_terminal_outcome_key,
+                    "terminal_outcome_family_key": terminal_family_key,
+                },
+            }
+        )
+    elif facet_root_map_missing:
+        findings.append(
+            {
+                "severity": "warn",
+                "code": "facet_root_map_missing",
+                "message": "facet_root_map is unavailable; terminal-outcome fallback grouped this cycle by artifact family and terminal outcome so proximate blocker mutations cannot reset same-family caps.",
+                "evidence": {
+                    "terminal_outcome_key": current_terminal_outcome_key,
+                    "terminal_outcome_family_key": terminal_family_key,
+                    "raw_root_family_key": raw_root_family_key,
+                    "previous_cycle_id": (latest_terminal_family or {}).get("cycle_id"),
+                },
             }
         )
     orphan_advice = advice_coherence_finding(root)

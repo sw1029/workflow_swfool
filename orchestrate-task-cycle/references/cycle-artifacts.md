@@ -2,6 +2,16 @@
 
 This reference defines durable workflow artifacts for `$orchestrate-task-cycle`. These artifacts are not workspace goal truth and do not replace owning skill verdicts.
 
+## Contents
+
+- [Cycle Ledger](#cycle-ledger)
+- [Result Contracts](#result-contracts)
+- [Visible Increment](#visible-increment)
+- [Validation Scope](#validation-scope)
+- [Evidence Cache](#evidence-cache)
+- [Dashboard And Profile Snapshots](#dashboard-and-profile-snapshots)
+- [Running Execution](#running-execution)
+
 ## Cycle Ledger
 
 Store cycle state under `.task/cycle/<cycle-id>/`:

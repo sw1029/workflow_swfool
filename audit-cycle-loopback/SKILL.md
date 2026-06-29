@@ -38,7 +38,7 @@ Prefer a repository-supplied domain adapter over producer-local domain assumptio
 - `structure_metrics(...) -> dict`: optional entrypoint/module structure metrics such as LOC, command count, function count, or consolidation recommendation for S-STRUCT.
 - `root_cause_hypotheses(...) -> list|dict`: domain-owned root-cause hypothesis slugs plus optional `target_surface`, `observed_delta_class`, `repair_attempted`, `repair_task_id`, `local`, `bounded`, `provider_free`, `in_scope`, `authority_allowed`, `actionable`, and provenance fields such as `advice_id`, `issue_id`, `run_id`, `evidence_paths`, or `provenance_refs`.
 
-The adapter must keep domain-specific file paths, metric names, lexicons, and thresholds outside this skill. If no adapter is registered, the producer keeps the legacy repository fallback for `scripts/novel_kg_quality_metrics.py` or `NOVEL_KG_QUALITY_METRICS_PATH`, but missing substance metrics fail closed for measurement or capability-ladder promotion.
+The adapter must keep domain-specific file paths, metric names, lexicons, and thresholds outside this skill. If no adapter is registered, any compatibility fallback is legacy-only and must not be extended with new domain-specific paths; missing substance metrics fail closed for measurement or capability-ladder promotion.
 
 Use conservative defaults:
 
@@ -46,6 +46,7 @@ Use conservative defaults:
 - Treat missing adapter output, low-confidence quality, malformed artifacts, or stale fingerprint claims as workflow blockers or warnings rather than progress.
 - Keep domain lexicons, thresholds, source-language handling, placeholder rules, and OCR handling inside the adapter or repository-owned shared module.
 - Do not hardcode project module paths, metric names, lexicon paths, or artifact filenames into this skill body or producer logic.
+- Prefer terminal-outcome family grouping over proximate blocker text. When `facet_root_map` is present, collapse blocker facets through it before root-family caps. When it is absent or empty, emit `facet_root_map_missing=true` and use the conservative fallback `artifact_family + terminal_outcome_key` as `family_key` and `root_family_key` so changing blocker labels cannot reset same-family micro-hardening counters. Preserve the old artifact/signature family as `legacy_family_key` for traceability only.
 
 ## Producer Command
 
@@ -88,7 +89,7 @@ Use `--artifact-paths-json` when a run packet already lists artifact paths.
 - Treat `coverage_quality_delta_gate.quality_delta_pass=true` as the only G-COV path for measurement work to support `goal_productive`. The gate compares adapter-supplied quality/coverage axes against the previous high-water mark; legacy fallback axes may include counts or ratios such as named-event/entity, relation, or source-window coverage.
 - Treat `substance_delta_gate.substance_delta_pass=false` or `status=missing` as G-SUBSTANCE fail-closed evidence. A validator, oracle, measurement check, or capability-ladder rung cannot be promoted from tool existence alone; require adapter-supplied substance delta or strict changed-and-semantic primary-output evidence.
 - Treat `vacuous_corrective_gate.surface_corrective_noop=true` as G-VACUOUS evidence: attempted corrective/backfill lanes with `resolved=0` must be excluded from produced/semantic delta claims.
-- Treat `facet_root_map_applied=true` as G-FACET evidence that adapter facet labels were collapsed before root-family caps. When no map exists, only conservative suffix/date/run/facet normalization applies.
+- Treat `facet_root_map_applied=true` as G-FACET evidence that adapter facet labels were collapsed before root-family caps. Treat `facet_root_map_missing=true` as a warning, not a hard stop: the packet must expose `terminal_outcome_key`, `terminal_outcome_family_key`, and `terminal_outcome_family_fallback_applied`, and repeated cycles with the same terminal outcome must remain in the same family even when proximate blockers mutate.
 - Treat `advice_freshness_gate.advice_metrics_stale=true` as a warn-level G-ADVICE-FRESH finding. Refresh, defer, or reject stale advice before using its headline metrics for next-task direction.
 - Treat `structure_metrics_gate.structure_consolidation_recommended=true` as an S-STRUCT warning that Class C consolidation or module-boundary work may be a valid next-task direction when it reduces an overgrown entrypoint or command surface.
 - Treat `measurement_progress=true` with `measurement_progress_allowed=false` as governance-only instrumentation. `measurement_progress_allowed=true` is valid only when the root-key and root-family measurement streaks are within cap and both G-COV and G-SUBSTANCE passed. Do not reinclude `goal_productive` for measurement-only work without quality/coverage and substance delta.

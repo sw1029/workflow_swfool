@@ -2,6 +2,42 @@
 
 Use this reference when recent task-cycle evidence shows safe but stationary work: repeated no-live contracts, metadata-only output, unchanged primary artifacts, provider avoidance, or repeated command-surface hardening. These gates are workflow controls, not goal truth, authority, issue closure evidence, or permission grants.
 
+## Contents
+
+- [Ownership](#ownership)
+- [Domain-Adapter Contract](#domain-adapter-contract)
+- [G1 Disposition Intersection Gate](#g1-disposition-intersection-gate)
+- [G0 Pre-Cycle Regression Guard](#g0-pre-cycle-regression-guard)
+- [G0-SAT Gate Satisfiability Precheck](#g0-sat-gate-satisfiability-precheck)
+- [G2 Qualitative Review Clamp](#g2-qualitative-review-clamp)
+- [G3 Strict Output Delta](#g3-strict-output-delta)
+- [R-GCOV Coverage Gate Reconciliation](#r-gcov-coverage-gate-reconciliation)
+- [G-INTEGRITY Validator Integrity And Coverage](#g-integrity-validator-integrity-and-coverage)
+- [G-COV Coverage/Quality Delta Gate](#g-cov-coveragequality-delta-gate)
+- [G-SUBSTANCE Output Substance Gate](#g-substance-output-substance-gate)
+- [G-VACUOUS Vacuous Corrective Gate](#g-vacuous-vacuous-corrective-gate)
+- [G-MEAS-CAP Measurement Exception Cap](#g-meas-cap-measurement-exception-cap)
+- [G-FACET Root-Family Measurement Cap](#g-facet-root-family-measurement-cap)
+- [G-ADVICE-FRESH Advice Freshness Gate](#g-advice-fresh-advice-freshness-gate)
+- [G-BALANCE Detection/Correction Balance](#g-balance-detectioncorrection-balance)
+- [G-DISPATCH Provider/Scale Duty Gate](#g-dispatch-providerscale-duty-gate)
+- [G4 Behavior-Based GT Conflict Detection](#g4-behavior-based-gt-conflict-detection)
+- [G5 Command-Surface Hard Stop](#g5-command-surface-hard-stop)
+- [S-STRUCT Structure Signal](#s-struct-structure-signal)
+- [G5b Consolidation Streak Cap](#g5b-consolidation-streak-cap)
+- [G6 Same-Family Micro-Hardening Limit](#g6-same-family-micro-hardening-limit)
+- [G7 Loopback Progress Packet](#g7-loopback-progress-packet)
+- [A1 Measurement Progress Exemption](#a1-measurement-progress-exemption)
+- [A2 Blocker Forward-Mutation Ledger](#a2-blocker-forward-mutation-ledger)
+- [A2b Root-Cause Hypothesis Ledger](#a2b-root-cause-hypothesis-ledger)
+- [A3 Terminal-Blocked Exit Guard](#a3-terminal-blocked-exit-guard)
+- [A3b Terminal Quiescence Gate](#a3b-terminal-quiescence-gate)
+- [A3c Terminal Escalation Gate](#a3c-terminal-escalation-gate)
+- [A4 Advice-Intake Coherence Gate](#a4-advice-intake-coherence-gate)
+- [A5 Command-Surface Carve-Out](#a5-command-surface-carve-out)
+- [Capability Ladder Router](#capability-ladder-router)
+- [No-Overclaim Boundaries](#no-overclaim-boundaries)
+
 ## Ownership
 
 - `orchestrate-task-cycle` owns packet assembly, script execution, stage ordering, and hard-gate enforcement before derive.
@@ -48,6 +84,22 @@ If the same artifact family repeats with `provider_request_count=0` and stagnant
 - a valid consolidation/refactor task for the over-budget surface
 - a supplied-input/domain-delta task that can change the semantic artifact
 - `terminal_blocked` or user escalation with the missing input/authority named
+
+## G0-SAT Gate Satisfiability Precheck
+
+Every fail-closed gate must prove that its evidence source can produce the required evidence shape in the current environment before the gate evaluates pass/fail. The run skill or repository adapter may expose:
+
+```text
+gate_satisfiability(gate_id, env, **context) -> {
+  satisfiable: bool,
+  reason: str,
+  alternative_evidence_source?: str
+}
+```
+
+If `satisfiable=true`, evaluate the gate normally. If `satisfiable=false` and `alternative_evidence_source` is present, evaluate the unchanged gate against the alternative source and record the fallback. If `satisfiable=false` and no alternative exists, classify the blocker as `self_inflicted_gate_defect` and route the next task to gate-contract/code correction or user escalation. Do not reclassify this state as an environment/runtime blocker, and do not select another same-gate recheck as progress.
+
+Keep domain facts, hardware names, command names, thresholds, and evidence-source details in the adapter or task packet. The generic workflow stores only the adapter interface, scalar outcome, classification, and routing rule.
 
 ## G2 Qualitative Review Clamp
 
@@ -123,9 +175,11 @@ Do not re-add `goal_productive` to `effective_allowed_dispositions` merely becau
 
 Normalize blocker and measurement families by removing version/date/run-directory suffixes and facet labels. When the domain adapter supplies `facet_root_map`, collapse facet labels through that map before applying family-level caps. Use `root_family_key` or `blocker_root_family`; do not let equivalent facet renames reset the measurement exception counter.
 
+When `facet_root_map` is absent, empty, or fails, do not fall back to raw proximate blocker text as the family key. Emit `facet_root_map_missing=true` and group by a stable terminal-outcome family such as `artifact_family + terminal_outcome_key`; use that value as `family_key` and `root_family_key`, and preserve the previous artifact/signature key as `legacy_family_key`. The packet should expose `terminal_outcome_key`, `terminal_outcome_family_key`, `terminal_outcome_family_fallback_applied`, and `terminal_outcome_family_previous_count`. This fallback is intentionally conservative: if the terminal outcome is unchanged, blocker-label mutation cannot reset the same-family cap.
+
 Packets should expose `measurement_progress_streak_for_root_family` alongside `measurement_progress_streak_for_root_key`. `measurement_progress_allowed=true` is valid only when both the root-key and root-family streaks are within cap and G-COV/G-SUBSTANCE passed.
 
-Treat `blocker_mutation_kind=facet_rename` as lateral churn. Treat `blocker_mutation_kind=forward_mutation` only when the normalized root family actually changes or a recorded capability ladder transition is not merely a facet rename.
+Treat `blocker_mutation_kind=facet_rename` as lateral churn. Treat `blocker_mutation_kind=forward_mutation` only when the normalized root family actually changes or a recorded capability ladder transition is not merely a facet rename. If the terminal outcome remains unchanged, set `forward_mutation_vacuous=true` and keep the hard stop.
 
 ## G-ADVICE-FRESH Advice Freshness Gate
 
@@ -269,6 +323,14 @@ Before derive writes `terminal_blocked`, check the next unsatisfied capability-l
 When loop detection reports `terminal_quiescence_gate.quiescence_required=true`, the orchestrator must not automatically start another domain cycle for the same `root_key`. Record one user-handoff note and skip closeout/dashboard/report/recheck reproduction with `commit_skipped_reason: terminal_quiescence`.
 
 This gate applies only when `has_supplied_input_delta=false` and the same root has reached terminal state at least `terminal_quiescence_threshold` consecutive times, default `2`. Count `untried_root_cause_repair_required` records with no terminal outcome change as same-root no-progress records for the streak. Use `quiescence_untried_reconcile` as the single source of truth for priority: a verified, unexhausted untried hypothesis may override quiescence; exhausted or unverified hypotheses may not.
+
+## A3c Terminal Escalation Gate
+
+When loop detection reports `terminal_escalation_gate.escalation_required=true`, the workflow must promote repeated terminal recheck into `user_escalation`. This gate applies when the same root family has `terminal_blocked`, terminal handoff, or recheck records for at least `terminal_escalation_threshold` consecutive cycles, default `2`, and `has_supplied_input_delta=false`.
+
+The packet must expose `terminal_recheck_streak`, `root_family`, `forced_disposition: user_escalation`, `seal_required: true`, `seal_family_path`, and exactly one `missing_input` object. The missing input kind must be one of `new_input_kind`, `authority_change`, `external_state_change`, or `gate_contract_fix_approval`.
+
+`terminal_blocked` recheck is not progress for this gate. `$derive-improvement-task` must seal the family and emit `selected_task_source: user_escalation` unless a verified unexhausted root-cause repair, supplied input delta, authority change, or external-state change reopens the family.
 
 ## A4 Advice-Intake Coherence Gate
 

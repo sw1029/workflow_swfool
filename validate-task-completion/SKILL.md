@@ -100,6 +100,8 @@ When `task.md`, a caller packet, or active workflow evidence references `.agent_
      - `regressed`: the task weakened or broke a required state, contract, validation gate, safety boundary, or goal requirement.
    - Do not classify progress as `advanced` merely because a new input kind was named. Evidence-family progress requires a non-empty supplied artifact path, `produced_domain_delta=true`, or another validated positive domain/output artifact.
    - Do not classify progress as `advanced` from self-declared `produced_domain_delta`, non-empty counts, fixture-only success, or a blocker-state label unless `terminal_outcome_changed=true` or strict observed changed-and-semantic output-delta evidence is present. Otherwise cap progress at `safety_only`.
+   - Do not classify progress as `advanced` when the run evidence is `self_inflicted_gate_defect` unless the task actually corrected the gate contract/code or supplied a valid alternative evidence source. Rechecking the same unsatisfiable gate is `no_progress` or `safety_only` at most.
+   - Do not classify repeated `terminal_blocked`/recheck closeout as `advanced`. If `terminal_escalation_gate.escalation_required=true`, a valid completion must record `user_escalation`, exactly one missing input, and family seal evidence; otherwise cap the verdict at `partial` or `failed` depending on the task objective.
    - Do not let `validation_verdict: complete` imply final-goal progress when `progress_verdict` is `safety_only` or `no_progress`.
 
 11. Write a validation report.
@@ -163,6 +165,7 @@ Include an `External advice` gate whenever `.agent_advice/` exists, the caller s
 - Do not mark `progress_verdict: advanced` merely because a no-live/fail-closed safety check passed; name the blocker-state transition or classify it as `safety_only`.
 - Do not mark `progress_verdict: advanced` unless `terminal_outcome_changed=true` or strict observed `changed_vs_previous=true` and `semantic_progress=true` evidence is present.
 - Do not mark named-only input changes as a positive input delta; require supplied artifact evidence or `produced_domain_delta=true`.
+- Do not mark G2 terminal escalation complete without `selected_task_source: user_escalation`, `required_missing_input_count: 1`, a concrete `required_missing_input.kind`, and `.task/sealed_blocker_families.json` or equivalent pack-mutation evidence.
 - Do not store secrets, credentials, private tokens, raw sensitive data, or large copyrighted excerpts in validation reports or logs.
 - Do not count a repo, OOM, env, or execution agent as the ID consistency agent; ID validation is additional when agent-based insight is used.
 - Do not mark schema/module/script contract changes complete when `.agent_goal/goal_schema_contract.md` applies but `.schema/` or `.contract/` evidence is stale, missing required fields, or lacks validation/causal-map coverage.
