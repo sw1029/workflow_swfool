@@ -1270,7 +1270,27 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                 ],
             )
         )
-        if terminal_or_seal and untried_root_cause_exists and not hypothesis_exhausted:
+        untried_veto_overridden_by_chain_stall = boolish(
+            first_present(
+                result,
+                [
+                    "untried_veto_overridden_by_chain_stall",
+                    "cumulative_untried_chain_without_quality_delta",
+                    "anti_loop_progress_gate.untried_veto_overridden_by_chain_stall",
+                    "anti_loop_progress_gate.cumulative_untried_chain_without_quality_delta",
+                    "loop_breaker_packet.untried_veto_overridden_by_chain_stall",
+                    "terminal_blocker.untried_veto_overridden_by_chain_stall",
+                    "result.anti_loop_progress_gate.untried_veto_overridden_by_chain_stall",
+                    "result.terminal_blocker.untried_veto_overridden_by_chain_stall",
+                ],
+            )
+        )
+        if (
+            terminal_or_seal
+            and untried_root_cause_exists
+            and not hypothesis_exhausted
+            and not untried_veto_overridden_by_chain_stall
+        ):
             add(
                 findings,
                 "block" if mode == "block" else "warn",
@@ -1613,6 +1633,11 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
         measurement_progress_allowed = boolish(value_for(result, "measurement_progress_allowed"))
         substance_delta_pass = boolish(deep_get(result, "substance_delta_gate.substance_delta_pass"))
         vacuous_corrective_noop = boolish(deep_get(result, "vacuous_corrective_gate.surface_corrective_noop"))
+        adapter_mandate_required = boolish(value_for(result, "adapter_mandate_required"))
+        cumulative_chain_stalled = boolish(value_for(result, "cumulative_goal_distance_stalled"))
+        untried_veto_overridden = boolish(value_for(result, "untried_veto_overridden_by_chain_stall"))
+        acceptance_unreachable = boolish(value_for(result, "acceptance_unreachable_under_frozen_config"))
+        metric_goal_productive_excluded = boolish(deep_get(result, "oracle_metric_validity_gate.metric_goal_productive_excluded"))
         forward_mutation_progress = str(value_for(result, "blocker_mutation_kind") or "").lower() == "forward_mutation"
         terminal_outcome_value = value_for(result, "terminal_outcome_changed")
         terminal_outcome_changed = (
@@ -1661,6 +1686,41 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                 "block" if mode == "block" else "warn",
                 "loopback_vacuous_corrective_claimed_semantic_progress",
                 "`loopback_audit` reported semantic_progress while G-VACUOUS found attempted corrective lanes with zero resolved items.",
+            )
+        if adapter_mandate_required and not hard_stop:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_adapter_mandate_without_hard_stop",
+                "`loopback_audit` adapter_mandate_required=true must hard-stop ordinary domain repair and force adapter registration/strengthening or escalation.",
+            )
+        if cumulative_chain_stalled and not adapter_mandate_required and not hard_stop:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_cumulative_chain_without_hard_stop",
+                "`loopback_audit` cumulative goal-distance stall must hard-stop unless G-ADAPTER is the active preceding mandate.",
+            )
+        if untried_veto_overridden and not cumulative_chain_stalled:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_untried_override_without_chain_stall",
+                "`untried_veto_overridden_by_chain_stall` requires cumulative goal-distance stall evidence.",
+            )
+        if acceptance_unreachable and not boolish(value_for(result, "relaxation_or_escalation_required")):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_unreachable_acceptance_without_relaxation_gate",
+                "`acceptance_unreachable_under_frozen_config` requires `relaxation_or_escalation_required=true`.",
+            )
+        if metric_goal_productive_excluded and semantic_progress and measurement_progress_allowed:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_tautological_metric_claimed_progress",
+                "Tautological oracle/metric validity must not support semantic or measurement goal-productive progress without independent output-delta evidence.",
             )
     if target == "validate":
         progress_verdict = str(value_for(result, "progress_verdict") or "").strip().lower()

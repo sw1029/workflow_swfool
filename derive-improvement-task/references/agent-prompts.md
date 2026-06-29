@@ -218,7 +218,7 @@ Inputs:
 - active `.agent_advice` packet as non-GT direction evidence when present
 - active `.task/task_pack` packet and Markdown render when present
 - loop_breaker_packet: blocker signatures, semantic signatures, same-signature counts, same-semantic-family counts, sealed-family matches, goal-distance gate, governance-only streak, positive input delta gate with `has_supplied_input_delta` and `supplied_input_artifact_paths`, provider re-attempt gate, command-surface budget, terminal blocker recommendation
-- output_delta_packet, qualitative_review_packet, and anti_loop_progress_gate: `changed_vs_previous`, `semantic_progress`, semantic readiness/cap fields, `substance_delta_gate`, `vacuous_corrective_gate`, `advice_freshness_gate`, provider/env behavior booleans, same-family micro-hardening count, command-surface hard-stop state, and allowed dispositions
+- output_delta_packet, qualitative_review_packet, and anti_loop_progress_gate: `changed_vs_previous`, `semantic_progress`, semantic readiness/cap fields, `substance_delta_gate`, `vacuous_corrective_gate`, `adapter_mandate_required`, `cumulative_goal_distance_stalled`, `untried_veto_overridden_by_chain_stall`, `acceptance_unreachable_under_frozen_config`, `oracle_metric_validity_gate`, `advice_freshness_gate`, provider/env behavior booleans, same-family micro-hardening count, command-surface hard-stop state, and allowed dispositions
 - issue goal-fit report from `$manage-implementation-issues`
 - task_miss analysis
 - candidate_task analysis

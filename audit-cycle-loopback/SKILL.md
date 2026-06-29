@@ -37,6 +37,8 @@ Prefer a repository-supplied domain adapter over producer-local domain assumptio
 - `previous_accepted_fp(...) -> str|dict`: previous accepted primary-output fingerprint, and optionally previous quality/high-water vector, for R-GCOV baseline selection.
 - `structure_metrics(...) -> dict`: optional entrypoint/module structure metrics such as LOC, command count, function count, or consolidation recommendation for S-STRUCT.
 - `root_cause_hypotheses(...) -> list|dict`: domain-owned root-cause hypothesis slugs plus optional `target_surface`, `observed_delta_class`, `repair_attempted`, `repair_task_id`, `local`, `bounded`, `provider_free`, `in_scope`, `authority_allowed`, `actionable`, and provenance fields such as `advice_id`, `issue_id`, `run_id`, `evidence_paths`, or `provenance_refs`.
+- `acceptance_reachability(...) -> dict`: optional abstract comparison input for G-REACH with `acceptance_min_output`, `frozen_envelope`, and optional `reachability_verdict: reachable|unreachable|indeterminate`.
+- `metric_validity_self_check(...) -> dict|list`: optional oracle/metric validity report for G-OENV. Return `metric_validity: tautological` or equivalent only when a metric can pass by construction and must not support goal-productive progress.
 
 The adapter must keep domain-specific file paths, metric names, lexicons, and thresholds outside this skill. If no adapter is registered, any compatibility fallback is legacy-only and must not be extended with new domain-specific paths; missing substance metrics fail closed for measurement or capability-ladder promotion.
 
@@ -67,9 +69,13 @@ python3 /home/swfool/.codex/skills/audit-cycle-loopback/scripts/anti_loop_gate_p
   --measurement-frontier event_sequence_oracle \
   --blocker-signature timeline_order_ambiguous \
   --blocker-rung pov_timeline \
+  --acceptance-reachability-json .task/cycle/cycle-YYYYMMDD-HHMMSS/packets/acceptance_reachability.json \
+  --metric-validity-json .task/cycle/cycle-YYYYMMDD-HHMMSS/packets/metric_validity.json \
   --hypothesized-root-cause prompt_candidate_row_gate \
   --root-cause-actionable \
   --untried-promotion-budget 2 \
+  --adapter-mandate-streak-cap 3 \
+  --cumulative-chain-streak-cap 3 \
   --write-registry \
   --output .task/cycle/cycle-YYYYMMDD-HHMMSS/packets/loopback_audit_packet.json
 ```
@@ -90,6 +96,11 @@ Use `--artifact-paths-json` when a run packet already lists artifact paths.
 - Treat `substance_delta_gate.substance_delta_pass=false` or `status=missing` as G-SUBSTANCE fail-closed evidence. A validator, oracle, measurement check, or capability-ladder rung cannot be promoted from tool existence alone; require adapter-supplied substance delta or strict changed-and-semantic primary-output evidence.
 - Treat `vacuous_corrective_gate.surface_corrective_noop=true` as G-VACUOUS evidence: attempted corrective/backfill lanes with `resolved=0` must be excluded from produced/semantic delta claims.
 - Treat `facet_root_map_applied=true` as G-FACET evidence that adapter facet labels were collapsed before root-family caps. Treat `facet_root_map_missing=true` as a warning, not a hard stop: the packet must expose `terminal_outcome_key`, `terminal_outcome_family_key`, and `terminal_outcome_family_fallback_applied`, and repeated cycles with the same terminal outcome must remain in the same family even when proximate blockers mutate.
+- Treat `adapter_mandate_required=true` as G-ADAPTER: when adapter contract gaps repeat with no quality/substance high-water improvement for the configured cap, derive must select adapter registration/strengthening before another domain micro-repair can count as `goal_productive`.
+- Treat `cumulative_goal_distance_stalled=true` as G-CHAIN: when the same adapter-collapsed root family, or `artifact_family` without an adapter, has no quality/substance high-water improvement for the configured cap, restrict the next disposition to `terminal_blocked` or `user_escalation` unless G-ADAPTER is the active preceding mandate.
+- Treat `untried_veto_overridden_by_chain_stall=true` as the only allowed override for the usual untried-root-cause terminal veto. Keep `untried_actionable_root_cause_exists=true` for traceability, but do not promote another distinct repair merely because its label is new.
+- Treat `acceptance_unreachable_under_frozen_config=true` as G-REACH: derive must choose a constraint-relaxation task or `user_escalation`; envelope-internal micro-repair cannot be goal-productive while the abstract acceptance minimum exceeds the frozen envelope.
+- Treat `oracle_metric_validity_gate.metric_goal_productive_excluded=true` as G-OENV: exclude tautological oracle/metric passes from goal-productive evidence and require metric correction or independent changed-and-semantic output-delta evidence. If `metric_validity_self_check` is absent, warn only.
 - Treat `advice_freshness_gate.advice_metrics_stale=true` as a warn-level G-ADVICE-FRESH finding. Refresh, defer, or reject stale advice before using its headline metrics for next-task direction.
 - Treat `structure_metrics_gate.structure_consolidation_recommended=true` as an S-STRUCT warning that Class C consolidation or module-boundary work may be a valid next-task direction when it reduces an overgrown entrypoint or command surface.
 - Treat `measurement_progress=true` with `measurement_progress_allowed=false` as governance-only instrumentation. `measurement_progress_allowed=true` is valid only when the root-key and root-family measurement streaks are within cap and both G-COV and G-SUBSTANCE passed. Do not reinclude `goal_productive` for measurement-only work without quality/coverage and substance delta.
@@ -97,7 +108,7 @@ Use `--artifact-paths-json` when a run packet already lists artifact paths.
 - Treat `blocker_mutation_kind=forward_mutation` as changed blocker-state progress only when `terminal_outcome_changed=true` from observed output-delta evidence. If the ladder rung changes but the terminal outcome does not, emit `forward_mutation_vacuous=true`, keep/raise the hard stop, and route to untried root-cause repair or terminal/user escalation.
 - Treat `blocker_mutation_kind=facet_rename` as lateral churn, not forward mutation. Facet names, suffixes, dates, run directories, and version labels do not reset the root-family cap.
 - Treat `requires_correction_or_terminal=true` as G-BALANCE: detection-only work has repeated for the same root blocker family while semantic progress remains false. Downstream derivation must choose correction/implementation work, `terminal_blocked`, or `user_escalation`; another validator, metric, gate, dashboard, lineage, or report is not goal-productive.
-- Treat `untried_actionable_root_cause_exists=true` as a terminal-blocker veto only while `hypothesis_exhausted=false`. Downstream derivation must promote the verified untried hypothesis as the next goal-productive repair task instead of sealing the family.
+- Treat `untried_actionable_root_cause_exists=true` as a terminal-blocker veto only while `hypothesis_exhausted=false` and `untried_veto_overridden_by_chain_stall=false`. Downstream derivation must promote the verified untried hypothesis as the next goal-productive repair task instead of sealing the family unless G-CHAIN proves cumulative goal-distance stall.
 - Treat `root_cause_unverified_hypotheses` as excluded from untried promotion. A self-asserted `actionable` flag without structural fields or provenance must not override terminal/quiescence.
 - Treat `root_cause_duplicate_hypotheses` as excluded from untried promotion. Version suffixes, renamed slugs, and same `(root cause, target surface, observed delta class)` equivalents do not create fresh untried hypotheses.
 - Treat `hypothesis_exhausted=true` as a hard stop equivalent to quiescence: after the same family spends the `untried_promotion_budget` on vacuous repairs with `terminal_outcome_changed=false`, route to `terminal_blocked` or `user_escalation` unless a supplied input delta changes the family.

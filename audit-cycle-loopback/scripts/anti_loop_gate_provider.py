@@ -28,6 +28,8 @@ MEASUREMENT_STREAK_CAP_DEFAULT = 1
 MAX_FORWARD_MUTATIONS_DEFAULT = 3
 DETECTION_ONLY_STREAK_CAP_DEFAULT = 2
 UNTRIED_PROMOTION_BUDGET_DEFAULT = 2
+ADAPTER_MANDATE_STREAK_CAP_DEFAULT = 3
+CUMULATIVE_CHAIN_STREAK_CAP_DEFAULT = 3
 ROOT_CAUSE_LEDGER_MAX_ROWS_PER_FAMILY_DEFAULT = 200
 ROOT_STEERING_DOC_NAMES = {"task_advice.md", "skill_advice.md", "task_doctor_steering.md"}
 QUALITY_DELTA_KEYS = (
@@ -83,6 +85,22 @@ IDEMPOTENT_REPLAY_KEYS = (
     "root_cause_ledger_entries",
     "root_cause_unverified_hypotheses",
     "root_cause_duplicate_hypotheses",
+    "adapter_mandate_gate",
+    "adapter_mandate_required",
+    "adapter_missing_streak",
+    "adapter_contract_unmet",
+    "cumulative_goal_distance_gate",
+    "cumulative_goal_distance_scope_key",
+    "cumulative_goal_distance_stall_streak",
+    "cumulative_goal_distance_stalled",
+    "cumulative_untried_chain_without_quality_delta",
+    "high_water_vector",
+    "high_water_last_improved_cycle",
+    "untried_veto_overridden_by_chain_stall",
+    "acceptance_reachability_gate",
+    "acceptance_unreachable_under_frozen_config",
+    "relaxation_or_escalation_required",
+    "oracle_metric_validity_gate",
     "untried_actionable_root_cause_exists",
     "untried_root_cause_hypotheses",
     "untried_promotion_budget",
@@ -1343,6 +1361,107 @@ def vector_delta_gate(
     }
 
 
+def infer_reachability_verdict(acceptance_min_output: Any, frozen_envelope: Any) -> str:
+    minimums = numeric_vector(acceptance_min_output)
+    envelope = numeric_vector(frozen_envelope)
+    if not minimums or not envelope:
+        return "indeterminate"
+    comparable = False
+    for key, minimum in minimums.items():
+        candidates = (
+            key,
+            f"max_{key}",
+            f"{key}_max",
+            f"limit_{key}",
+            f"{key}_limit",
+            "max_output",
+            "output_cap",
+        )
+        matching = [envelope[candidate] for candidate in candidates if candidate in envelope]
+        if not matching:
+            continue
+        comparable = True
+        if max(matching) < minimum:
+            return "unreachable"
+    return "reachable" if comparable else "indeterminate"
+
+
+def acceptance_reachability_gate(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict) and isinstance(value.get("acceptance_reachability_gate"), dict):
+        value = value["acceptance_reachability_gate"]
+    if not isinstance(value, dict):
+        verdict = "indeterminate"
+        acceptance_min_output: Any = {}
+        frozen_envelope: Any = {}
+    else:
+        acceptance_min_output = (
+            value.get("acceptance_min_output")
+            or value.get("min_output")
+            or value.get("minimum_output")
+            or {}
+        )
+        frozen_envelope = value.get("frozen_envelope") or value.get("envelope") or value.get("bounds") or {}
+        verdict = str(
+            value.get("reachability_verdict")
+            or value.get("verdict")
+            or value.get("status")
+            or ""
+        ).strip().lower()
+        if bool_value(value.get("acceptance_unreachable_under_frozen_config")):
+            verdict = "unreachable"
+        if verdict not in {"reachable", "unreachable", "indeterminate"}:
+            verdict = infer_reachability_verdict(acceptance_min_output, frozen_envelope)
+    unreachable = verdict == "unreachable"
+    return {
+        "gate": "G-REACH",
+        "acceptance_min_output": acceptance_min_output,
+        "frozen_envelope": frozen_envelope,
+        "reachability_verdict": verdict,
+        "acceptance_unreachable_under_frozen_config": unreachable,
+        "relaxation_or_escalation_required": unreachable,
+        "status": "block" if unreachable else verdict,
+        "constrains_disposition": unreachable,
+        "allowed_dispositions": ["goal_productive", "terminal_blocked", "user_escalation"],
+        "blocked_micro_repair_under_frozen_envelope": unreachable,
+    }
+
+
+def metric_validity_states(value: Any) -> list[str]:
+    states: list[str] = []
+
+    def walk(item: Any) -> None:
+        if isinstance(item, dict):
+            for key in ("metric_validity", "validity", "status", "verdict"):
+                if item.get(key) is not None:
+                    states.append(str(item.get(key)).strip().lower())
+            for child in item.values():
+                walk(child)
+        elif isinstance(item, list):
+            for child in item:
+                walk(child)
+
+    walk(value)
+    return states
+
+
+def oracle_metric_validity_gate(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict) and isinstance(value.get("oracle_metric_validity_gate"), dict):
+        value = value["oracle_metric_validity_gate"]
+    states = metric_validity_states(value)
+    tautological = any(state in {"tautological", "constant", "self_fulfilling", "self-fulfilling"} for state in states)
+    provided = value is not None
+    return {
+        "gate": "G-OENV",
+        "metric_validity": "tautological" if tautological else ("checked" if provided else "unknown"),
+        "metric_validity_states": states[:20],
+        "metric_validity_self_check_provided": provided,
+        "metric_goal_productive_excluded": tautological,
+        "status": "block" if tautological else ("ok" if provided else "not_provided"),
+        "constrains_disposition": tautological,
+        "allowed_dispositions": ["goal_productive", "terminal_blocked", "user_escalation"],
+    }
+
+
 def normalize_adapter_quality_result(value: Any, root: Path) -> tuple[dict[str, Any], list[str], str | None]:
     if not isinstance(value, dict):
         return {}, [], "domain_adapter_quality_vector_missing"
@@ -2128,6 +2247,153 @@ def provider_scale_dispatch_gate(
     }
 
 
+def row_vector_delta_passed(row: dict[str, Any]) -> bool:
+    coverage_gate = row.get("coverage_quality_delta_gate")
+    substance_gate = row.get("substance_delta_gate")
+    return any(
+        (
+            bool_value(row.get("semantic_progress")),
+            isinstance(coverage_gate, dict) and bool_value(coverage_gate.get("quality_delta_pass")),
+            isinstance(substance_gate, dict) and bool_value(substance_gate.get("substance_delta_pass")),
+        )
+    )
+
+
+def adapter_contract_unmet_fields(
+    *,
+    facet_root_map_missing: bool,
+    substance_gate: dict[str, Any],
+    quality: dict[str, Any],
+) -> list[str]:
+    unmet: list[str] = []
+    if facet_root_map_missing:
+        unmet.append("facet_root_map")
+    if str(substance_gate.get("status") or "").lower() == "missing" or not numeric_vector(
+        substance_gate.get("current_substance_vector")
+    ):
+        unmet.append("substance_metrics")
+    if not numeric_vector(quality):
+        unmet.append("quality_vector")
+    return sorted(dict.fromkeys(unmet))
+
+
+def row_adapter_contract_unmet(row: dict[str, Any]) -> list[str]:
+    if isinstance(row.get("adapter_contract_unmet"), list):
+        return list_values(row.get("adapter_contract_unmet"))
+    substance_gate = row.get("substance_delta_gate") if isinstance(row.get("substance_delta_gate"), dict) else {}
+    return adapter_contract_unmet_fields(
+        facet_root_map_missing=bool_value(row.get("facet_root_map_missing")),
+        substance_gate=substance_gate,
+        quality=row.get("quality_vector") if isinstance(row.get("quality_vector"), dict) else {},
+    )
+
+
+def adapter_missing_streak(
+    rows: list[dict[str, Any]],
+    artifact_family: str,
+    current_contract_unmet: list[str],
+    current_no_delta: bool,
+) -> int:
+    if not current_contract_unmet or not current_no_delta:
+        return 0
+    streak = 1
+    for row in reversed(rows):
+        if str(row.get("artifact_family") or "") != artifact_family:
+            continue
+        if row_adapter_contract_unmet(row) and not row_vector_delta_passed(row):
+            streak += 1
+            continue
+        break
+    return streak
+
+
+def adapter_mandate_gate(
+    rows: list[dict[str, Any]],
+    *,
+    artifact_family: str,
+    contract_unmet: list[str],
+    current_no_delta: bool,
+    cap: int,
+) -> dict[str, Any]:
+    streak = adapter_missing_streak(rows, artifact_family, contract_unmet, current_no_delta)
+    required = bool(contract_unmet) and current_no_delta and streak >= max(1, cap)
+    return {
+        "gate": "G-ADAPTER",
+        "adapter_mandate_required": required,
+        "adapter_missing_streak": streak,
+        "adapter_missing_streak_cap": max(1, cap),
+        "adapter_contract_unmet": contract_unmet,
+        "quality_high_water_unimproved": current_no_delta,
+        "status": "block" if required else ("warn" if contract_unmet else "ok"),
+        "constrains_disposition": required,
+        "allowed_dispositions": ["goal_productive", "terminal_blocked", "user_escalation"],
+    }
+
+
+def cumulative_goal_distance_scope_key(artifact_family: str, root_family_key: str, facet_root_map_missing: bool) -> str:
+    if facet_root_map_missing:
+        return f"artifact_family:{normalize_root_family_key(artifact_family)}"
+    return f"root_family:{normalize_root_family_key(root_family_key)}"
+
+
+def row_goal_distance_scope(row: dict[str, Any], artifact_family: str, root_family_key: str, facet_root_map_missing: bool) -> str:
+    existing = str(row.get("cumulative_goal_distance_scope_key") or "").strip()
+    if existing:
+        return existing
+    if facet_root_map_missing:
+        return f"artifact_family:{normalize_root_family_key(row.get('artifact_family') or artifact_family)}"
+    return f"root_family:{normalize_root_family_key(row.get('root_family_key') or row.get('blocker_root_family') or root_family_key)}"
+
+
+def cumulative_goal_distance_gate(
+    rows: list[dict[str, Any]],
+    *,
+    artifact_family: str,
+    root_family_key: str,
+    facet_root_map_missing: bool,
+    current_no_delta: bool,
+    high_water: dict[str, Any],
+    current_cycle_id: str,
+    cap: int,
+) -> dict[str, Any]:
+    scope_key = cumulative_goal_distance_scope_key(artifact_family, root_family_key, facet_root_map_missing)
+    if not current_no_delta:
+        return {
+            "gate": "G-CHAIN",
+            "cumulative_goal_distance_scope_key": scope_key,
+            "cumulative_goal_distance_stall_streak": 0,
+            "cumulative_goal_distance_stall_cap": max(1, cap),
+            "cumulative_goal_distance_stalled": False,
+            "high_water_vector": numeric_vector(high_water),
+            "high_water_last_improved_cycle": current_cycle_id,
+            "status": "ok",
+            "constrains_disposition": False,
+            "allowed_dispositions": ["terminal_blocked", "user_escalation"],
+        }
+    streak = 1 if current_no_delta else 0
+    last_improved_cycle = current_cycle_id if not current_no_delta else None
+    for row in reversed(rows):
+        if row_goal_distance_scope(row, artifact_family, root_family_key, facet_root_map_missing) != scope_key:
+            continue
+        if row_vector_delta_passed(row):
+            last_improved_cycle = str(row.get("cycle_id") or "") or None
+            break
+        streak += 1
+    stalled = current_no_delta and streak >= max(1, cap)
+    return {
+        "gate": "G-CHAIN",
+        "cumulative_goal_distance_scope_key": scope_key,
+        "cumulative_goal_distance_stall_streak": streak,
+        "cumulative_goal_distance_stall_cap": max(1, cap),
+        "cumulative_goal_distance_stalled": stalled,
+        "high_water_vector": numeric_vector(high_water),
+        "high_water_last_improved_cycle": last_improved_cycle,
+        "status": "block" if stalled else "ok",
+        "constrains_disposition": stalled,
+        "allowed_dispositions": ["terminal_blocked", "user_escalation"],
+    }
+
+
 def semantic_progress_from_high_water(
     quality: dict[str, Any],
     prev_high: dict[str, Any],
@@ -2328,6 +2594,40 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
     corrective_gate = vacuous_corrective_gate(corrective_value)
     if bool_value(corrective_gate.get("constrains_disposition")):
         gate_inputs.append({"name": "vacuous_corrective_gate", **corrective_gate})
+    acceptance_value = load_json_value(root, getattr(args, "acceptance_reachability_json", None))
+    acceptance_error: str | None = None
+    if acceptance_value is None:
+        acceptance_value, acceptance_error = call_adapter(
+            domain_adapter,
+            "acceptance_reachability",
+            root=root,
+            artifact_paths=[rel_path(root, path) for path in paths],
+            quality_vector=quality,
+            output_delta=output_delta,
+            runner_validation=runner_validation,
+            family_key=family_key,
+            root_key=current_root_key,
+        )
+    reachability_gate = acceptance_reachability_gate(acceptance_value)
+    if bool_value(reachability_gate.get("constrains_disposition")):
+        gate_inputs.append({"name": "acceptance_reachability_gate", **reachability_gate})
+    metric_validity_value = load_json_value(root, getattr(args, "metric_validity_json", None))
+    metric_validity_error: str | None = None
+    if metric_validity_value is None:
+        metric_validity_value, metric_validity_error = call_adapter(
+            domain_adapter,
+            "metric_validity_self_check",
+            root=root,
+            artifact_paths=[rel_path(root, path) for path in paths],
+            quality_vector=quality,
+            output_delta=output_delta,
+            runner_validation=runner_validation,
+            family_key=family_key,
+            root_key=current_root_key,
+        )
+    metric_validity_gate = oracle_metric_validity_gate(metric_validity_value)
+    if bool_value(metric_validity_gate.get("constrains_disposition")):
+        gate_inputs.append({"name": "oracle_metric_validity_gate", **metric_validity_gate})
     adapter_fingerprint_value, adapter_fingerprint_error = call_adapter(
         domain_adapter,
         "output_fingerprint",
@@ -2369,6 +2669,8 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
         and bool_value(substance_gate.get("substance_delta_pass"))
         and not coverage_reconciliation_blocks
     )
+    if bool_value(metric_validity_gate.get("metric_goal_productive_excluded")):
+        measurement_progress_allowed = False
     blocker_sources: list[Any] = [runner_validation, output_delta, quality, gate_inputs, args.semantic_signature, args.artifact_family]
     current_blocker_signature = (
         args.blocker_signature
@@ -2445,6 +2747,52 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
     requires_correction_or_terminal = detection_streak >= args.detection_only_streak_cap and not semantic_progress
     if requires_correction_or_terminal:
         hard_stop = True
+    current_no_goal_distance_delta = not (
+        bool_value(coverage_gate.get("quality_delta_pass"))
+        or bool_value(substance_gate.get("substance_delta_pass"))
+    )
+    adapter_contract_unmet = adapter_contract_unmet_fields(
+        facet_root_map_missing=facet_root_map_missing,
+        substance_gate=substance_gate,
+        quality=quality,
+    )
+    adapter_gate = adapter_mandate_gate(
+        registry_rows,
+        artifact_family=args.artifact_family,
+        contract_unmet=adapter_contract_unmet,
+        current_no_delta=current_no_goal_distance_delta,
+        cap=getattr(args, "adapter_mandate_streak_cap", ADAPTER_MANDATE_STREAK_CAP_DEFAULT),
+    )
+    if bool_value(adapter_gate.get("adapter_mandate_required")):
+        hard_stop = True
+        disposition = "adapter_mandate_required"
+        gate_inputs.append({"name": "adapter_mandate_gate", **adapter_gate})
+    chain_gate = cumulative_goal_distance_gate(
+        registry_rows,
+        artifact_family=args.artifact_family,
+        root_family_key=current_root_family_key,
+        facet_root_map_missing=facet_root_map_missing,
+        current_no_delta=current_no_goal_distance_delta,
+        high_water=high_water,
+        current_cycle_id=args.cycle_id,
+        cap=getattr(args, "cumulative_chain_streak_cap", CUMULATIVE_CHAIN_STREAK_CAP_DEFAULT),
+    )
+    if bool_value(chain_gate.get("cumulative_goal_distance_stalled")) and not bool_value(
+        adapter_gate.get("adapter_mandate_required")
+    ):
+        hard_stop = True
+        disposition = "terminal_blocked"
+        gate_inputs.append({"name": "cumulative_goal_distance_gate", **chain_gate})
+    if bool_value(reachability_gate.get("acceptance_unreachable_under_frozen_config")):
+        hard_stop = True
+        if not bool_value(adapter_gate.get("adapter_mandate_required")) and not bool_value(
+            chain_gate.get("cumulative_goal_distance_stalled")
+        ):
+            disposition = "relaxation_or_escalation_required"
+    if bool_value(metric_validity_gate.get("metric_goal_productive_excluded")):
+        hard_stop = True
+        if disposition in {"open", "prefer_provider_or_semantic", "measurement_progress_goal_productive_candidate"}:
+            disposition = "metric_definition_correction_required"
 
     row = {
         "schema_version": SCHEMA_VERSION,
@@ -2466,6 +2814,24 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
         "substance_metrics": numeric_vector(current_substance),
         "substance_delta_gate": substance_gate,
         "vacuous_corrective_gate": corrective_gate,
+        "adapter_mandate_gate": adapter_gate,
+        "adapter_mandate_required": bool_value(adapter_gate.get("adapter_mandate_required")),
+        "adapter_missing_streak": adapter_gate.get("adapter_missing_streak"),
+        "adapter_contract_unmet": adapter_contract_unmet,
+        "cumulative_goal_distance_gate": chain_gate,
+        "cumulative_goal_distance_scope_key": chain_gate.get("cumulative_goal_distance_scope_key"),
+        "cumulative_goal_distance_stall_streak": chain_gate.get("cumulative_goal_distance_stall_streak"),
+        "cumulative_goal_distance_stalled": bool_value(chain_gate.get("cumulative_goal_distance_stalled")),
+        "high_water_vector": chain_gate.get("high_water_vector"),
+        "high_water_last_improved_cycle": chain_gate.get("high_water_last_improved_cycle"),
+        "acceptance_reachability_gate": reachability_gate,
+        "acceptance_unreachable_under_frozen_config": bool_value(
+            reachability_gate.get("acceptance_unreachable_under_frozen_config")
+        ),
+        "relaxation_or_escalation_required": bool_value(
+            reachability_gate.get("relaxation_or_escalation_required")
+        ),
+        "oracle_metric_validity_gate": metric_validity_gate,
         "facet_root_map_applied": bool(facet_root_map),
         "facet_root_map_missing": facet_root_map_missing,
         "facet_root_map_size": len(facet_root_map),
@@ -2635,7 +3001,14 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
     row["hypothesis_exhausted"] = root_cause_gate["hypothesis_exhausted"]
     row["untried_actionable_root_cause_exists"] = bool(untried)
     row["untried_root_cause_hypotheses"] = untried[:10]
-    row["terminal_blocked_invalid_due_to_untried_root_cause"] = bool(untried)
+    chain_untried_override = (
+        bool(untried)
+        and bool_value(row.get("cumulative_goal_distance_stalled"))
+        and not bool_value(row.get("adapter_mandate_required"))
+    )
+    row["cumulative_untried_chain_without_quality_delta"] = chain_untried_override
+    row["untried_veto_overridden_by_chain_stall"] = chain_untried_override
+    row["terminal_blocked_invalid_due_to_untried_root_cause"] = bool(untried) and not chain_untried_override
     if root_cause_adapter_error:
         row["root_cause_ledger_adapter_error"] = root_cause_adapter_error
     if row["hypothesis_exhausted"] and getattr(args, "write_registry", False):
@@ -2654,6 +3027,69 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
     row["consolidation_reduces_goal_distance"] = False
     row["consolidation_streak_cap"] = args.consolidation_streak_cap
     findings = list(row.get("findings") or [])
+    if row["adapter_mandate_required"]:
+        findings.append(
+            {
+                "severity": "block",
+                "code": "adapter_mandate_required",
+                "message": "domain adapter contract is unmet across the configured no-quality-delta streak; derive must select adapter registration or adapter strengthening before another domain micro-repair can count as goal-productive.",
+                "evidence": row["adapter_mandate_gate"],
+            }
+        )
+    if bool_value(row.get("cumulative_goal_distance_stalled")) and not row["adapter_mandate_required"]:
+        findings.append(
+            {
+                "severity": "block",
+                "code": "cumulative_goal_distance_stalled",
+                "message": "quality/substance high-water has not improved across the configured cumulative chain cap, independent of blocker label or terminal-outcome churn.",
+                "evidence": row["cumulative_goal_distance_gate"],
+            }
+        )
+    if row["acceptance_unreachable_under_frozen_config"]:
+        findings.append(
+            {
+                "severity": "block",
+                "code": "acceptance_unreachable_under_frozen_config",
+                "message": "acceptance minimum output is unreachable under the frozen envelope; derive must choose constraint relaxation or user escalation instead of envelope-internal micro-repair.",
+                "evidence": reachability_gate,
+            }
+        )
+    if bool_value(metric_validity_gate.get("metric_goal_productive_excluded")):
+        findings.append(
+            {
+                "severity": "block",
+                "code": "metric_validity_tautological",
+                "message": "oracle or metric validity self-check is tautological; exclude that metric pass from goal-productive evidence and require metric correction or independent output-delta evidence.",
+                "evidence": metric_validity_gate,
+            }
+        )
+    elif measurement_progress and not bool_value(metric_validity_gate.get("metric_validity_self_check_provided")):
+        findings.append(
+            {
+                "severity": "warn",
+                "code": "metric_validity_self_check_missing",
+                "message": "measurement or oracle progress was observed without an adapter metric_validity_self_check; treat metric validity as warning-only unless another gate blocks.",
+                "evidence": metric_validity_gate,
+            }
+        )
+    if acceptance_error:
+        findings.append(
+            {
+                "severity": "warn",
+                "code": "domain_adapter_acceptance_reachability_failed",
+                "message": "domain adapter acceptance_reachability() failed; G-REACH remained indeterminate unless explicit reachability input was supplied.",
+                "evidence": {"error": acceptance_error},
+            }
+        )
+    if metric_validity_error:
+        findings.append(
+            {
+                "severity": "warn",
+                "code": "domain_adapter_metric_validity_failed",
+                "message": "domain adapter metric_validity_self_check() failed; G-OENV remained warning-only unless explicit metric validity input was supplied.",
+                "evidence": {"error": metric_validity_error},
+            }
+        )
     if row["hypothesis_exhausted"]:
         row["hard_stop_required"] = True
         row["recommended_disposition"] = "terminal_blocked"
@@ -2667,6 +3103,21 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
                     "untried_promotion_budget": row["untried_promotion_budget"],
                     "vacuous_untried_attempt_count": row["vacuous_untried_attempt_count"],
                     "hypothesis_exhaustion_seal_path": row.get("hypothesis_exhaustion_seal_path"),
+                },
+            }
+        )
+    elif chain_untried_override:
+        row["hard_stop_required"] = True
+        row["recommended_disposition"] = "terminal_blocked"
+        findings.append(
+            {
+                "severity": "block",
+                "code": "cumulative_untried_chain_without_quality_delta",
+                "message": "distinct untried root-cause hypotheses no longer override terminal/user escalation because the same goal-distance scope has not improved its quality or substance high-water vector across the configured chain cap.",
+                "evidence": {
+                    "cumulative_goal_distance_gate": row.get("cumulative_goal_distance_gate"),
+                    "root_cause_ledger_path": row["root_cause_ledger_path"],
+                    "untried_root_cause_hypotheses": untried[:5],
                 },
             }
         )
@@ -2980,6 +3431,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--substance-metrics-json", help="Path or JSON object with adapter-compatible substance_metrics/current_substance_vector values.")
     parser.add_argument("--corrective-resolution-json", help="Path or JSON with corrective lane attempted/resolved counts.")
     parser.add_argument("--facet-root-map-json", help="Path or JSON mapping facet labels to root families.")
+    parser.add_argument("--acceptance-reachability-json", help="Path or JSON object with acceptance_min_output, frozen_envelope, and optional reachability_verdict.")
+    parser.add_argument("--metric-validity-json", help="Path or JSON object/list from an oracle or metric validity self-check.")
     parser.add_argument("--root-cause-hypotheses-json", help="Path or JSON list/dict of root-cause hypotheses for the generic root-cause ledger.")
     parser.add_argument("--hypothesized-root-cause", help="Single root-cause hypothesis slug to record when no JSON/adapter list is supplied.")
     parser.add_argument("--root-cause-repair-attempted", action="store_true", help="Mark the supplied root-cause hypothesis as explicitly attempted by this cycle.")
@@ -2991,6 +3444,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--measurement-frontier", action="append", default=[], help="Named measurement frontier observed by this cycle.")
     parser.add_argument("--measurement-streak-cap", type=int, default=MEASUREMENT_STREAK_CAP_DEFAULT)
     parser.add_argument("--detection-only-streak-cap", type=int, default=DETECTION_ONLY_STREAK_CAP_DEFAULT)
+    parser.add_argument("--adapter-mandate-streak-cap", type=int, default=ADAPTER_MANDATE_STREAK_CAP_DEFAULT)
+    parser.add_argument("--cumulative-chain-streak-cap", type=int, default=CUMULATIVE_CHAIN_STREAK_CAP_DEFAULT)
     parser.add_argument("--blocker-signature", help="Stable current blocker signature before suffix normalization.")
     parser.add_argument("--blocker-rung", help="Current capability-ladder rung for the blocker family.")
     parser.add_argument("--max-forward-mutations", type=int, default=MAX_FORWARD_MUTATIONS_DEFAULT)

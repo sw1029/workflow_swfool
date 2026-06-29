@@ -24,6 +24,10 @@ Required fields:
 - `coverage_quality_delta_reconciliation_gate`: R-GCOV packet comparing loopback G-COV with output-delta G-COV when both exist.
 - `substance_delta_gate`: G-SUBSTANCE packet comparing adapter-supplied substance vectors.
 - `vacuous_corrective_gate`: G-VACUOUS packet summarizing corrective/backfill attempted and resolved counts.
+- `adapter_mandate_gate`: G-ADAPTER packet summarizing adapter contract gaps, missing streak, and whether adapter registration/strengthening is mandatory.
+- `cumulative_goal_distance_gate`: G-CHAIN packet summarizing high-water stall streak for an adapter-collapsed root family or adapter-missing artifact family.
+- `acceptance_reachability_gate`: G-REACH packet with abstract acceptance minimum, frozen envelope, reachability verdict, and relaxation/escalation requirement.
+- `oracle_metric_validity_gate`: G-OENV packet with optional oracle/metric validity self-check status and tautological-metric exclusion.
 - `advice_freshness_gate`: G-ADVICE-FRESH packet comparing declared advice fingerprints to current output fingerprint when available.
 - `structure_metrics_gate`: S-STRUCT packet exposing optional adapter-supplied structure metrics and consolidation recommendations.
 - `high_water_mark`
@@ -46,6 +50,10 @@ Additive anti-loop gate fields:
 - `substance_delta_gate`: G-SUBSTANCE packet with `current_substance_vector`, `previous_substance_vector`, `improved_axes`, `substance_delta_pass`, `status`, and fail-closed disposition metadata.
 - `vacuous_corrective_gate`: G-VACUOUS packet with lane `attempted/resolved` counts, `surface_corrective_noop`, `excluded_delta_lanes`, and `status`.
 - `facet_root_map_applied` and `facet_root_map_size`: whether the domain adapter supplied facet-to-root family normalization before cap evaluation.
+- `adapter_mandate_required`, `adapter_missing_streak`, `adapter_contract_unmet`, and `adapter_mandate_gate`: G-ADAPTER fields. `adapter_contract_unmet` may include `facet_root_map`, `substance_metrics`, or `quality_vector`.
+- `cumulative_goal_distance_scope_key`, `cumulative_goal_distance_stall_streak`, `cumulative_goal_distance_stalled`, `cumulative_untried_chain_without_quality_delta`, `high_water_vector`, `high_water_last_improved_cycle`, and `untried_veto_overridden_by_chain_stall`: G-CHAIN fields.
+- `acceptance_unreachable_under_frozen_config`, `relaxation_or_escalation_required`, and `acceptance_reachability_gate`: G-REACH fields.
+- `oracle_metric_validity_gate`: G-OENV fields. `metric_goal_productive_excluded=true` means tautological metric/oracle evidence cannot support goal-productive progress.
 - `advice_freshness_gate`: G-ADVICE-FRESH packet with `current_output_fingerprint`, declared fingerprint claims, stale advice paths, and `advice_metrics_stale`.
 - `structure_metrics_gate`: S-STRUCT packet with `structure_metrics`, `structure_consolidation_recommended`, `status`, and warning metadata.
 - `measurement_progress`: boolean indicating newly introduced or first-observed measurement/oracle coverage.
@@ -105,9 +113,17 @@ Integrity rule: `validator_integrity_gate.status=block` prevents validator-deriv
 
 Mutation rule: `blocker_mutation_kind=facet_rename` is same-family churn. `blocker_mutation_kind=forward_mutation` counts as blocker-state movement only when stricter gates are clear and `terminal_outcome_changed=true`. If `forward_mutation_vacuous=true`, consumers must not reset loop counters or promote `goal_productive`; route to untried root-cause repair when available, otherwise terminal/user escalation. If `force_implementation_cycle=true`, consumers must choose an in-place implementation task or terminal/user escalation when implementation is not authorized.
 
-Root-cause ledger rule: `root_cause_ledger_entries` are non-GT workflow evidence keyed by `family_key`, `root_key`, and `hypothesized_root_cause`. A hypothesis is untried only when it is actionability-verified and distinct from attempted hypotheses by normalized root cause, target surface, and observed delta class. Assertion-only `actionable=true` rows are `unverified`; version-suffix or rename equivalents are duplicates. If `untried_actionable_root_cause_exists=true` and `hypothesis_exhausted=false`, `terminal_blocked` is invalid unless current authority, safety, or external state makes that hypothesis non-actionable. If `hypothesis_exhausted=true`, derive must stop, terminal-block, or user-escalate unless a supplied input delta changes the family.
+Root-cause ledger rule: `root_cause_ledger_entries` are non-GT workflow evidence keyed by `family_key`, `root_key`, and `hypothesized_root_cause`. A hypothesis is untried only when it is actionability-verified and distinct from attempted hypotheses by normalized root cause, target surface, and observed delta class. Assertion-only `actionable=true` rows are `unverified`; version-suffix or rename equivalents are duplicates. If `untried_actionable_root_cause_exists=true`, `hypothesis_exhausted=false`, and `untried_veto_overridden_by_chain_stall=false`, `terminal_blocked` is invalid unless current authority, safety, or external state makes that hypothesis non-actionable. If `hypothesis_exhausted=true`, derive must stop, terminal-block, or user-escalate unless a supplied input delta changes the family.
 
 Facet rule: adapter-supplied `facet_root_map` entries collapse facet labels before root-family streaks and measurement caps are computed. Without a map, the producer applies only conservative suffix/date/run/facet normalization.
+
+Adapter mandate rule: `adapter_mandate_required=true` means adapter contract gaps have repeated for the same `artifact_family` with no quality/substance high-water improvement for the configured cap. Consumers must select adapter registration/strengthening as the next goal-productive task, or terminal/user-escalate with the exact missing adapter contract.
+
+Cumulative chain rule: `cumulative_goal_distance_stalled=true` means the same adapter-collapsed root family, or the same `artifact_family` when adapter collapse is unavailable, has not improved quality/substance high-water for the configured cap. If `cumulative_untried_chain_without_quality_delta=true`, distinct untried hypothesis labels do not override terminal/user escalation.
+
+Reachability rule: `acceptance_unreachable_under_frozen_config=true` means the abstract acceptance minimum and frozen envelope are incompatible. Consumers must select constraint relaxation or `user_escalation`; another envelope-internal micro-repair is not goal-productive.
+
+Metric validity rule: `oracle_metric_validity_gate.metric_goal_productive_excluded=true` means an oracle/metric can pass tautologically. Consumers must not use that metric pass as goal-productive evidence without independent changed-and-semantic output-delta proof. Missing metric validity self-check is warning-only.
 
 Balance rule: `requires_correction_or_terminal=true` blocks another detection-only next task as goal-productive. Consumers must choose correction/implementation work, `terminal_blocked`, or `user_escalation`.
 

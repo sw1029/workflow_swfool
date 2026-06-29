@@ -18,6 +18,10 @@ Use this reference when recent task-cycle evidence shows safe but stationary wor
 - [G-VACUOUS Vacuous Corrective Gate](#g-vacuous-vacuous-corrective-gate)
 - [G-MEAS-CAP Measurement Exception Cap](#g-meas-cap-measurement-exception-cap)
 - [G-FACET Root-Family Measurement Cap](#g-facet-root-family-measurement-cap)
+- [G-ADAPTER Adapter-Mandate Gate](#g-adapter-adapter-mandate-gate)
+- [G-CHAIN Cumulative Goal-Distance Gate](#g-chain-cumulative-goal-distance-gate)
+- [G-REACH Acceptance Reachability Gate](#g-reach-acceptance-reachability-gate)
+- [G-OENV Oracle/Metric Validity Gate](#g-oenv-oraclemetric-validity-gate)
 - [G-ADVICE-FRESH Advice Freshness Gate](#g-advice-fresh-advice-freshness-gate)
 - [G-BALANCE Detection/Correction Balance](#g-balance-detectioncorrection-balance)
 - [G-DISPATCH Provider/Scale Duty Gate](#g-dispatch-providerscale-duty-gate)
@@ -57,6 +61,8 @@ Gate logic must stay domain-agnostic. A repository may supply a domain adapter t
 - `previous_accepted_fp(...)`: previous accepted primary-output fingerprint, optionally with previous quality/high-water vector, for R-GCOV baseline selection.
 - `structure_metrics(...)`: optional structure metrics for S-STRUCT, such as entrypoint LOC, command count, active/legacy ratio, and consolidation recommendation.
 - `root_cause_hypotheses(...)`: optional root-cause hypothesis rows with domain-owned slugs and actionability booleans for the generic root-cause ledger.
+- `acceptance_reachability(...)`: optional abstract G-REACH input with `acceptance_min_output`, `frozen_envelope`, and optional `reachability_verdict`.
+- `metric_validity_self_check(...)`: optional G-OENV input that reports tautological, constant, or self-fulfilling metrics/oracles.
 
 If the adapter is absent or omits a required vector, promotion must fail closed for the affected gate while packet production continues. Do not hardcode project module paths, metric names, lexicon paths, or artifact filenames in the generic workflow skill body.
 
@@ -181,6 +187,53 @@ Packets should expose `measurement_progress_streak_for_root_family` alongside `m
 
 Treat `blocker_mutation_kind=facet_rename` as lateral churn. Treat `blocker_mutation_kind=forward_mutation` only when the normalized root family actually changes or a recorded capability ladder transition is not merely a facet rename. If the terminal outcome remains unchanged, set `forward_mutation_vacuous=true` and keep the hard stop.
 
+## G-ADAPTER Adapter-Mandate Gate
+
+When `facet_root_map_missing=true`, `substance_delta_gate.status=missing`, or `quality_vector` is missing for the same `artifact_family` across the configured adapter cap, default `3`, and quality/substance high-water has not improved during that span, emit:
+
+- `adapter_mandate_required: true`
+- `adapter_missing_streak`
+- `adapter_contract_unmet`, using only abstract contract names such as `facet_root_map`, `substance_metrics`, and `quality_vector`
+- `adapter_mandate_gate.allowed_dispositions: [goal_productive, terminal_blocked, user_escalation]`
+
+The next goal-productive task must register or strengthen the repository domain adapter. Do not count another domain-specific micro-repair as goal-productive until the adapter supplies the missing collapse/substance/quality contract or the cycle terminal/user-escalates with the exact adapter blocker.
+
+If G-ADAPTER fires, it precedes G-CHAIN. This prevents adapter absence from being mistaken for a domain terminal state when the real missing prerequisite is the workflow's own adapter contract.
+
+## G-CHAIN Cumulative Goal-Distance Gate
+
+Track cumulative high-water movement by `root_family_key` after adapter facet collapse. If the adapter is absent, track by `artifact_family` instead of proximate blocker label or terminal outcome. This gate is independent of `blocker_signature`, terminal-outcome wording, version suffixes, and renamed hypotheses.
+
+When the same scope has no G-COV or G-SUBSTANCE high-water improvement for the configured chain cap, default `3`, emit:
+
+- `cumulative_goal_distance_stalled: true`
+- `cumulative_goal_distance_stall_streak`
+- `cumulative_goal_distance_scope_key`
+- `high_water_vector`
+- `high_water_last_improved_cycle`
+
+If untried hypotheses remain in the same stalled scope, also emit `cumulative_untried_chain_without_quality_delta=true` and `untried_veto_overridden_by_chain_stall=true`. `$derive-improvement-task` must then ignore the usual untried-root-cause terminal veto and select only `terminal_blocked` or `user_escalation`, unless G-ADAPTER is simultaneously forcing adapter work.
+
+Use this gate for the "distinct but non-converging hypothesis chain" case: each repair can be locally valid and still fail to reduce goal distance. Do not delete or weaken A2b; G-CHAIN adds a separate cumulative no-progress axis.
+
+## G-REACH Acceptance Reachability Gate
+
+Before derive promotes another repair inside a frozen envelope, compare the task acceptance lower bound with the frozen execution/resource/input envelope when the adapter or caller exposes abstract comparable values. The packet should carry:
+
+- `acceptance_min_output`
+- `frozen_envelope`
+- `reachability_verdict: reachable|unreachable|indeterminate`
+- `acceptance_unreachable_under_frozen_config`
+- `relaxation_or_escalation_required`
+
+If `reachability_verdict=unreachable`, another envelope-internal micro-repair is not goal-productive. Derive must choose a constraint-relaxation task when authority permits it, or `user_escalation` when relaxation needs user approval. If the values are absent or not comparable, use `indeterminate` and do not block solely from G-REACH.
+
+## G-OENV Oracle/Metric Validity Gate
+
+When the adapter exposes `metric_validity_self_check(...)`, check whether a metric/oracle can pass tautologically, by constant output, or by echoing an input/order it is supposed to evaluate. The packet should expose `oracle_metric_validity_gate` with `metric_validity`, `metric_validity_states`, `metric_validity_self_check_provided`, and `metric_goal_productive_excluded`.
+
+If `metric_goal_productive_excluded=true`, do not use that oracle/metric pass to justify measurement progress, capability-ladder promotion, or completion. The next task must correct the metric/oracle definition or provide independent strict changed-and-semantic output-delta evidence. If the adapter omits the self-check, warn only.
+
 ## G-ADVICE-FRESH Advice Freshness Gate
 
 Advice is non-GT steering evidence. When active/root advice declares headline output fingerprints or metric snapshots, compare those claims to the current adapter/output fingerprint. The packet should expose `advice_freshness_gate` with `current_output_fingerprint`, declared fingerprint claims, stale advice paths, and `advice_metrics_stale`.
@@ -269,6 +322,7 @@ The producer must compute `anti_loop_progress_gate` from raw artifact content an
 - `quality_vector`, including confidence and domain-context fields when the adapter supplies them
 - `previous_accepted_baseline`, `coverage_quality_delta_reconciliation_gate`, `substance_delta_gate`, `vacuous_corrective_gate`, `facet_root_map_applied`, `advice_freshness_gate`, and `structure_metrics_gate`
 - `terminal_outcome_changed`, `observed_delta_class`, `forward_mutation_vacuous`, `root_cause_ledger_path`, `root_cause_unverified_hypotheses`, `root_cause_duplicate_hypotheses`, `untried_actionable_root_cause_exists`, `untried_root_cause_hypotheses`, `untried_promotion_budget`, `vacuous_untried_streak`, and `hypothesis_exhausted` when applicable
+- `adapter_mandate_required`, `adapter_missing_streak`, `adapter_contract_unmet`, `cumulative_goal_distance_stalled`, `cumulative_goal_distance_stall_streak`, `untried_veto_overridden_by_chain_stall`, `acceptance_unreachable_under_frozen_config`, `relaxation_or_escalation_required`, and `oracle_metric_validity_gate` when applicable
 - `recommended_disposition`, `hard_stop_required`, `evidence_class`, and evidence paths
 
 The repository adapter or shared module must fail closed on noisy quality inputs. If confidence is low, artifacts are missing/malformed, adapter output is missing, or domain interpretation is uncertain, emit `evidence_class: insufficient_evidence`, `recommended_disposition: conservative_hold`, and `hard_stop_required: true`. Legacy repository quality modules may remain as compatibility fallbacks, but new domain-specific metrics, paths, lexicons, and thresholds belong behind the adapter interface.
@@ -281,7 +335,11 @@ Use the packet as a derive gate:
 - `effective_allowed_dispositions` bounds the next selected disposition. Do not choose a disposition by taking a union of individual gates.
 - `substance_delta_gate.substance_delta_pass=false` blocks measurement promotion unless strict changed-and-semantic primary-output evidence exists.
 - `blocker_mutation_kind=forward_mutation` blocks rung promotion unless `terminal_outcome_changed=true`; set `forward_mutation_vacuous=true` when the ladder moved but observed domain output did not.
-- `untried_actionable_root_cause_exists=true` invalidates terminal blocking and forces derive to select the untried root-cause repair only when `hypothesis_exhausted=false` and the hypothesis is actionability-verified.
+- `adapter_mandate_required=true` forces adapter registration/strengthening before another domain repair can count as `goal_productive`.
+- `cumulative_goal_distance_stalled=true` restricts the next disposition to `terminal_blocked` or `user_escalation` unless G-ADAPTER is active.
+- `untried_actionable_root_cause_exists=true` invalidates terminal blocking and forces derive to select the untried root-cause repair only when `hypothesis_exhausted=false`, `untried_veto_overridden_by_chain_stall=false`, and the hypothesis is actionability-verified.
+- `acceptance_unreachable_under_frozen_config=true` forces constraint relaxation or `user_escalation`.
+- `oracle_metric_validity_gate.metric_goal_productive_excluded=true` blocks tautological metric/oracle passes from supporting progress.
 - `root_cause_unverified_hypotheses` and `root_cause_duplicate_hypotheses` never override terminal/quiescence. Self-asserted actionability without structural fields or provenance is not enough, and rename/version suffix equivalents are not fresh hypotheses.
 - `hypothesis_exhausted=true` means the same family has spent the untried repair budget on vacuous attempts; derive must terminal-block or user-escalate unless a supplied input delta changes the family.
 - `vacuous_corrective_gate.surface_corrective_noop=true` blocks counting unresolved corrective rows as output delta.
@@ -308,7 +366,7 @@ Track `forward_mutation_budget_remaining`. When it reaches zero, set `force_impl
 
 `$audit-cycle-loopback` may append `.task/anti_loop/root_cause_ledger.jsonl` rows keyed by `family_key`, `root_key`, and `hypothesized_root_cause`. The hypothesis slug is domain-owned; the generic workflow evaluates whether it was attempted, whether terminal outcome changed, whether it is actionability-verified, and whether it is distinct from attempted hypotheses by normalized `(hypothesized_root_cause, target_surface, observed_delta_class)`.
 
-Before terminal blocking or sealing, `$derive-improvement-task` must check the loopback packet or ledger summary. If `untried_actionable_root_cause_exists=true` and `hypothesis_exhausted=false`, terminal blocking is invalid. Promote that hypothesis as the next `goal_productive` repair task unless authority, safety, or external state makes it non-actionable and records that rationale. If `hypothesis_exhausted=true`, do not promote another same-family untried repair without supplied input delta; terminal-block or user-escalate.
+Before terminal blocking or sealing, `$derive-improvement-task` must check the loopback packet or ledger summary. If `untried_actionable_root_cause_exists=true`, `hypothesis_exhausted=false`, and `untried_veto_overridden_by_chain_stall=false`, terminal blocking is invalid. Promote that hypothesis as the next `goal_productive` repair task unless authority, safety, or external state makes it non-actionable and records that rationale. If `hypothesis_exhausted=true` or `untried_veto_overridden_by_chain_stall=true`, do not promote another same-family untried repair without supplied input delta; terminal-block or user-escalate.
 
 ## A3 Terminal-Blocked Exit Guard
 

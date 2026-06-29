@@ -101,6 +101,8 @@ Consumers must preserve:
 - terminal outcome fields: `terminal_outcome_key`, `terminal_outcome_family_key`
 - constraint fields: `effective_allowed_dispositions`, `disposition_intersection_basis`, `hard_stop_required`, `evidence_class`
 - root-cause fields: `root_cause_unverified_hypotheses`, `root_cause_duplicate_hypotheses`, `untried_actionable_root_cause_exists`, `untried_root_cause_hypotheses`, `hypothesis_exhausted`
+- adapter/chain fields: `adapter_mandate_required`, `adapter_contract_unmet`, `adapter_missing_streak`, `cumulative_goal_distance_stalled`, `cumulative_goal_distance_stall_streak`, `untried_veto_overridden_by_chain_stall`
+- reachability/metric fields: `acceptance_unreachable_under_frozen_config`, `relaxation_or_escalation_required`, `oracle_metric_validity_gate`
 - mutation fields: `blocker_mutation_kind`, `forward_mutation_vacuous`, `forward_mutation_budget_remaining`, `force_implementation_cycle`
 - evidence: findings and `evidence_paths`
 
