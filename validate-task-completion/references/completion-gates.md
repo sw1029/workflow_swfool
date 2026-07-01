@@ -42,6 +42,9 @@ If a task includes a prerequisite manifest with unchanged command, path, input, 
 | Repo audit | `$inspect-repo-with-agents` finds no blocking governance, regression, or generalization issue. | Audit was degraded or finds nonblocking risks. | Audit finds blocking defects, regressions, or severe overfitting. |
 | Goal schema contract | Relevant schema/module/script contract changes satisfy `.agent_goal/goal_schema_contract.md`, and `.schema/` or `.contract/` evidence is current. | Goal schema-contract compliance is partly evidenced but has nonblocking missing fields, stale links, or unclear applicability. | Required schema-contract evidence is absent, stale, unsupported, or contradicts `.agent_goal/goal_schema_contract.md`. |
 | External advice | Task-referenced `.agent_advice` was incorporated, rejected, deferred, or intentionally left active with rationale, and no advice was used as GT or authority. | Advice relevance is plausible but lifecycle links or rationale are incomplete. | Advice was ignored without rationale, applied despite higher-priority conflict, or treated as GT/authority. |
+| Acceptance provenance | Measurable directive-derived work meets the original target, or an explicit descope decision preserves residual scope in an open follow-up. | The work is useful but original target achievement is incomplete, comparison evidence is degraded, or residual scope remains open. | `acceptance_diluted=true`, original target is unmet without descope, or a narrowed item has no residual follow-up. |
+| Structure effect | Behavior-preserving refactor/consolidation moved an adapter-supplied structure high-water target enough to satisfy the task objective. | Refactor code and tests are useful but structure high-water movement is missing, weak, or deferred. | The task claims structural reduction while target structure metrics are flat or worse. |
+| Behavior-change live evidence | Runtime gate/router/validator/dispatch behavior-change fixes have fresh live before/after evidence, or the task explicitly did not require live behavior proof. | Live evidence is deferred with a recorded reason and follow-up. | A behavior-change fix is claimed complete from unit/static evidence alone while live result change is required. |
 | Issue tracking | Linked implementation issues are either resolved by evidence, not applicable, or intentionally handed off to `$manage-implementation-issues` after validation. | Issue evidence exists but links, close evidence, or handoff state are incomplete. | An active issue proves the task objective is still blocked or contradicts the claimed completion. |
 | OOM risk | `$inspect-oom-risk` passed or is not applicable. | Relevant OOM risk was not fully audited or has mitigated concerns. | Audit finds likely unbounded memory failure or unsafe resource behavior. |
 | task_miss | No active linked miss is open, partial, or unverified. | Nonblocking misses remain and are recorded. | Severe active miss blocks the task objective. |
@@ -52,6 +55,8 @@ If a task includes a prerequisite manifest with unchanged command, path, input, 
 ## Verdict Rules
 
 Return `complete` only when every required gate is `passed` or `not_applicable` and the progress gate does not contradict the task's declared progress target.
+
+Return `partial` when measurable acceptance was intentionally narrowed with residual scope, when behavior-change live evidence is explicitly deferred, or when structural refactor evidence is useful but below the original target. These states may be valid progress, but they must not consume the original target.
 
 Return `failed` when any gate has a blocking `failed` status for the active task objective.
 

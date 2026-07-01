@@ -42,6 +42,15 @@ This contract defines `.agent_advice/` artifacts. Advice is direction evidence, 
 
 - <Directive that can influence task/design/workflow behavior.>
 
+## Measurable Targets
+
+- directive_id: <stable directive id>
+  metric: <abstract metric name or adapter-owned target label>
+  comparator: <>, <=, >=, ==, contains, exists, or equivalent>
+  target: <target value or condition>
+  acceptance_text: <acceptance wording to copy into task.md or scope_fidelity>
+  residual_policy: <how to preserve remaining scope if narrowed>
+
 ## Normalization Fidelity
 
 - fidelity_status: ok | needs_review | degenerate
@@ -100,6 +109,7 @@ Record advice in `.agent_advice/index.jsonl` and `$manage-task-state-index`:
 - fidelity fields: `fidelity_status`, `fidelity_reason`, `raw_direct_reference_required`
 - freshness fields: `advice_metrics_stale`, `declared_output_fingerprints`, `current_output_fingerprint`, `freshness_reason`
 - root-cause freshness fields: `re_advised_dead_hypothesis`, `dead_hypothesis_claims`, `root_cause_ledger_path`
+- measurable target fields: `directive_id`, `metric`, `comparator`, `target`, `acceptance_text`, `residual_policy`
 - useful links: `advice_for`, `incorporated_into`, `applied_by`, `rejected_by`, `superseded_by`, `conflicts_with_goal`, `conflicts_with_authority`
 
 ## Audit Freshness Gate
@@ -126,3 +136,5 @@ If `fidelity_status` is `degenerate` or `needs_review`, downstream workflows mus
 If `advice_metrics_stale` is `true`, downstream workflows must refresh, defer, reject, or explicitly justify use against current repository evidence before relying on headline metric or fingerprint claims. Advice freshness is a warning gate, not goal truth.
 
 If `re_advised_dead_hypothesis` is `true`, downstream workflows must not use that advice as fresh untried root-cause evidence unless it supplies a new input delta, authority change, or external-state change.
+
+If advice includes measurable targets, downstream `$task-doctor` and `$derive-improvement-task` must carry them into task-pack `scope_fidelity` or `task.md` acceptance. Do not mark the advice applied merely because a narrowed pilot/plan/slice was completed; either the original target is met, or explicit descope with residual scope is recorded.

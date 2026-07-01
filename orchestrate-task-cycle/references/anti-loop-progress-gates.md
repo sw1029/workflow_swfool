@@ -59,7 +59,7 @@ Gate logic must stay domain-agnostic. A repository may supply a domain adapter t
 - `facet_root_map(...)`: facet labels mapped to root families for G-FACET.
 - `output_fingerprint(...)`: current primary-output fingerprint for G-ADVICE-FRESH.
 - `previous_accepted_fp(...)`: previous accepted primary-output fingerprint, optionally with previous quality/high-water vector, for R-GCOV baseline selection.
-- `structure_metrics(...)`: optional structure metrics for S-STRUCT, such as entrypoint LOC, command count, active/legacy ratio, and consolidation recommendation.
+- `structure_metrics(...)`: optional structure metrics for S-STRUCT, such as entrypoint LOC, command count, active/legacy ratio, consolidation recommendation, `structure_high_water_moved`, `improved_structure_axes`, and `refactor_effect_required`.
 - `root_cause_hypotheses(...)`: optional root-cause hypothesis rows with domain-owned slugs and actionability booleans for the generic root-cause ledger.
 - `repo_owned_source_roots(...)`: optional repository-owned source glob roots for provenance-based root-cause actionability. When a blocker hypothesis points to a repo-owned source under these roots, `$audit-cycle-loopback` derives `local=true`, `in_scope=true`, and `actionable=true` from provenance and rejects conflicting producer self-report fields. If absent, fail quiet and keep legacy actionability rules.
 - `gate_selfcheck(...)`: optional pre-execution gate artifact self-check consumed by `$run-task-code-and-log` failure autopsy. It may report `blocked_pre_exec`, `contradicting_evidence`, `trusted_evidence_source`, `prior_pass_observed`, and `repo_owned_pre_exec_blocker`.
@@ -309,7 +309,9 @@ Allow a goal-productive disposition only for strict changed-and-semantic primary
 
 ## S-STRUCT Structure Signal
 
-When the domain adapter supplies `structure_metrics(...)`, expose `structure_metrics_gate` with numeric structure metrics and `structure_consolidation_recommended`. Treat the signal as warn-level unless another gate makes command-surface pressure hard. Use it to justify Class C consolidation or module-boundary work when that work reduces the reported entrypoint or command burden.
+When the domain adapter supplies `structure_metrics(...)`, expose `structure_metrics_gate` with numeric structure metrics, `structure_consolidation_recommended`, optional `structure_high_water_moved`, `improved_structure_axes`, and `refactor_effect_required`. Treat the signal as warn-level unless another gate makes command-surface pressure hard. Use it to justify Class C consolidation or module-boundary work when that work reduces the reported entrypoint or command burden.
+
+For behavior-preserving refactor tasks whose objective is structural reduction, downstream validation must require real structure high-water movement. New modules, relocated helpers, or green tests are not enough when the adapter reports `refactor_effect_required=true` and `structure_high_water_moved=false`.
 
 If the adapter omits structure metrics, do nothing. Do not hardcode project-specific module paths, metric names, or thresholds into this generic workflow reference.
 
@@ -365,6 +367,7 @@ Use the packet as a derive gate:
 - `hypothesis_exhausted=true` means the same family has spent the untried repair budget on vacuous attempts; derive must terminal-block or user-escalate unless a supplied input delta changes the family.
 - `vacuous_corrective_gate.surface_corrective_noop=true` blocks counting unresolved corrective rows as output delta.
 - `partial_progress_axes_gate.status=warn` is advisory only: it recommends decomposing all-or-nothing gates when partial axes exist but high-water remains flat. It must not add a new blocker.
+- `structure_metrics_gate.refactor_effect_required=true` with `structure_high_water_moved=false` means a refactor may be useful but cannot be completed as structural goal progress without residual work or explicit descope.
 
 ## A1 Measurement Progress Exemption
 

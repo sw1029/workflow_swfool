@@ -25,6 +25,7 @@ ITEM_STATUSES = {
 VALIDATION_PROFILES = {"current_only", "affected_chain", "full_chain"}
 PROGRESS_TARGETS = {"advanced", "safety_only", "no_progress", "regressed"}
 PROGRESS_KINDS = {"goal_productive", "governance_only"}
+OPEN_RESIDUAL_STATUSES = {"planned", "promoted", "in_progress", "inserted", "reordered", "blocked"}
 
 
 def now_iso() -> str:
@@ -68,6 +69,37 @@ def load_plan(value: str | None) -> dict[str, Any]:
     return plan
 
 
+def truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "passed", "pass", "met", "ok"}
+    return bool(value)
+
+
+def non_empty(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple, set, dict)):
+        return bool(value)
+    return True
+
+
+def scope_fidelity_records(item: dict[str, Any]) -> tuple[list[dict[str, Any]], bool]:
+    value = item.get("scope_fidelity", item.get("scope_fidelity_records"))
+    if value is None:
+        return [], True
+    if isinstance(value, dict):
+        return [value], True
+    if isinstance(value, list) and all(isinstance(record, dict) for record in value):
+        return value, True
+    return [], False
+
+
 def write_json(path: Path, data: dict[str, Any]) -> None:
     data["updated_at"] = now_iso()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -106,6 +138,8 @@ def validate_pack(data: dict[str, Any], path: Path | None = None) -> list[dict[s
 
     seen_ids: set[str] = set()
     seen_orders: set[int] = set()
+    item_by_id: dict[str, dict[str, Any]] = {}
+    residual_links: list[tuple[str, str]] = []
     for index, item in enumerate(items):
         if not isinstance(item, dict):
             add("block", "invalid_item", "Task pack item must be an object.", {"index": index})
@@ -119,6 +153,8 @@ def validate_pack(data: dict[str, Any], path: Path | None = None) -> list[dict[s
         elif item_id in seen_ids:
             add("block", "duplicate_item_id", "Task pack item_id is duplicated.", {"item_id": item_id})
         seen_ids.add(item_id)
+        if item_id:
+            item_by_id[item_id] = item
         order = item.get("order")
         if not isinstance(order, int) or order <= 0:
             add("block", "invalid_item_order", "Task pack item order must be a positive integer.", {"item_id": item_id, "order": order})
@@ -166,6 +202,95 @@ def validate_pack(data: dict[str, Any], path: Path | None = None) -> list[dict[s
                     "Consumed evidence-family pack items should record a supplied input artifact or produced_domain_delta=true; derive/result-contract gates enforce this for new progress claims.",
                     {"item_id": item_id},
                 )
+
+        records, valid_scope_shape = scope_fidelity_records(item)
+        if not valid_scope_shape:
+            add("block", "scope_fidelity_invalid", "`scope_fidelity` must be an object or a list of objects.", {"item_id": item_id})
+            records = []
+        for record_index, record in enumerate(records):
+            directive_id = str(record.get("directive_id") or "").strip()
+            original_target = record.get("original_target", record.get("measurable_target"))
+            item_acceptance = record.get("item_acceptance", item.get("acceptance"))
+            has_target = non_empty(original_target)
+            narrowed = truthy(record.get("narrowed"))
+            residual_item_id = str(record.get("residual_item_id") or "").strip()
+
+            if has_target and not directive_id:
+                add(
+                    "block",
+                    "scope_fidelity_directive_id_missing",
+                    "Measurable scope_fidelity records require `directive_id`.",
+                    {"item_id": item_id, "record_index": record_index},
+                )
+            if has_target and not non_empty(item_acceptance):
+                add(
+                    "block",
+                    "scope_fidelity_item_acceptance_missing",
+                    "Measurable scope_fidelity records require item acceptance copied from or traceable to the directive target.",
+                    {"item_id": item_id, "directive_id": directive_id or None},
+                )
+            if narrowed:
+                if not non_empty(record.get("narrow_reason")):
+                    add(
+                        "block",
+                        "scope_fidelity_narrow_reason_missing",
+                        "Narrowed measurable directives require `narrow_reason`.",
+                        {"item_id": item_id, "directive_id": directive_id or None},
+                    )
+                if not residual_item_id:
+                    add(
+                        "block",
+                        "scope_fidelity_residual_item_missing",
+                        "Narrowed measurable directives require `residual_item_id` so remaining scope stays open.",
+                        {"item_id": item_id, "directive_id": directive_id or None},
+                    )
+                else:
+                    residual_links.append((item_id, residual_item_id))
+
+            if has_target and item.get("status") == "consumed":
+                acceptance_gate = result.get("acceptance_provenance_gate") if isinstance(result.get("acceptance_provenance_gate"), dict) else {}
+                acceptance_gate = acceptance_gate or (result.get("scope_fidelity_gate") if isinstance(result.get("scope_fidelity_gate"), dict) else {})
+                if not acceptance_gate:
+                    add(
+                        "block",
+                        "acceptance_provenance_gate_missing",
+                        "Consumed measurable pack items require an `acceptance_provenance_gate` result comparing actual achievement to the original directive target.",
+                        {"item_id": item_id, "directive_id": directive_id or None},
+                    )
+                    continue
+                if truthy(acceptance_gate.get("acceptance_diluted")):
+                    add(
+                        "block",
+                        "acceptance_diluted_item_consumed",
+                        "A pack item with `acceptance_diluted=true` cannot be `consumed`; keep the residual target open and mark validation partial.",
+                        {"item_id": item_id, "directive_id": directive_id or None},
+                    )
+                target_met = truthy(acceptance_gate.get("target_met"))
+                explicit_descope = truthy(acceptance_gate.get("explicit_descope_decision"))
+                if not target_met and not explicit_descope:
+                    add(
+                        "block",
+                        "measurable_target_unmet_without_descope",
+                        "Consumed measurable pack items must meet the original target or record an explicit descope decision with residual scope.",
+                        {"item_id": item_id, "directive_id": directive_id or None},
+                    )
+
+    for item_id, residual_item_id in residual_links:
+        residual = item_by_id.get(residual_item_id)
+        if residual is None:
+            add(
+                "block",
+                "scope_fidelity_residual_item_unknown",
+                "`residual_item_id` must reference another pack item.",
+                {"item_id": item_id, "residual_item_id": residual_item_id},
+            )
+        elif residual.get("status") not in OPEN_RESIDUAL_STATUSES:
+            add(
+                "block",
+                "scope_fidelity_residual_item_not_open",
+                "`residual_item_id` must remain open when the current item narrows a measurable directive.",
+                {"item_id": item_id, "residual_item_id": residual_item_id, "residual_status": residual.get("status")},
+            )
 
     current = data.get("current_item_id")
     if current and current not in seen_ids:
@@ -308,6 +433,16 @@ def render_markdown(root: Path, path: Path, data: dict[str, Any], language: str)
         "",
     ]
     for item in sorted_items(data):
+        scope_records, _ = scope_fidelity_records(item)
+        scope_summary = "none"
+        if scope_records:
+            parts = []
+            for record in scope_records:
+                directive_id = str(record.get("directive_id") or "unknown")
+                narrowed = "narrowed" if truthy(record.get("narrowed")) else "full"
+                residual = str(record.get("residual_item_id") or "none")
+                parts.append(f"{directive_id}:{narrowed}:residual={residual}")
+            scope_summary = "; ".join(parts)
         lines.extend(
             [
                 f"### {item.get('order')}. {item.get('title')}",
@@ -320,6 +455,7 @@ def render_markdown(root: Path, path: Path, data: dict[str, Any], language: str)
                 f"- semantic_signature_expected: `{item.get('semantic_signature_expected') or 'none'}`",
                 f"- positive_input_delta_required: `{item.get('positive_input_delta_required', False)}`",
                 f"- required_new_input_kinds: {', '.join(str(value) for value in item.get('required_new_input_kinds', [])) or 'none'}",
+                f"- scope_fidelity: {scope_summary}",
                 "",
                 str(item.get("objective") or "").strip(),
                 "",
@@ -646,6 +782,27 @@ def command_mark_consumed(args: argparse.Namespace) -> int:
                 for supplied_path in args.supplied_input_artifact_path:
                     if supplied_path not in paths:
                         paths.append(supplied_path)
+            if (
+                args.acceptance_target_met
+                or args.acceptance_diluted
+                or args.explicit_descope_decision
+                or args.acceptance_provenance_evidence_path
+                or args.residual_item_id
+            ):
+                gate = result.setdefault("acceptance_provenance_gate", {})
+                if args.acceptance_target_met:
+                    gate["target_met"] = True
+                if args.acceptance_diluted:
+                    gate["acceptance_diluted"] = True
+                if args.explicit_descope_decision:
+                    gate["explicit_descope_decision"] = True
+                if args.residual_item_id:
+                    gate["residual_item_id"] = args.residual_item_id
+                if args.acceptance_provenance_evidence_path:
+                    paths = gate.setdefault("evidence_paths", [])
+                    for evidence_path in args.acceptance_provenance_evidence_path:
+                        if evidence_path not in paths:
+                            paths.append(evidence_path)
             found = True
             break
     if not found:
@@ -663,6 +820,12 @@ def command_mark_consumed(args: argparse.Namespace) -> int:
             "actor": "$derive-improvement-task",
         }
     )
+    findings = validate_pack(data, path)
+    if any(item.get("severity") == "block" for item in findings):
+        output = {"status": "block", "pack_path": rel_path(root, path), "pack_id": data.get("pack_id"), "findings": findings}
+        json.dump(output, sys.stdout, ensure_ascii=False, indent=2, sort_keys=True)
+        sys.stdout.write("\n")
+        return 2
     write_json(path, data)
     if args.render:
         render_path(path).write_text(render_markdown(root, path, data, args.language), encoding="utf-8")
@@ -705,6 +868,11 @@ def main(argv: list[str] | None = None) -> int:
     consumed_p.add_argument("--blocker-signature")
     consumed_p.add_argument("--has-supplied-input-delta", action="store_true")
     consumed_p.add_argument("--supplied-input-artifact-path", action="append")
+    consumed_p.add_argument("--acceptance-target-met", action="store_true")
+    consumed_p.add_argument("--acceptance-diluted", action="store_true")
+    consumed_p.add_argument("--explicit-descope-decision", action="store_true")
+    consumed_p.add_argument("--residual-item-id")
+    consumed_p.add_argument("--acceptance-provenance-evidence-path", action="append")
     consumed_p.add_argument("--reason")
     consumed_p.add_argument("--language", default="ko")
     consumed_p.add_argument("--render", action="store_true")

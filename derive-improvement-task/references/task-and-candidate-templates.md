@@ -157,6 +157,16 @@ Store task packs under `.task/task_pack/pack-YYYYMMDD-HHMMSS-<slug>.json`. The J
       "progress_kind_expected": "goal_productive",
       "positive_input_delta_required": false,
       "required_new_input_kinds": [],
+      "scope_fidelity": [
+        {
+          "directive_id": "adv-...#directive-id",
+          "original_target": {"metric": "abstract_metric", "comparator": ">=", "target": "original target"},
+          "item_acceptance": ["Acceptance copied from or traceable to the original directive target."],
+          "narrowed": false,
+          "narrow_reason": null,
+          "residual_item_id": null
+        }
+      ],
       "promotion": {
         "task_id": null,
         "task_path": null,
@@ -181,6 +191,7 @@ Pack rules:
 - Keep at most one active task pack unless a caller explicitly authorizes multiple packs.
 - Prefer 2-5 items. Use a standalone task when only one item is known.
 - Promote only one item into the active `task.md` per derivation.
+- Preserve measurable directive scope with `scope_fidelity`. If a pack item narrows an original target, set `narrowed=true`, record `narrow_reason`, and create an open residual item rather than consuming the target under a weaker acceptance criterion.
 - Use `terminal_blocked` when no viable item remains and no supplied input delta, authority change, or external-state change exists. Include `semantic_signature`, `root_cause_attempted_for_family`, authorized-alternative-path status, provider re-attempt status, and dual-track attempt evidence when a hard loop gate applies, so later derivation can seal the family rather than only the current target surface.
 - Refresh the Markdown render with `$orchestrate-task-cycle/scripts/task_pack_queue.py --root . render --language <language>` after any JSON edit.
 

@@ -25,6 +25,88 @@ detect_progress_loop = load_module(ORCHESTRATE_ROOT / "scripts" / "detect_progre
 anti_loop_gate_provider = load_module(
     SKILLS_ROOT / "audit-cycle-loopback" / "scripts" / "anti_loop_gate_provider.py"
 )
+task_pack_queue = load_module(ORCHESTRATE_ROOT / "scripts" / "task_pack_queue.py")
+
+
+def base_pack(items: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "pack_id": "pack-test",
+        "status": "active",
+        "goal": "Test pack.",
+        "current_item_id": items[0]["item_id"] if items else None,
+        "items": items,
+        "mutation_log": [],
+    }
+
+
+def base_item(item_id: str, status: str = "planned") -> dict[str, Any]:
+    return {
+        "item_id": item_id,
+        "order": 1,
+        "status": status,
+        "title": item_id,
+        "objective": "Do work.",
+        "acceptance": ["Meet the original measurable target."],
+        "validation_profile": "current_only",
+        "progress_target": "advanced",
+    }
+
+
+def test_task_pack_scope_fidelity_blocks_diluted_consumed_item() -> None:
+    item = base_item("item-001", status="consumed")
+    item["scope_fidelity"] = {
+        "directive_id": "directive-r1",
+        "original_target": {"metric": "entrypoint_loc", "comparator": "<=", "target": 2000},
+        "item_acceptance": ["Meet the original measurable target."],
+    }
+    item["result"] = {
+        "validation_verdict": "complete",
+        "acceptance_provenance_gate": {"target_met": False, "acceptance_diluted": True},
+    }
+
+    findings = task_pack_queue.validate_pack(base_pack([item]))
+
+    assert any(finding.get("code") == "acceptance_diluted_item_consumed" for finding in findings)
+    assert task_pack_queue.status_from_findings(findings) == "block"
+
+
+def test_task_pack_scope_fidelity_allows_explicit_descope_with_open_residual() -> None:
+    narrowed = base_item("item-001", status="consumed")
+    narrowed["scope_fidelity"] = {
+        "directive_id": "directive-r1",
+        "original_target": {"metric": "entrypoint_loc", "comparator": "<=", "target": 2000},
+        "item_acceptance": ["Meet the original measurable target."],
+        "narrowed": True,
+        "narrow_reason": "Bounded first slice.",
+        "residual_item_id": "item-002",
+    }
+    narrowed["result"] = {
+        "validation_verdict": "complete",
+        "acceptance_provenance_gate": {"target_met": False, "explicit_descope_decision": True},
+    }
+    residual = base_item("item-002", status="planned")
+    residual["order"] = 2
+
+    findings = task_pack_queue.validate_pack(base_pack([narrowed, residual]))
+
+    assert not any(finding.get("severity") == "block" for finding in findings)
+
+
+def test_structure_metrics_gate_preserves_high_water_fields() -> None:
+    gate = anti_loop_gate_provider.structure_metrics_gate(
+        {
+            "structure_metrics": {"entrypoint_loc": 1200, "structure_consolidation_recommended": True},
+            "structure_high_water_moved": True,
+            "improved_structure_axes": ["entrypoint_loc"],
+            "refactor_effect_required": True,
+        }
+    )
+
+    assert gate["structure_consolidation_recommended"] is True
+    assert gate["structure_high_water_moved"] is True
+    assert gate["improved_structure_axes"] == ["entrypoint_loc"]
+    assert gate["refactor_effect_required"] is True
 
 
 def test_terminal_outcome_family_fallback_groups_mutating_blockers() -> None:

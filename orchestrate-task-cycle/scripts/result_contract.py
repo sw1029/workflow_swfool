@@ -1723,7 +1723,134 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                 "Tautological oracle/metric validity must not support semantic or measurement goal-productive progress without independent output-delta evidence.",
             )
     if target == "validate":
+        validation_verdict = str(value_for(result, "validation_verdict") or "").strip().lower()
         progress_verdict = str(value_for(result, "progress_verdict") or "").strip().lower()
+        acceptance_diluted = boolish(
+            first_present(
+                result,
+                [
+                    "acceptance_diluted",
+                    "acceptance_provenance_gate.acceptance_diluted",
+                    "scope_fidelity_gate.acceptance_diluted",
+                    "result.acceptance_provenance_gate.acceptance_diluted",
+                ],
+            )
+        )
+        target_met = boolish(
+            first_present(
+                result,
+                [
+                    "acceptance_target_met",
+                    "acceptance_provenance_gate.target_met",
+                    "scope_fidelity_gate.target_met",
+                    "result.acceptance_provenance_gate.target_met",
+                ],
+            )
+        )
+        explicit_descope = boolish(
+            first_present(
+                result,
+                [
+                    "explicit_descope_decision",
+                    "acceptance_provenance_gate.explicit_descope_decision",
+                    "scope_fidelity_gate.explicit_descope_decision",
+                    "result.acceptance_provenance_gate.explicit_descope_decision",
+                ],
+            )
+        )
+        measurable_target_required = boolish(
+            first_present(
+                result,
+                [
+                    "measurable_target_required",
+                    "acceptance_provenance_gate.measurable_target_required",
+                    "scope_fidelity_gate.measurable_target_required",
+                    "task_pack_item.scope_fidelity.measurable_target_required",
+                    "result.acceptance_provenance_gate.measurable_target_required",
+                ],
+            )
+        )
+        if acceptance_diluted and validation_verdict in {"complete", "passed", "pass"}:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_acceptance_diluted_complete",
+                "`validate` cannot report complete when original directive acceptance was diluted; return partial and preserve residual scope.",
+            )
+        if measurable_target_required and validation_verdict in {"complete", "passed", "pass"} and not target_met and not explicit_descope:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_measurable_target_unmet_complete",
+                "`validate` cannot complete a measurable directive-derived item without meeting the original target or recording explicit descope plus residual scope.",
+            )
+        behavior_change_live_required = boolish(
+            first_present(
+                result,
+                [
+                    "behavior_change_live_required",
+                    "live_behavior_evidence_required",
+                    "execution_evidence_gate.behavior_change_live_required",
+                    "result.execution_evidence_gate.behavior_change_live_required",
+                ],
+            )
+        )
+        behavior_change_live_present = boolish(
+            first_present(
+                result,
+                [
+                    "behavior_change_live_present",
+                    "live_behavior_evidence_present",
+                    "execution_evidence_gate.live_behavior_evidence_present",
+                    "result.execution_evidence_gate.live_behavior_evidence_present",
+                ],
+            )
+        )
+        behavior_change_deferred = boolish(
+            first_present(
+                result,
+                [
+                    "behavior_change_live_deferred",
+                    "execution_evidence_gate.live_behavior_evidence_deferred",
+                    "result.execution_evidence_gate.live_behavior_evidence_deferred",
+                ],
+            )
+        )
+        if behavior_change_live_required and validation_verdict in {"complete", "passed", "pass"} and not behavior_change_live_present and not behavior_change_deferred:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_behavior_change_live_evidence_missing",
+                "`validate` cannot complete a runtime gate or judgment behavior-change fix without fresh live before/after evidence or an explicit defer rationale.",
+            )
+        refactor_effect_required = boolish(
+            first_present(
+                result,
+                [
+                    "refactor_effect_required",
+                    "structure_metrics_gate.refactor_effect_required",
+                    "result.structure_metrics_gate.refactor_effect_required",
+                ],
+            )
+        )
+        structure_high_water_moved = boolish(
+            first_present(
+                result,
+                [
+                    "structure_high_water_moved",
+                    "structure_metrics_gate.structure_high_water_moved",
+                    "structure_metrics_gate.target_structure_improved",
+                    "result.structure_metrics_gate.structure_high_water_moved",
+                ],
+            )
+        )
+        if refactor_effect_required and validation_verdict in {"complete", "passed", "pass"} and not structure_high_water_moved:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_refactor_without_structure_high_water",
+                "`validate` cannot complete a behavior-preserving refactor from module creation and green tests alone; adapter-supplied structure high-water must move or the task remains partial.",
+            )
         terminal_outcome_value = first_present(
             result,
             [

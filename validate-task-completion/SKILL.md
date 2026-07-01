@@ -50,6 +50,7 @@ When `task.md`, a caller packet, or active workflow evidence references `.agent_
 4. Verify execution evidence.
    - Use `$run-task-code-and-log` when the task specifies code, commands, scripts, notebooks, tests, or a required run procedure.
    - Require factual evidence: command line, exit status, output summary, artifacts, failures, and saved `.agent_log` entry.
+   - If the task changes a runtime gate, router, validator, dispatch decision, or other judgment whose expected output changes, require fresh live before/after evidence that the changed path actually changed result, or record an explicit defer rationale and cap completion at `partial`.
    - If execution cannot be run, classify the execution gate as `missing` or `blocked` and explain why.
 
 5. Run repository audit.
@@ -85,11 +86,19 @@ When `task.md`, a caller packet, or active workflow evidence references `.agent_
    - `failed`: a task-referenced advice directive was ignored without rationale, applied despite a higher-priority conflict, or used as GT/authority.
    - Use `$manage-external-advice mark-applied` only when the advice is fully consumed or retired by durable evidence. Otherwise keep it active and record the remaining gate.
 
-10. Decide the verdict.
+10. Evaluate acceptance provenance and structure effect.
+   - When `task.md`, `.task/task_pack`, active advice, or caller packets provide `scope_fidelity`, compare the original measurable target against actual achievement before allowing close.
+   - If the item inherited a measurable target and actual achievement is below the original target, set `acceptance_diluted=true`, return `partial`, and preserve or require an open residual follow-up. Do not mark the original directive applied or the pack item consumed.
+   - Accept a narrower result only when there is an explicit descope decision with reason plus residual item/link. A weak item label such as `pilot`, `plan`, or `slice` is not descope evidence.
+   - For behavior-preserving refactor tasks, require adapter-supplied structure high-water movement, such as reduced entrypoint burden, reduced command/flat-file/function burden, or another project-owned structure metric. New modules plus green tests alone are insufficient for `complete` when the refactor objective was structural reduction.
+   - Record `acceptance_provenance_gate`, `structure_metrics_gate`, and `execution_evidence_gate` fields in the validation result when applicable so `$orchestrate-task-cycle` result contracts can enforce them.
+
+11. Decide the verdict.
    - Use [completion-gates.md](references/completion-gates.md) for the gate matrix.
    - `complete`: acceptance criteria are met; required execution passed; relevant repo/OOM audits have no blockers; environment is known or not needed; active task_miss has no blockers; logs and index are updated.
    - If schema/module/script contracts are relevant, `complete` also requires `.agent_goal/goal_schema_contract.md` compliance or a documented non-applicable reason, plus updated `.schema/` or `.contract/` evidence.
    - If advice was referenced, `complete` also requires the `External advice` gate to be `passed` or `not_applicable`.
+   - If measurable acceptance provenance, structure-effect, or behavior-change live evidence gates are applicable, `complete` also requires those gates to pass or a recorded explicit descope/defer decision that leaves residual work open and normally caps the verdict at `partial`.
    - `partial`: core work appears useful but one or more nonfatal gates are missing, unverified, degraded, or have follow-up risks.
    - `failed`: implementation is absent, required execution fails, audit finds blocking defects, severe task_miss remains open, or the task cannot be safely validated.
    - If ID audit finds high-severity broken links, multiple active tasks, missing validation/run/audit evidence links, or unsafe candidate/miss deletion ambiguity, cap the verdict at `partial` or `failed` depending on whether the missing traceability blocks the task objective.
@@ -104,13 +113,13 @@ When `task.md`, a caller packet, or active workflow evidence references `.agent_
    - Do not classify repeated `terminal_blocked`/recheck closeout as `advanced`. If `terminal_escalation_gate.escalation_required=true`, a valid completion must record `user_escalation`, exactly one missing input, and family seal evidence; otherwise cap the verdict at `partial` or `failed` depending on the task objective.
    - Do not let `validation_verdict: complete` imply final-goal progress when `progress_verdict` is `safety_only` or `no_progress`.
 
-11. Write a validation report.
+12. Write a validation report.
    - Create `.task/validation/YYYYMMDD-HHMMSS-task-validation.md`.
    - Include task ID if known, validation verdict, progress verdict, gate statuses, evidence paths, commands, audit summaries, active misses, and required follow-ups.
    - Update `$manage-task-state-index` with a `validation` artifact whose status is `passed`, `partial`, or `failed`.
    - Use `$record-agent-work-log` when the user requested durable logging of the validation work itself or when this report closes a larger agent cycle.
 
-12. Report the outcome.
+13. Report the outcome.
    - Lead with the verdict.
    - For `partial` or `failed`, list blockers before summarizing completed work.
    - Include the validation report path and the updated task index path.
@@ -140,6 +149,12 @@ Include an `Issue tracking` gate whenever `.issue/` exists or `$manage-implement
 Include a `Goal schema contract` gate whenever `.agent_goal/goal_schema_contract.md`, `.schema/`, `.contract/`, or schema/module/script contract surfaces are relevant.
 
 Include an `External advice` gate whenever `.agent_advice/` exists, the caller supplied `used_advice`, or `task.md` references an advice ID/path.
+
+Include an `Acceptance provenance` gate whenever `scope_fidelity`, measurable advice targets, or directive-derived acceptance criteria are present.
+
+Include a `Structure effect` gate whenever the task is a behavior-preserving refactor or consolidation intended to reduce structure burden.
+
+Include a `Behavior-change live evidence` gate whenever the task changes runtime gate, routing, validator, dispatch, or judgment outcomes.
 
 ## Blocking Findings
 ...
@@ -172,3 +187,7 @@ Include an `External advice` gate whenever `.agent_advice/` exists, the caller s
 - Do not close, archive, or delete `.issue` records from this skill; issue lifecycle changes belong to `$manage-implementation-issues`.
 - Do not treat `.agent_advice` as GT, authority, or completion evidence by itself.
 - Do not mark advice applied without `$manage-external-advice` lifecycle evidence or a clear validation/report rationale.
+- Do not return `complete` for `acceptance_diluted=true`; return `partial` and preserve residual scope.
+- Do not complete measurable directive-derived work against a weaker criterion unless explicit descope and residual tracking exist.
+- Do not complete behavior-preserving refactor work from module creation or green tests alone when the objective required structural reduction.
+- Do not complete runtime behavior-change fixes without fresh live evidence or a documented defer that keeps follow-up work open.

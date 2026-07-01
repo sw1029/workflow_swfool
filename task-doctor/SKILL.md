@@ -96,6 +96,7 @@ If the task direction change reveals a required code change, write it into the n
    - Do not write a replacement task whose progress case depends only on self-declared `produced_domain_delta=true`; require observed output evidence, legitimate provider-terminal evidence, consolidation, or explicit terminal/user escalation.
    - Do not write a replacement task that treats a new oracle, validator, metric, ladder record, dashboard, lineage, or gap report as `goal_productive` unless `coverage_quality_delta_gate.quality_delta_pass=true` or strict changed-and-semantic output-delta evidence exists.
    - Do not preserve a fail-closed gate as an environment blocker when recent run evidence classifies it as `self_inflicted_gate_defect`. The replacement task must correct the gate contract/code, use a recorded alternative evidence source, or ask the user for `gate_contract_fix_approval`.
+   - Do not weaken a measurable user/advice/issue directive into a smaller `pilot`, `plan`, or `slice` acceptance criterion without recording explicit descope. If a measurable directive is narrowed, the new task or pack item must preserve the original target in acceptance or create an open residual follow-up with the reason.
    - Do not retarget a quiesced or `hypothesis_exhausted=true` family silently. A user-directed retarget is allowed, but the new `task.md` or task-pack mutation must record `quiescence_override` with the user instruction, supplied input delta, authority change, external-state change, or verified unexhausted root-cause evidence.
    - Do not retarget a G2-escalated terminal family into another `terminal_blocked` recheck. A user-directed override must record `terminal_escalation_override` with one of: supplied input delta, authority change, external-state change, gate-contract fix approval, or verified unexhausted root-cause evidence.
    - Do not preserve `single_work_id:true` as an indefinite generalization blocker. When `.agent_goal` or the current task requires corpus/generalization progress, require a bounded multi-work path with `single_work_id` separation, or terminal-block on the exact missing source/authority/provider condition.
@@ -172,6 +173,9 @@ If the task direction change reveals a required code change, write it into the n
    - Create `.task/task_pack/` only when the explicit doctor instruction asks for a pack, sequence, ordered proposal, or current-task-plus-followups plan.
    - Use canonical JSON under `.task/task_pack/pack-<timestamp>-<slug>.json` and render `.task/task_pack/pack-<timestamp>-<slug>.md` in the user's language.
    - Follow the schema from `$orchestrate-task-cycle` [task-pack-workflow.md](../orchestrate-task-cycle/references/task-pack-workflow.md): `schema_version`, `pack_id`, `status`, `language`, `goal`, `current_item_id`, `items`, `mutation_log`, and optional `terminal_blocker`.
+   - For every item derived from a measurable directive, include `scope_fidelity` with `directive_id`, `original_target`, `item_acceptance`, `narrowed`, `narrow_reason`, and `residual_item_id`.
+   - If `narrowed=true`, create or preserve the residual item in the same pack and keep it open. Do not mark the source advice applied or the original target consumed until `$validate-task-completion` records `target_met=true` or an explicit descope decision plus residual scope.
+   - If prior pack items closed a measurable directive under weaker acceptance, reopen the residual scope as `planned`, `inserted`, or `blocked` rather than deleting or silently superseding it.
    - If the current `task.md` remains active and is included in the pack, make it the current pack item and set `promotion.task_path: task.md`; do not create a second active task.
    - If the doctor instruction replaces `task.md` and also creates a pack, make the new task the promoted/current item and put follow-up tasks after it as `planned`.
    - If the instruction only asks for a pack proposal, do not overwrite `task.md` unless the user explicitly asks to retarget the active task.
@@ -215,6 +219,7 @@ If the task direction change reveals a required code change, write it into the n
 - Link task-pack proposals to the active/new task with `pack_for_task` or `promoted_from_pack` when IDs are known.
 - Keep `task.md` formatted so `$task-md-agent-governance` can implement it without additional interpretation.
 - Keep `.task/task_pack` formatted so `$derive-improvement-task` and `$orchestrate-task-cycle` can consume, insert, reorder, or terminal-block it without additional interpretation.
+- Keep measurable directive provenance in `scope_fidelity`; `task.md` wording alone is not enough to prove that original acceptance survived task doctoring.
 - Never claim the doctored task is complete. Completion belongs to `$validate-task-completion` after the later orchestrated cycle.
 
 ## Reporting

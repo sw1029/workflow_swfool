@@ -133,6 +133,7 @@ Return 3-5 candidates. For each:
 - goal/convention blocker handled or avoided
 - task_pack_disposition: standalone | promote_pack_item | insert_pack_item | reorder_pack | terminal_block_pack | not_applicable
 - positive_input_delta: new input kind introduced plus non-empty supplied artifact path or `produced_domain_delta=true`, or why no delta is needed
+- scope_fidelity: affected measurable directive IDs, original target preservation, narrowed/descope status, and residual item needed
 - authority conflict handled or avoided
 - advice conflict handled, deferred, or marked not_applicable
 - should_be_next_task: yes/no with reason
@@ -268,6 +269,7 @@ Selection constraints:
 - If anti-loop evidence shows 3 same-family micro-hardening tasks, block another same-family micro task as `goal_productive`; choose provider/semantic transition, consolidation, supplied-input/domain-delta work, or terminal/user escalation.
 - If a semantic family is sealed, do not select another non-terminal task in that family unless you name the new input kind, authority change, or external-state change that reopens it.
 - If `positive_input_delta_required` is true, name the newly introduced input kind and the supplied artifact path or `produced_domain_delta=true`. If no supplied delta exists, terminal-block or select a task that obtains the missing input.
+- If a candidate derives from a measurable directive, preserve the original target in `scope_fidelity`; if narrowed, require explicit descope plus an open residual item. Do not call a pilot/plan/slice complete against a weaker target.
 - Before terminal-blocking or sealing, verify no authority-permitted productive alternative path remains unattempted.
 - If zero viable standalone candidates and zero viable pack items remain, emit `selected_task_source: terminal_blocked` with `terminal_blocker` instead of inventing work.
 

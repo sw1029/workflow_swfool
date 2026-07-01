@@ -7,6 +7,7 @@ This reference defines optional long-range task packs for `$orchestrate-task-cyc
 - [Core Invariant](#core-invariant)
 - [Artifacts](#artifacts)
 - [JSON Shape](#json-shape)
+- [Scope Fidelity](#scope-fidelity)
 - [Pack Transactions](#pack-transactions)
 - [Promotion](#promotion)
 - [Loop Breaker Fields](#loop-breaker-fields)
@@ -62,6 +63,16 @@ The JSON is authoritative. The Markdown render is for scanability and must use t
       "progress_kind_expected": "goal_productive",
       "positive_input_delta_required": false,
       "required_new_input_kinds": [],
+      "scope_fidelity": [
+        {
+          "directive_id": "adv-...#directive-r1",
+          "original_target": {"metric": "abstract_metric", "comparator": "<=", "target": "original target"},
+          "item_acceptance": ["Acceptance copied from or traceable to the original directive target."],
+          "narrowed": false,
+          "narrow_reason": null,
+          "residual_item_id": null
+        }
+      ],
       "promotion": {
         "task_id": null,
         "task_path": null,
@@ -102,6 +113,34 @@ Allowed item statuses:
 - `terminal_blocked`
 - `superseded`
 
+## Scope Fidelity
+
+When a pack item derives from an external advice, steering document, issue, or user directive with a measurable target, record the directive-to-item mapping in `scope_fidelity`. This is provenance for later completion validation; it is not goal truth and does not grant authority.
+
+Each record should include:
+
+- `directive_id`: stable advice/user/issue directive ID or path fragment.
+- `original_target`: the measurable target exactly enough for validation to compare actual achievement. Keep project-specific metric definitions in the repository adapter or project-owned contract, not in this generic workflow.
+- `item_acceptance`: the acceptance criteria copied from or traceable to `original_target`.
+- `narrowed`: `true` only when the item intentionally covers less than the original target.
+- `narrow_reason`: required when `narrowed=true`.
+- `residual_item_id`: required when `narrowed=true`; it must point to another open pack item that preserves the remaining target.
+
+Do not let labels such as `pilot`, `plan`, `slice`, or `phase 1` silently descope a measurable directive. Either copy the original measurable target into the item acceptance, or mark `narrowed=true` with a reason and an open residual item.
+
+When a measurable item is marked `consumed`, its `result` must include an `acceptance_provenance_gate` such as:
+
+```json
+{
+  "target_met": true,
+  "acceptance_diluted": false,
+  "explicit_descope_decision": false,
+  "evidence_paths": []
+}
+```
+
+If `target_met=false`, completion is valid only with `explicit_descope_decision=true` plus a still-open `residual_item_id`. If `acceptance_diluted=true`, do not mark the item `consumed`; validation must report `partial` and preserve the residual target.
+
 ## Pack Transactions
 
 `$derive-improvement-task` owns the decision. `scripts/task_pack_queue.py` owns deterministic queue mutation when available. Prefer:
@@ -130,6 +169,7 @@ Every non-promotion mutation must produce a `pack_mutation_plan` with:
 - changed item IDs
 - `before_order` and `after_order` when order changes
 - `terminal_blocker` for `terminal_blocked`
+- `scope_fidelity` records for new or changed measurable items
 - Markdown `render_path` after applying the mutation
 
 The mutation reason must cite one of: new blocker evidence, repeated blocker/semantic/root-axis evidence, missing supplied positive input delta, provider-neutral retarget evidence, task-state/schema/validation/issue dependency repair, user-supplied direction, or terminal blocker evidence. Do not mutate a pack merely to prefer a newer idea, rename a version, or avoid executing the next item.
@@ -140,6 +180,7 @@ When an active pack exists, `$derive-improvement-task` should consider the next 
 
 - the item still aligns with `.agent_goal` GT, authority policy, active advice disposition, schema contracts, and current blocker evidence;
 - dependencies are satisfied or explicitly represented in the new `task.md`;
+- any `scope_fidelity` measurable target is copied into `task.md` acceptance or explicitly narrowed with residual scope;
 - loop-breaker checks do not require insertion, reordering, or terminal blocking first.
 
 The promoted `task.md` must include these fields in `## Execution Environment`:

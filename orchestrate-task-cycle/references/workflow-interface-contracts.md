@@ -42,8 +42,8 @@ Use these ownership rules:
 | Qualitative review packet | `$review-cycle-output-quality` | Loopback, validation-set, schema, derive, validation, report | `review_agent_count`, reviewed artifacts, quality verdict, findings, progress cap, output-delta fields, no-overclaim flags, evidence paths. |
 | Anti-loop progress gate | `$audit-cycle-loopback` | Derive, validation, dashboard, report | Family/root keys, semantic signature, progress booleans, terminal outcome fields, quality vector, effective dispositions, hard-stop state, findings, evidence paths. |
 | Loop-breaker packet | `scripts/detect_progress_loop.py` plus orchestrator synthesis | Derive, task-pack, validation, report | Blocker/root/semantic signatures, root-axis counts, terminal quiescence/escalation gates, supplied-input delta, provider retry, command surface, sealed family, zero-candidate state. |
-| Task-pack packet | `scripts/task_pack_queue.py` and `$derive-improvement-task` | Derive, index, validation, report, commit | Pack ID/path/status, current item, mutation plan, Markdown render, terminal blocker state, selected disposition. |
-| Validation result | `$validate-task-completion` | Issue, commit, dashboard, report | `validation_verdict`, `progress_verdict`, `progress_axes`, blockers, evidence paths, advice disposition, task-pack preservation. |
+| Task-pack packet | `scripts/task_pack_queue.py` and `$derive-improvement-task` | Derive, index, validation, report, commit | Pack ID/path/status, current item, mutation plan, Markdown render, terminal blocker state, selected disposition, and `scope_fidelity` for measurable directive-derived items. |
+| Validation result | `$validate-task-completion` | Issue, commit, dashboard, report | `validation_verdict`, `progress_verdict`, `progress_axes`, blockers, evidence paths, advice disposition, task-pack preservation, `acceptance_provenance_gate`, `structure_metrics_gate`, and behavior-change live evidence gate when applicable. |
 | Issue packet | `$manage-implementation-issues` | Commit, dashboard, report | Created/updated/closed issue IDs, blocker links, resolution evidence, skipped reason. |
 | Commit packet | `$repo-change-commit` | Dashboard, report, closeout | `commit_role`, created/skipped/blocked status, commit hash/subject when created, skipped reason when not. |
 
@@ -112,6 +112,28 @@ Consumers must preserve:
 - mutation fields: `blocker_mutation_kind`, `forward_mutation_vacuous`, `forward_mutation_budget_remaining`, `force_implementation_cycle`
 - evidence: findings and `evidence_paths`
 
+### Acceptance Provenance
+
+When task direction originates in advice, issue, task pack, or user steering with a measurable target, `$task-doctor` and `$derive-improvement-task` must preserve a directive-to-item mapping through `scope_fidelity`. `$validate-task-completion` owns the close-time comparison against the original target.
+
+Generic fields:
+
+- `scope_fidelity.directive_id`: stable source directive identifier.
+- `scope_fidelity.original_target`: abstract measurable target. Project-specific metric definitions and thresholds belong in the advice packet, task pack, repository adapter, or project-owned contracts.
+- `scope_fidelity.item_acceptance`: acceptance copied from or traceable to the original target.
+- `scope_fidelity.narrowed`, `narrow_reason`, and `residual_item_id`: explicit descope record and open residual scope.
+- `acceptance_provenance_gate.target_met`: validation result comparing actual achievement to the original target.
+- `acceptance_provenance_gate.acceptance_diluted`: true when the item was closed against a weaker target.
+- `acceptance_provenance_gate.explicit_descope_decision`: true only when a reason and residual item/link exist.
+
+Consumers must not mark a measurable item consumed, applied, or complete when `acceptance_diluted=true`. A narrowed item may be useful progress, but it remains `partial` unless the original target is met or the residual target stays open under an explicit descope decision.
+
+### Refactor And Behavior-Change Evidence
+
+When a behavior-preserving refactor or consolidation claims structural reduction, `$audit-cycle-loopback` may pass adapter-supplied `structure_metrics_gate.structure_high_water_moved`, `improved_structure_axes`, and `refactor_effect_required`. `$validate-task-completion` must not complete a structural-reduction task from module creation and green tests alone when that gate says high-water did not move.
+
+When a task changes runtime gate, routing, validator, dispatch, or judgment behavior, `$validate-task-completion` must require fresh live before/after evidence, or record an explicit defer gate that leaves follow-up work open. Unit/static evidence alone does not complete behavior-change work whose purpose is to change live outcomes.
+
 ### Loop Breaker And Terminal Gates
 
 `scripts/detect_progress_loop.py` produces or contributes loop-breaker evidence. The derive packet must carry normalized `blocker_signature`, additive `semantic_signature`, suffix-normalized `root_key`, root-axis counts, compared cycle IDs, positive input delta status, provider reattempt/mitigation gate status, command-surface budget, sealed-family matches, and zero-candidate state.
@@ -141,7 +163,7 @@ Helper scripts provide decision-support evidence. They do not replace owning ski
 | `detect_gt_constraint_conflict.py` | `--root`, task/GT/behavior evidence | GT/task conflict packet | Derive |
 | `detect_progress_loop.py` | `--root`, optional registry writes | Loop-breaker packet, feature-symbol gate, terminal gates, sealed-family evidence | Derive, task-pack, validation, report |
 | `output_delta_contract.py` | `--root`, output paths/contracts when present | Output-delta packet or not-applicable reason | Review, loopback, derive, validation |
-| `task_pack_queue.py` | `status`, `validate`, `render`, `next`, `apply-mutation` | `.task/task_pack/*.json` canonical queue and Markdown render when mutating through derive-approved plan | Derive, index, report |
+| `task_pack_queue.py` | `status`, `validate`, `render`, `next`, `apply-mutation`, `mark-consumed` | `.task/task_pack/*.json` canonical queue and Markdown render when mutating through derive-approved plan; validates `scope_fidelity` and measurable acceptance provenance when present | Derive, index, validation, report |
 | `visible_increment.py` | Completed evidence and cycle ID | `.task/delta/<cycle-id>-visible-delta.{md,json}` with `not_validation_evidence: true` | Report only; not validation |
 | `render_cycle_dashboard.py` | Cycle ledger evidence | Korean `dashboard.md` snapshot | Report, closeout |
 | `profile_cycle_efficiency.py` | Cycle ledger evidence | Efficiency profile snapshot | Report |
@@ -153,6 +175,9 @@ Helper scripts provide decision-support evidence. They do not replace owning ski
 - Treat missing or malformed packet evidence as `conservative_hold`, `not_applicable`, `partial`, or `blocked`; never silently upgrade it to success.
 - Enforce `effective_allowed_dispositions` as an intersection already computed by gates. Do not union individual gate dispositions.
 - Treat self-reported `produced_domain_delta`, non-empty rows, lineage, gap reports, renamed commands, or metric existence as insufficient for goal-productive progress without strict changed-and-semantic output evidence or independent validated positive evidence.
+- Treat `acceptance_diluted=true` as incompatible with final completion. Preserve residual measurable scope instead of consuming the original directive.
+- Treat behavior-preserving refactor completion claims as partial when adapter-supplied structure high-water is flat and the original objective was structural reduction.
+- Treat runtime behavior-change completion claims as partial when fresh live before/after evidence is required but absent.
 - Keep `available_goal_truth` separate from `used_goal_truth`; final `기준 GT` may list only actually used GT.
 - Keep `.agent_advice` out of GT and authority. Active advice in scope requires `used_advice` or an explicit defer/reject/not-applicable rationale.
 - Keep repo-local adapters out of GT, authority, human approval, and completion evidence.

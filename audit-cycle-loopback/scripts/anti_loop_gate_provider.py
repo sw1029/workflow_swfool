@@ -1429,6 +1429,7 @@ def structure_metrics_gate(value: Any) -> dict[str, Any]:
         metrics = value
     else:
         metrics = {}
+    source = value if isinstance(value, dict) else {}
     recommended = any(
         bool_value(metrics.get(key))
         for key in (
@@ -1438,10 +1439,32 @@ def structure_metrics_gate(value: Any) -> dict[str, Any]:
             "over_budget",
         )
     )
+    high_water_moved = bool_value(
+        source.get("structure_high_water_moved")
+        or source.get("target_structure_improved")
+        or source.get("structure_metric_improved")
+        or metrics.get("structure_high_water_moved")
+        or metrics.get("target_structure_improved")
+        or metrics.get("structure_metric_improved")
+    )
+    improved_axes = source.get("improved_structure_axes") or source.get("improved_axes") or metrics.get("improved_structure_axes") or []
+    if isinstance(improved_axes, str):
+        improved_axes = [improved_axes]
+    if not isinstance(improved_axes, list):
+        improved_axes = []
+    refactor_effect_required = bool_value(
+        source.get("refactor_effect_required")
+        or source.get("behavior_preserving_refactor")
+        or metrics.get("refactor_effect_required")
+        or metrics.get("behavior_preserving_refactor")
+    )
     return {
         "gate": "S-STRUCT",
         "structure_metrics": numeric_vector(metrics),
         "structure_consolidation_recommended": recommended,
+        "structure_high_water_moved": high_water_moved,
+        "improved_structure_axes": [str(axis) for axis in improved_axes if str(axis).strip()],
+        "refactor_effect_required": refactor_effect_required,
         "status": "warn" if recommended else ("not_applicable" if not metrics else "ok"),
         "constrains_disposition": False,
     }

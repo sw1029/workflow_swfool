@@ -57,7 +57,7 @@ Additive anti-loop gate fields:
 - `advice_freshness_gate`: G-ADVICE-FRESH packet with `current_output_fingerprint`, declared fingerprint claims, stale advice paths, and `advice_metrics_stale`.
 - `advice_freshness_gate.gate_result_regression_stale`: warn-only signal for a supplied gate verdict that changed from passed to blocked under a stable environment fingerprint.
 - `partial_progress_axes_gate`: warn-only packet with adapter-supplied partial axes and `recommendation: decompose_all_or_nothing_gate` when high-water remains flat.
-- `structure_metrics_gate`: S-STRUCT packet with `structure_metrics`, `structure_consolidation_recommended`, `status`, and warning metadata.
+- `structure_metrics_gate`: S-STRUCT packet with `structure_metrics`, `structure_consolidation_recommended`, optional `structure_high_water_moved`, `improved_structure_axes`, `refactor_effect_required`, `status`, and warning metadata.
 - `measurement_progress`: boolean indicating newly introduced or first-observed measurement/oracle coverage.
 - `measurement_progress_allowed`: boolean indicating the measurement exemption is still within `measurement_streak_cap`.
 - `measurement_streak` and `measurement_streak_cap`: bounded exemption counters for consecutive measurement cycles.
@@ -144,6 +144,6 @@ Gate regression rule: `advice_freshness_gate.gate_result_regression_stale=true` 
 
 Partial axes rule: `partial_progress_axes_gate.status=warn` recommends decomposing all-or-nothing progress gates when adapter-reported partial axes exist but quality/substance high-water remains flat. Consumers must not treat this warning as progress or as a blocker by itself.
 
-Structure rule: `structure_metrics_gate.structure_consolidation_recommended=true` is a warn-level signal that Class C surface reduction, module extraction, or responsibility separation may be valid when it reduces the reported structure burden. Absence of this optional adapter output must not crash packet production.
+Structure rule: `structure_metrics_gate.structure_consolidation_recommended=true` is a warn-level signal that Class C surface reduction, module extraction, or responsibility separation may be valid when it reduces the reported structure burden. When `refactor_effect_required=true`, downstream validation must require `structure_high_water_moved=true` or explicit residual/descope handling before closing the refactor as complete. Absence of this optional adapter output must not crash packet production.
 
 OCR and typo rule: typoed extractor labels, OCR provenance, and OCR near-duplicate placeholder surfaces must fail closed. Missing or incomplete threshold config must use conservative defaults rather than disabling structural placeholder or locale-lock checks.
