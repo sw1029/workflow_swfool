@@ -38,7 +38,7 @@ Use these ownership rules:
 | Validation-set packet | `$build-validation-set-with-agents` | Governance, schema, derive, index, validation, report | Need/status, quality tier, `not_gold`, item/label/oracle counts, source-class distribution, oracle/split/leakage/root paths, blocked/candidate-only reasons. |
 | Governance result | `$task-md-agent-governance` | Result contract, ledger, code audit, run, schema, validation | Task ID, changed files, task_miss, used GT/advice, implementation summary, validation profile, blockers. |
 | Code-structure audit packet | `scripts/code_structure_audit.py` | Run, derive, validation, issue, report | Scanned changed files, oversize files, responsibility clusters, moduleization requirement, split plan, exemptions, evidence paths. |
-| Run result | `$run-task-code-and-log` | Review, loopback, validation-set, schema, derive, index, validation, issue, report | Status, command, exit code, output/artifact paths, running metadata, log path, shortcomings, `failure_autopsy`, `gate_satisfiability`. |
+| Run result | `$run-task-code-and-log` | Review, loopback, validation-set, schema, derive, index, validation, issue, report | Status, command, exit code, output/artifact paths, running metadata, log path, shortcomings, `failure_autopsy`, `gate_satisfiability`, and scalar `gate_selfcheck` when a pre-execution gate artifact exists. |
 | Qualitative review packet | `$review-cycle-output-quality` | Loopback, validation-set, schema, derive, validation, report | `review_agent_count`, reviewed artifacts, quality verdict, findings, progress cap, output-delta fields, no-overclaim flags, evidence paths. |
 | Anti-loop progress gate | `$audit-cycle-loopback` | Derive, validation, dashboard, report | Family/root keys, semantic signature, progress booleans, terminal outcome fields, quality vector, effective dispositions, hard-stop state, findings, evidence paths. |
 | Loop-breaker packet | `scripts/detect_progress_loop.py` plus orchestrator synthesis | Derive, task-pack, validation, report | Blocker/root/semantic signatures, root-axis counts, terminal quiescence/escalation gates, supplied-input delta, provider retry, command surface, sealed family, zero-candidate state. |
@@ -65,6 +65,8 @@ gate_satisfiability(gate_id, env, **context) -> {
 
 If `satisfiable=false` and no alternative source exists, classify the run as `self_inflicted_gate_defect`. Consumers must route a gate-contract/code correction task or `user_escalation`; they must not schedule another same-gate environment recheck.
 
+For pre-execution gate artifacts, `$run-task-code-and-log` may also include `gate_selfcheck` entries with `gate_id`, `blocked_pre_exec`, `repo_owned_pre_exec_blocker`, `contradicting_evidence`, `trusted_evidence_source`, `prior_pass_observed`, `status`, `classification`, and `alternative_evidence_source`. Treat `classification: self_inflicted_gate_defect` as valid only when repository-owned provenance is confirmed. Treat `status: warn_missing_repo_owned_confirmation` as advisory until `$audit-cycle-loopback` or the adapter confirms repository-owned blocker provenance.
+
 ### Failure Autopsy
 
 When execution fails with a nonzero exit, traceback, runtime exception, or provider/HTTP-style error, `$run-task-code-and-log` should include scalar-safe diagnostics only:
@@ -81,6 +83,9 @@ When execution fails with a nonzero exit, traceback, runtime exception, or provi
 - `provider_response_parse_failed`
 - `mitigations_attempted`
 - `mitigations_unavailable`
+- `classification`
+- `alternative_evidence_source`
+- `gate_selfcheck`
 
 Do not persist raw prompts, provider bodies, generated bodies, stdout/stderr bodies, source bodies, credentials, tokens, or secrets in the autopsy packet.
 
@@ -100,9 +105,10 @@ Consumers must preserve:
 - progress fields: `changed_vs_previous`, `semantic_progress`, `authoritative_semantic_progress`, `terminal_outcome_changed`
 - terminal outcome fields: `terminal_outcome_key`, `terminal_outcome_family_key`
 - constraint fields: `effective_allowed_dispositions`, `disposition_intersection_basis`, `hard_stop_required`, `evidence_class`
-- root-cause fields: `root_cause_unverified_hypotheses`, `root_cause_duplicate_hypotheses`, `untried_actionable_root_cause_exists`, `untried_root_cause_hypotheses`, `hypothesis_exhausted`
+- root-cause fields: `repo_owned_source_roots_status`, `root_cause_unverified_hypotheses`, `root_cause_duplicate_hypotheses`, `untried_actionable_root_cause_exists`, `untried_root_cause_hypotheses`, `hypothesis_exhausted`, and provenance-hardened ledger entries
 - adapter/chain fields: `adapter_mandate_required`, `adapter_contract_unmet`, `adapter_missing_streak`, `cumulative_goal_distance_stalled`, `cumulative_goal_distance_stall_streak`, `untried_veto_overridden_by_chain_stall`
 - reachability/metric fields: `acceptance_unreachable_under_frozen_config`, `relaxation_or_escalation_required`, `oracle_metric_validity_gate`
+- warn-only fields: `partial_progress_axes_gate` and `advice_freshness_gate.gate_result_regression_stale`
 - mutation fields: `blocker_mutation_kind`, `forward_mutation_vacuous`, `forward_mutation_budget_remaining`, `force_implementation_cycle`
 - evidence: findings and `evidence_paths`
 

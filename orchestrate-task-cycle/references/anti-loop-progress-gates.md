@@ -61,6 +61,9 @@ Gate logic must stay domain-agnostic. A repository may supply a domain adapter t
 - `previous_accepted_fp(...)`: previous accepted primary-output fingerprint, optionally with previous quality/high-water vector, for R-GCOV baseline selection.
 - `structure_metrics(...)`: optional structure metrics for S-STRUCT, such as entrypoint LOC, command count, active/legacy ratio, and consolidation recommendation.
 - `root_cause_hypotheses(...)`: optional root-cause hypothesis rows with domain-owned slugs and actionability booleans for the generic root-cause ledger.
+- `repo_owned_source_roots(...)`: optional repository-owned source glob roots for provenance-based root-cause actionability. When a blocker hypothesis points to a repo-owned source under these roots, `$audit-cycle-loopback` derives `local=true`, `in_scope=true`, and `actionable=true` from provenance and rejects conflicting producer self-report fields. If absent, fail quiet and keep legacy actionability rules.
+- `gate_selfcheck(...)`: optional pre-execution gate artifact self-check consumed by `$run-task-code-and-log` failure autopsy. It may report `blocked_pre_exec`, `contradicting_evidence`, `trusted_evidence_source`, `prior_pass_observed`, and `repo_owned_pre_exec_blocker`.
+- `partial_progress_axes(...)`: optional warn-only axes for all-or-nothing gate flatlining. Use it to recommend gate decomposition; never let this hook alone promote or block progress.
 - `acceptance_reachability(...)`: optional abstract G-REACH input with `acceptance_min_output`, `frozen_envelope`, and optional `reachability_verdict`.
 - `metric_validity_self_check(...)`: optional G-OENV input that reports tautological, constant, or self-fulfilling metrics/oracles.
 
@@ -104,6 +107,20 @@ gate_satisfiability(gate_id, env, **context) -> {
 ```
 
 If `satisfiable=true`, evaluate the gate normally. If `satisfiable=false` and `alternative_evidence_source` is present, evaluate the unchanged gate against the alternative source and record the fallback. If `satisfiable=false` and no alternative exists, classify the blocker as `self_inflicted_gate_defect` and route the next task to gate-contract/code correction or user escalation. Do not reclassify this state as an environment/runtime blocker, and do not select another same-gate recheck as progress.
+
+For pre-execution gate artifacts, the run skill may also call:
+
+```text
+gate_selfcheck(gate_artifact, gate_id, **context) -> {
+  blocked_pre_exec: bool,
+  contradicting_evidence: list,
+  trusted_evidence_source?: str,
+  prior_pass_observed?: bool,
+  repo_owned_pre_exec_blocker?: bool
+}
+```
+
+Classify `self_inflicted_gate_defect` only when repository-owned blocker provenance is confirmed and the same gate artifact contains contradiction evidence, a trusted alternative evidence source, or prior pass evidence. Without repository-owned confirmation, emit warn-only self-check evidence and keep the original failure class.
 
 Keep domain facts, hardware names, command names, thresholds, and evidence-source details in the adapter or task packet. The generic workflow stores only the adapter interface, scalar outcome, classification, and routing rule.
 
@@ -240,6 +257,8 @@ Advice is non-GT steering evidence. When active/root advice declares headline ou
 
 If `advice_metrics_stale=true`, warn and require refresh, defer, or reject rationale before relying on the advice's headline metrics for derive. This does not change phase order and does not promote advice to goal truth.
 
+Gate-result regression is absorbed here rather than added as a separate hard gate. When a supplied gate packet shows `passed -> blocked` under a stable environment fingerprint, expose `gate_result_regression_stale=true` and warn. Route the next task through current evidence review, `gate_selfcheck`, or provenance-hardened root-cause repair before relying on stale headline gate state.
+
 ## G-BALANCE Detection/Correction Balance
 
 Classify each cycle task as:
@@ -321,6 +340,7 @@ The producer must compute `anti_loop_progress_gate` from raw artifact content an
 - `provider_request_count` and other safe provider/env behavior scalars when available
 - `quality_vector`, including confidence and domain-context fields when the adapter supplies them
 - `previous_accepted_baseline`, `coverage_quality_delta_reconciliation_gate`, `substance_delta_gate`, `vacuous_corrective_gate`, `facet_root_map_applied`, `advice_freshness_gate`, and `structure_metrics_gate`
+- `repo_owned_source_roots_status`, `partial_progress_axes_gate`, and provenance-hardened root-cause actionability fields when supplied by the adapter
 - `terminal_outcome_changed`, `observed_delta_class`, `forward_mutation_vacuous`, `root_cause_ledger_path`, `root_cause_unverified_hypotheses`, `root_cause_duplicate_hypotheses`, `untried_actionable_root_cause_exists`, `untried_root_cause_hypotheses`, `untried_promotion_budget`, `vacuous_untried_streak`, and `hypothesis_exhausted` when applicable
 - `adapter_mandate_required`, `adapter_missing_streak`, `adapter_contract_unmet`, `cumulative_goal_distance_stalled`, `cumulative_goal_distance_stall_streak`, `untried_veto_overridden_by_chain_stall`, `acceptance_unreachable_under_frozen_config`, `relaxation_or_escalation_required`, and `oracle_metric_validity_gate` when applicable
 - `recommended_disposition`, `hard_stop_required`, `evidence_class`, and evidence paths
@@ -338,11 +358,13 @@ Use the packet as a derive gate:
 - `adapter_mandate_required=true` forces adapter registration/strengthening before another domain repair can count as `goal_productive`.
 - `cumulative_goal_distance_stalled=true` restricts the next disposition to `terminal_blocked` or `user_escalation` unless G-ADAPTER is active.
 - `untried_actionable_root_cause_exists=true` invalidates terminal blocking and forces derive to select the untried root-cause repair only when `hypothesis_exhausted=false`, `untried_veto_overridden_by_chain_stall=false`, and the hypothesis is actionability-verified.
+- `repo_owned_source_roots_status=provided` means repository-owned provenance can override conflicting producer self-report fields for root-cause `local`, `in_scope`, and `actionable`. Do not trust self-reported `local=false`, `in_scope=false`, or `actionable=false` for that hypothesis.
 - `acceptance_unreachable_under_frozen_config=true` forces constraint relaxation or `user_escalation`.
 - `oracle_metric_validity_gate.metric_goal_productive_excluded=true` blocks tautological metric/oracle passes from supporting progress.
 - `root_cause_unverified_hypotheses` and `root_cause_duplicate_hypotheses` never override terminal/quiescence. Self-asserted actionability without structural fields or provenance is not enough, and rename/version suffix equivalents are not fresh hypotheses.
 - `hypothesis_exhausted=true` means the same family has spent the untried repair budget on vacuous attempts; derive must terminal-block or user-escalate unless a supplied input delta changes the family.
 - `vacuous_corrective_gate.surface_corrective_noop=true` blocks counting unresolved corrective rows as output delta.
+- `partial_progress_axes_gate.status=warn` is advisory only: it recommends decomposing all-or-nothing gates when partial axes exist but high-water remains flat. It must not add a new blocker.
 
 ## A1 Measurement Progress Exemption
 

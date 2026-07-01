@@ -302,6 +302,138 @@ def test_cumulative_chain_overrides_untried_veto_after_quality_stall() -> None:
     assert packet["effective_allowed_dispositions"] == ["terminal_blocked", "user_escalation"]
 
 
+def test_repo_owned_source_provenance_rejects_nonactionable_self_report() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        adapter = root / "domain_adapter.py"
+        adapter.write_text(
+            "\n".join(
+                [
+                    "def repo_owned_source_roots(**kwargs):",
+                    "    return ['scripts/**/*.py']",
+                    "def facet_root_map(**kwargs):",
+                    "    return {'self_gate': 'self_gate'}",
+                    "def quality_vector(**kwargs):",
+                    "    return {'quality_vector': {'event_named_ratio': 0, 'proper_noun_character_ratio': 0, 'coreference_resolved_ratio': 0, 'causal_edge_count': 0, 'windows_covered': 0, 'current_output_fingerprint': 'fp-current'}}",
+                    "def substance_metrics(**kwargs):",
+                    "    return {'event_count': 0}",
+                    "def partial_progress_axes(**kwargs):",
+                    "    return ['extraction_axis_observed']",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (root / "scripts").mkdir()
+        (root / "scripts" / "gate.py").write_text("# gate producer\n", encoding="utf-8")
+        hypotheses = [
+            {
+                "hypothesized_root_cause": "pre_exec_gate_self_defect",
+                "target_surface": "pre_exec_gate",
+                "observed_delta_class": "blocked_pre_exec",
+                "local": False,
+                "bounded": True,
+                "provider_free": True,
+                "in_scope": False,
+                "authority_allowed": True,
+                "actionable": False,
+                "evidence_paths": ["scripts/gate.py"],
+            }
+        ]
+        hypotheses_path = root / "hypotheses.json"
+        hypotheses_path.write_text(json.dumps(hypotheses, sort_keys=True), encoding="utf-8")
+        args = argparse.Namespace(
+            root=str(root),
+            cycle_id="cycle-new",
+            task_id="task-new",
+            artifact_family="primary_output",
+            semantic_signature="self_gate",
+            root_key="self_gate",
+            domain_adapter=str(adapter),
+            provider_request_count=0,
+            artifact_path=[],
+            artifact_paths_json=None,
+            gate_state_json=[
+                json.dumps(
+                    {
+                        "gates": [
+                            {
+                                "gate_id": "pre_exec_gate",
+                                "prior_verdict": "passed",
+                                "current_verdict": "blocked",
+                                "env_fingerprint_stable": True,
+                            }
+                        ]
+                    }
+                )
+            ],
+            recent_progress_json=None,
+            runner_validation_json=None,
+            output_delta_json=json.dumps({"changed_vs_previous": False, "semantic_progress": False}),
+            substance_metrics_json=None,
+            corrective_resolution_json=None,
+            facet_root_map_json=None,
+            acceptance_reachability_json=None,
+            metric_validity_json=None,
+            root_cause_hypotheses_json=str(hypotheses_path),
+            hypothesized_root_cause=None,
+            root_cause_repair_attempted=False,
+            root_cause_repair_task_id=None,
+            root_cause_actionable=False,
+            untried_promotion_budget=2,
+            measurement_check_id=[],
+            measurement_check_ids_json=None,
+            measurement_frontier=[],
+            measurement_streak_cap=1,
+            detection_only_streak_cap=2,
+            adapter_mandate_streak_cap=3,
+            cumulative_chain_streak_cap=3,
+            blocker_signature="pre_exec_gate_blocked",
+            blocker_rung=None,
+            max_forward_mutations=3,
+            consolidation_streak_cap=2,
+            registry_path=".task/anti_loop/family_progress_registry.jsonl",
+            root_cause_ledger_path=".task/anti_loop/root_cause_ledger.jsonl",
+            threshold=3,
+            epsilon=1e-9,
+            max_rows_per_family=200,
+            max_root_cause_rows_per_family=200,
+            write_registry=False,
+            output=None,
+        )
+
+        anti_loop_gate_provider._DOMAIN_ADAPTER_MODULE = None
+        packet, _, _ = anti_loop_gate_provider.evaluate(args)
+
+    entry = packet["root_cause_ledger_entries"][0]
+    assert packet["repo_owned_source_roots_status"] == "provided"
+    assert packet["untried_actionable_root_cause_exists"] is True
+    assert entry["local"] is True
+    assert entry["in_scope"] is True
+    assert entry["actionable"] is True
+    assert entry["actionability_status"] == "verified"
+    assert entry["self_report_rejected_fields"] == {"actionable": False, "in_scope": False, "local": False}
+    assert entry["actionability_basis"]["provenance_derived_actionable"] is True
+    assert entry["repo_owned_source_refs"] == ["scripts/gate.py"]
+    assert packet["partial_progress_axes_gate"]["status"] == "warn"
+    assert packet["advice_freshness_gate"]["gate_result_regression_stale"] is True
+    assert any(
+        finding.get("code") == "repo_owned_source_self_report_rejected"
+        for finding in packet.get("findings", [])
+        if isinstance(finding, dict)
+    )
+    assert any(
+        finding.get("code") == "partial_progress_axes_flatlined"
+        for finding in packet.get("findings", [])
+        if isinstance(finding, dict)
+    )
+    assert any(
+        finding.get("code") == "gate_result_regression_stale"
+        for finding in packet.get("findings", [])
+        if isinstance(finding, dict)
+    )
+
+
 def test_reachability_and_metric_validity_gates_are_conservative() -> None:
     reachability = anti_loop_gate_provider.acceptance_reachability_gate(
         {
@@ -378,6 +510,7 @@ def main() -> int:
     test_terminal_outcome_family_fallback_groups_mutating_blockers()
     test_adapter_mandate_blocks_missing_adapter_stall_chain()
     test_cumulative_chain_overrides_untried_veto_after_quality_stall()
+    test_repo_owned_source_provenance_rejects_nonactionable_self_report()
     test_reachability_and_metric_validity_gates_are_conservative()
     test_terminal_recheck_escalates_to_user_input()
     test_supplied_input_delta_prevents_terminal_escalation()

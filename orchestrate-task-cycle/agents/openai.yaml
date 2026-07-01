@@ -1,4 +1,4 @@
 interface:
   display_name: "Orchestrate Task Cycle"
   short_description: "Run governed cycles with task-pack gates"
-  default_prompt: "Use $orchestrate-task-cycle in Korean, keep .agent_goal GT and .agent_advice non-GT separate, route implementation through $task-md-agent-governance, audit generated code structure before run/log, enforce loop breakers including root-cause exhaustion and quiescence reconcile, derive the next task or evidence-gated task-pack transaction while preserving one active task.md, validate progress axes, track issues, and invoke $repo-change-commit."
+  default_prompt: "Use $orchestrate-task-cycle in Korean to run a governed task cycle, pass scalar run/autopsy and anti-loop packets, enforce provenance-hardened blocker routing, derive the next task, validate, commit, and report."

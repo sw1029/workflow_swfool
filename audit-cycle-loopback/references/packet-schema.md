@@ -55,6 +55,8 @@ Additive anti-loop gate fields:
 - `acceptance_unreachable_under_frozen_config`, `relaxation_or_escalation_required`, and `acceptance_reachability_gate`: G-REACH fields.
 - `oracle_metric_validity_gate`: G-OENV fields. `metric_goal_productive_excluded=true` means tautological metric/oracle evidence cannot support goal-productive progress.
 - `advice_freshness_gate`: G-ADVICE-FRESH packet with `current_output_fingerprint`, declared fingerprint claims, stale advice paths, and `advice_metrics_stale`.
+- `advice_freshness_gate.gate_result_regression_stale`: warn-only signal for a supplied gate verdict that changed from passed to blocked under a stable environment fingerprint.
+- `partial_progress_axes_gate`: warn-only packet with adapter-supplied partial axes and `recommendation: decompose_all_or_nothing_gate` when high-water remains flat.
 - `structure_metrics_gate`: S-STRUCT packet with `structure_metrics`, `structure_consolidation_recommended`, `status`, and warning metadata.
 - `measurement_progress`: boolean indicating newly introduced or first-observed measurement/oracle coverage.
 - `measurement_progress_allowed`: boolean indicating the measurement exemption is still within `measurement_streak_cap`.
@@ -74,6 +76,7 @@ Additive anti-loop gate fields:
 - `root_cause_ledger_path`: `.task/anti_loop/root_cause_ledger.jsonl` unless overridden.
 - `root_cause_ledger_status`: `recorded` or `not_applicable_no_hypotheses`.
 - `root_cause_ledger_entries`: ledger rows proposed or written for this cycle.
+- `repo_owned_source_roots`, `repo_owned_source_roots_status`, and `repo_owned_source_roots_error`: optional adapter-supplied repository-owned source glob contract used for provenance-based actionability. `not_provided` is fail-quiet and must not become a new gate.
 - `root_cause_unverified_hypotheses`: asserted-actionable hypotheses excluded because they lack structural actionability or provenance.
 - `root_cause_duplicate_hypotheses`: hypotheses excluded because they are equivalent to an attempted hypothesis by normalized slug, target surface, and observed delta class.
 - `untried_actionable_root_cause_exists`: boolean terminal-blocker veto when at least one verified local, bounded, provider-free, in-scope, authority-allowed or provenance-backed hypothesis remains untried and `hypothesis_exhausted=false`.
@@ -113,7 +116,7 @@ Integrity rule: `validator_integrity_gate.status=block` prevents validator-deriv
 
 Mutation rule: `blocker_mutation_kind=facet_rename` is same-family churn. `blocker_mutation_kind=forward_mutation` counts as blocker-state movement only when stricter gates are clear and `terminal_outcome_changed=true`. If `forward_mutation_vacuous=true`, consumers must not reset loop counters or promote `goal_productive`; route to untried root-cause repair when available, otherwise terminal/user escalation. If `force_implementation_cycle=true`, consumers must choose an in-place implementation task or terminal/user escalation when implementation is not authorized.
 
-Root-cause ledger rule: `root_cause_ledger_entries` are non-GT workflow evidence keyed by `family_key`, `root_key`, and `hypothesized_root_cause`. A hypothesis is untried only when it is actionability-verified and distinct from attempted hypotheses by normalized root cause, target surface, and observed delta class. Assertion-only `actionable=true` rows are `unverified`; version-suffix or rename equivalents are duplicates. If `untried_actionable_root_cause_exists=true`, `hypothesis_exhausted=false`, and `untried_veto_overridden_by_chain_stall=false`, `terminal_blocked` is invalid unless current authority, safety, or external state makes that hypothesis non-actionable. If `hypothesis_exhausted=true`, derive must stop, terminal-block, or user-escalate unless a supplied input delta changes the family.
+Root-cause ledger rule: `root_cause_ledger_entries` are non-GT workflow evidence keyed by `family_key`, `root_key`, and `hypothesized_root_cause`. A hypothesis is untried only when it is actionability-verified and distinct from attempted hypotheses by normalized root cause, target surface, and observed delta class. Assertion-only `actionable=true` rows are `unverified`; version-suffix or rename equivalents are duplicates. If adapter-supplied `repo_owned_source_roots` proves that a hypothesis provenance reference belongs to repository-owned source, derive `local=true`, `in_scope=true`, and `actionable=true` from that provenance and ignore conflicting self-report fields. Do not hardcode project paths in this generic schema; if the hook is absent, keep the old actionability basis. If `untried_actionable_root_cause_exists=true`, `hypothesis_exhausted=false`, and `untried_veto_overridden_by_chain_stall=false`, `terminal_blocked` is invalid unless current authority, safety, or external state makes that hypothesis non-actionable. If `hypothesis_exhausted=true`, derive must stop, terminal-block, or user-escalate unless a supplied input delta changes the family.
 
 Facet rule: adapter-supplied `facet_root_map` entries collapse facet labels before root-family streaks and measurement caps are computed. Without a map, the producer applies only conservative suffix/date/run/facet normalization.
 
@@ -136,6 +139,10 @@ Generalization rule: quality metrics must come from the repository domain adapte
 Adapter rule: domain-specific paths, metrics, lexicons, and thresholds belong in the repository domain adapter or repository-owned shared module. The skill and producer should call only the adapter interface and remain domain-agnostic.
 
 Advice freshness rule: `advice_freshness_gate.advice_metrics_stale=true` is a warn-level signal that active/root advice declares output fingerprint claims that do not match the current adapter/output fingerprint. Consumers should refresh, defer, or reject the advice before relying on its headline metrics.
+
+Gate regression rule: `advice_freshness_gate.gate_result_regression_stale=true` is warn-only evidence that a gate verdict regressed from passed to blocked under a stable environment fingerprint. Consumers should combine it with `gate_selfcheck` or provenance-hardened root-cause evidence before routing a gate-fix task; it is not a separate hard gate.
+
+Partial axes rule: `partial_progress_axes_gate.status=warn` recommends decomposing all-or-nothing progress gates when adapter-reported partial axes exist but quality/substance high-water remains flat. Consumers must not treat this warning as progress or as a blocker by itself.
 
 Structure rule: `structure_metrics_gate.structure_consolidation_recommended=true` is a warn-level signal that Class C surface reduction, module extraction, or responsibility separation may be valid when it reduces the reported structure burden. Absence of this optional adapter output must not crash packet production.
 

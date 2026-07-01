@@ -44,6 +44,7 @@ When task-state IDs are available, link the run evidence and log entry through `
    - For long-running commands, clear authorization may come from the user, `task.md`, an issue-resolution request, `$orchestrate-task-cycle`, or a governance result. If authorization or monitoring details are ambiguous, ask before leaving a process running.
    - Keep secrets, tokens, private paths, and sensitive raw data out of logs; summarize or redact them.
    - For fail-closed gates named by `task.md`, the caller packet, or the command harness, run a gate satisfiability precheck before evaluating the gate. Use a repository or environment adapter when available through `--domain-adapter`, `TASK_CYCLE_DOMAIN_ADAPTER_PATH`, or the caller-provided run packet. The adapter contract is `gate_satisfiability(gate_id, env, **context) -> {satisfiable: bool, reason, alternative_evidence_source?}`.
+   - For pre-execution gate artifacts, also use adapter `gate_selfcheck(gate_artifact, gate_id, **context) -> {blocked_pre_exec, contradicting_evidence[], trusted_evidence_source?, prior_pass_observed?, repo_owned_pre_exec_blocker?}` when available. Classify as `self_inflicted_gate_defect` only when the blocker is confirmed repository-owned and at least one artifact-level contradiction, trusted evidence source, or prior pass exists. If repository-owned confirmation is missing, record warn-only `gate_selfcheck` and keep the original failure classification.
    - If `satisfiable=false` and `alternative_evidence_source` is present, evaluate the original gate against that alternative source and record `gate_satisfiability` plus `gate_evidence_source: alternative` in the run packet.
    - If `satisfiable=false` and no alternative source is present, classify the result as `self_inflicted_gate_defect`, not as an environment/runtime blocker. Stop before rechecking the same gate, record the exact gate id, reason, adapter/probe evidence, and required gate-contract/code correction, and let `$derive-improvement-task` route a gate-fix task or user escalation.
    - If `satisfiable=true`, keep the original fail-closed gate unchanged. This precheck must not weaken no-overclaim, no-raw-body, source-backed, cache, OOM, permission, or provider-safety gates.
@@ -55,7 +56,7 @@ When task-state IDs are available, link the run evidence and log entry through `
    - If a process is long-running, monitor it until it completes, fails, reaches the authorized startup/heartbeat evidence threshold, or the user explicitly asks to leave it running.
    - When leaving an authorized process running, capture the PID, process/session/job ID when available, log file path, current output tail or heartbeat, checkpoint/artifact path if any, monitor command, stop command, and next recommended check.
    - If execution fails, do not hide the failure. Capture the error and stop unless the user requested retries or a fallback.
-   - When execution fails with a nonzero exit, traceback, RuntimeError, or HTTP/provider-style error, run `scripts/safe_failure_autopsy.py` on captured stdout/stderr or bounded log files when available. Include only scalar diagnostics such as `error_type`, `exception_class`, `traceback_last_frame`, `http_status`, `missing_env_key_names`, `provider_request_count`, `provider_status`, `failure_class`, `provider_response_empty`, `provider_response_parse_failed`, `mitigations_attempted`, and `mitigations_unavailable`; do not persist raw source, prompt, provider, generated, stdout/stderr body, credential value, token, or secret-bearing payloads.
+   - When execution fails with a nonzero exit, traceback, RuntimeError, or HTTP/provider-style error, run `scripts/safe_failure_autopsy.py` on captured stdout/stderr or bounded log files when available. Include only scalar diagnostics such as `error_type`, `exception_class`, `traceback_last_frame`, `http_status`, `missing_env_key_names`, `provider_request_count`, `provider_status`, `failure_class`, `provider_response_empty`, `provider_response_parse_failed`, `classification`, `alternative_evidence_source`, `gate_selfcheck`, `mitigations_attempted`, and `mitigations_unavailable`; do not persist raw source, prompt, provider, generated, stdout/stderr body, credential value, token, or secret-bearing payloads.
 
 4. Determine result status.
    - Use `success` only when the specified run completed with the expected result.
@@ -76,6 +77,7 @@ When task-state IDs are available, link the run evidence and log entry through `
      - `shortcomings`: failures, missing inputs, ambiguity, skipped steps, unverified assumptions, or unsafe details omitted.
    - Include the validation profile used, prerequisite manifest/hash evidence used, and whether the run was fresh or reused identical evidence.
    - Include `gate_satisfiability` entries for every fail-closed gate that was prechecked: `gate_id`, `satisfiable`, `reason`, `evidence_source`, `alternative_evidence_source`, and `classification`. Use `classification: self_inflicted_gate_defect` when the gate's required evidence shape is impossible in the current environment and no valid alternative source exists.
+   - Include `gate_selfcheck` entries for pre-execution gate artifacts when available: `gate_id`, `blocked_pre_exec`, `repo_owned_pre_exec_blocker`, `contradicting_evidence`, `trusted_evidence_source`, `prior_pass_observed`, `classification`, `alternative_evidence_source`, and `status`. Treat these entries as scalar routing evidence only; do not persist raw gate bodies.
    - Include `failure_autopsy` for failed runs when safe scalar extraction was possible. For provider/runtime failures, include `provider_request_count`, `failure_class`, provider empty/parse flags, and mitigation fields when available so downstream derivation can distinguish transient/unmitigated failure from terminal state. Treat it as direction evidence for root-cause repair, not as remediation or validation success.
    - For `running` results, include PID/session/job identifiers, log and checkpoint paths, latest observed output or heartbeat, monitor and stop commands, expected completion signal, and remaining validation.
    - Use [execution-log-checklist.md](references/execution-log-checklist.md) when assembling the log fields.
@@ -115,6 +117,19 @@ python3 /home/swfool/.codex/skills/record-agent-work-log/scripts/write_agent_log
 
 Add `--changed-file`, `--follow-up`, and additional `--command` values when relevant.
 
+For failed pre-execution gate runs with a safe gate artifact, add the bounded gate artifact and repository-owned confirmation when known:
+
+```bash
+python3 /home/swfool/.codex/skills/run-task-code-and-log/scripts/safe_failure_autopsy.py \
+  --stderr-path path/to/stderr.log \
+  --exit-code 1 \
+  --gate-id pre_exec_gate \
+  --gate-artifact-json path/to/gate_artifact.json \
+  --domain-adapter .task/domain_adapter.py \
+  --repo-owned-pre-exec-blocker \
+  --output .task/cycle/cycle-YYYYMMDD-HHMMSS/packets/failure_autopsy.json
+```
+
 ## Guardrails
 
 - Do not invent code, commands, arguments, inputs, or success criteria.
@@ -124,6 +139,7 @@ Add `--changed-file`, `--follow-up`, and additional `--command` values when rele
 - Do not omit a failed command from the `.agent_log` record.
 - Do not let redaction rules turn a failed run into an opaque terminal blocker when safe scalar autopsy can identify the failing file/line, exception class, HTTP status, or missing env key name without storing bodies or secrets.
 - Do not rerun a fail-closed gate as an environment blocker after `gate_satisfiability.satisfiable=false` proves the gate's evidence shape is unsatisfiable and no alternative source exists. Record `self_inflicted_gate_defect` and route gate-contract correction instead of rechecking.
+- Do not classify pre-execution gate contradiction evidence as `self_inflicted_gate_defect` unless repository-owned blocker provenance is confirmed by loopback/actionability evidence, the adapter, or an explicit caller flag. Without that confirmation, keep the self-check warn-only.
 - Do not store full sensitive transcripts, credentials, raw tokens, private keys, or large copyrighted text in `.agent_log`.
 - Do not let a helper or subagent write the log. The main agent runs `$record-agent-work-log`'s writer.
 - Do not let an ID insight agent run commands, retry failures, or decide success; it only reviews traceability after the run evidence exists.

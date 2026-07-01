@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import difflib
+import fnmatch
 import hashlib
 import inspect
 import importlib.util
@@ -68,6 +69,7 @@ IDEMPOTENT_REPLAY_KEYS = (
     "terminal_outcome_family_fallback_applied",
     "terminal_outcome_family_previous_count",
     "advice_freshness_gate",
+    "partial_progress_axes_gate",
     "structure_metrics_gate",
     "previous_accepted_baseline",
     "provider_scale_dispatch_gate",
@@ -85,6 +87,9 @@ IDEMPOTENT_REPLAY_KEYS = (
     "root_cause_ledger_entries",
     "root_cause_unverified_hypotheses",
     "root_cause_duplicate_hypotheses",
+    "repo_owned_source_roots",
+    "repo_owned_source_roots_status",
+    "repo_owned_source_roots_error",
     "adapter_mandate_gate",
     "adapter_mandate_required",
     "adapter_missing_streak",
@@ -915,6 +920,29 @@ ROOT_CAUSE_PROVENANCE_KEYS = (
 )
 
 
+def normalize_repo_owned_source_roots(value: Any) -> list[str]:
+    if isinstance(value, dict):
+        for key in ("repo_owned_source_roots", "source_roots", "roots", "patterns"):
+            if key in value:
+                value = value.get(key)
+                break
+        else:
+            return []
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    roots: list[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        normalized = text.replace("\\", "/").strip()
+        if normalized not in roots:
+            roots.append(normalized)
+    return roots[:50]
+
+
 def root_cause_provenance_refs(entry: dict[str, Any]) -> list[str]:
     refs: list[str] = []
     for key in ROOT_CAUSE_PROVENANCE_KEYS:
@@ -928,12 +956,66 @@ def root_cause_provenance_refs(entry: dict[str, Any]) -> list[str]:
     return sorted(set(refs))[:12]
 
 
-def root_cause_actionability(entry: dict[str, Any]) -> dict[str, Any]:
+def clean_provenance_path_ref(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text.startswith("file://"):
+        text = text[len("file://") :]
+    match = re.match(r"^(.*?):[0-9]+(?::[0-9]+)?$", text)
+    if match:
+        text = match.group(1)
+    return text.replace("\\", "/").strip()
+
+
+def repo_owned_provenance_refs(root: Path | None, refs: list[str], source_roots: list[str]) -> list[str]:
+    if root is None or not source_roots:
+        return []
+    root_resolved = root.resolve()
+    owned: list[str] = []
+    for ref in refs:
+        cleaned = clean_provenance_path_ref(ref)
+        if not cleaned:
+            continue
+        ref_path = Path(cleaned)
+        if not ref_path.is_absolute():
+            ref_path = root_resolved / ref_path
+        try:
+            rel = ref_path.resolve().relative_to(root_resolved).as_posix()
+        except (OSError, ValueError):
+            rel = cleaned.lstrip("./")
+        for raw_pattern in source_roots:
+            pattern = raw_pattern.strip().replace("\\", "/").strip("/")
+            if not pattern:
+                continue
+            zero_depth_pattern = pattern.replace("/**/", "/")
+            if (
+                rel == pattern
+                or rel.startswith(pattern + "/")
+                or fnmatch.fnmatch(rel, pattern)
+                or (zero_depth_pattern != pattern and fnmatch.fnmatch(rel, zero_depth_pattern))
+                or fnmatch.fnmatch(rel, pattern.rstrip("/") + "/**")
+            ):
+                owned.append(ref)
+                break
+    return sorted(set(owned))[:12]
+
+
+def root_cause_actionability(
+    entry: dict[str, Any],
+    *,
+    root: Path | None = None,
+    repo_owned_source_roots: list[str] | None = None,
+) -> dict[str, Any]:
     structural_fields = ("local", "bounded", "provider_free", "in_scope", "authority_allowed")
     structural = all(bool_value(entry.get(field)) for field in structural_fields)
     asserted = bool_value(entry.get("actionable")) or bool_value(entry.get("root_cause_actionable"))
     provenance = root_cause_provenance_refs(entry)
-    actionable = structural or (asserted and bool(provenance))
+    explicit_owned_refs = string_list(entry.get("repo_owned_source_refs"))
+    computed_owned_refs = repo_owned_provenance_refs(root, provenance, repo_owned_source_roots or [])
+    owned_refs = sorted(set(explicit_owned_refs + computed_owned_refs))[:12]
+    provenance_derived = bool(owned_refs)
+    actionable = structural or provenance_derived or (asserted and bool(provenance))
     if actionable:
         status = "verified"
     elif asserted:
@@ -943,10 +1025,34 @@ def root_cause_actionability(entry: dict[str, Any]) -> dict[str, Any]:
     basis = {
         "asserted_actionable": asserted,
         "structural_actionable": structural,
+        "provenance_derived_actionable": provenance_derived,
+        "repo_owned_source_ref_count": len(owned_refs),
+        "repo_owned_source_refs": owned_refs,
         "provenance_ref_count": len(provenance),
         "required_structural_fields": list(structural_fields),
     }
     return {"actionable": actionable, "status": status, "basis": basis, "provenance_refs": provenance}
+
+
+def harden_repo_owned_actionability(
+    entry: dict[str, Any],
+    *,
+    root: Path,
+    repo_owned_source_roots: list[str],
+) -> dict[str, Any]:
+    actionability = root_cause_actionability(entry, root=root, repo_owned_source_roots=repo_owned_source_roots)
+    owned_refs = string_list(actionability.get("basis", {}).get("repo_owned_source_refs"))
+    if not owned_refs:
+        return actionability
+    rejected: dict[str, Any] = {}
+    for field in ("local", "in_scope", "actionable"):
+        if not bool_value(entry.get(field)):
+            rejected[field] = entry.get(field)
+        entry[field] = True
+    entry["repo_owned_source_refs"] = owned_refs
+    if rejected:
+        entry["self_report_rejected_fields"] = rejected
+    return root_cause_actionability(entry, root=root, repo_owned_source_roots=repo_owned_source_roots)
 
 
 def root_cause_actionable(entry: dict[str, Any]) -> bool:
@@ -1048,21 +1154,28 @@ def root_cause_hypothesis_gate(
     root_key: str,
     root_family_key: str,
     budget: int,
+    *,
+    root: Path | None = None,
+    repo_owned_source_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     latest_by_root: dict[str, dict[str, Any]] = {}
     attempted_rows: list[dict[str, Any]] = []
     for row in rows:
         if not same_root_cause_scope(row, family_key, root_key, root_family_key):
             continue
-        root = normalize_root_cause_slug(row.get("hypothesized_root_cause"))
-        latest_by_root[root] = row
+        hypothesis_root = normalize_root_cause_slug(row.get("hypothesized_root_cause"))
+        latest_by_root[hypothesis_root] = row
         if bool_value(row.get("repair_attempted")):
             attempted_rows.append(row)
     untried = []
     unverified = []
     duplicates = []
-    for root, row in sorted(latest_by_root.items()):
-        actionability = root_cause_actionability(row)
+    for hypothesis_root, row in sorted(latest_by_root.items()):
+        actionability = root_cause_actionability(
+            row,
+            root=root,
+            repo_owned_source_roots=repo_owned_source_roots,
+        )
         if not actionability["actionable"]:
             if actionability["status"] == "unverified":
                 unverified.append(
@@ -1070,7 +1183,7 @@ def root_cause_hypothesis_gate(
                         "family_key": row.get("family_key"),
                         "root_key": row.get("root_key"),
                         "root_family_key": row.get("root_family_key"),
-                        "hypothesized_root_cause": root,
+                        "hypothesized_root_cause": hypothesis_root,
                         "actionability_status": "unverified",
                         "actionability_basis": actionability["basis"],
                     }
@@ -1083,7 +1196,7 @@ def root_cause_hypothesis_gate(
                     "family_key": row.get("family_key"),
                     "root_key": row.get("root_key"),
                     "root_family_key": row.get("root_family_key"),
-                    "hypothesized_root_cause": root,
+                    "hypothesized_root_cause": hypothesis_root,
                     "attempted_equivalent": normalize_root_cause_slug(duplicate.get("hypothesized_root_cause")),
                     "target_surface": root_cause_target_surface(row),
                     "observed_delta_class": row.get("observed_delta_class"),
@@ -1095,7 +1208,7 @@ def root_cause_hypothesis_gate(
                 "family_key": row.get("family_key"),
                 "root_key": row.get("root_key"),
                 "root_family_key": row.get("root_family_key"),
-                "hypothesized_root_cause": root,
+                "hypothesized_root_cause": hypothesis_root,
                 "repair_attempted": False,
                 "repair_task_id": row.get("repair_task_id"),
                 "terminal_outcome_changed": bool_value(row.get("terminal_outcome_changed")),
@@ -1124,6 +1237,9 @@ def untried_root_cause_hypotheses(
     family_key: str,
     root_key: str,
     root_family_key: str,
+    *,
+    root: Path | None = None,
+    repo_owned_source_roots: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     return root_cause_hypothesis_gate(
         rows,
@@ -1131,6 +1247,8 @@ def untried_root_cause_hypotheses(
         root_key,
         root_family_key,
         UNTRIED_PROMOTION_BUDGET_DEFAULT,
+        root=root,
+        repo_owned_source_roots=repo_owned_source_roots,
     )["untried_root_cause_hypotheses"]
 
 
@@ -1574,7 +1692,86 @@ def extract_fingerprint_claims(text: str) -> list[str]:
     return sorted(set(claims))
 
 
-def advice_freshness_gate(root: Path, current_output_fingerprint: Any) -> dict[str, Any]:
+def verdict_state(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text in PASS_STATUS_VALUES:
+        return "passed"
+    if text in FAIL_STATUS_VALUES or text in {"block", "blocked", "safe_to_attempt_false"}:
+        return "blocked"
+    return text
+
+
+def gate_result_regressions(values: list[Any]) -> list[dict[str, Any]]:
+    regressions: list[dict[str, Any]] = []
+
+    def walk(item: Any) -> None:
+        if isinstance(item, list):
+            for child in item:
+                walk(child)
+            return
+        if not isinstance(item, dict):
+            return
+        gate_id = str(item.get("gate_id") or item.get("name") or item.get("gate") or "").strip()
+        transition = str(item.get("verdict_transition") or item.get("transition") or "").strip().lower()
+        prior = verdict_state(item.get("prior_verdict") or item.get("previous_verdict") or item.get("previous_status"))
+        current = verdict_state(item.get("current_verdict") or item.get("verdict") or item.get("status"))
+        env_changed_key_present = "env_fingerprint_changed" in item or "environment_changed" in item
+        env_stable_key_present = "env_fingerprint_stable" in item or "same_env_fingerprint" in item
+        env_changed = bool_value(item.get("env_fingerprint_changed") or item.get("environment_changed"))
+        env_stable = bool_value(item.get("env_fingerprint_stable") or item.get("same_env_fingerprint")) or (
+            env_changed_key_present and not env_changed
+        )
+        env_stability_known = env_changed_key_present or env_stable_key_present
+        passed_to_blocked = transition in {"passed_to_blocked", "pass_to_block", "regressed"} or (
+            prior == "passed" and current == "blocked"
+        )
+        if passed_to_blocked and env_stability_known and env_stable:
+            regressions.append(
+                {
+                    "gate_id": gate_id or None,
+                    "prior_verdict": prior or None,
+                    "current_verdict": current or None,
+                    "verdict_transition": transition or "passed_to_blocked",
+                    "env_fingerprint_stable": env_stable,
+                }
+            )
+        for child in item.values():
+            if isinstance(child, (dict, list)):
+                walk(child)
+
+    for value in values:
+        walk(value)
+    return regressions[:10]
+
+
+def partial_progress_axes_gate(value: Any, no_goal_distance_delta: bool) -> dict[str, Any]:
+    if isinstance(value, dict) and "partial_progress_axes" in value:
+        axes_value = value.get("partial_progress_axes")
+    else:
+        axes_value = value
+    if isinstance(axes_value, dict):
+        axes = {str(key): child for key, child in axes_value.items() if truthy_observation(child)}
+    elif isinstance(axes_value, list):
+        axes = {str(item): True for item in axes_value if truthy_observation(item)}
+    else:
+        axes = {}
+    warn = bool(axes) and no_goal_distance_delta
+    return {
+        "gate": "W-PARTIAL-PROGRESS-AXES",
+        "partial_progress_axes": axes,
+        "partial_progress_axes_provided": bool(axes),
+        "high_water_flat": no_goal_distance_delta,
+        "status": "warn" if warn else ("pass" if axes else "not_provided"),
+        "recommendation": "decompose_all_or_nothing_gate" if warn else None,
+        "constrains_disposition": False,
+    }
+
+
+def advice_freshness_gate(
+    root: Path,
+    current_output_fingerprint: Any,
+    gate_values: list[Any] | None = None,
+) -> dict[str, Any]:
     current = str(current_output_fingerprint or "").strip()
     docs = []
     active_dir = root / ".agent_advice" / "active"
@@ -1595,13 +1792,17 @@ def advice_freshness_gate(root: Path, current_output_fingerprint: Any) -> dict[s
         claimed.append(row)
         if current and current not in fingerprints:
             stale.append(row)
+    regressions = gate_result_regressions(gate_values or [])
+    warn = bool(stale) or bool(regressions)
     return {
         "gate": "G-ADVICE-FRESH",
         "current_output_fingerprint": current or None,
         "declared_fingerprint_claims": claimed,
         "advice_metrics_stale": bool(stale),
         "stale_advice": stale,
-        "status": "warn" if stale else ("not_applicable" if not claimed else "pass"),
+        "gate_result_regression_stale": bool(regressions),
+        "gate_result_regressions": regressions,
+        "status": "warn" if warn else ("not_applicable" if not claimed else "pass"),
         "constrains_disposition": False,
     }
 
@@ -2468,6 +2669,23 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
         or first_named_value([runner_validation, output_delta, quality, gate_inputs], ROOT_KEY_KEYS)
         or family_key
     )
+    repo_owned_source_roots_value, repo_owned_source_roots_error = call_adapter(
+        domain_adapter,
+        "repo_owned_source_roots",
+        root=root,
+        artifact_paths=[rel_path(root, path) for path in paths],
+        quality_vector=quality,
+        output_delta=output_delta,
+        runner_validation=runner_validation,
+        family_key=family_key,
+        root_key=current_root_key,
+    )
+    repo_owned_source_roots = normalize_repo_owned_source_roots(repo_owned_source_roots_value)
+    repo_owned_source_roots_status = (
+        "provided"
+        if repo_owned_source_roots
+        else ("error" if repo_owned_source_roots_error else "not_provided")
+    )
     previous_baseline_source = "registry_latest"
     previous_baseline_error: str | None = None
     previous_baseline_value, previous_baseline_call_error = call_adapter(
@@ -2637,7 +2855,7 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
     )
     if adapter_fingerprint_value and not quality.get("current_output_fingerprint"):
         quality["current_output_fingerprint"] = str(adapter_fingerprint_value)
-    advice_gate = advice_freshness_gate(root, quality.get("current_output_fingerprint"))
+    advice_gate = advice_freshness_gate(root, quality.get("current_output_fingerprint"), [gate_inputs, runner_validation, output_delta])
     structure_value, structure_error = call_adapter(
         domain_adapter,
         "structure_metrics",
@@ -2751,6 +2969,20 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
         bool_value(coverage_gate.get("quality_delta_pass"))
         or bool_value(substance_gate.get("substance_delta_pass"))
     )
+    partial_progress_value, partial_progress_error = call_adapter(
+        domain_adapter,
+        "partial_progress_axes",
+        root=root,
+        artifact_paths=[rel_path(root, path) for path in paths],
+        quality_vector=quality,
+        output_delta=output_delta,
+        runner_validation=runner_validation,
+        family_key=family_key,
+        root_key=current_root_key,
+        current_no_goal_distance_delta=current_no_goal_distance_delta,
+    )
+    partial_progress_gate = partial_progress_axes_gate(partial_progress_value, current_no_goal_distance_delta)
+    partial_progress_gate["adapter_error"] = partial_progress_error
     adapter_contract_unmet = adapter_contract_unmet_fields(
         facet_root_map_missing=facet_root_map_missing,
         substance_gate=substance_gate,
@@ -2832,6 +3064,9 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
             reachability_gate.get("relaxation_or_escalation_required")
         ),
         "oracle_metric_validity_gate": metric_validity_gate,
+        "repo_owned_source_roots": repo_owned_source_roots,
+        "repo_owned_source_roots_status": repo_owned_source_roots_status,
+        "repo_owned_source_roots_error": repo_owned_source_roots_error,
         "facet_root_map_applied": bool(facet_root_map),
         "facet_root_map_missing": facet_root_map_missing,
         "facet_root_map_size": len(facet_root_map),
@@ -2843,6 +3078,7 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
         "terminal_outcome_family_previous_count": previous_micro_hardening_count(registry_rows, current_root_family_key),
         "terminal_outcome_family_previous_cycle_id": (latest_terminal_family or {}).get("cycle_id"),
         "advice_freshness_gate": advice_gate,
+        "partial_progress_axes_gate": partial_progress_gate,
         "structure_metrics_gate": structure_gate,
         "provider_scale_dispatch_gate": dispatch_gate,
         "changed_vs_previous": changed_vs_previous,
@@ -2968,7 +3204,11 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
             "evidence_paths": hypothesis_evidence_paths,
             "updated_at": now_iso(),
         }
-        actionability = root_cause_actionability(entry)
+        actionability = harden_repo_owned_actionability(
+            entry,
+            root=root,
+            repo_owned_source_roots=repo_owned_source_roots,
+        )
         entry["actionability_status"] = actionability["status"]
         entry["actionability_basis"] = actionability["basis"]
         ledger_entries.append(entry)
@@ -2987,6 +3227,8 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
         current_root_key,
         current_root_family_key,
         args.untried_promotion_budget,
+        root=root,
+        repo_owned_source_roots=repo_owned_source_roots,
     )
     untried = root_cause_gate["untried_root_cause_hypotheses"]
     row["root_cause_ledger_path"] = rel_path(root, root_cause_ledger_path)
@@ -3027,6 +3269,25 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
     row["consolidation_reduces_goal_distance"] = False
     row["consolidation_streak_cap"] = args.consolidation_streak_cap
     findings = list(row.get("findings") or [])
+    rejected_self_reports = [
+        {
+            "hypothesized_root_cause": entry.get("hypothesized_root_cause"),
+            "self_report_rejected_fields": entry.get("self_report_rejected_fields"),
+            "repo_owned_source_refs": entry.get("repo_owned_source_refs"),
+            "target_surface": entry.get("target_surface"),
+        }
+        for entry in ledger_entries
+        if isinstance(entry, dict) and entry.get("self_report_rejected_fields")
+    ]
+    if rejected_self_reports:
+        findings.append(
+            {
+                "severity": "warn",
+                "code": "repo_owned_source_self_report_rejected",
+                "message": "root-cause actionability was derived from repo-owned source provenance; conflicting producer self-report fields were ignored.",
+                "evidence": {"root_cause_ledger_entries": rejected_self_reports[:5]},
+            }
+        )
     if row["adapter_mandate_required"]:
         findings.append(
             {
@@ -3311,6 +3572,24 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
                 "code": "advice_metrics_stale",
                 "message": "advice declares output fingerprint claims that do not match the current adapter/output fingerprint; refresh or reclassify the advice before relying on its headline metrics.",
                 "evidence": advice_gate,
+            }
+        )
+    if bool_value(advice_gate.get("gate_result_regression_stale")):
+        findings.append(
+            {
+                "severity": "warn",
+                "code": "gate_result_regression_stale",
+                "message": "a gate verdict regressed from passed to blocked under a stable environment fingerprint; route through the existing advice-freshness/self-check path before trusting stale headline gate state.",
+                "evidence": advice_gate,
+            }
+        )
+    if str(partial_progress_gate.get("status")) == "warn":
+        findings.append(
+            {
+                "severity": "warn",
+                "code": "partial_progress_axes_flatlined",
+                "message": "adapter-reported partial progress axes exist while quality/substance high-water remains flat; recommend decomposing all-or-nothing gates rather than adding another detector.",
+                "evidence": partial_progress_gate,
             }
         )
     if adapter_fingerprint_error:
