@@ -162,6 +162,7 @@ Store task packs under `.task/task_pack/pack-YYYYMMDD-HHMMSS-<slug>.json`. The J
           "directive_id": "adv-...#directive-id",
           "original_target": {"metric": "abstract_metric", "comparator": ">=", "target": "original target"},
           "item_acceptance": ["Acceptance copied from or traceable to the original directive target."],
+          "acceptance_envelope_contract": {"envelope_floor": "adapter-owned abstract floor", "deficit_axis": "adapter-owned axis", "status": "provided|not_provided|indeterminate"},
           "narrowed": false,
           "narrow_reason": null,
           "residual_item_id": null
@@ -192,6 +193,7 @@ Pack rules:
 - Prefer 2-5 items. Use a standalone task when only one item is known.
 - Promote only one item into the active `task.md` per derivation.
 - Preserve measurable directive scope with `scope_fidelity`. If a pack item narrows an original target, set `narrowed=true`, record `narrow_reason`, and create an open residual item rather than consuming the target under a weaker acceptance criterion.
+- Preserve adapter-owned `acceptance_envelope_contract` when it exists. If the planned item envelope is below the floor, keep the original target open and represent the item as envelope expansion, explicit descope with residual scope, terminal blocker, or user escalation rather than a weakened acceptance target.
 - Use `terminal_blocked` when no viable item remains and no supplied input delta, authority change, or external-state change exists. Include `semantic_signature`, `root_cause_attempted_for_family`, authorized-alternative-path status, provider re-attempt status, and dual-track attempt evidence when a hard loop gate applies, so later derivation can seal the family rather than only the current target surface.
 - Refresh the Markdown render with `$orchestrate-task-cycle/scripts/task_pack_queue.py --root . render --language <language>` after any JSON edit.
 

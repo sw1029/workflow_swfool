@@ -14,7 +14,7 @@ This reference defines how `$orchestrate-task-cycle` discovers, consumes, schedu
 
 ## Core Rule
 
-Treat repository-scoped domain skills under `.codex/skills/` as optional adapters for domain vocabulary, artifact taxonomy, validation-set planning hints, command profiles, qualitative-review criteria, output-delta interpretation, and derive candidate selection.
+Treat repository-scoped domain skills under `.codex/skills/` as optional adapters for domain vocabulary, artifact taxonomy, validation-set planning hints, command profiles, qualitative-review criteria, output-delta interpretation, code convention contracts, structure metrics, and derive candidate selection.
 
 Adapters must not:
 
@@ -59,6 +59,10 @@ Adapters may inform these phases when applicable:
 - `derive`
 - `schema_post_derive`
 - `validate`
+
+Adapters may expose `code_convention_contract` as compact data. Keep project-specific naming rules, max LOC/depth/fan-out values, kernel/reuse roots, dependency DAGs, forbidden patterns, and semantic module placement rules inside the repo-owned adapter or `.agent_goal/conventions.md`; generic workflow skills consume only the contract shape and status.
+
+If a repository also registers a loopback domain adapter, pass its declared path/status to `$audit-cycle-loopback`. A registered adapter that does not load is an `adapter_wiring_defect` or adapter load correction task, not evidence that no adapter exists. Keep this distinction in `repo_skill_gap_packet` so `$derive-improvement-task` does not schedule duplicate adapter creation.
 
 Keep adapter-loaded references one level deep inside the adapter skill. Detailed domain maps, validation policies, command profiles, and examples belong in `references/`. Deterministic packet renderers, lint checks, or fixture-safe checks belong in `scripts/`.
 
@@ -105,11 +109,15 @@ Build `repo_skill_gap_packet` before derivation when current-cycle evidence show
 - repeated command/profile discovery;
 - repeated validation/oracle/source-class ambiguity;
 - repeated progress-classification uncertainty;
+- missing or stale `code_convention_contract` when governance, code-structure audit, loopback, derive, or validation repeatedly needs repo-specific naming, reuse, dependency, depth, fan-out, or structure high-water rules;
+- repeated mechanical shard, duplicate-helper, global-rebinding, dependency-direction, or reuse-layer ambiguity that generic workflow checks can only report warn-only;
 - adapter validation failure;
 - task_miss caused by missing repo-specific procedure;
 - a known 2-5 task sequence that would otherwise reload long domain context.
 
 The packet should include recommended adapter name, scope, target path, expected resources (`references`, `scripts`, `assets`), future consuming phases, and whether derive should create, update, defer, or reject adapter work.
+
+For convention adapter gaps, include the missing contract fields abstractly, such as `reuse_roots`, `semantic_naming_rules`, `dependency_layers`, `max_tree_depth`, `max_dir_fan_out`, `max_file_loc`, `forbidden_name_patterns`, `structure_metrics`, and `high_water_axes`. Do not put project-specific values into the generic orchestrator skill.
 
 Promote an adapter task only when reusable value is concrete. For one-off instructions, use `.agent_advice`, task acceptance criteria, or normal schema/contract notes instead.
 

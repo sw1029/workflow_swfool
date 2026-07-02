@@ -1,6 +1,6 @@
 ---
 name: task-md-agent-governance
-description: "Implement repository work described by a root or workspace `task.md` using delegated coding agents, requiring code-writing workers on `gpt-5.5` with `reasoning_effort: medium` by default and `high` for high-reliability core logic, code analysis at minimum `reasoning_effort: high`, important post-implementation review at `reasoning_effort: xhigh`, `$manage-agent-authority` authority/freedom/API-call policy, and relevant active `.agent_advice` non-GT constraints to be included in code-worker and audit prompts. Use when the current repo contains `task.md` and the user wants delegated implementation, multi-agent code review, generalization audit, durable miss/gap records under `.task/task_miss/`, or cleanup of previously recorded task misses."
+description: "Implement repository work described by a root or workspace `task.md` using delegated coding agents, requiring code-writing workers on `gpt-5.5` with `reasoning_effort: medium` by default and `high` for high-reliability core logic, code analysis at minimum `reasoning_effort: high`, important post-implementation review at `reasoning_effort: xhigh`, `$manage-agent-authority` authority/freedom/API-call policy, active `.agent_advice` non-GT constraints, and repo-owned `code_convention_contract` constraints for reuse-before-create, semantic naming/placement, dependency direction, and convention conformance in worker and audit prompts. Use when the current repo contains `task.md` and the user wants delegated implementation, write-time code convention governance, multi-agent code review, generalization audit, durable miss/gap records under `.task/task_miss/`, or cleanup of previously recorded task misses."
 ---
 
 # Task.md Agent Governance
@@ -18,6 +18,8 @@ When `task.md` includes `progress_target`, `progress_kind`, `validation_profile`
 Use `$manage-agent-authority` to resolve worker authority and operating posture. If `.agent_goal/agent_authority.md` is absent and no caller supplied an authority summary, use `authority_policy: default_current_agent_permissions`: the current coding agent's effective sandbox, approval rules, and higher-priority instructions, with no inferred extra network/API/destructive authority. The authority policy may constrain API calls, external service use, allowed direction variation, strictness, implementation-first versus validation-first behavior, output/artifact confirmation, quality-review priority, conservative implementation, and escalation behavior. It can narrow or rank implementation choices, but it cannot override higher-priority instructions or grant capabilities unavailable in the current session.
 
 Use `$manage-external-advice` or the caller's packet for `.agent_advice/active/*.md` when the task references advice or active advice is present. Advice can constrain design or task interpretation, but it is not GT and cannot broaden task scope, grant authority, or override repository evidence. Include relevant advice in worker and audit prompts under `used_advice`.
+
+Use a repository-owned `code_convention_contract` when available from a repo-local adapter packet, `.agent_goal/conventions.md`, or caller context. The contract may define naming rules, reuse roots, kernel/shared-module paths, dependency-layer direction, max LOC/depth/fan-out, and forbidden patterns. Keep project-specific values out of this skill body. If no structured convention contract is available, apply only generic review heuristics as warn-only evidence and continue without inventing repo-specific rules.
 
 ## Agent Routing Policy
 
@@ -41,6 +43,7 @@ Use `$manage-external-advice` or the caller's packet for `.agent_advice/active/*
    - Use `$manage-agent-authority` in `summarize` mode when `.agent_goal/agent_authority.md` exists, or use its `default_current_agent_permissions` fallback when absent and no caller supplied an authority summary. Extract constraints on API calls, external service use, direction freedom, implementation/validation priority, strictness, conservative implementation, artifact/output confirmation, quality review, and escalation.
    - Read relevant `.agent_advice/active/*.md` or consume the caller's active advice packet when `task.md` lists `External Advice`, the caller provided `used_advice`, or active advice exists. Keep it separate from `.agent_goal` GT.
    - Read `.agent_goal/goal_schema_contract.md`, `.schema/`, and `.contract/` when present and the task can affect shared schemas, module contracts, script contracts, serialized artifacts, CLIs, or cross-module compatibility.
+   - Read or consume the repo-owned `code_convention_contract` when present. If it is absent, record `code_convention_contract_status: not_provided` and keep convention enforcement warn-only instead of blocking implementation.
    - If ambiguity blocks safe implementation, ask one concise clarification before spawning workers.
    - Run `$manage-task-state-index` `scan` to assign or reuse the active `task-*` ID when possible. If no index can be created or no usable ID context exists, continue the implementation workflow and note that ID tracking was skipped.
 
@@ -56,6 +59,13 @@ Use `$manage-external-advice` or the caller's packet for `.agent_advice/active/*
    - Tell every worker they are not alone in the codebase, must not revert others' edits, and must list changed files.
    - Tell every worker the effective authority policy and require them to stay within it. If a worker believes the task requires broader API/network/external access, direction freedom, destructive operations, or validation posture than allowed, the worker must report the mismatch instead of proceeding.
    - Tell every worker the relevant active advice constraints and require `used_advice` in their output when advice shaped implementation. If advice conflicts with the task, GT, authority, or repo facts, workers must report the conflict instead of deciding scope themselves.
+   - Tell every worker the applicable `code_convention_contract` or explicitly say the contract is missing and warn-only. Require workers to:
+     - search existing reuse roots/shared modules before creating a new utility, helper, command wrapper, validator, adapter, or abstraction;
+     - prefer reusing or extending an existing owned abstraction over duplicating equivalent behavior;
+     - name files, modules, functions, classes, and commands by semantic responsibility rather than numbered shards, version suffixes, or mechanical split labels;
+     - place code in the repository's semantic module tree and respect dependency direction; if the contract is absent, infer only from nearby repo patterns and report uncertainty;
+     - avoid global rebinding shims, import-time mutation bridges, god objects, and mechanical split files that preserve hidden coupling;
+     - include `convention_conformance` in worker output with `reuse_checked`, `created_new_surface`, `semantic_names`, `placement_basis`, `dependency_direction`, `contract_status`, and any warn-only violations.
    - Keep ownership explicit: paths/modules, expected behavior, tests to update, and exclusions.
    - Use [worker-and-audit-prompts.md](references/worker-and-audit-prompts.md) for prompt shapes.
 
@@ -64,6 +74,7 @@ Use `$manage-external-advice` or the caller's packet for `.agent_advice/active/*
    - Resolve conflicts or mismatches without discarding unrelated user work.
    - Run relevant formatting, tests, or validation that can be inferred from the repo.
    - Keep validation consistent with the task's declared validation profile. Use `current_only` or `affected_chain` when appropriate; reserve full prerequisite reruns for changed shared validators/runtime, live dispatch, readiness promotion, issue closure, or explicit task/user requirements.
+   - Check worker `convention_conformance` before execution. Treat contract-backed violations as integration blockers or task_miss candidates. Treat missing contract or uncertain repo convention evidence as warn-only and preserve it for `code_structure_audit`, `$audit-cycle-loopback`, and `$validate-task-completion`.
    - Record commands and failures for the later miss report.
 
 5. Audit with `$inspect-repo-with-agents`.
@@ -76,6 +87,7 @@ Use `$manage-external-advice` or the caller's packet for `.agent_advice/active/*
    - Include active advice in the audit target when the task or caller referenced it. Audit whether implementation incorporated, deferred, rejected, or ignored advice correctly and whether any advice was incorrectly treated as GT.
    - Include at least two audit concerns:
      - Code governance: requirement coverage, maintainability, regressions, tests, ownership boundaries, and unsafe side effects.
+     - Semantic code governance: reuse-before-create evidence, semantic naming, correct module placement, dependency direction, duplicate helper definitions, global rebinding or hidden coupling, god-object growth, and mechanical shard/version-suffix file creation.
      - Generalization: logic/design that only handles one case, hard-coded assumptions, weak abstractions, narrow fixtures, missing edge cases, or unscalable structure.
      - Schema-contract governance: whether changed interfaces, data artifacts, modules, scripts, producers, consumers, validation, versions, and causal links still satisfy `.agent_goal/goal_schema_contract.md` and are reflected in `.schema/` or `.contract/`.
      - Authority governance: whether implementation workers stayed within `.agent_goal/agent_authority.md` or the default current-agent authority fallback, including API/external-call, autonomy, strictness, implementation-priority, quality-priority, conservative-implementation, and escalation rules.
@@ -125,6 +137,9 @@ Treat these as miss candidates:
 - Hard-coded paths, constants, shapes, IDs, prompts, or data assumptions not justified by `task.md`.
 - Missing validation for edge cases, invalid inputs, concurrency, data size, permissions, or failure modes.
 - New code that bypasses existing abstractions, conventions, error handling, logging, or tests.
+- New helper, utility, command wrapper, validator, adapter, or abstraction created without a reuse-before-create search of the repository-owned reuse layer or local equivalents.
+- New or changed code that violates a provided `code_convention_contract`, including semantic naming, module placement, dependency direction, LOC/depth/fan-out limits, forbidden naming patterns, or reuse-layer expectations.
+- Mechanical splits, numbered shards, version-suffix modules, global rebinding shims, duplicate public definitions, or god-object growth introduced as apparent refactoring progress.
 - New or changed schema/module/script contract behavior that violates `.agent_goal/goal_schema_contract.md`, leaves `.schema/` or `.contract/` stale, omits required minimum fields, or fails to update versions/causal links.
 - New code, worker behavior, task broadening, API/network/external service use, destructive operation, or validation posture that violates `.agent_goal/agent_authority.md` or the `default_current_agent_permissions` fallback.
 - Implementation or audit output that ignores task-referenced `.agent_advice`, treats advice as `.agent_goal` GT, or applies advice despite conflict with the task, authority, current user direction, or repository facts.
@@ -172,3 +187,5 @@ Use these statuses for prior `.task/task_miss` files after audit:
 - Do not bypass `$manage-agent-authority` when implementing, delegating, or auditing code. If `.agent_goal/agent_authority.md` is absent, do not infer additional authority beyond the current coding agent's effective permissions.
 - Do not treat `.agent_advice` as GT, authority, or a reason to broaden implementation scope. Advice is a non-GT constraint to consider and report through `used_advice`.
 - Do not create duplicate timestamp-only no-material miss reports when identical evidence for the same task/check already exists and can be linked.
+- Do not create new shared utilities, wrappers, validators, or adapters before checking existing reuse surfaces named by the repo-owned convention contract or evident local patterns.
+- Do not turn repo-specific naming rules, thresholds, kernel paths, or dependency DAGs into this generic skill body; consume them from the repository contract or keep the finding warn-only.

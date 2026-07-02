@@ -62,7 +62,11 @@ COMMON_FIELDS = {
         "task_id",
         "audit_status",
         "thresholds",
+        "semantic_structure_metrics",
+        "semantic_structure_findings",
+        "convention_conformance",
         "moduleization_required",
+        "semantic_refactor_plan",
         "evidence_paths",
     ],
     "run": ["task_id", "execution_status", "evidence_paths"],
@@ -207,9 +211,13 @@ def has_value(data: dict[str, Any], field: str) -> bool:
         "oversize_files": ["oversize_files", "oversized_files", "code_structure_audit.oversize_files"],
         "thresholds": ["thresholds", "code_structure_audit.thresholds"],
         "responsibility_clusters": ["responsibility_clusters", "clusters", "code_structure_audit.responsibility_clusters"],
+        "semantic_structure_metrics": ["semantic_structure_metrics", "code_structure_audit.semantic_structure_metrics"],
+        "semantic_structure_findings": ["semantic_structure_findings", "code_structure_audit.semantic_structure_findings"],
+        "convention_conformance": ["convention_conformance", "code_structure_audit.convention_conformance"],
         "moduleization_required": ["moduleization_required", "refactor_required", "code_structure_audit.moduleization_required"],
         "suggested_module_root": ["suggested_module_root", "module_root", "code_structure_audit.suggested_module_root"],
         "responsibility_split_plan": ["responsibility_split_plan", "split_plan", "module_split_plan", "code_structure_audit.responsibility_split_plan"],
+        "semantic_refactor_plan": ["semantic_refactor_plan", "code_structure_audit.semantic_refactor_plan"],
         "validation_set_status": ["validation_set_status", "status", "validation_set.status"],
         "validation_set_id": ["validation_set_id", "vset_id", "validation_set.id"],
         "not_gold": ["not_gold", "validation_set.not_gold"],
@@ -336,6 +344,66 @@ def list_values(value: Any) -> list[str]:
     if isinstance(value, str) and value.strip():
         return [value.strip()]
     return []
+
+
+def normalize_task_kind(value: Any) -> str:
+    return "".join(
+        ch if ch.isalnum() or ch == "_" else "_"
+        for ch in str(value or "").strip().lower().replace("-", "_")
+    ).strip("_")
+
+
+def selected_task_kind_value(result: dict[str, Any]) -> str:
+    for alias in (
+        "selected_task_kind",
+        "task_kind",
+        "selected_task.kind",
+        "selected_task.task_kind",
+        "derive.selected_task_kind",
+        "derive.task_kind",
+        "result.selected_task_kind",
+        "result.task_kind",
+    ):
+        value = deep_get(result, alias) if "." in alias else result.get(alias)
+        kind = normalize_task_kind(value)
+        if kind:
+            return kind
+    return ""
+
+
+def allowed_task_kinds_from_basis(value: Any) -> set[str]:
+    allowed: set[str] = set()
+    if isinstance(value, str) and value.strip():
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return allowed
+    if not isinstance(value, dict):
+        return allowed
+    for gate in value.values():
+        if not isinstance(gate, dict):
+            continue
+        for key in ("allowed_task_kinds", "goal_productive_task_kinds", "required_task_kinds"):
+            for item in list_values(gate.get(key)):
+                kind = normalize_task_kind(item)
+                if kind:
+                    allowed.add(kind)
+    return allowed
+
+
+def forced_task_kind(result: dict[str, Any]) -> str:
+    for alias in (
+        "forced_selected_task.selected_task_kind",
+        "forced_selected_task.task_kind",
+        "anti_loop_progress_gate.forced_selected_task.selected_task_kind",
+        "anti_loop_progress_gate.forced_selected_task.task_kind",
+        "result.anti_loop_progress_gate.forced_selected_task.selected_task_kind",
+        "result.anti_loop_progress_gate.forced_selected_task.task_kind",
+    ):
+        kind = normalize_task_kind(deep_get(result, alias))
+        if kind:
+            return kind
+    return ""
 
 
 def selected_disposition(result: dict[str, Any], selected_source: str, progress_kind: str) -> str:
@@ -779,6 +847,44 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                     "Derive selected a disposition outside `effective_allowed_dispositions`; active gates must be consumed as an intersection, not a union.",
                     {"selected_disposition": disposition, "effective_allowed_dispositions": effective_allowed},
                 )
+        disposition_basis = first_present(
+            result,
+            [
+                "disposition_intersection_basis",
+                "anti_loop_progress_gate.disposition_intersection_basis",
+                "loop_breaker_packet.disposition_intersection_basis",
+                "result.anti_loop_progress_gate.disposition_intersection_basis",
+                "result.loop_breaker_packet.disposition_intersection_basis",
+            ],
+        )
+        allowed_task_kinds = allowed_task_kinds_from_basis(disposition_basis)
+        selected_kind = selected_task_kind_value(result)
+        if progress_kind == "goal_productive" and allowed_task_kinds and selected_source != "terminal_blocked":
+            if not selected_kind:
+                add(
+                    findings,
+                    "block" if mode == "block" else "warn",
+                    "selected_task_kind_missing_for_constrained_goal_productive",
+                    "`derive` must provide `selected_task_kind` when active gates restrict goal_productive to specific task kinds.",
+                    {"allowed_task_kinds": sorted(allowed_task_kinds)},
+                )
+            elif selected_kind not in allowed_task_kinds:
+                add(
+                    findings,
+                    "block" if mode == "block" else "warn",
+                    "goal_productive_task_kind_not_allowed",
+                    "`derive` selected goal_productive by label but the task kind is outside the gate-constrained allowed set.",
+                    {"selected_task_kind": selected_kind, "allowed_task_kinds": sorted(allowed_task_kinds)},
+                )
+        forced_kind = forced_task_kind(result)
+        if forced_kind and selected_source != "terminal_blocked" and selected_kind and selected_kind != forced_kind:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "forced_selected_task_kind_mismatch",
+                "`derive` must select the forced task kind emitted by the anti-loop chain-stall gate before choosing another goal-productive task.",
+                {"selected_task_kind": selected_kind, "forced_selected_task_kind": forced_kind},
+            )
         output_delta_status = str(
             first_present(
                 result,
@@ -1634,11 +1740,17 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
         substance_delta_pass = boolish(deep_get(result, "substance_delta_gate.substance_delta_pass"))
         vacuous_corrective_noop = boolish(deep_get(result, "vacuous_corrective_gate.surface_corrective_noop"))
         adapter_mandate_required = boolish(value_for(result, "adapter_mandate_required"))
+        adapter_wiring_defect = boolish(value_for(result, "adapter_wiring_defect"))
         cumulative_chain_stalled = boolish(value_for(result, "cumulative_goal_distance_stalled"))
+        chain_stall_streak = number_value(value_for(result, "cumulative_goal_distance_stall_streak")) or 0
+        chain_stall_cap = number_value(deep_get(result, "cumulative_goal_distance_gate.cumulative_goal_distance_stall_cap")) or number_value(value_for(result, "cumulative_goal_distance_stall_cap")) or 0
         untried_veto_overridden = boolish(value_for(result, "untried_veto_overridden_by_chain_stall"))
+        forced_retarget_gate = deep_get(result, "chain_stall_forced_retarget_gate")
+        forced_retarget_options = deep_get(result, "forced_selected_task_options")
         acceptance_unreachable = boolish(value_for(result, "acceptance_unreachable_under_frozen_config"))
         metric_goal_productive_excluded = boolish(deep_get(result, "oracle_metric_validity_gate.metric_goal_productive_excluded"))
-        forward_mutation_progress = str(value_for(result, "blocker_mutation_kind") or "").lower() == "forward_mutation"
+        blocker_mutation = str(value_for(result, "blocker_mutation_kind") or "").lower()
+        forward_mutation_progress = blocker_mutation == "forward_mutation"
         terminal_outcome_value = value_for(result, "terminal_outcome_changed")
         terminal_outcome_changed = (
             boolish(terminal_outcome_value)
@@ -1694,6 +1806,13 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                 "loopback_adapter_mandate_without_hard_stop",
                 "`loopback_audit` adapter_mandate_required=true must hard-stop ordinary domain repair and force adapter registration/strengthening or escalation.",
             )
+        if adapter_wiring_defect and (adapter_mandate_required or disposition != "self_inflicted_gate_defect" or not hard_stop):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_adapter_wiring_defect_misrouted",
+                "`loopback_audit` must route a registered-but-unloaded adapter as self_inflicted_gate_defect, not adapter absence.",
+            )
         if cumulative_chain_stalled and not adapter_mandate_required and not hard_stop:
             add(
                 findings,
@@ -1701,6 +1820,23 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                 "loopback_cumulative_chain_without_hard_stop",
                 "`loopback_audit` cumulative goal-distance stall must hard-stop unless G-ADAPTER is the active preceding mandate.",
             )
+        if (
+            cumulative_chain_stalled
+            and not adapter_mandate_required
+            and chain_stall_cap > 0
+            and chain_stall_streak >= chain_stall_cap * 2
+            and blocker_mutation in {"facet_rename", "lateral", "repeat"}
+        ):
+            gate_present = isinstance(forced_retarget_gate, dict) and boolish(forced_retarget_gate.get("chain_stall_force_retarget"))
+            options_present = isinstance(forced_retarget_options, list)
+            if not gate_present or not options_present:
+                add(
+                    findings,
+                    "block" if mode == "block" else "warn",
+                    "loopback_chain_stall_forced_retarget_missing",
+                    "`loopback_audit` must enumerate forced retarget alternatives when cumulative goal-distance stall reaches cap*2.",
+                    {"cumulative_goal_distance_stall_streak": chain_stall_streak, "cumulative_goal_distance_stall_cap": chain_stall_cap},
+                )
         if untried_veto_overridden and not cumulative_chain_stalled:
             add(
                 findings,
@@ -1850,6 +1986,38 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                 "block" if mode == "block" else "warn",
                 "validate_refactor_without_structure_high_water",
                 "`validate` cannot complete a behavior-preserving refactor from module creation and green tests alone; adapter-supplied structure high-water must move or the task remains partial.",
+            )
+        convention_status = str(
+            first_present(
+                result,
+                [
+                    "convention_conformance_gate.status",
+                    "convention_conformance.status",
+                    "result.convention_conformance_gate.status",
+                    "result.convention_conformance.status",
+                ],
+            )
+            or ""
+        ).lower()
+        convention_violation = boolish(
+            first_present(
+                result,
+                [
+                    "convention_conformance_gate.contract_violation",
+                    "convention_conformance.contract_violation",
+                    "result.convention_conformance_gate.contract_violation",
+                    "result.convention_conformance.contract_violation",
+                ],
+            )
+        )
+        if validation_verdict in {"complete", "passed", "pass"} and (
+            convention_status in {"failed", "fail", "blocked", "block", "refactor_required"} or convention_violation
+        ):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_complete_with_convention_violation",
+                "`validate` cannot complete code changes with unresolved contract-backed convention violations; return partial or record explicit residual/descope handling.",
             )
         terminal_outcome_value = first_present(
             result,

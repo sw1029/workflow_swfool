@@ -25,11 +25,15 @@ Required fields:
 - `substance_delta_gate`: G-SUBSTANCE packet comparing adapter-supplied substance vectors.
 - `vacuous_corrective_gate`: G-VACUOUS packet summarizing corrective/backfill attempted and resolved counts.
 - `adapter_mandate_gate`: G-ADAPTER packet summarizing adapter contract gaps, missing streak, and whether adapter registration/strengthening is mandatory.
+- `adapter_wiring_gate`: C1 packet summarizing registered adapter path/load status and whether a registered-but-unloaded adapter must be routed as `self_inflicted_gate_defect`.
 - `cumulative_goal_distance_gate`: G-CHAIN packet summarizing high-water stall streak for an adapter-collapsed root family or adapter-missing artifact family.
+- `chain_stall_forced_retarget_gate`: C4 packet listing actionable forced retarget options when cumulative goal-distance stall reaches the forced-retarget threshold under lateral churn.
+- `primary_metric_gate`: optional adapter-supplied G-CHAIN/C4 trigger packet for single north-star high-water movement.
 - `acceptance_reachability_gate`: G-REACH packet with abstract acceptance minimum, frozen envelope, reachability verdict, and relaxation/escalation requirement.
+- `acceptance_envelope_contract`: optional normalized acceptance packet field binding a measurable target to an adapter-owned minimum executable envelope.
 - `oracle_metric_validity_gate`: G-OENV packet with optional oracle/metric validity self-check status and tautological-metric exclusion.
 - `advice_freshness_gate`: G-ADVICE-FRESH packet comparing declared advice fingerprints to current output fingerprint when available.
-- `structure_metrics_gate`: S-STRUCT packet exposing optional adapter-supplied structure metrics and consolidation recommendations.
+- `structure_metrics_gate`: S-STRUCT packet exposing optional adapter-supplied structure metrics and consolidation recommendations, including semantic structure axes when available.
 - `high_water_mark`
 - `recommended_disposition`
 - `hard_stop_required`
@@ -39,8 +43,10 @@ Required fields:
 
 Additive anti-loop gate fields:
 
+The D1-D4 fields in this list revise existing acceptance, progress truth-source, root-cause distinctness, and C4 trigger decisions. They are not additional detector phases or new authority surfaces.
+
 - `effective_allowed_dispositions`: intersection of all active constraining gates' `allowed_dispositions`, with `terminal_blocked` and `user_escalation` always preserved as safety valves.
-- `disposition_intersection_basis`: per-gate `allowed_dispositions` and `constrains_disposition` basis used to compute the intersection.
+- `disposition_intersection_basis`: per-gate `allowed_dispositions`, optional `allowed_task_kinds`, and `constrains_disposition` basis used to compute the intersection and bind `goal_productive` labels to specific correction classes.
 - `consolidation_streak`: consecutive recent `consolidation` dispositions whose effective progress is `governance_only`.
 - `consolidation_reduces_goal_distance`: always `false` unless a repository-specific gate proves a primary-output transition.
 - `validator_disagreement` finding: block-level finding when strict runner validation reports `semantic_progress=true` while output-delta reports `semantic_progress=false`.
@@ -51,13 +57,18 @@ Additive anti-loop gate fields:
 - `vacuous_corrective_gate`: G-VACUOUS packet with lane `attempted/resolved` counts, `surface_corrective_noop`, `excluded_delta_lanes`, and `status`.
 - `facet_root_map_applied` and `facet_root_map_size`: whether the domain adapter supplied facet-to-root family normalization before cap evaluation.
 - `adapter_mandate_required`, `adapter_missing_streak`, `adapter_contract_unmet`, and `adapter_mandate_gate`: G-ADAPTER fields. `adapter_contract_unmet` may include `facet_root_map`, `substance_metrics`, or `quality_vector`.
+- `adapter_wiring_defect`, `adapter_loaded`, `adapter_registered`, `adapter_path`, `adapter_expected_path`, and `adapter_wiring_gate`: C1 fields. `adapter_wiring_defect=true` supersedes `adapter_mandate_required` for the current cycle.
 - `cumulative_goal_distance_scope_key`, `cumulative_goal_distance_stall_streak`, `cumulative_goal_distance_stalled`, `cumulative_untried_chain_without_quality_delta`, `high_water_vector`, `high_water_last_improved_cycle`, and `untried_veto_overridden_by_chain_stall`: G-CHAIN fields.
+- `chain_stall_forced_retarget_gate`, `forced_selected_task`, and `forced_selected_task_options`: C4 fields. Options use abstract `selected_task_kind` values such as adapter wiring/load fixes or adapter-owned capability-ladder rungs.
+- `primary_metric_gate`, `primary_metric_high_water_moved`, `primary_metric_zero_movement_streak`, and `primary_metric_stalled`: D4/C4 trigger-key fields when the adapter exposes `primary_metric(...)`. The adapter owns the metric definition and comparison semantics.
+- `c4_user_escalation_backstop_required`: boolean set only when C4/primary-metric stall has no actionable forced task option and the workflow must emit one user-escalation handoff instead of another same-family retry.
 - `acceptance_unreachable_under_frozen_config`, `relaxation_or_escalation_required`, and `acceptance_reachability_gate`: G-REACH fields.
+- `acceptance_envelope_contract`, `envelope_floor`, `execution_envelope`, `envelope_deficit_axis`, and `envelope_below_floor`: optional D1 fields. These are abstract adapter-owned values; absence is warn-only and must not crash packet production.
 - `oracle_metric_validity_gate`: G-OENV fields. `metric_goal_productive_excluded=true` means tautological metric/oracle evidence cannot support goal-productive progress.
 - `advice_freshness_gate`: G-ADVICE-FRESH packet with `current_output_fingerprint`, declared fingerprint claims, stale advice paths, and `advice_metrics_stale`.
 - `advice_freshness_gate.gate_result_regression_stale`: warn-only signal for a supplied gate verdict that changed from passed to blocked under a stable environment fingerprint.
 - `partial_progress_axes_gate`: warn-only packet with adapter-supplied partial axes and `recommendation: decompose_all_or_nothing_gate` when high-water remains flat.
-- `structure_metrics_gate`: S-STRUCT packet with `structure_metrics`, `structure_consolidation_recommended`, optional `structure_high_water_moved`, `improved_structure_axes`, `refactor_effect_required`, `status`, and warning metadata.
+- `structure_metrics_gate`: S-STRUCT packet with `structure_metrics`, `structure_consolidation_recommended`, optional `structure_high_water_moved`, `improved_structure_axes`, `refactor_effect_required`, `status`, and warning metadata. `structure_metrics` may include numeric semantic axes such as `mechanical_shard_file_count`, `version_suffix_file_count`, `global_rebinding_signal_count`, `duplicate_symbol_name_count`, `max_changed_tree_depth`, `max_changed_dir_fan_out`, `reuse_root_import_ratio`, and `max_file_logical_loc`.
 - `measurement_progress`: boolean indicating newly introduced or first-observed measurement/oracle coverage.
 - `measurement_progress_allowed`: boolean indicating the measurement exemption is still within `measurement_streak_cap`.
 - `measurement_streak` and `measurement_streak_cap`: bounded exemption counters for consecutive measurement cycles.
@@ -68,6 +79,7 @@ Additive anti-loop gate fields:
 - `measurement_progress_basis`: introduced check IDs and new frontier observations that justified the exemption.
 - `blocker_signature`: stable current blocker identifier before volatile suffix normalization.
 - `blocker_root_family`: normalized blocker family used to prevent facet-renaming loops.
+- `root_dominant_parameter_key`: optional adapter-owned dominant parameter, such as an acceptance `deficit_axis`, used with the collapsed root family for distinct-root-cause and stall equivalence.
 - `blocker_ladder_rung`: current capability-ladder rung for the blocker family.
 - `blocker_mutation_kind`: `initial`, `repeat`, `facet_rename`, `lateral`, or `forward_mutation`.
 - `forward_mutation_budget_remaining`: remaining count before forward rung movement must force implementation rather than another measurement/governance cycle.
@@ -88,6 +100,9 @@ Additive anti-loop gate fields:
 - `terminal_blocked_invalid_due_to_untried_root_cause`: alias boolean for derive/result-contract consumers.
 - `force_implementation_cycle`: boolean requiring derive to choose implementation work after the forward-mutation budget is exhausted.
 - `task_correction_class`: `detection`, `correction`, `mixed`, or `unknown`.
+- `producer_progress_claim_fields`: optional adapter-supplied field names that were downgraded from producer progress reports.
+- `observed_producer_claim`: captured producer self-report values, stored only for traceability and never as authoritative progress.
+- `split_brain_progress_claim`: warning boolean/details when producer self-report conflicts with adapter/output-delta truth.
 - `detection_only`: boolean indicating detection work without semantic primary-output progress.
 - `detection_only_streak_for_root_family` and `detection_only_streak_cap`: G-BALANCE streak and cap.
 - `requires_correction_or_terminal`: boolean requiring correction/implementation work, terminal blocking, or user escalation.
@@ -102,7 +117,11 @@ Disposition values:
 
 Consumer rule: `produced_domain_delta=true` is not a substitute for this packet unless it is backed by `changed_vs_previous=true` and `semantic_progress=true`.
 
+Producer claim rule: producer-owned progress fields must be represented as `observed_producer_claim` and excluded from authoritative progress. If the adapter or strict output-delta evidence disagrees, set `split_brain_progress_claim` and use the conservative adapter/output-delta verdict.
+
 Disposition rule: consumers must select the next-task disposition from `effective_allowed_dispositions` when present. Do not treat separate gate `allowed_dispositions` as a union.
+
+Task-kind rule: when `disposition_intersection_basis` contains `allowed_task_kinds`, consumers must not accept a task as `goal_productive` unless its `selected_task_kind` is in that set. A matching `goal_productive` label alone is insufficient.
 
 Measurement rule: `measurement_progress_allowed=true` may reinclude `goal_productive` without setting `semantic_progress=true`; consumers must still preserve no-overclaim boundaries and must stop using the exemption after the root-key or root-family streak cap.
 
@@ -120,11 +139,17 @@ Root-cause ledger rule: `root_cause_ledger_entries` are non-GT workflow evidence
 
 Facet rule: adapter-supplied `facet_root_map` entries collapse facet labels before root-family streaks and measurement caps are computed. Without a map, the producer applies only conservative suffix/date/run/facet normalization.
 
-Adapter mandate rule: `adapter_mandate_required=true` means adapter contract gaps have repeated for the same `artifact_family` with no quality/substance high-water improvement for the configured cap. Consumers must select adapter registration/strengthening as the next goal-productive task, or terminal/user-escalate with the exact missing adapter contract.
+Adapter mandate rule: `adapter_mandate_required=true` means adapter contract gaps have repeated for the same `artifact_family` with no quality/substance high-water improvement for the configured cap. Consumers must select adapter registration/strengthening as the next goal-productive task, or terminal/user-escalate with the exact missing adapter contract. If `adapter_wiring_defect=true`, do not use this rule for the same cycle; route the registered-but-unloaded adapter as self-inflicted wiring/load correction.
 
-Cumulative chain rule: `cumulative_goal_distance_stalled=true` means the same adapter-collapsed root family, or the same `artifact_family` when adapter collapse is unavailable, has not improved quality/substance high-water for the configured cap. If `cumulative_untried_chain_without_quality_delta=true`, distinct untried hypothesis labels do not override terminal/user escalation.
+Cumulative chain rule: `cumulative_goal_distance_stalled=true` means the same adapter-collapsed root family, or the same `artifact_family` when adapter collapse is unavailable, has not improved quality/substance high-water for the configured cap. If `cumulative_untried_chain_without_quality_delta=true`, distinct untried hypothesis labels do not override terminal/user escalation. When `chain_stall_forced_retarget_gate.chain_stall_force_retarget=true`, derive must first choose an actionable `forced_selected_task` option when one exists; only an empty option set permits terminal/user escalation.
+
+Dominant-parameter key rule: when `root_dominant_parameter_key` is supplied, distinct-root-cause vetoes and stall streaks are keyed by the adapter-collapsed root plus that parameter, not by proximate blocker labels. If the key is absent, keep the legacy key path without inventing domain-specific parameters.
+
+Primary metric C4 rule: when `primary_metric_gate.primary_metric_stalled=true`, C4 forced retargeting is keyed by zero high-water movement on the adapter-owned primary metric. Renamed labels, facets, or version suffixes cannot reset that trigger. If no `forced_selected_task_options` are actionable, emit `c4_user_escalation_backstop_required=true` and a single user-escalation handoff with the missing input, authority, or evidence kind.
 
 Reachability rule: `acceptance_unreachable_under_frozen_config=true` means the abstract acceptance minimum and frozen envelope are incompatible. Consumers must select constraint relaxation or `user_escalation`; another envelope-internal micro-repair is not goal-productive.
+
+Acceptance envelope rule: `acceptance_envelope_contract` binds a measurable target to an adapter-owned minimum envelope. If `envelope_below_floor=true`, consumers must treat the slice as acceptance-incomplete and choose envelope expansion, explicit descope with residual scope, or user escalation. Do not lower the target and do not reclassify the planned failure as a new prompt/tool/schema blocker.
 
 Metric validity rule: `oracle_metric_validity_gate.metric_goal_productive_excluded=true` means an oracle/metric can pass tautologically. Consumers must not use that metric pass as goal-productive evidence without independent changed-and-semantic output-delta proof. Missing metric validity self-check is warning-only.
 
@@ -144,6 +169,6 @@ Gate regression rule: `advice_freshness_gate.gate_result_regression_stale=true` 
 
 Partial axes rule: `partial_progress_axes_gate.status=warn` recommends decomposing all-or-nothing progress gates when adapter-reported partial axes exist but quality/substance high-water remains flat. Consumers must not treat this warning as progress or as a blocker by itself.
 
-Structure rule: `structure_metrics_gate.structure_consolidation_recommended=true` is a warn-level signal that Class C surface reduction, module extraction, or responsibility separation may be valid when it reduces the reported structure burden. When `refactor_effect_required=true`, downstream validation must require `structure_high_water_moved=true` or explicit residual/descope handling before closing the refactor as complete. Absence of this optional adapter output must not crash packet production.
+Structure rule: `structure_metrics_gate.structure_consolidation_recommended=true` is a warn-level signal that Class C surface reduction, semantic consolidation, reuse extraction, coupling reduction, module extraction, or responsibility separation may be valid when it reduces the reported structure burden. When `refactor_effect_required=true`, downstream validation must require `structure_high_water_moved=true` or explicit residual/descope handling before closing the refactor as complete. File/module count increases, relocated helpers, token/pattern avoidance, and producer self-reports are not structure high-water movement unless adapter `structure_metrics` records real movement on a project-owned axis. Absence of this optional adapter output must not crash packet production.
 
 OCR and typo rule: typoed extractor labels, OCR provenance, and OCR near-duplicate placeholder surfaces must fail closed. Missing or incomplete threshold config must use conservative defaults rather than disabling structural placeholder or locale-lock checks.

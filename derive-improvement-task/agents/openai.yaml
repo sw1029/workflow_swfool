@@ -1,4 +1,4 @@
 interface:
   display_name: "Derive Improvement Task"
-  short_description: "Generate task.md or task-pack transactions"
-  default_prompt: "Use $derive-improvement-task with fixed reasoning_effort xhigh agents to select the next task.md or task-pack transaction from goal, authority, advice, loopback, autopsy, and provenance-hardened blocker evidence."
+  short_description: "Derive task.md with constrained gates"
+  default_prompt: "Use $derive-improvement-task with fixed reasoning_effort xhigh agents to select the next task.md or task-pack transaction from goal, authority, advice, loopback task-kind constraints, code-structure, convention, and blocker evidence."

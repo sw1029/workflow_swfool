@@ -21,6 +21,7 @@ ROOT_CAUSE_LEDGER_REL_PATH = ".task/anti_loop/root_cause_ledger.jsonl"
 SCHEMA_VERSION = "anti-loop-progress-gate-v1"
 LEGACY_QUALITY_MODULE_NAME = "novel_kg_quality_metrics.py"
 DOMAIN_ADAPTER_ENV = "TASK_CYCLE_DOMAIN_ADAPTER_PATH"
+DEFAULT_DOMAIN_ADAPTER_REL_PATH = ".task/domain_adapter.py"
 LEGACY_QUALITY_ENV = "NOVEL_KG_QUALITY_METRICS_PATH"
 DISPOSITION_UNIVERSE = {"goal_productive", "consolidation", "terminal_blocked", "user_escalation"}
 SAFETY_VALVES = {"terminal_blocked", "user_escalation"}
@@ -106,6 +107,15 @@ IDEMPOTENT_REPLAY_KEYS = (
     "acceptance_unreachable_under_frozen_config",
     "relaxation_or_escalation_required",
     "oracle_metric_validity_gate",
+    "adapter_wiring_gate",
+    "adapter_wiring_defect",
+    "adapter_loaded",
+    "adapter_path",
+    "adapter_registered",
+    "adapter_expected_path",
+    "chain_stall_forced_retarget_gate",
+    "forced_selected_task",
+    "forced_selected_task_options",
     "untried_actionable_root_cause_exists",
     "untried_root_cause_hypotheses",
     "untried_promotion_budget",
@@ -306,10 +316,7 @@ def load_python_module(path: Path, module_name: str) -> Any | None:
     return module
 
 
-def load_domain_adapter(root: Path, explicit_path: str | None) -> tuple[Any | None, str | None, str | None]:
-    global _DOMAIN_ADAPTER_MODULE
-    if _DOMAIN_ADAPTER_MODULE is not None:
-        return _DOMAIN_ADAPTER_MODULE, None, None
+def domain_adapter_candidate_paths(root: Path, explicit_path: str | None) -> list[Path]:
     candidates: list[Path] = []
     for raw in (explicit_path, os.environ.get(DOMAIN_ADAPTER_ENV), os.environ.get("DOMAIN_ADAPTER_PATH")):
         if not raw:
@@ -318,6 +325,17 @@ def load_domain_adapter(root: Path, explicit_path: str | None) -> tuple[Any | No
         if not candidate.is_absolute():
             candidate = root / candidate
         candidates.append(candidate)
+    default_candidate = root / DEFAULT_DOMAIN_ADAPTER_REL_PATH
+    if default_candidate.is_file():
+        candidates.append(default_candidate)
+    return candidates
+
+
+def load_domain_adapter(root: Path, explicit_path: str | None) -> tuple[Any | None, str | None, str | None]:
+    global _DOMAIN_ADAPTER_MODULE
+    if _DOMAIN_ADAPTER_MODULE is not None:
+        return _DOMAIN_ADAPTER_MODULE, None, None
+    candidates = domain_adapter_candidate_paths(root, explicit_path)
     seen: set[str] = set()
     for candidate in candidates:
         resolved = candidate.expanduser().resolve()
@@ -331,7 +349,7 @@ def load_domain_adapter(root: Path, explicit_path: str | None) -> tuple[Any | No
         if module is not None:
             _DOMAIN_ADAPTER_MODULE = module
             return module, resolved.as_posix(), None
-    if explicit_path or os.environ.get(DOMAIN_ADAPTER_ENV) or os.environ.get("DOMAIN_ADAPTER_PATH"):
+    if candidates:
         return None, None, "domain_adapter_not_found"
     return None, None, None
 
@@ -1424,12 +1442,15 @@ def coverage_quality_delta_reconciliation_gate(local_gate: dict[str, Any], exter
 
 def structure_metrics_gate(value: Any) -> dict[str, Any]:
     if isinstance(value, dict) and isinstance(value.get("structure_metrics"), dict):
-        metrics = value["structure_metrics"]
+        metrics = dict(value["structure_metrics"])
     elif isinstance(value, dict):
-        metrics = value
+        metrics = dict(value)
     else:
         metrics = {}
     source = value if isinstance(value, dict) else {}
+    semantic_metrics = source.get("semantic_structure_metrics")
+    if isinstance(semantic_metrics, dict):
+        metrics.update(semantic_metrics)
     recommended = any(
         bool_value(metrics.get(key))
         for key in (
@@ -1968,6 +1989,14 @@ def normalize_dispositions(values: Any) -> set[str]:
     return {item for item in normalized if item in DISPOSITION_UNIVERSE}
 
 
+def normalize_task_kind(value: Any) -> str:
+    return re.sub(r"[^a-z0-9_]+", "_", str(value or "").strip().lower().replace("-", "_")).strip("_")
+
+
+def normalize_task_kinds(values: Any) -> set[str]:
+    return {kind for kind in (normalize_task_kind(item) for item in list_values(values)) if kind}
+
+
 def gate_allowed_dispositions(name: str, gate: dict[str, Any]) -> set[str]:
     explicit = normalize_dispositions(gate.get("allowed_dispositions"))
     if explicit:
@@ -1977,6 +2006,41 @@ def gate_allowed_dispositions(name: str, gate: dict[str, Any]) -> set[str]:
     if name == "command_surface_budget" and (bool_value(gate.get("hard_gate")) or bool_value(gate.get("budget_exceeded"))):
         return {"consolidation", "terminal_blocked"}
     return set(DISPOSITION_UNIVERSE)
+
+
+def gate_allowed_task_kinds(gate: dict[str, Any]) -> set[str]:
+    kinds = normalize_task_kinds(
+        gate.get("allowed_task_kinds")
+        or gate.get("goal_productive_task_kinds")
+        or gate.get("required_task_kinds")
+    )
+    forced = gate.get("forced_selected_task")
+    if isinstance(forced, dict):
+        kinds.update(
+            normalize_task_kinds(
+                [
+                    forced.get("selected_task_kind"),
+                    forced.get("task_kind"),
+                    forced.get("kind"),
+                    forced.get("rung"),
+                ]
+            )
+        )
+    options = gate.get("forced_selected_task_options")
+    if isinstance(options, list):
+        for option in options:
+            if isinstance(option, dict):
+                kinds.update(
+                    normalize_task_kinds(
+                        [
+                            option.get("selected_task_kind"),
+                            option.get("task_kind"),
+                            option.get("kind"),
+                            option.get("rung"),
+                        ]
+                    )
+                )
+    return kinds
 
 
 def gate_constrains_disposition(name: str, gate: dict[str, Any]) -> bool:
@@ -2008,6 +2072,8 @@ def extract_disposition_gates(value: Any) -> list[dict[str, Any]]:
         "feature_symbol_gate",
         "gt_constraint_conflict_gate",
         "semantic_signature_gate",
+        "adapter_wiring_gate",
+        "chain_stall_forced_retarget_gate",
     )
     gates = []
     for name in gate_names:
@@ -2042,6 +2108,9 @@ def effective_allowed_dispositions(gates: list[dict[str, Any]]) -> tuple[list[st
             "allowed_dispositions": sorted(allowed),
             "constrains_disposition": constrains,
         }
+        task_kinds = gate_allowed_task_kinds(gate)
+        if task_kinds:
+            basis[name]["allowed_task_kinds"] = sorted(task_kinds)
         if constrains:
             constraining.append(allowed)
     if constraining:
@@ -2554,6 +2623,35 @@ def adapter_mandate_gate(
     }
 
 
+def adapter_wiring_gate(
+    *,
+    registered: bool,
+    loaded: bool,
+    expected_path: str | None,
+    loaded_path: str | None,
+    load_error: str | None,
+) -> dict[str, Any]:
+    defect = registered and not loaded
+    return {
+        "gate": "G-ADAPTER-WIRING",
+        "adapter_registered": registered,
+        "adapter_loaded": loaded,
+        "adapter_expected_path": expected_path,
+        "adapter_path": loaded_path or expected_path,
+        "adapter_load_error": load_error,
+        "adapter_wiring_defect": defect,
+        "self_inflicted_gate_defect": defect,
+        "local": defect,
+        "in_scope": defect,
+        "actionable": defect,
+        "status": "block" if defect else ("ok" if loaded else "not_applicable"),
+        "constrains_disposition": defect,
+        "allowed_dispositions": ["goal_productive", "terminal_blocked", "user_escalation"],
+        "allowed_task_kinds": ["adapter_wiring_fix", "adapter_load_fix"],
+        "recommended_disposition": "self_inflicted_gate_defect" if defect else None,
+    }
+
+
 def cumulative_goal_distance_scope_key(artifact_family: str, root_family_key: str, facet_root_map_missing: bool) -> str:
     if facet_root_map_missing:
         return f"artifact_family:{normalize_root_family_key(artifact_family)}"
@@ -2618,6 +2716,91 @@ def cumulative_goal_distance_gate(
     }
 
 
+def first_actionable_capability_ladder_option(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    items: list[Any]
+    if isinstance(value, dict):
+        raw_items = (
+            value.get("rungs")
+            or value.get("items")
+            or value.get("options")
+            or value.get("capability_ladder")
+            or value.get("next_rungs")
+        )
+        items = raw_items if isinstance(raw_items, list) else [value]
+    elif isinstance(value, list):
+        items = value
+    else:
+        return None
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if bool_value(item.get("satisfied") or item.get("complete") or item.get("blocked")):
+            continue
+        actionable_value = item.get("actionable")
+        if actionable_value is not None and not bool_value(actionable_value):
+            continue
+        kind = normalize_task_kind(
+            item.get("selected_task_kind")
+            or item.get("task_kind")
+            or item.get("kind")
+            or item.get("rung")
+            or item.get("name")
+        )
+        if not kind:
+            continue
+        return {
+            "selected_task_kind": kind,
+            "task_kind": kind,
+            "rung": item.get("rung") or item.get("name") or kind,
+            "provider_dependency": item.get("provider_dependency"),
+            "authority_allowed": item.get("authority_allowed"),
+            "uses_only_local_data": item.get("uses_only_local_data"),
+            "source": "capability_ladder",
+        }
+    return None
+
+
+def chain_stall_forced_retarget_gate(
+    chain_gate: dict[str, Any],
+    *,
+    blocker_mutation: str,
+    adapter_gate: dict[str, Any],
+    capability_ladder_option: dict[str, Any] | None,
+) -> dict[str, Any]:
+    stalled = bool_value(chain_gate.get("cumulative_goal_distance_stalled"))
+    streak = int_metric(chain_gate.get("cumulative_goal_distance_stall_streak"))
+    cap = max(1, int_metric(chain_gate.get("cumulative_goal_distance_stall_cap")) or 1)
+    lateral = blocker_mutation in {"facet_rename", "lateral", "repeat"}
+    force = stalled and lateral and streak >= cap * 2
+    options: list[dict[str, Any]] = []
+    if force and bool_value(adapter_gate.get("adapter_wiring_defect")):
+        options.append(
+            {
+                "selected_task_kind": "adapter_wiring_fix",
+                "task_kind": "adapter_wiring_fix",
+                "source": "adapter_wiring_gate",
+                "actionable": True,
+            }
+        )
+    if force and capability_ladder_option:
+        options.append({**capability_ladder_option, "actionable": True})
+    return {
+        "gate": "G-CHAIN-FORCED-RETARGET",
+        "chain_stall_force_retarget": force,
+        "cumulative_goal_distance_stall_streak": streak,
+        "cumulative_goal_distance_stall_cap": cap,
+        "blocker_mutation_kind": blocker_mutation,
+        "forced_selected_task_options": options,
+        "forced_selected_task": options[0] if options else None,
+        "status": "block" if force and options else ("warn" if force else "ok"),
+        "constrains_disposition": force and bool(options),
+        "allowed_dispositions": ["goal_productive", "terminal_blocked", "user_escalation"],
+        "allowed_task_kinds": [option["selected_task_kind"] for option in options if option.get("selected_task_kind")],
+    }
+
+
 def semantic_progress_from_high_water(
     quality: dict[str, Any],
     prev_high: dict[str, Any],
@@ -2671,7 +2854,17 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
     prev_fingerprint = (latest or {}).get("current_output_fingerprint")
 
     paths = load_artifact_paths(root, args.artifact_paths_json, args.artifact_path)
+    adapter_candidates = domain_adapter_candidate_paths(root, getattr(args, "domain_adapter", None))
+    adapter_registered = bool(adapter_candidates)
+    adapter_expected_path = adapter_candidates[0].expanduser().resolve().as_posix() if adapter_candidates else None
     domain_adapter, domain_adapter_path, domain_adapter_error = load_domain_adapter(root, getattr(args, "domain_adapter", None))
+    adapter_load_gate = adapter_wiring_gate(
+        registered=adapter_registered,
+        loaded=domain_adapter is not None,
+        expected_path=adapter_expected_path,
+        loaded_path=domain_adapter_path,
+        load_error=domain_adapter_error,
+    )
     quality, evidence_paths, insufficient_reason = (
         ({}, [], domain_adapter_error)
         if domain_adapter_error
@@ -2679,6 +2872,8 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
     )
     provider_request_count = max(0, int(args.provider_request_count or 0))
     gate_inputs: list[dict[str, Any]] = []
+    if bool_value(adapter_load_gate.get("constrains_disposition")):
+        gate_inputs.append({"name": "adapter_wiring_gate", **adapter_load_gate})
     for raw_gate in getattr(args, "gate_state_json", []) or []:
         gate_inputs.extend(extract_disposition_gates(load_json_value(root, raw_gate)))
     runner_validation = load_json_value(root, getattr(args, "runner_validation_json", None))
@@ -3018,7 +3213,14 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
         current_no_delta=current_no_goal_distance_delta,
         cap=getattr(args, "adapter_mandate_streak_cap", ADAPTER_MANDATE_STREAK_CAP_DEFAULT),
     )
-    if bool_value(adapter_gate.get("adapter_mandate_required")):
+    if bool_value(adapter_load_gate.get("adapter_wiring_defect")):
+        adapter_gate["adapter_mandate_required"] = False
+        adapter_gate["status"] = "ok"
+        adapter_gate["adapter_wiring_defect_supersedes_adapter_mandate"] = True
+    if bool_value(adapter_load_gate.get("adapter_wiring_defect")):
+        hard_stop = True
+        disposition = "self_inflicted_gate_defect"
+    elif bool_value(adapter_gate.get("adapter_mandate_required")):
         hard_stop = True
         disposition = "adapter_mandate_required"
         gate_inputs.append({"name": "adapter_mandate_gate", **adapter_gate})
@@ -3032,11 +3234,39 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
         current_cycle_id=args.cycle_id,
         cap=getattr(args, "cumulative_chain_streak_cap", CUMULATIVE_CHAIN_STREAK_CAP_DEFAULT),
     )
-    if bool_value(chain_gate.get("cumulative_goal_distance_stalled")) and not bool_value(
-        adapter_gate.get("adapter_mandate_required")
+    capability_ladder_value, capability_ladder_error = call_adapter(
+        domain_adapter,
+        "capability_ladder",
+        root=root,
+        artifact_paths=[rel_path(root, path) for path in paths],
+        quality_vector=quality,
+        output_delta=output_delta,
+        runner_validation=runner_validation,
+        family_key=family_key,
+        root_key=current_root_key,
+        root_family_key=current_root_family_key,
+        high_water=high_water,
+    )
+    capability_ladder_option = first_actionable_capability_ladder_option(capability_ladder_value)
+    forced_retarget_gate = chain_stall_forced_retarget_gate(
+        chain_gate,
+        blocker_mutation=mutation_kind,
+        adapter_gate=adapter_load_gate,
+        capability_ladder_option=capability_ladder_option,
+    )
+    if capability_ladder_error:
+        forced_retarget_gate["capability_ladder_error"] = capability_ladder_error
+    if bool_value(forced_retarget_gate.get("constrains_disposition")):
+        chain_gate["allowed_dispositions"] = ["goal_productive", "terminal_blocked", "user_escalation"]
+        chain_gate["allowed_task_kinds"] = forced_retarget_gate.get("allowed_task_kinds") or []
+        gate_inputs.append({"name": "chain_stall_forced_retarget_gate", **forced_retarget_gate})
+    if (
+        bool_value(chain_gate.get("cumulative_goal_distance_stalled"))
+        and not bool_value(adapter_gate.get("adapter_mandate_required"))
+        and not bool_value(adapter_load_gate.get("adapter_wiring_defect"))
     ):
         hard_stop = True
-        disposition = "terminal_blocked"
+        disposition = "goal_productive" if bool_value(forced_retarget_gate.get("constrains_disposition")) else "terminal_blocked"
         gate_inputs.append({"name": "cumulative_goal_distance_gate", **chain_gate})
     if bool_value(reachability_gate.get("acceptance_unreachable_under_frozen_config")):
         hard_stop = True
@@ -3073,10 +3303,19 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
         "adapter_mandate_required": bool_value(adapter_gate.get("adapter_mandate_required")),
         "adapter_missing_streak": adapter_gate.get("adapter_missing_streak"),
         "adapter_contract_unmet": adapter_contract_unmet,
+        "adapter_wiring_gate": adapter_load_gate,
+        "adapter_wiring_defect": bool_value(adapter_load_gate.get("adapter_wiring_defect")),
+        "adapter_loaded": domain_adapter is not None,
+        "adapter_registered": adapter_registered,
+        "adapter_path": domain_adapter_path or adapter_expected_path,
+        "adapter_expected_path": adapter_expected_path,
         "cumulative_goal_distance_gate": chain_gate,
         "cumulative_goal_distance_scope_key": chain_gate.get("cumulative_goal_distance_scope_key"),
         "cumulative_goal_distance_stall_streak": chain_gate.get("cumulative_goal_distance_stall_streak"),
         "cumulative_goal_distance_stalled": bool_value(chain_gate.get("cumulative_goal_distance_stalled")),
+        "chain_stall_forced_retarget_gate": forced_retarget_gate,
+        "forced_selected_task": forced_retarget_gate.get("forced_selected_task"),
+        "forced_selected_task_options": forced_retarget_gate.get("forced_selected_task_options") or [],
         "high_water_vector": chain_gate.get("high_water_vector"),
         "high_water_last_improved_cycle": chain_gate.get("high_water_last_improved_cycle"),
         "acceptance_reachability_gate": reachability_gate,
@@ -3145,7 +3384,9 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
             "quality_vector_override_applied": bool(previous_adapter_high),
         },
         "domain_adapter": {
-            "path": domain_adapter_path,
+            "path": domain_adapter_path or adapter_expected_path,
+            "expected_path": adapter_expected_path,
+            "registered": adapter_registered,
             "loaded": domain_adapter is not None,
             "status": "loaded" if domain_adapter is not None else ("error" if domain_adapter_error else "legacy_fallback"),
             "error": domain_adapter_error,
@@ -3311,6 +3552,15 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
                 "evidence": {"root_cause_ledger_entries": rejected_self_reports[:5]},
             }
         )
+    if row["adapter_wiring_defect"]:
+        findings.append(
+            {
+                "severity": "block",
+                "code": "adapter_wiring_defect",
+                "message": "a registered repository domain adapter did not load; treat this as a self-inflicted workflow wiring/load defect, not adapter absence.",
+                "evidence": row["adapter_wiring_gate"],
+            }
+        )
     if row["adapter_mandate_required"]:
         findings.append(
             {
@@ -3327,6 +3577,15 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
                 "code": "cumulative_goal_distance_stalled",
                 "message": "quality/substance high-water has not improved across the configured cumulative chain cap, independent of blocker label or terminal-outcome churn.",
                 "evidence": row["cumulative_goal_distance_gate"],
+            }
+        )
+    if bool_value(forced_retarget_gate.get("chain_stall_force_retarget")):
+        findings.append(
+            {
+                "severity": "block" if forced_retarget_gate.get("forced_selected_task") else "warn",
+                "code": "chain_stall_forced_retarget",
+                "message": "cumulative goal-distance stall exceeded the forced-retarget threshold; derive must select an actionable listed alternative before terminal/user escalation when one exists.",
+                "evidence": forced_retarget_gate,
             }
         )
     if row["acceptance_unreachable_under_frozen_config"]:

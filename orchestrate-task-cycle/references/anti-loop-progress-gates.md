@@ -6,6 +6,7 @@ Use this reference when recent task-cycle evidence shows safe but stationary wor
 
 - [Ownership](#ownership)
 - [Domain-Adapter Contract](#domain-adapter-contract)
+- [Part D In-Place Revision Contract](#part-d-in-place-revision-contract)
 - [G1 Disposition Intersection Gate](#g1-disposition-intersection-gate)
 - [G0 Pre-Cycle Regression Guard](#g0-pre-cycle-regression-guard)
 - [G0-SAT Gate Satisfiability Precheck](#g0-sat-gate-satisfiability-precheck)
@@ -51,15 +52,20 @@ Use this reference when recent task-cycle evidence shows safe but stationary wor
 
 ## Domain-Adapter Contract
 
-Gate logic must stay domain-agnostic. A repository may supply a domain adapter to `$audit-cycle-loopback` with `--domain-adapter <path.py>` or `TASK_CYCLE_DOMAIN_ADAPTER_PATH`. The adapter owns domain-specific paths, metric names, lexicons, thresholds, and artifact interpretation. The workflow consumes only these interfaces:
+Gate logic must stay domain-agnostic. A repository may supply a domain adapter to `$audit-cycle-loopback` with `--domain-adapter <path.py>`, `TASK_CYCLE_DOMAIN_ADAPTER_PATH`, or the conventional `.task/domain_adapter.py` path when present. The adapter owns domain-specific paths, metric names, lexicons, thresholds, and artifact interpretation. The workflow consumes only these interfaces:
 
 - `quality_vector(...)`: coverage/quality vector for G-COV.
 - `substance_metrics(...)`: primary-output substance vector for G-SUBSTANCE.
 - `corrective_resolution(...)`: corrective/backfill lanes with `attempted/resolved` counts for G-VACUOUS.
 - `facet_root_map(...)`: facet labels mapped to root families for G-FACET.
+- `min_envelope_for(target, **context)`: optional D1 helper returning adapter-owned `envelope_floor` and `deficit_axis` for measurable acceptance targets.
 - `output_fingerprint(...)`: current primary-output fingerprint for G-ADVICE-FRESH.
 - `previous_accepted_fp(...)`: previous accepted primary-output fingerprint, optionally with previous quality/high-water vector, for R-GCOV baseline selection.
-- `structure_metrics(...)`: optional structure metrics for S-STRUCT, such as entrypoint LOC, command count, active/legacy ratio, consolidation recommendation, `structure_high_water_moved`, `improved_structure_axes`, and `refactor_effect_required`.
+- `structure_metrics(...)`: optional structure metrics for S-STRUCT, such as entrypoint LOC, command count, active/legacy ratio, mechanical shard count, version-suffix file count, global-rebinding/coupling signal count, duplicate definition count, tree depth, directory fan-out, reuse ratio, max file LOC, consolidation recommendation, `structure_high_water_moved`, `improved_structure_axes`, and `refactor_effect_required`.
+- `producer_progress_claim_fields(...)`: optional D2 helper listing producer-owned progress/completion fields that must be stored only as `observed_producer_claim`.
+- `adapter_load_status(...)` or packet fields `adapter_loaded`/`adapter_path`: optional registered-adapter load status. A registered adapter that is not loaded is `adapter_wiring_defect`, not adapter absence.
+- `capability_ladder(...)`: optional next-rung options for G-CHAIN forced retargeting, including abstract `selected_task_kind`, actionability, authority, local-data, and provider-bound prerequisites.
+- `primary_metric(...)`: optional D4 helper exposing one adapter-owned north-star progress value and high-water comparison semantics for G-CHAIN/C4 trigger keying.
 - `root_cause_hypotheses(...)`: optional root-cause hypothesis rows with domain-owned slugs and actionability booleans for the generic root-cause ledger.
 - `repo_owned_source_roots(...)`: optional repository-owned source glob roots for provenance-based root-cause actionability. When a blocker hypothesis points to a repo-owned source under these roots, `$audit-cycle-loopback` derives `local=true`, `in_scope=true`, and `actionable=true` from provenance and rejects conflicting producer self-report fields. If absent, fail quiet and keep legacy actionability rules.
 - `gate_selfcheck(...)`: optional pre-execution gate artifact self-check consumed by `$run-task-code-and-log` failure autopsy. It may report `blocked_pre_exec`, `contradicting_evidence`, `trusted_evidence_source`, `prior_pass_observed`, and `repo_owned_pre_exec_blocker`.
@@ -67,16 +73,25 @@ Gate logic must stay domain-agnostic. A repository may supply a domain adapter t
 - `acceptance_reachability(...)`: optional abstract G-REACH input with `acceptance_min_output`, `frozen_envelope`, and optional `reachability_verdict`.
 - `metric_validity_self_check(...)`: optional G-OENV input that reports tautological, constant, or self-fulfilling metrics/oracles.
 
-If the adapter is absent or omits a required vector, promotion must fail closed for the affected gate while packet production continues. Do not hardcode project module paths, metric names, lexicon paths, or artifact filenames in the generic workflow skill body.
+If the adapter is absent or omits a required vector, promotion must fail closed for the affected gate while packet production continues. If the adapter is registered by path or declaration but `adapter_loaded!=true`, set `adapter_wiring_defect=true`, route as `self_inflicted_gate_defect`, and select wiring/load correction instead of creating a new adapter. Do not hardcode project module paths, metric names, lexicon paths, or artifact filenames in the generic workflow skill body.
+
+## Part D In-Place Revision Contract
+
+These rules revise existing decision points. They do not create new detector phases, do not grant new authority, and do not weaken existing no-overclaim gates.
+
+- D1 acceptance-envelope binding: `$normalize-acceptance-and-demo` treats a measurable acceptance target as the target plus adapter-owned `min_envelope_for(target)`. A selected slice below `envelope_floor` is acceptance-incomplete. Downstream derive may expand the envelope, preserve explicit descope with residual scope, or user-escalate; it must not lower the target to fit the smaller slice.
+- D2 producer verdict seal: `$run-task-code-and-log` and downstream packets must downgrade producer progress labels to `observed_producer_claim`. Authoritative progress comes only from adapter recomputation, loopback/output-delta, or completion validation. A conflict is `split_brain_progress_claim` warning evidence, not a second truth source.
+- D3 root-cause rekeying: distinct-root-cause vetoes and stall streaks use adapter-collapsed root family plus an adapter-owned dominant parameter such as `min_envelope_for(...).deficit_axis` when present. Proximate label churn cannot create a fresh untried root for the same pair. Missing hooks fail quiet to legacy keys.
+- D4 C4 trigger rekeying: when `primary_metric(...)` is present, C4 forced-retargeting is triggered by zero high-water movement on that adapter-owned primary metric, not by mutable blocker labels. If C4 finds no actionable forced option, emit exactly one `user_escalation` backstop with the missing input, authority, or evidence kind.
 
 ## G1 Disposition Intersection Gate
 
 When multiple active gates provide `allowed_dispositions`, combine them by intersection, not union. The packet must expose:
 
 - `effective_allowed_dispositions`: the intersection of all gates where `hard_stop_required`, `hard_gate`, `requires_goal_productive_next`, `requires_goal_productive_or_user_escalation`, `status=block`, or `constrains_disposition=true`.
-- `disposition_intersection_basis`: each contributing gate's allowed set and whether it constrained the result.
+- `disposition_intersection_basis`: each contributing gate's allowed set, optional `allowed_task_kinds`, and whether it constrained the result.
 
-Always preserve `terminal_blocked` and `user_escalation` as safety valves. `$derive-improvement-task` must select only from `effective_allowed_dispositions` when the field is present. A disposition allowed by only one gate, such as command-surface `consolidation` when root-axis requires `goal_productive`, is invalid unless it remains in the effective intersection.
+Always preserve `terminal_blocked` and `user_escalation` as safety valves. `$derive-improvement-task` must select only from `effective_allowed_dispositions` when the field is present. A disposition allowed by only one gate, such as command-surface `consolidation` when root-axis requires `goal_productive`, is invalid unless it remains in the effective intersection. If a constraining gate allows `goal_productive` only for named task kinds, a task with another `selected_task_kind` is `governance_only` or blocked even when its disposition label says `goal_productive`.
 
 ## G0 Pre-Cycle Regression Guard
 
@@ -149,6 +164,8 @@ Metadata-only outputs remain `effective_progress_kind: governance_only` unless t
 
 If strict runner validation and output-delta disagree on the same evidence class, prefer the conservative output-delta value. A runner `semantic_progress=true` with output-delta `semantic_progress=false` must produce a block-level `validator_disagreement` finding, set `authoritative_semantic_progress=false`, and prevent runner pass from being used as completion or goal-productive evidence.
 
+Producer progress labels captured from artifacts or run logs are not output-delta truth. Store them as `observed_producer_claim` and compare them only as warning evidence; if they conflict with adapter or strict output-delta evidence, emit `split_brain_progress_claim` and use the conservative recomputed value.
+
 ## R-GCOV Coverage Gate Reconciliation
 
 When both output-delta and loopback emit `coverage_quality_delta_gate`, compare them as one logical G-COV. The packet should expose `coverage_quality_delta_reconciliation_gate` with compact local/external gates, `validator_disagreement`, `gcov_metric_name_collision`, metric value conflicts, and `status`.
@@ -215,6 +232,8 @@ When `facet_root_map_missing=true`, `substance_delta_gate.status=missing`, or `q
 
 The next goal-productive task must register or strengthen the repository domain adapter. Do not count another domain-specific micro-repair as goal-productive until the adapter supplies the missing collapse/substance/quality contract or the cycle terminal/user-escalates with the exact adapter blocker.
 
+If the repository has registered an adapter but the loopback packet reports `adapter_loaded!=true`, emit `adapter_wiring_defect=true` and `recommended_disposition=self_inflicted_gate_defect`. That state is local, in-scope, and actionable because the workflow failed to inject or load its own registered adapter. The next goal-productive task kind is `adapter_wiring_fix` or `adapter_load_fix`; do not misroute it as `adapter_mandate_required` or a new-adapter task.
+
 If G-ADAPTER fires, it precedes G-CHAIN. This prevents adapter absence from being mistaken for a domain terminal state when the real missing prerequisite is the workflow's own adapter contract.
 
 ## G-CHAIN Cumulative Goal-Distance Gate
@@ -229,9 +248,16 @@ When the same scope has no G-COV or G-SUBSTANCE high-water improvement for the c
 - `high_water_vector`
 - `high_water_last_improved_cycle`
 
-If untried hypotheses remain in the same stalled scope, also emit `cumulative_untried_chain_without_quality_delta=true` and `untried_veto_overridden_by_chain_stall=true`. `$derive-improvement-task` must then ignore the usual untried-root-cause terminal veto and select only `terminal_blocked` or `user_escalation`, unless G-ADAPTER is simultaneously forcing adapter work.
+If untried hypotheses remain in the same stalled scope, also emit `cumulative_untried_chain_without_quality_delta=true` and `untried_veto_overridden_by_chain_stall=true`. `$derive-improvement-task` must then ignore the usual untried-root-cause terminal veto. When the stall streak reaches the forced-retarget threshold and lateral churn continues, the packet must enumerate `forced_selected_task_options` before terminal/user escalation:
+
+- self-inflicted gate defects such as `adapter_wiring_fix`;
+- the first actionable adapter `capability_ladder` rung whose authority, local-data, and provider-bound prerequisites are satisfied.
+
+If an option exists, expose it as `forced_selected_task` and allow `goal_productive` only for its `selected_task_kind`. If no option exists or the adapter omits the ladder hook, keep `terminal_blocked` or `user_escalation` under the existing fail-quiet rule.
 
 Use this gate for the "distinct but non-converging hypothesis chain" case: each repair can be locally valid and still fail to reduce goal distance. Do not delete or weaken A2b; G-CHAIN adds a separate cumulative no-progress axis.
+
+When the adapter exposes `primary_metric(...)`, key the C4 forced-retarget trigger to primary-metric high-water movement. If the primary metric has zero high-water movement for the configured cap, renamed labels, facets, or version suffixes cannot reset the trigger. If no forced option is actionable, emit one user-escalation backstop with the missing input, authority, or evidence kind; do not schedule another same-family retry solely to recheck the condition.
 
 ## G-REACH Acceptance Reachability Gate
 
@@ -244,6 +270,8 @@ Before derive promotes another repair inside a frozen envelope, compare the task
 - `relaxation_or_escalation_required`
 
 If `reachability_verdict=unreachable`, another envelope-internal micro-repair is not goal-productive. Derive must choose a constraint-relaxation task when authority permits it, or `user_escalation` when relaxation needs user approval. If the values are absent or not comparable, use `indeterminate` and do not block solely from G-REACH.
+
+When an `acceptance_envelope_contract` exists, treat `envelope_below_floor=true` as the same acceptance-incomplete condition before derive selects a task slice. This is not a new gate; it is the normalized acceptance contract saying the selected envelope cannot satisfy the target.
 
 ## G-OENV Oracle/Metric Validity Gate
 
@@ -309,11 +337,11 @@ Allow a goal-productive disposition only for strict changed-and-semantic primary
 
 ## S-STRUCT Structure Signal
 
-When the domain adapter supplies `structure_metrics(...)`, expose `structure_metrics_gate` with numeric structure metrics, `structure_consolidation_recommended`, optional `structure_high_water_moved`, `improved_structure_axes`, and `refactor_effect_required`. Treat the signal as warn-level unless another gate makes command-surface pressure hard. Use it to justify Class C consolidation or module-boundary work when that work reduces the reported entrypoint or command burden.
+When the domain adapter supplies `structure_metrics(...)`, expose `structure_metrics_gate` with numeric structure metrics, `structure_consolidation_recommended`, optional `structure_high_water_moved`, `improved_structure_axes`, and `refactor_effect_required`. Semantic structure metrics may include mechanical shard count, version-suffix file count, global-rebinding or hidden-coupling signal count, duplicate public definition count, tree depth, directory fan-out, reuse ratio, and max file LOC. Treat the adapter hook as the single truth source for structure progress; producer-local structure reports are advisory until absorbed into this hook. Treat the signal as warn-level unless another gate makes command-surface pressure hard. Use it to justify Class C consolidation, `semantic_consolidation`, `reuse_extraction`, `coupling_reduction`, or module-boundary work when that work reduces the reported structure burden.
 
-For behavior-preserving refactor tasks whose objective is structural reduction, downstream validation must require real structure high-water movement. New modules, relocated helpers, or green tests are not enough when the adapter reports `refactor_effect_required=true` and `structure_high_water_moved=false`.
+For behavior-preserving refactor tasks whose objective is structural reduction, downstream validation must require real structure high-water movement. New modules, relocated helpers, additional files, token/pattern avoidance, or green tests are not enough when the adapter reports `refactor_effect_required=true` and `structure_high_water_moved=false`. Define coupling axes by durable dependency/reference counts or equivalent movement-resistant metrics, not only by absence of forbidden token strings.
 
-If the adapter omits structure metrics, do nothing. Do not hardcode project-specific module paths, metric names, or thresholds into this generic workflow reference.
+If the adapter omits structure metrics, do nothing beyond warn-only generic code-structure audit findings. Do not hardcode project-specific module paths, metric names, kernel/reuse roots, dependency DAGs, or thresholds into this generic workflow reference.
 
 ## G5b Consolidation Streak Cap
 
@@ -344,7 +372,7 @@ The producer must compute `anti_loop_progress_gate` from raw artifact content an
 - `previous_accepted_baseline`, `coverage_quality_delta_reconciliation_gate`, `substance_delta_gate`, `vacuous_corrective_gate`, `facet_root_map_applied`, `advice_freshness_gate`, and `structure_metrics_gate`
 - `repo_owned_source_roots_status`, `partial_progress_axes_gate`, and provenance-hardened root-cause actionability fields when supplied by the adapter
 - `terminal_outcome_changed`, `observed_delta_class`, `forward_mutation_vacuous`, `root_cause_ledger_path`, `root_cause_unverified_hypotheses`, `root_cause_duplicate_hypotheses`, `untried_actionable_root_cause_exists`, `untried_root_cause_hypotheses`, `untried_promotion_budget`, `vacuous_untried_streak`, and `hypothesis_exhausted` when applicable
-- `adapter_mandate_required`, `adapter_missing_streak`, `adapter_contract_unmet`, `cumulative_goal_distance_stalled`, `cumulative_goal_distance_stall_streak`, `untried_veto_overridden_by_chain_stall`, `acceptance_unreachable_under_frozen_config`, `relaxation_or_escalation_required`, and `oracle_metric_validity_gate` when applicable
+- `adapter_mandate_required`, `adapter_missing_streak`, `adapter_contract_unmet`, `adapter_loaded`, `adapter_wiring_defect`, `cumulative_goal_distance_stalled`, `cumulative_goal_distance_stall_streak`, `forced_selected_task_options`, `untried_veto_overridden_by_chain_stall`, `acceptance_unreachable_under_frozen_config`, `relaxation_or_escalation_required`, and `oracle_metric_validity_gate` when applicable
 - `recommended_disposition`, `hard_stop_required`, `evidence_class`, and evidence paths
 
 The repository adapter or shared module must fail closed on noisy quality inputs. If confidence is low, artifacts are missing/malformed, adapter output is missing, or domain interpretation is uncertain, emit `evidence_class: insufficient_evidence`, `recommended_disposition: conservative_hold`, and `hard_stop_required: true`. Legacy repository quality modules may remain as compatibility fallbacks, but new domain-specific metrics, paths, lexicons, and thresholds belong behind the adapter interface.
@@ -355,10 +383,12 @@ Use the packet as a derive gate:
 - `semantic_progress=false` with `same_family_micro_hardening_count >= 3` blocks another same-family micro-hardening task as `goal_productive`.
 - `evidence_class=insufficient_evidence` blocks `goal_productive` unless the next task supplies the missing raw artifacts, runs a bounded provider/semantic transition, or records terminal/user escalation with evidence.
 - `effective_allowed_dispositions` bounds the next selected disposition. Do not choose a disposition by taking a union of individual gates.
+- `disposition_intersection_basis.allowed_task_kinds` binds `goal_productive` to those task kinds. A label-only `goal_productive` task with another kind is not valid progress.
 - `substance_delta_gate.substance_delta_pass=false` blocks measurement promotion unless strict changed-and-semantic primary-output evidence exists.
 - `blocker_mutation_kind=forward_mutation` blocks rung promotion unless `terminal_outcome_changed=true`; set `forward_mutation_vacuous=true` when the ladder moved but observed domain output did not.
 - `adapter_mandate_required=true` forces adapter registration/strengthening before another domain repair can count as `goal_productive`.
-- `cumulative_goal_distance_stalled=true` restricts the next disposition to `terminal_blocked` or `user_escalation` unless G-ADAPTER is active.
+- `adapter_wiring_defect=true` forces adapter wiring/load correction as `self_inflicted_gate_defect`; it is not adapter absence.
+- `cumulative_goal_distance_stalled=true` restricts the next disposition to `terminal_blocked` or `user_escalation` unless G-ADAPTER is active or `chain_stall_forced_retarget_gate` exposes an actionable forced task kind.
 - `untried_actionable_root_cause_exists=true` invalidates terminal blocking and forces derive to select the untried root-cause repair only when `hypothesis_exhausted=false`, `untried_veto_overridden_by_chain_stall=false`, and the hypothesis is actionability-verified.
 - `repo_owned_source_roots_status=provided` means repository-owned provenance can override conflicting producer self-report fields for root-cause `local`, `in_scope`, and `actionable`. Do not trust self-reported `local=false`, `in_scope=false`, or `actionable=false` for that hypothesis.
 - `acceptance_unreachable_under_frozen_config=true` forces constraint relaxation or `user_escalation`.
@@ -367,7 +397,7 @@ Use the packet as a derive gate:
 - `hypothesis_exhausted=true` means the same family has spent the untried repair budget on vacuous attempts; derive must terminal-block or user-escalate unless a supplied input delta changes the family.
 - `vacuous_corrective_gate.surface_corrective_noop=true` blocks counting unresolved corrective rows as output delta.
 - `partial_progress_axes_gate.status=warn` is advisory only: it recommends decomposing all-or-nothing gates when partial axes exist but high-water remains flat. It must not add a new blocker.
-- `structure_metrics_gate.refactor_effect_required=true` with `structure_high_water_moved=false` means a refactor may be useful but cannot be completed as structural goal progress without residual work or explicit descope.
+- `structure_metrics_gate.refactor_effect_required=true` with `structure_high_water_moved=false` means a refactor may be useful but cannot be completed as structural goal progress without residual work or explicit descope. File-count growth, mechanical splitting, token avoidance, or producer self-reports must not be treated as an improved structure axis.
 
 ## A1 Measurement Progress Exemption
 
@@ -390,6 +420,8 @@ Track `forward_mutation_budget_remaining`. When it reaches zero, set `force_impl
 ## A2b Root-Cause Hypothesis Ledger
 
 `$audit-cycle-loopback` may append `.task/anti_loop/root_cause_ledger.jsonl` rows keyed by `family_key`, `root_key`, and `hypothesized_root_cause`. The hypothesis slug is domain-owned; the generic workflow evaluates whether it was attempted, whether terminal outcome changed, whether it is actionability-verified, and whether it is distinct from attempted hypotheses by normalized `(hypothesized_root_cause, target_surface, observed_delta_class)`.
+
+When the adapter supplies a collapsed root plus `root_dominant_parameter_key`, distinctness is evaluated on that pair before proximate labels. Renaming prompt/schema/event-edge labels, version suffixes, or target-surface wording does not create a fresh untried hypothesis for the same collapsed root and dominant parameter.
 
 Before terminal blocking or sealing, `$derive-improvement-task` must check the loopback packet or ledger summary. If `untried_actionable_root_cause_exists=true`, `hypothesis_exhausted=false`, and `untried_veto_overridden_by_chain_stall=false`, terminal blocking is invalid. Promote that hypothesis as the next `goal_productive` repair task unless authority, safety, or external state makes it non-actionable and records that rationale. If `hypothesis_exhausted=true` or `untried_veto_overridden_by_chain_stall=true`, do not promote another same-family untried repair without supplied input delta; terminal-block or user-escalate.
 
@@ -441,6 +473,8 @@ When `goal_productive` is required and no concrete candidate exists, derive the 
 5. `M4_unseen_15`: fifteen unseen works run or are terminal-blocked with precise source/authority/provider evidence.
 
 Promote the first unsatisfied rung as a goal-productive task-pack item only when it can be implemented through an allowed command-surface class and current authority permits the needed provider/runtime behavior. A rung passes by G-COV quality/coverage delta or strict changed-and-semantic output-delta evidence, not by oracle existence alone.
+
+When G-CHAIN reaches the forced-retarget threshold, this ladder is not optional planning context. The loopback packet must expose the first actionable rung as `forced_selected_task` when authority, local data, and bounded/provider prerequisites allow it. `$derive-improvement-task` may terminal/user-escalate only after recording that no ladder rung or self-inflicted gate correction is actionable.
 
 ## No-Overclaim Boundaries
 

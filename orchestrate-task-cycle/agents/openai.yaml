@@ -1,4 +1,4 @@
 interface:
   display_name: "Orchestrate Task Cycle"
-  short_description: "Run governed cycles with task-pack gates"
-  default_prompt: "Use $orchestrate-task-cycle in Korean to run a governed task cycle, pass scalar run/autopsy and anti-loop packets, enforce provenance-hardened blocker routing, derive the next task, validate, commit, and report."
+  short_description: "Run governed cycles with routing gates"
+  default_prompt: "Use $orchestrate-task-cycle in Korean to run a governed task cycle with repo adapters, adapter routing checks, code convention contracts, semantic structure audit, loopback, derivation, validation, commit, and report."

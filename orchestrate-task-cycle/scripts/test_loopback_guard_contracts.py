@@ -22,6 +22,8 @@ SCRIPT_PATH = Path(__file__).resolve()
 ORCHESTRATE_ROOT = SCRIPT_PATH.parents[1]
 SKILLS_ROOT = ORCHESTRATE_ROOT.parent
 detect_progress_loop = load_module(ORCHESTRATE_ROOT / "scripts" / "detect_progress_loop.py")
+code_structure_audit = load_module(ORCHESTRATE_ROOT / "scripts" / "code_structure_audit.py")
+result_contract = load_module(ORCHESTRATE_ROOT / "scripts" / "result_contract.py")
 anti_loop_gate_provider = load_module(
     SKILLS_ROOT / "audit-cycle-loopback" / "scripts" / "anti_loop_gate_provider.py"
 )
@@ -97,6 +99,7 @@ def test_structure_metrics_gate_preserves_high_water_fields() -> None:
     gate = anti_loop_gate_provider.structure_metrics_gate(
         {
             "structure_metrics": {"entrypoint_loc": 1200, "structure_consolidation_recommended": True},
+            "semantic_structure_metrics": {"mechanical_shard_file_count": 3},
             "structure_high_water_moved": True,
             "improved_structure_axes": ["entrypoint_loc"],
             "refactor_effect_required": True,
@@ -107,6 +110,83 @@ def test_structure_metrics_gate_preserves_high_water_fields() -> None:
     assert gate["structure_high_water_moved"] is True
     assert gate["improved_structure_axes"] == ["entrypoint_loc"]
     assert gate["refactor_effect_required"] is True
+    assert gate["structure_metrics"]["mechanical_shard_file_count"] == 3.0
+
+
+def test_code_structure_audit_reports_semantic_signals_warn_only_without_contract() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        src = root / "src"
+        src.mkdir()
+        (src / "part_001.py").write_text(
+            "_PREBIND_GLOBAL_NAMES = ['shared']\n"
+            "globals().update({'shared': object()})\n"
+            "def repeated():\n"
+            "    return 1\n",
+            encoding="utf-8",
+        )
+        (src / "part_002.py").write_text("def repeated():\n    return 2\n", encoding="utf-8")
+
+        packet = code_structure_audit.audit(
+            root,
+            ["src/part_001.py", "src/part_002.py"],
+            code_structure_audit.DEFAULT_THRESHOLDS,
+            "task-test",
+        )
+
+    assert packet["audit_status"] == "warn"
+    assert packet["moduleization_required"] is False
+    assert packet["convention_conformance"]["code_convention_contract_status"] == "not_provided"
+    assert packet["semantic_structure_metrics"]["mechanical_shard_file_count"] == 2
+    assert packet["semantic_structure_metrics"]["global_rebinding_signal_count"] >= 2
+    assert packet["semantic_structure_metrics"]["duplicate_symbol_name_count"] == 1
+
+
+def test_code_structure_audit_enforced_contract_requires_semantic_refactor() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        src = root / "src"
+        src.mkdir()
+        (src / "part_001.py").write_text("def repeated():\n    return 1\n", encoding="utf-8")
+        contract = {
+            "status": "provided",
+            "enforcement": "required",
+            "warn_only": False,
+            "raw": {"enforcement": "required"},
+        }
+
+        packet = code_structure_audit.audit(
+            root,
+            ["src/part_001.py"],
+            code_structure_audit.DEFAULT_THRESHOLDS,
+            "task-test",
+            contract,
+        )
+
+    assert packet["audit_status"] == "refactor_required"
+    assert packet["moduleization_required"] is True
+    assert packet["responsibility_split_plan"]
+    assert any(finding["severity"] == "refactor_required" for finding in packet["semantic_structure_findings"])
+
+
+def test_validate_result_contract_blocks_complete_with_convention_violation() -> None:
+    result = result_contract.validate(
+        "validate",
+        {
+            "task_id": "task-test",
+            "validation_verdict": "complete",
+            "progress_verdict": "advanced",
+            "blockers": [],
+            "evidence_paths": ["validation.md"],
+            "convention_conformance_gate": {"status": "failed"},
+        },
+        "block",
+    )
+
+    assert any(
+        finding.get("code") == "validate_complete_with_convention_violation"
+        for finding in result["findings"]
+    )
 
 
 def test_terminal_outcome_family_fallback_groups_mutating_blockers() -> None:
@@ -275,6 +355,75 @@ def test_adapter_mandate_blocks_missing_adapter_stall_chain() -> None:
     )
 
 
+def test_registered_adapter_load_failure_routes_wiring_defect() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        adapter = root / ".task" / "domain_adapter.py"
+        adapter.parent.mkdir(parents=True, exist_ok=True)
+        adapter.write_text("raise RuntimeError('adapter boom')\n", encoding="utf-8")
+        args = argparse.Namespace(
+            root=str(root),
+            cycle_id="cycle-new",
+            task_id="task-new",
+            artifact_family="primary_output",
+            semantic_signature="same_root",
+            root_key="same_root",
+            domain_adapter=None,
+            provider_request_count=0,
+            artifact_path=[],
+            artifact_paths_json=None,
+            gate_state_json=[],
+            recent_progress_json=None,
+            runner_validation_json=None,
+            output_delta_json=json.dumps({"changed_vs_previous": False, "semantic_progress": False}),
+            substance_metrics_json=None,
+            corrective_resolution_json=None,
+            facet_root_map_json=None,
+            acceptance_reachability_json=None,
+            metric_validity_json=None,
+            root_cause_hypotheses_json=None,
+            hypothesized_root_cause=None,
+            root_cause_repair_attempted=False,
+            root_cause_repair_task_id=None,
+            root_cause_actionable=False,
+            untried_promotion_budget=2,
+            measurement_check_id=[],
+            measurement_check_ids_json=None,
+            measurement_frontier=[],
+            measurement_streak_cap=1,
+            detection_only_streak_cap=2,
+            adapter_mandate_streak_cap=3,
+            cumulative_chain_streak_cap=3,
+            blocker_signature="same_root",
+            blocker_rung=None,
+            max_forward_mutations=3,
+            consolidation_streak_cap=2,
+            registry_path=".task/anti_loop/family_progress_registry.jsonl",
+            root_cause_ledger_path=".task/anti_loop/root_cause_ledger.jsonl",
+            threshold=3,
+            epsilon=1e-9,
+            max_rows_per_family=200,
+            max_root_cause_rows_per_family=200,
+            write_registry=False,
+            output=None,
+        )
+
+        anti_loop_gate_provider._DOMAIN_ADAPTER_MODULE = None
+        packet, _, _ = anti_loop_gate_provider.evaluate(args)
+
+    assert packet["adapter_registered"] is True
+    assert packet["adapter_loaded"] is False
+    assert packet["adapter_wiring_defect"] is True
+    assert packet["adapter_mandate_required"] is False
+    assert packet["recommended_disposition"] == "self_inflicted_gate_defect"
+    assert "adapter_wiring_fix" in packet["disposition_intersection_basis"]["adapter_wiring_gate"]["allowed_task_kinds"]
+    assert any(
+        finding.get("code") == "adapter_wiring_defect"
+        for finding in packet.get("findings", [])
+        if isinstance(finding, dict)
+    )
+
+
 def test_cumulative_chain_overrides_untried_veto_after_quality_stall() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -382,6 +531,103 @@ def test_cumulative_chain_overrides_untried_veto_after_quality_stall() -> None:
     assert packet["untried_veto_overridden_by_chain_stall"] is True
     assert packet["terminal_blocked_invalid_due_to_untried_root_cause"] is False
     assert packet["effective_allowed_dispositions"] == ["terminal_blocked", "user_escalation"]
+
+
+def test_chain_stall_forces_actionable_ladder_task_kind() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        adapter = root / "domain_adapter.py"
+        adapter.write_text(
+            "\n".join(
+                [
+                    "def quality_vector(**kwargs):",
+                    "    return {'quality_vector': {'event_named_ratio': 0, 'proper_noun_character_ratio': 0, 'coreference_resolved_ratio': 0, 'causal_edge_count': 0, 'windows_covered': 0, 'current_output_fingerprint': 'fp-current'}}",
+                    "def substance_metrics(**kwargs):",
+                    "    return {'event_count': 0}",
+                    "def facet_root_map(**kwargs):",
+                    "    return {'same_root': 'same_root'}",
+                    "def capability_ladder(**kwargs):",
+                    "    return {'rungs': [{'selected_task_kind': 'bounded_extraction', 'rung': 'M0', 'actionable': True, 'satisfied': False}]}",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        registry = root / ".task" / "anti_loop" / "family_progress_registry.jsonl"
+        registry.parent.mkdir(parents=True, exist_ok=True)
+        rows = [
+            {
+                "cycle_id": f"cycle-old-{index}",
+                "family_key": "primary_output|same-root",
+                "artifact_family": "primary_output",
+                "root_family_key": "same_root",
+                "blocker_root_family": "same_root",
+                "cumulative_goal_distance_scope_key": "root_family:same_root",
+                "blocker_signature": "old_surface",
+                "coverage_quality_delta_gate": {"quality_delta_pass": False},
+                "substance_delta_gate": {"status": "block", "substance_delta_pass": False},
+                "semantic_progress": False,
+            }
+            for index in range(5)
+        ]
+        registry.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n", encoding="utf-8")
+        args = argparse.Namespace(
+            root=str(root),
+            cycle_id="cycle-new",
+            task_id="task-new",
+            artifact_family="primary_output",
+            semantic_signature="same_root",
+            root_key="same_root",
+            domain_adapter=str(adapter),
+            provider_request_count=0,
+            artifact_path=[],
+            artifact_paths_json=None,
+            gate_state_json=[],
+            recent_progress_json=None,
+            runner_validation_json=None,
+            output_delta_json=json.dumps({"changed_vs_previous": False, "semantic_progress": False}),
+            substance_metrics_json=None,
+            corrective_resolution_json=None,
+            facet_root_map_json=None,
+            acceptance_reachability_json=None,
+            metric_validity_json=None,
+            root_cause_hypotheses_json=None,
+            hypothesized_root_cause=None,
+            root_cause_repair_attempted=False,
+            root_cause_repair_task_id=None,
+            root_cause_actionable=False,
+            untried_promotion_budget=2,
+            measurement_check_id=[],
+            measurement_check_ids_json=None,
+            measurement_frontier=[],
+            measurement_streak_cap=1,
+            detection_only_streak_cap=2,
+            adapter_mandate_streak_cap=3,
+            cumulative_chain_streak_cap=3,
+            blocker_signature="new_surface",
+            blocker_rung=None,
+            max_forward_mutations=3,
+            consolidation_streak_cap=2,
+            registry_path=".task/anti_loop/family_progress_registry.jsonl",
+            root_cause_ledger_path=".task/anti_loop/root_cause_ledger.jsonl",
+            threshold=3,
+            epsilon=1e-9,
+            max_rows_per_family=200,
+            max_root_cause_rows_per_family=200,
+            write_registry=False,
+            output=None,
+        )
+
+        anti_loop_gate_provider._DOMAIN_ADAPTER_MODULE = None
+        packet, _, _ = anti_loop_gate_provider.evaluate(args)
+
+    assert packet["cumulative_goal_distance_stall_streak"] == 6
+    assert packet["blocker_mutation_kind"] == "facet_rename"
+    assert packet["chain_stall_forced_retarget_gate"]["chain_stall_force_retarget"] is True
+    assert packet["recommended_disposition"] == "goal_productive"
+    assert packet["forced_selected_task"]["selected_task_kind"] == "bounded_extraction"
+    assert "bounded_extraction" in packet["disposition_intersection_basis"]["chain_stall_forced_retarget_gate"]["allowed_task_kinds"]
+    assert "goal_productive" in packet["effective_allowed_dispositions"]
 
 
 def test_repo_owned_source_provenance_rejects_nonactionable_self_report() -> None:
@@ -588,14 +834,47 @@ def test_supplied_input_delta_prevents_terminal_escalation() -> None:
     assert gate["forced_disposition"] is None
 
 
+def test_result_contract_blocks_label_only_goal_productive_task_kind() -> None:
+    result = result_contract.validate(
+        "derive",
+        {
+            "completed_task_id": "task-old",
+            "selected_task_source": "standalone",
+            "next_task_id": "task-new",
+            "loop_breaker_disposition": "goal_productive",
+            "progress_kind": "goal_productive",
+            "semantic_signature": "same-root",
+            "selected_task_kind": "facet_rename",
+            "effective_allowed_dispositions": ["goal_productive", "terminal_blocked", "user_escalation"],
+            "disposition_intersection_basis": {
+                "adapter_mandate_gate": {
+                    "allowed_dispositions": ["goal_productive", "terminal_blocked", "user_escalation"],
+                    "allowed_task_kinds": ["adapter_registration", "adapter_wiring_fix"],
+                    "constrains_disposition": True,
+                }
+            },
+            "evidence_paths": ["derive.json"],
+        },
+        "block",
+    )
+
+    assert any(
+        finding.get("code") == "goal_productive_task_kind_not_allowed"
+        for finding in result["findings"]
+    )
+
+
 def main() -> int:
     test_terminal_outcome_family_fallback_groups_mutating_blockers()
     test_adapter_mandate_blocks_missing_adapter_stall_chain()
+    test_registered_adapter_load_failure_routes_wiring_defect()
     test_cumulative_chain_overrides_untried_veto_after_quality_stall()
+    test_chain_stall_forces_actionable_ladder_task_kind()
     test_repo_owned_source_provenance_rejects_nonactionable_self_report()
     test_reachability_and_metric_validity_gates_are_conservative()
     test_terminal_recheck_escalates_to_user_input()
     test_supplied_input_delta_prevents_terminal_escalation()
+    test_result_contract_blocks_label_only_goal_productive_task_kind()
     print("loopback guard contract tests passed")
     return 0
 

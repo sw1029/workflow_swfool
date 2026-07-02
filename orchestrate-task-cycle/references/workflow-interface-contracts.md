@@ -34,11 +34,12 @@ Use these ownership rules:
 | --- | --- | --- | --- |
 | Authority policy | `$manage-agent-authority` | Governance, derive, validation, report | Policy source, effective permissions, external/API posture, strictness, escalation posture. |
 | Active advice packet | `$manage-external-advice` or orchestrator context | Governance, validation-set, review, derive, validation, report, commit | Advice ID/path, summary, actionable directives, application gates, raw-direct-reference requirement, disposition or explicit non-use rationale. |
-| Repo adapter packet | Orchestrator scan or `scripts/render_adapter_packet.py` | Validation-set, governance, run, review, loopback, schema, derive, validation | Adapter ID/path/status, consumed phase packet, loaded references, non-GT/authority limits, validation status. |
+| Acceptance packet | `$normalize-acceptance-and-demo` | Governance, validation-scope, run planning, loopback, derive, validation | Acceptance criteria, non-goals, demo surfaces, validation commands, forbidden shortcuts, and optional `acceptance_envelope_contract` from adapter `min_envelope_for`. |
+| Repo adapter packet | Orchestrator scan or `scripts/render_adapter_packet.py` | Validation-set, governance, run, review, loopback, schema, derive, validation | Adapter ID/path/status, consumed phase packet, loaded references, optional `code_convention_contract`, non-GT/authority limits, validation status. |
 | Validation-set packet | `$build-validation-set-with-agents` | Governance, schema, derive, index, validation, report | Need/status, quality tier, `not_gold`, item/label/oracle counts, source-class distribution, oracle/split/leakage/root paths, blocked/candidate-only reasons. |
 | Governance result | `$task-md-agent-governance` | Result contract, ledger, code audit, run, schema, validation | Task ID, changed files, task_miss, used GT/advice, implementation summary, validation profile, blockers. |
-| Code-structure audit packet | `scripts/code_structure_audit.py` | Run, derive, validation, issue, report | Scanned changed files, oversize files, responsibility clusters, moduleization requirement, split plan, exemptions, evidence paths. |
-| Run result | `$run-task-code-and-log` | Review, loopback, validation-set, schema, derive, index, validation, issue, report | Status, command, exit code, output/artifact paths, running metadata, log path, shortcomings, `failure_autopsy`, `gate_satisfiability`, and scalar `gate_selfcheck` when a pre-execution gate artifact exists. |
+| Code-structure audit packet | `scripts/code_structure_audit.py` | Run, derive, validation, issue, report | Scanned changed files, oversize files, responsibility clusters, semantic structure metrics/findings, convention conformance, moduleization requirement, split plan, semantic-refactor plan, exemptions, evidence paths. |
+| Run result | `$run-task-code-and-log` | Review, loopback, validation-set, schema, derive, index, validation, issue, report | Status, command, exit code, output/artifact paths, running metadata, log path, shortcomings, `failure_autopsy`, `gate_satisfiability`, scalar `gate_selfcheck`, and any producer progress labels only as `observed_producer_claim`. |
 | Qualitative review packet | `$review-cycle-output-quality` | Loopback, validation-set, schema, derive, validation, report | `review_agent_count`, reviewed artifacts, quality verdict, findings, progress cap, output-delta fields, no-overclaim flags, evidence paths. |
 | Anti-loop progress gate | `$audit-cycle-loopback` | Derive, validation, dashboard, report | Family/root keys, semantic signature, progress booleans, terminal outcome fields, quality vector, effective dispositions, hard-stop state, findings, evidence paths. |
 | Loop-breaker packet | `scripts/detect_progress_loop.py` plus orchestrator synthesis | Derive, task-pack, validation, report | Blocker/root/semantic signatures, root-axis counts, terminal quiescence/escalation gates, supplied-input delta, provider retry, command surface, sealed family, zero-candidate state. |
@@ -104,12 +105,13 @@ Consumers must preserve:
 - family keys: `family_key`, `root_key`, `root_family_key`, `blocker_root_family`
 - progress fields: `changed_vs_previous`, `semantic_progress`, `authoritative_semantic_progress`, `terminal_outcome_changed`
 - terminal outcome fields: `terminal_outcome_key`, `terminal_outcome_family_key`
-- constraint fields: `effective_allowed_dispositions`, `disposition_intersection_basis`, `hard_stop_required`, `evidence_class`
+- constraint fields: `effective_allowed_dispositions`, `disposition_intersection_basis` including optional `allowed_task_kinds`, `hard_stop_required`, `evidence_class`
 - root-cause fields: `repo_owned_source_roots_status`, `root_cause_unverified_hypotheses`, `root_cause_duplicate_hypotheses`, `untried_actionable_root_cause_exists`, `untried_root_cause_hypotheses`, `hypothesis_exhausted`, and provenance-hardened ledger entries
-- adapter/chain fields: `adapter_mandate_required`, `adapter_contract_unmet`, `adapter_missing_streak`, `cumulative_goal_distance_stalled`, `cumulative_goal_distance_stall_streak`, `untried_veto_overridden_by_chain_stall`
-- reachability/metric fields: `acceptance_unreachable_under_frozen_config`, `relaxation_or_escalation_required`, `oracle_metric_validity_gate`
+- adapter/chain fields: `adapter_mandate_required`, `adapter_contract_unmet`, `adapter_missing_streak`, `adapter_loaded`, `adapter_registered`, `adapter_wiring_defect`, `adapter_wiring_gate`, `cumulative_goal_distance_stalled`, `cumulative_goal_distance_stall_streak`, `chain_stall_forced_retarget_gate`, `forced_selected_task`, `forced_selected_task_options`, `untried_veto_overridden_by_chain_stall`
+- reachability/metric fields: `acceptance_envelope_contract`, `envelope_below_floor`, `acceptance_unreachable_under_frozen_config`, `relaxation_or_escalation_required`, `oracle_metric_validity_gate`, `primary_metric_gate`, `primary_metric_stalled`, `primary_metric_zero_movement_streak`, and `c4_user_escalation_backstop_required`
+- truth-source fields: `producer_progress_claim_fields`, `observed_producer_claim`, and `split_brain_progress_claim`
 - warn-only fields: `partial_progress_axes_gate` and `advice_freshness_gate.gate_result_regression_stale`
-- mutation fields: `blocker_mutation_kind`, `forward_mutation_vacuous`, `forward_mutation_budget_remaining`, `force_implementation_cycle`
+- mutation fields: `blocker_mutation_kind`, `root_dominant_parameter_key`, `forward_mutation_vacuous`, `forward_mutation_budget_remaining`, `force_implementation_cycle`
 - evidence: findings and `evidence_paths`
 
 ### Acceptance Provenance
@@ -128,9 +130,23 @@ Generic fields:
 
 Consumers must not mark a measurable item consumed, applied, or complete when `acceptance_diluted=true`. A narrowed item may be useful progress, but it remains `partial` unless the original target is met or the residual target stays open under an explicit descope decision.
 
+### Acceptance Envelope
+
+When normalized acceptance has a measurable target and a domain adapter exposes `min_envelope_for(target)`, the acceptance packet should carry `acceptance_envelope_contract` with abstract `envelope_floor`, `deficit_axis`, comparison status, and evidence paths. Project-specific metrics, capacities, model limits, paths, and thresholds remain in the adapter or project-owned contracts.
+
+If `envelope_below_floor=true`, consumers must treat the selected or executed slice as acceptance-incomplete. They may select envelope expansion, explicit descope with residual scope, or user escalation; they must not lower the target silently or reclassify the planned failure as a new prompt/tool/schema blocker. If the adapter hook is absent, fail quiet and keep existing acceptance rules.
+
+### Progress Truth-Source Seal
+
+Producer artifacts and run logs may contain progress fields such as `progress_kind`, `effective_progress_kind`, `progress_verdict`, `goal_productive`, or `produced_domain_delta`. `$run-task-code-and-log` must store these under `observed_producer_claim` using adapter `producer_progress_claim_fields()` when available. Downstream loopback, derive, and validation must not read those claims as authoritative progress.
+
+Authoritative progress must come from adapter-recomputed quality/substance/structure evidence, strict output-delta fields, or validation gates. If producer self-report conflicts with recomputed evidence, set `split_brain_progress_claim` and use the conservative recomputed verdict.
+
 ### Refactor And Behavior-Change Evidence
 
-When a behavior-preserving refactor or consolidation claims structural reduction, `$audit-cycle-loopback` may pass adapter-supplied `structure_metrics_gate.structure_high_water_moved`, `improved_structure_axes`, and `refactor_effect_required`. `$validate-task-completion` must not complete a structural-reduction task from module creation and green tests alone when that gate says high-water did not move.
+When a behavior-preserving refactor or consolidation claims structural reduction, `$audit-cycle-loopback` may pass adapter-supplied `structure_metrics_gate.structure_high_water_moved`, `improved_structure_axes`, `refactor_effect_required`, and semantic metrics such as shard count, coupling signal count, duplicate definition count, depth, fan-out, reuse ratio, and max LOC. `$validate-task-completion` must not complete a structural-reduction task from module creation, file-count growth, relocated helpers, token/pattern avoidance, producer self-reports, or green tests alone when that gate says high-water did not move.
+
+When `disposition_intersection_basis` includes `allowed_task_kinds`, `$derive-improvement-task` must emit `selected_task_kind` and choose one of those kinds for `goal_productive`. Label-only `goal_productive` is a contract failure. When `forced_selected_task` is present, the selected task kind must match it unless the result is terminal/user escalation with evidence that the forced option became unactionable.
 
 When a task changes runtime gate, routing, validator, dispatch, or judgment behavior, `$validate-task-completion` must require fresh live before/after evidence, or record an explicit defer gate that leaves follow-up work open. Unit/static evidence alone does not complete behavior-change work whose purpose is to change live outcomes.
 
@@ -146,7 +162,7 @@ When terminal blocking is selected, use the `terminal_blocker` shape in [task-pa
 
 Repo adapter packet details are owned by [repo-local-skill-adapters.md](repo-local-skill-adapters.md). The orchestrator passes adapter packets as non-GT capability evidence only.
 
-`repo_skill_gap_packet` should include repeated domain lookup, repeated command/profile discovery, validation/oracle/source-class ambiguity, progress-classification uncertainty, adapter validation failures, task_miss caused by missing repo-specific procedure, recommended adapter name/scope/resources, and defer/reject rationale when not selected.
+`repo_skill_gap_packet` should include repeated domain lookup, repeated command/profile discovery, validation/oracle/source-class ambiguity, progress-classification uncertainty, missing or stale `code_convention_contract`, adapter validation failures, task_miss caused by missing repo-specific procedure, recommended adapter name/scope/resources, and defer/reject rationale when not selected.
 
 ## Helper Script Surfaces
 
@@ -159,7 +175,7 @@ Helper scripts provide decision-support evidence. They do not replace owning ski
 | `render_subskill_packet.py` | `--target <phase>`, context/stage evidence | Markdown or JSON packet with routing, required inputs/outputs, GT/advice separation | Every owning subskill |
 | `validate_cycle_transition.py` | `--transition <name>`, context/status evidence | Transition `pass|warn|block` findings | Orchestrator before major phases |
 | `result_contract.py` | `--target <target>`, `--mode warn|block`, result JSON | Contract findings and ledger-envelope readiness | Orchestrator before advancing stages |
-| `code_structure_audit.py` | `--root`, changed-file list or input JSON | Scalar audit packet; no source bodies; no patches | Run, derive, validation, report |
+| `code_structure_audit.py` | `--root`, changed-file list or input JSON, optional `--convention-json` | Scalar audit packet with size, responsibility, semantic structure, and convention-conformance fields; no source bodies; no patches | Run, derive, validation, report |
 | `detect_gt_constraint_conflict.py` | `--root`, task/GT/behavior evidence | GT/task conflict packet | Derive |
 | `detect_progress_loop.py` | `--root`, optional registry writes | Loop-breaker packet, feature-symbol gate, terminal gates, sealed-family evidence | Derive, task-pack, validation, report |
 | `output_delta_contract.py` | `--root`, output paths/contracts when present | Output-delta packet or not-applicable reason | Review, loopback, derive, validation |
@@ -174,9 +190,11 @@ Helper scripts provide decision-support evidence. They do not replace owning ski
 
 - Treat missing or malformed packet evidence as `conservative_hold`, `not_applicable`, `partial`, or `blocked`; never silently upgrade it to success.
 - Enforce `effective_allowed_dispositions` as an intersection already computed by gates. Do not union individual gate dispositions.
+- Enforce gate-constrained `allowed_task_kinds` inside `disposition_intersection_basis`; do not accept unrelated tasks merely because their disposition label is `goal_productive`.
+- Treat `adapter_wiring_defect=true` as a self-inflicted workflow wiring/load bug. Do not downgrade it to adapter absence, adapter mandate, environment failure, or terminal blocker without a wiring/load correction attempt or user escalation.
 - Treat self-reported `produced_domain_delta`, non-empty rows, lineage, gap reports, renamed commands, or metric existence as insufficient for goal-productive progress without strict changed-and-semantic output evidence or independent validated positive evidence.
 - Treat `acceptance_diluted=true` as incompatible with final completion. Preserve residual measurable scope instead of consuming the original directive.
-- Treat behavior-preserving refactor completion claims as partial when adapter-supplied structure high-water is flat and the original objective was structural reduction.
+- Treat behavior-preserving refactor completion claims as partial when adapter-supplied structure high-water is flat and the original objective was structural reduction. Additional files, numbered shards, version-suffix modules, relocated helpers, token/pattern avoidance, or producer-local reports are not structural progress by themselves.
 - Treat runtime behavior-change completion claims as partial when fresh live before/after evidence is required but absent.
 - Keep `available_goal_truth` separate from `used_goal_truth`; final `기준 GT` may list only actually used GT.
 - Keep `.agent_advice` out of GT and authority. Active advice in scope requires `used_advice` or an explicit defer/reject/not-applicable rationale.

@@ -16,6 +16,7 @@ Capture:
 - Produced artifacts, changed files, generated reports, or missing expected outputs.
 - Validation performed after execution.
 - Fail-closed gate prechecks and pre-execution gate self-checks when present, using scalar fields only.
+- Producer self-reported progress or completion fields only as `observed_producer_claim`, never as authoritative progress evidence.
 
 ## Log Field Mapping
 
@@ -40,12 +41,14 @@ Capture:
 - Artifacts produced or expected artifacts missing.
 - Validation outcome.
 - `failure_autopsy.classification`, `failure_autopsy.alternative_evidence_source`, and `failure_autopsy.gate_selfcheck` when a failure was autopsied.
+- `observed_producer_claim` and scalar `split_brain_progress_claim` warning details when a producer self-report conflicts with adapter or strict output-delta evidence supplied by the caller.
 
 `shortcomings`:
 
 - Missing code, missing inputs, ambiguous instructions, unsafe assumptions, command failure, timeout, skipped validation, unavailable dependencies, or unverified output.
 - For `running` status: final completion and final validation still pending.
 - Sensitive details omitted from the log.
+- Producer progress labels were downgraded when present, and no close/progress verdict was inferred from them.
 
 ## Status Rules
 
@@ -64,6 +67,10 @@ For fail-closed or pre-execution gates, record only scalar-safe routing evidence
 - `gate_selfcheck`: `gate_id`, `blocked_pre_exec`, `repo_owned_pre_exec_blocker`, `contradicting_evidence`, `trusted_evidence_source`, `prior_pass_observed`, `status`, and `classification`.
 - `classification: self_inflicted_gate_defect` only when repository-owned pre-execution blocker provenance is confirmed and the gate artifact has contradiction evidence, a trusted alternative evidence source, or a prior pass.
 - `status: warn_missing_repo_owned_confirmation` when contradiction evidence exists but repository-owned confirmation is absent.
+
+## Producer Progress Claim Fields
+
+When available, use adapter `producer_progress_claim_fields()` to identify producer-owned progress labels. If it is absent, treat conventional fields such as `progress_kind`, `effective_progress_kind`, `progress_verdict`, `goal_productive`, and `produced_domain_delta` as claims. Store the captured values under `observed_producer_claim`. Authoritative progress remains owned by adapter recomputation, loopback, output-delta, and completion validation.
 
 ## Redaction Rules
 
