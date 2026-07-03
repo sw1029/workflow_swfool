@@ -178,6 +178,12 @@ def analyze(root: Path, events: list[dict[str, Any]], index_records: list[dict[s
     progress_kinds = [str(first_present(event, ("effective_progress_kind", "progress_kind"))).lower() for event in events if first_present(event, ("effective_progress_kind", "progress_kind"))]
     blockers = [str(item) for event in events for item in (event.get("blockers") or [])]
     artifacts = [str(item) for event in events for item in (event.get("artifacts") or [])]
+    unchanged_refs = [
+        ref
+        for event in events
+        for ref in (event.get("unchanged_refs") or [])
+        if isinstance(ref, dict)
+    ]
     validation_profiles = [str(event.get("validation_profile")).lower() for event in events if event.get("validation_profile")]
     blocker_signatures = [str(event.get("blocker_signature")).lower() for event in events if event.get("blocker_signature")]
     validation_set_events = [event for event in events if str(event.get("step") or "") == "validation_set_build"]
@@ -230,6 +236,15 @@ def analyze(root: Path, events: list[dict[str, Any]], index_records: list[dict[s
         findings.append({"severity": "warn", "code": "repeated_blocker_signature", "message": "A normalized blocker signature appears multiple times.", "evidence": repeated_signatures[:5]})
     if duplicate_artifacts:
         findings.append({"severity": "warn", "code": "duplicate_artifact_paths", "message": "Artifact paths repeat across events.", "evidence": duplicate_artifacts[:5]})
+    if duplicate_artifacts and not unchanged_refs:
+        findings.append(
+            {
+                "severity": "warn",
+                "code": "unchanged_ref_missing_for_duplicate_artifacts",
+                "message": "Repeated artifact payloads should use unchanged_ref(path+hash) instead of reserializing identical packet content.",
+                "evidence": duplicate_artifacts[:5],
+            }
+        )
     if full_chain_without_reason:
         findings.append({"severity": "warn", "code": "full_chain_without_escalation_reason", "message": "Full-chain validation was recorded without escalation reason.", "count": len(full_chain_without_reason)})
     if vacuous_untried_streak:
@@ -273,6 +288,7 @@ def analyze(root: Path, events: list[dict[str, Any]], index_records: list[dict[s
         findings.append({"severity": "info", "code": "base_commit_present", "message": "Pre-commit hashes should stay classified as base/pre_commit evidence until $repo-change-commit returns a final commit."})
     surface_budget = command_surface_budget(root, len(metadata_only_events))
     sprawl_budget = artifact_sprawl_budget(root)
+    cycle_fixed_cost = max(1, len(events) - len(unchanged_refs))
     if surface_budget["consolidation_candidate_required"]:
         findings.append(
             {
@@ -318,6 +334,13 @@ def analyze(root: Path, events: list[dict[str, Any]], index_records: list[dict[s
         "progress_counts": dict(Counter(progress_values)),
         "progress_kind_counts": dict(Counter(progress_kinds)),
         "metadata_only_count": len(metadata_only_events),
+        "unchanged_ref_count": len(unchanged_refs),
+        "cycle_fixed_cost": cycle_fixed_cost,
+        "cycle_cost_basis": {
+            "event_count": len(events),
+            "unchanged_ref_count": len(unchanged_refs),
+            "denominator": "max(1, event_count - unchanged_ref_count)",
+        },
         "vacuous_untried_streak": vacuous_untried_streak,
         "hypothesis_exhausted": hypothesis_exhausted,
         "forward_mutation_vacuous_count": forward_mutation_vacuous_count,

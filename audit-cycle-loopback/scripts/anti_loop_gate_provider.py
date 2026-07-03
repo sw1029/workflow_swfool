@@ -32,6 +32,8 @@ DETECTION_ONLY_STREAK_CAP_DEFAULT = 2
 UNTRIED_PROMOTION_BUDGET_DEFAULT = 2
 ADAPTER_MANDATE_STREAK_CAP_DEFAULT = 3
 CUMULATIVE_CHAIN_STREAK_CAP_DEFAULT = 3
+INSTRUMENTATION_TRIGGER_THRESHOLD_DEFAULT = 2
+ENVELOPE_THAW_STREAK_CAP_DEFAULT = 2
 ROOT_CAUSE_LEDGER_MAX_ROWS_PER_FAMILY_DEFAULT = 200
 ROOT_STEERING_DOC_NAMES = {"task_advice.md", "skill_advice.md", "task_doctor_steering.md"}
 QUALITY_DELTA_KEYS = (
@@ -72,6 +74,8 @@ IDEMPOTENT_REPLAY_KEYS = (
     "advice_freshness_gate",
     "partial_progress_axes_gate",
     "structure_metrics_gate",
+    "structure_high_water_key_scope",
+    "structure_global_invariant_metrics",
     "previous_accepted_baseline",
     "provider_scale_dispatch_gate",
     "measurement_goal_productive_allowed",
@@ -105,8 +109,14 @@ IDEMPOTENT_REPLAY_KEYS = (
     "untried_veto_overridden_by_chain_stall",
     "acceptance_reachability_gate",
     "acceptance_unreachable_under_frozen_config",
+    "acceptance_verifier_not_evaluated",
+    "unverifiable_acceptance_contract",
     "relaxation_or_escalation_required",
+    "residual_gap_policy",
+    "residual_gap_ratio",
+    "marginal_repair",
     "oracle_metric_validity_gate",
+    "metric_verifier_not_evaluated",
     "adapter_wiring_gate",
     "adapter_wiring_defect",
     "adapter_loaded",
@@ -131,6 +141,38 @@ IDEMPOTENT_REPLAY_KEYS = (
     "detection_only_streak_cap",
     "requires_correction_or_terminal",
     "validator_integrity_gate",
+    "evidence_provenance_gate",
+    "producer_attested_fields",
+    "independently_verified_fields",
+    "attested_only_movement",
+    "primary_metric_gate",
+    "primary_metric_high_water_moved",
+    "primary_metric_zero_movement_streak",
+    "primary_metric_stalled",
+    "c4_user_escalation_backstop_required",
+    "failure_surface_stage_gate",
+    "execution_stage_ladder_status",
+    "last_successful_stage",
+    "failure_surface_stage",
+    "failure_surface_count_key",
+    "terminal_classification_stage_contradiction",
+    "terminal_classification_invalid_for_counting",
+    "same_input_contract_gate",
+    "same_input_contract_violation",
+    "diagnostics_unavailable",
+    "diagnostics_unavailable_streak",
+    "diagnostics_unavailable_gate",
+    "instrumentation_supply_required",
+    "verification_source_separation_gate",
+    "independent_source_separation_status",
+    "independently_verified_downgraded_fields",
+    "envelope_thaw_item_required",
+    "envelope_thaw_item",
+    "envelope_thaw_streak",
+    "root_dominant_parameter_key",
+    "coupled_verifier_gate",
+    "pass_with_coupled_verifier",
+    "changed_verifier_source_paths",
     "effective_allowed_dispositions",
     "disposition_intersection_basis",
     "consolidation_streak",
@@ -781,6 +823,500 @@ def load_json_value(root: Path, raw: str | None) -> Any:
         return None
 
 
+def load_json_values(root: Path, raws: list[str] | None) -> list[Any]:
+    values: list[Any] = []
+    for raw in raws or []:
+        loaded = load_json_value(root, raw)
+        if loaded is not None:
+            values.append(loaded)
+    return values
+
+
+def iter_dicts(value: Any, *, depth: int = 0) -> list[dict[str, Any]]:
+    if depth > 6:
+        return []
+    items: list[dict[str, Any]] = []
+    if isinstance(value, dict):
+        items.append(value)
+        for child in value.values():
+            items.extend(iter_dicts(child, depth=depth + 1))
+    elif isinstance(value, list):
+        for child in value:
+            items.extend(iter_dicts(child, depth=depth + 1))
+    return items
+
+
+def first_field_value(values: list[Any], keys: set[str]) -> Any:
+    normalized_keys = {normalize_root_family_key(key) for key in keys}
+    for value in values:
+        for item in iter_dicts(value):
+            for key, child in item.items():
+                if normalize_root_family_key(key) in normalized_keys and child not in (None, "", []):
+                    return child
+    return None
+
+
+def normalize_stage_name(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip().lower().replace(" ", "_").replace("-", "_")
+    return text or None
+
+
+def normalize_execution_stage_ladder(value: Any) -> tuple[list[str], dict[str, set[str]], bool]:
+    if value is None:
+        return [], {}, False
+    source = value
+    classification_map_value: Any = None
+    if isinstance(value, dict):
+        classification_map_value = (
+            value.get("terminal_classification_stage_map")
+            or value.get("classification_stage_map")
+            or value.get("terminal_stage_map")
+        )
+        for key in ("execution_stage_ladder", "stage_ladder", "stages", "ladder"):
+            if key in value:
+                source = value.get(key)
+                break
+    stages: list[str] = []
+    if isinstance(source, list):
+        for item in source:
+            stage = item.get("name") if isinstance(item, dict) else item
+            normalized = normalize_stage_name(stage)
+            if normalized and normalized not in stages:
+                stages.append(normalized)
+    elif isinstance(source, dict):
+        raw_stages = source.get("stages") or source.get("execution_stage_ladder") or source.get("stage_ladder")
+        if isinstance(raw_stages, list):
+            stages, _, _ = normalize_execution_stage_ladder(raw_stages)
+        else:
+            for key in source:
+                if key in {"terminal_classification_stage_map", "classification_stage_map", "terminal_stage_map"}:
+                    continue
+                normalized = normalize_stage_name(key)
+                if normalized and normalized not in stages:
+                    stages.append(normalized)
+    elif isinstance(source, str):
+        for item in re.split(r"[,>\s]+", source):
+            normalized = normalize_stage_name(item)
+            if normalized and normalized not in stages:
+                stages.append(normalized)
+    return stages, normalize_classification_stage_map(classification_map_value), bool(stages)
+
+
+def normalize_classification_stage_map(value: Any) -> dict[str, set[str]]:
+    mapping: dict[str, set[str]] = {}
+    if value is None:
+        return mapping
+
+    def add(classification: Any, stages: Any) -> None:
+        key = normalize_root_family_key(classification)
+        if not key:
+            return
+        stage_values = string_list(stages)
+        if isinstance(stages, dict):
+            for child_key in ("stages", "failure_stages", "allowed_failure_stages", "stage"):
+                stage_values.extend(string_list(stages.get(child_key)))
+        normalized_stages = {stage for item in stage_values if (stage := normalize_stage_name(item))}
+        if normalized_stages:
+            mapping.setdefault(key, set()).update(normalized_stages)
+
+    if isinstance(value, dict):
+        for classification, stages in value.items():
+            add(classification, stages)
+    elif isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict):
+                add(
+                    item.get("classification") or item.get("terminal_classification") or item.get("name"),
+                    item.get("stages") or item.get("failure_stages") or item.get("stage"),
+                )
+    return mapping
+
+
+def next_failure_surface_stage(stages: list[str], last_successful_stage: str | None) -> str | None:
+    if not stages or not last_successful_stage or last_successful_stage not in stages:
+        return None
+    index = stages.index(last_successful_stage)
+    return stages[index + 1] if index + 1 < len(stages) else None
+
+
+LAST_STAGE_KEYS = {"last_successful_stage", "last_completed_stage", "last_stage_reached"}
+FAILURE_STAGE_KEYS = {"failure_surface_stage", "failed_stage", "failure_stage"}
+TERMINAL_CLASSIFICATION_KEYS = {
+    "terminal_classification",
+    "terminal_outcome_classification",
+    "classification",
+    "failure_class",
+    "recommended_disposition",
+}
+
+
+def terminal_stage_resolution_gate(
+    *,
+    ladder_value: Any,
+    classification_map_value: Any,
+    contexts: list[Any],
+    root_family_key: str,
+    dominant_parameter: str,
+) -> dict[str, Any]:
+    stages, embedded_map, ladder_provided = normalize_execution_stage_ladder(ladder_value)
+    explicit_map = normalize_classification_stage_map(classification_map_value)
+    classification_map = {**embedded_map, **explicit_map}
+    last_stage = normalize_stage_name(first_field_value(contexts, LAST_STAGE_KEYS))
+    failure_stage = normalize_stage_name(first_field_value(contexts, FAILURE_STAGE_KEYS)) or next_failure_surface_stage(stages, last_stage)
+    terminal_classification = first_field_value(contexts, TERMINAL_CLASSIFICATION_KEYS)
+    terminal_key = normalize_root_family_key(terminal_classification) if terminal_classification is not None else None
+    mapped_stages = classification_map.get(terminal_key or "")
+    contradiction = bool(failure_stage and mapped_stages and failure_stage not in mapped_stages)
+    failure_surface_count_key = normalize_root_family_key(root_family_key, dominant_parameter, failure_stage) if failure_stage else None
+    return {
+        "gate": "H2-FAILURE-SURFACE-STAGE",
+        "execution_stage_ladder_status": "provided" if ladder_provided else "not_provided",
+        "execution_stage_ladder": stages,
+        "terminal_classification_stage_map_status": "provided" if classification_map else "not_provided",
+        "last_successful_stage": last_stage,
+        "failure_surface_stage": failure_stage,
+        "failure_surface_count_key": failure_surface_count_key,
+        "terminal_classification": terminal_classification,
+        "terminal_classification_key": terminal_key,
+        "terminal_classification_allowed_stages": sorted(mapped_stages or []),
+        "terminal_classification_stage_contradiction": contradiction,
+        "terminal_classification_invalid_for_counting": contradiction,
+        "root_dominant_parameter_key": dominant_parameter,
+        "status": "block" if contradiction else ("pass" if failure_stage else "not_evaluated"),
+        "constrains_disposition": contradiction,
+        "allowed_dispositions": ["goal_productive", "terminal_blocked", "user_escalation"],
+        "allowed_task_kinds": ["terminal_classification_stage_repair", "instrumentation_supply"],
+    }
+
+
+def same_input_contract_gate(contexts: list[Any]) -> dict[str, Any]:
+    for value in contexts:
+        for item in iter_dicts(value):
+            match_value = (
+                item.get("same_input_set_match")
+                if "same_input_set_match" in item
+                else item.get("same_window_window_count_match")
+                if "same_window_window_count_match" in item
+                else item.get("same_condition_input_set_match")
+            )
+            expected = (
+                item.get("expected_input_set_size")
+                or item.get("expected_window_count")
+                or item.get("baseline_window_count")
+                or item.get("target_input_set_size")
+            )
+            actual = (
+                item.get("actual_input_set_size")
+                or item.get("runtime_input_set_size")
+                or item.get("runtime_window_count")
+                or item.get("actual_window_count")
+            )
+            declared = bool_value(
+                item.get("same_input_set_contract")
+                or item.get("same_condition_contract")
+                or item.get("same_window_contract")
+            ) or match_value is not None or (expected is not None and actual is not None)
+            if not declared:
+                continue
+            mismatch = (match_value is not None and not bool_value(match_value))
+            if expected is not None and actual is not None:
+                mismatch = mismatch or str(expected) != str(actual)
+            return {
+                "gate": "H2-SAME-INPUT-CONTRACT",
+                "same_input_contract_declared": True,
+                "expected_input_set_size": expected,
+                "actual_input_set_size": actual,
+                "same_input_set_match": not mismatch,
+                "same_input_contract_violation": mismatch,
+                "status": "block" if mismatch else "pass",
+                "constrains_disposition": mismatch,
+                "allowed_dispositions": ["goal_productive", "terminal_blocked", "user_escalation"],
+                "allowed_task_kinds": ["input_set_contract_repair", "instrumentation_supply"],
+            }
+    return {
+        "gate": "H2-SAME-INPUT-CONTRACT",
+        "same_input_contract_declared": False,
+        "same_input_contract_violation": False,
+        "status": "not_evaluated",
+        "constrains_disposition": False,
+    }
+
+
+def diagnostics_unavailable_gate(
+    *,
+    registry_rows: list[dict[str, Any]],
+    failure_surface_count_key: str | None,
+    contexts: list[Any],
+    threshold: int,
+) -> dict[str, Any]:
+    diagnostics_unavailable = any(bool_value(first_field_value([context], {"diagnostics_unavailable"})) for context in contexts)
+    streak = 1 if diagnostics_unavailable else 0
+    if diagnostics_unavailable and failure_surface_count_key:
+        for row in reversed(registry_rows):
+            if row.get("failure_surface_count_key") != failure_surface_count_key:
+                continue
+            if bool_value(row.get("diagnostics_unavailable")):
+                streak += 1
+                continue
+            break
+    required = diagnostics_unavailable and streak >= max(1, threshold)
+    return {
+        "gate": "H3-DIAGNOSTICS-UNAVAILABLE",
+        "diagnostics_unavailable": diagnostics_unavailable,
+        "diagnostics_unavailable_streak": streak,
+        "instrumentation_trigger_threshold": max(1, threshold),
+        "instrumentation_supply_required": required,
+        "status": "block" if required else ("warn" if diagnostics_unavailable else "not_applicable"),
+        "constrains_disposition": required,
+        "allowed_dispositions": ["goal_productive", "terminal_blocked", "user_escalation"],
+        "allowed_task_kinds": ["instrumentation_supply", "execution_diagnostics_supply"],
+    }
+
+
+def evidence_source_metadata(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    source = value.get("evidence_provenance_gate") if isinstance(value.get("evidence_provenance_gate"), dict) else value
+    return {
+        "verification_input_paths": string_list(
+            source.get("verification_input_paths")
+            or source.get("verification_inputs")
+            or source.get("input_paths")
+            or source.get("read_paths")
+        ),
+        "self_grounded_axes": {
+            normalize_gate_key(item)
+            for item in string_list(
+                source.get("self_grounded_axes")
+                or source.get("self_grounded_fields")
+                or source.get("self_grounded_metrics")
+            )
+        },
+        "disagreement_count": source.get("disagreement_count"),
+        "zero_disagreement_reported": (
+            source.get("disagreement_count") == 0
+            or bool_value(source.get("zero_disagreement_reported"))
+            or bool_value(source.get("no_disagreements"))
+        ),
+    }
+
+
+def verification_source_separation_gate(
+    *,
+    provenance_value: Any,
+    verified_artifact_paths: list[str],
+    independently_verified_fields: list[str],
+) -> dict[str, Any]:
+    metadata = evidence_source_metadata(provenance_value)
+    independent = sorted(set(independently_verified_fields))
+    self_grounded = set(metadata.get("self_grounded_axes") or set())
+    source_required_fields = [field for field in independent if normalize_gate_key(field) not in self_grounded]
+    input_paths = [path.replace("\\", "/").lstrip("./") for path in metadata.get("verification_input_paths") or []]
+    artifact_paths = [path.replace("\\", "/").lstrip("./") for path in verified_artifact_paths]
+    overlaps: list[str] = []
+    for input_path in input_paths:
+        for artifact_path in artifact_paths:
+            if input_path == artifact_path or path_matches_pattern(input_path, artifact_path) or path_matches_pattern(artifact_path, input_path):
+                overlaps.append(input_path)
+                break
+    missing = bool(source_required_fields and not input_paths)
+    overlap = bool(source_required_fields and overlaps)
+    pass_status = bool(independent) and not missing and not overlap
+    downgraded = source_required_fields if (missing or overlap) else []
+    status = "pass" if pass_status else ("not_evaluated" if not independent else "block")
+    return {
+        "gate": "H4-VERIFICATION-SOURCE-SEPARATION",
+        "verification_input_paths": input_paths,
+        "verified_artifact_paths": artifact_paths,
+        "self_grounded_axes": sorted(self_grounded),
+        "source_separation_required_fields": source_required_fields,
+        "verification_input_disjoint": bool(source_required_fields and input_paths and not overlaps),
+        "verification_input_overlap_paths": sorted(set(overlaps)),
+        "independent_source_separation_status": "missing" if missing else ("overlap" if overlap else ("pass" if pass_status else "not_evaluated")),
+        "independently_verified_downgraded_fields": downgraded,
+        "zero_disagreement_reported": bool_value(metadata.get("zero_disagreement_reported")),
+        "status": status,
+        "constrains_disposition": False,
+    }
+
+def load_changed_files(root: Path, changed_files_json: str | None, changed_files: list[str]) -> list[str]:
+    values: list[str] = list(changed_files or [])
+    loaded = load_json_value(root, changed_files_json)
+    if isinstance(loaded, list):
+        values.extend(str(item) for item in loaded if item is not None)
+    elif isinstance(loaded, dict):
+        for key in ("changed_files", "files", "paths", "changed_paths", "modified_files"):
+            raw = loaded.get(key)
+            if isinstance(raw, list):
+                for item in raw:
+                    if isinstance(item, dict) and item.get("path"):
+                        values.append(str(item["path"]))
+                    elif item is not None:
+                        values.append(str(item))
+    normalized: list[str] = []
+    for value in values:
+        text = clean_provenance_path_ref(str(value or ""))
+        if not text:
+            continue
+        path = Path(text)
+        if path.is_absolute():
+            try:
+                text = path.resolve().relative_to(root.resolve()).as_posix()
+            except (OSError, ValueError):
+                text = path.as_posix()
+        else:
+            text = text.replace("\\", "/").lstrip("./")
+        if text and text not in normalized:
+            normalized.append(text)
+    return normalized
+
+
+def path_matches_pattern(path: str, pattern: str) -> bool:
+    candidate = path.replace("\\", "/").lstrip("./")
+    raw = pattern.replace("\\", "/").strip().lstrip("./")
+    if not candidate or not raw:
+        return False
+    if raw.endswith("/"):
+        return candidate.startswith(raw)
+    return (
+        candidate == raw
+        or candidate.startswith(raw.rstrip("/") + "/")
+        or fnmatch.fnmatch(candidate, raw)
+        or fnmatch.fnmatch(candidate, raw.rstrip("/") + "/**")
+    )
+
+
+def normalize_gate_key(value: Any) -> str:
+    return normalize_root_family_key(str(value or "unknown_gate"))
+
+
+def normalize_verifier_source_paths(value: Any) -> tuple[dict[str, list[str]], bool]:
+    if value is None:
+        return {}, False
+    source = value
+    if isinstance(value, dict):
+        for key in ("verifier_source_paths", "gate_verifier_source_paths", "gate_sources", "sources"):
+            if key in value:
+                source = value.get(key)
+                break
+    mapping: dict[str, list[str]] = {}
+
+    def add(gate_id: Any, paths: Any) -> None:
+        key = normalize_gate_key(gate_id or "*")
+        values = string_list(paths)
+        if isinstance(paths, dict):
+            for child_key in ("paths", "source_paths", "verifier_paths", "files"):
+                values.extend(string_list(paths.get(child_key)))
+        if values:
+            bucket = mapping.setdefault(key, [])
+            for item in values:
+                if item not in bucket:
+                    bucket.append(item)
+
+    if isinstance(source, dict):
+        for gate_id, paths in source.items():
+            if gate_id in {"paths", "source_paths", "verifier_paths", "files"}:
+                add("*", paths)
+            else:
+                add(gate_id, paths)
+    elif isinstance(source, list):
+        for item in source:
+            if isinstance(item, dict):
+                gate_id = item.get("gate") or item.get("gate_id") or item.get("name") or item.get("id") or "*"
+                paths = item.get("paths") or item.get("source_paths") or item.get("verifier_paths") or item.get("files")
+                add(gate_id, paths)
+            elif isinstance(item, str):
+                add("*", item)
+    elif isinstance(source, str):
+        add("*", source)
+    return mapping, True
+
+
+def gate_evaluation_status(gate: dict[str, Any]) -> str | None:
+    for key in ("evaluation_status", "status", "verdict", "result"):
+        normalized = normalize_gate_evaluation_status(gate.get(key))
+        if normalized:
+            return normalized
+    return None
+
+
+def gate_is_passing(gate: dict[str, Any]) -> bool:
+    status = gate_evaluation_status(gate)
+    if status == "pass":
+        return True
+    if status in {"fail", "not_evaluated"}:
+        return False
+    return any(
+        bool_value(gate.get(key))
+        for key in (
+            "quality_delta_pass",
+            "substance_delta_pass",
+            "primary_metric_high_water_moved",
+            "structure_high_water_moved",
+        )
+    )
+
+
+def coupled_verifier_gate(
+    *,
+    changed_files: list[str],
+    verifier_source_map: dict[str, list[str]],
+    hook_provided: bool,
+    gates: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not hook_provided:
+        return {
+            "gate": "F1-VERIFIER-COUPLING",
+            "verifier_source_paths_status": "not_provided",
+            "changed_files_status": "not_provided" if not changed_files else "provided",
+            "pass_with_coupled_verifier": False,
+            "status": "not_evaluated",
+            "constrains_disposition": False,
+        }
+    affected: list[dict[str, Any]] = []
+    changed_source_paths: list[str] = []
+    for gate in gates:
+        gate_id = normalize_gate_key(gate.get("gate") or gate.get("name") or gate.get("id"))
+        patterns = list(verifier_source_map.get(gate_id) or []) + list(verifier_source_map.get("*") or [])
+        if not patterns:
+            continue
+        matched = [
+            changed
+            for changed in changed_files
+            if any(path_matches_pattern(changed, pattern) for pattern in patterns)
+        ]
+        if not matched:
+            continue
+        changed_source_paths.extend(matched)
+        if gate_is_passing(gate):
+            affected.append(
+                {
+                    "gate": gate.get("gate") or gate.get("name") or gate_id,
+                    "evaluation_status": gate_evaluation_status(gate) or "pass",
+                    "changed_source_paths": sorted(set(matched)),
+                    "verifier_source_paths": sorted(set(patterns)),
+                    "effective_result": "pass_with_coupled_verifier",
+                }
+            )
+    coupled = bool(affected)
+    return {
+        "gate": "F1-VERIFIER-COUPLING",
+        "verifier_source_paths_status": "provided",
+        "changed_files_status": "provided" if changed_files else "not_provided",
+        "changed_files": changed_files,
+        "changed_verifier_source_paths": sorted(set(changed_source_paths)),
+        "affected_passing_gates": affected,
+        "pass_with_coupled_verifier": coupled,
+        "status": "block" if coupled else "ok",
+        "hard_stop_required": coupled,
+        "constrains_disposition": coupled,
+        "allowed_dispositions": ["goal_productive", "terminal_blocked", "user_escalation"],
+        "allowed_task_kinds": ["verifier_revalidation", "independent_evidence_recalculation"],
+    }
+
+
 def first_scalar_by_key(value: Any, keys: set[str]) -> str | None:
     if isinstance(value, dict):
         for key, child in value.items():
@@ -874,8 +1410,19 @@ def latest_root_family_row(rows: list[dict[str, Any]], root_family_key: str) -> 
     return next((row for row in reversed(rows) if row_root_family(row) == root_family_key), None)
 
 
+def row_effective_count_key(row: dict[str, Any]) -> str:
+    return str(row.get("failure_surface_count_key") or row.get("effective_count_key") or row_root_family(row))
+
+
 def previous_micro_hardening_count(rows: list[dict[str, Any]], root_family_key: str) -> int:
     family_rows = [row for row in rows if row_root_family(row) == root_family_key]
+    if not family_rows:
+        return 0
+    return max(int_metric(row.get("same_family_micro_hardening_count") or row.get("micro_hardening_count") or 0) for row in family_rows)
+
+
+def previous_micro_hardening_count_for_count_key(rows: list[dict[str, Any]], count_key: str) -> int:
+    family_rows = [row for row in rows if row_effective_count_key(row) == count_key]
     if not family_rows:
         return 0
     return max(int_metric(row.get("same_family_micro_hardening_count") or row.get("micro_hardening_count") or 0) for row in family_rows)
@@ -1473,6 +2020,23 @@ def structure_metrics_gate(value: Any) -> dict[str, Any]:
         improved_axes = [improved_axes]
     if not isinstance(improved_axes, list):
         improved_axes = []
+    global_metric_source = (
+        source.get("global_invariants")
+        or source.get("global_invariant_metrics")
+        or metrics.get("global_invariants")
+        or metrics.get("global_invariant_metrics")
+        or {}
+    )
+    global_metrics = numeric_vector(global_metric_source)
+    for key, metric_value in numeric_vector(metrics).items():
+        if str(key).startswith("global_"):
+            global_metrics.setdefault(str(key), metric_value)
+    global_high_water_moved = bool_value(
+        source.get("global_structure_high_water_moved")
+        or source.get("global_invariant_high_water_moved")
+        or metrics.get("global_structure_high_water_moved")
+        or metrics.get("global_invariant_high_water_moved")
+    )
     refactor_effect_required = bool_value(
         source.get("refactor_effect_required")
         or source.get("behavior_preserving_refactor")
@@ -1482,8 +2046,11 @@ def structure_metrics_gate(value: Any) -> dict[str, Any]:
     return {
         "gate": "S-STRUCT",
         "structure_metrics": numeric_vector(metrics),
+        "structure_global_invariant_metrics": global_metrics,
+        "structure_high_water_key_scope": "global_invariant" if global_metrics else ("per_scope" if metrics else "not_evaluated"),
         "structure_consolidation_recommended": recommended,
-        "structure_high_water_moved": high_water_moved,
+        "structure_high_water_moved": high_water_moved or global_high_water_moved,
+        "global_structure_high_water_moved": global_high_water_moved,
         "improved_structure_axes": [str(axis) for axis in improved_axes if str(axis).strip()],
         "refactor_effect_required": refactor_effect_required,
         "status": "warn" if recommended else ("not_applicable" if not metrics else "ok"),
@@ -1523,6 +2090,138 @@ def vector_delta_gate(
     }
 
 
+INDEPENDENT_PROVENANCE_VALUES = {
+    "independently_verified",
+    "independent",
+    "verified",
+    "adapter_recomputed",
+    "recomputed",
+    "source_recomputed",
+}
+ATTESTED_PROVENANCE_VALUES = {
+    "producer_attested",
+    "attested",
+    "producer_claim",
+    "self_report",
+    "observed_producer_claim",
+    "unknown",
+    "missing",
+}
+
+
+def normalize_provenance_label(value: Any) -> str:
+    text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if text in INDEPENDENT_PROVENANCE_VALUES:
+        return "independently_verified"
+    if text in ATTESTED_PROVENANCE_VALUES:
+        return "producer_attested"
+    return text or "producer_attested"
+
+
+def normalize_evidence_provenance(value: Any) -> tuple[dict[str, str], bool]:
+    if value is None:
+        return {}, False
+    source = value
+    if isinstance(value, dict):
+        for key in ("evidence_provenance", "metric_provenance", "provenance_by_metric", "metrics"):
+            if isinstance(value.get(key), (dict, list)):
+                source = value.get(key)
+                break
+    provenance: dict[str, str] = {}
+
+    def add(metric_key: Any, provenance_value: Any) -> None:
+        key = normalize_gate_key(metric_key)
+        label_source = provenance_value
+        if isinstance(provenance_value, dict):
+            label_source = (
+                provenance_value.get("evidence_provenance")
+                or provenance_value.get("provenance")
+                or provenance_value.get("source")
+                or provenance_value.get("status")
+            )
+        provenance[key] = normalize_provenance_label(label_source)
+
+    if isinstance(source, dict):
+        for metric_key, provenance_value in source.items():
+            add(metric_key, provenance_value)
+    elif isinstance(source, list):
+        for item in source:
+            if not isinstance(item, dict):
+                continue
+            metric_key = item.get("metric") or item.get("metric_key") or item.get("field") or item.get("name")
+            if metric_key:
+                add(metric_key, item)
+    return provenance, True
+
+
+def provenance_for_metric(metric_key: str, provenance: dict[str, str], hook_provided: bool) -> str:
+    if not hook_provided:
+        return "legacy_unclassified"
+    return provenance.get(normalize_gate_key(metric_key), "producer_attested")
+
+
+def metric_is_independently_verified(metric_key: str, provenance: dict[str, str], hook_provided: bool) -> bool:
+    if not hook_provided:
+        return True
+    return provenance_for_metric(metric_key, provenance, hook_provided) == "independently_verified"
+
+
+def apply_evidence_provenance_filter(
+    gate: dict[str, Any],
+    *,
+    improved_key: str,
+    pass_key: str,
+    provenance: dict[str, str],
+    hook_provided: bool,
+) -> tuple[dict[str, Any], list[str], list[str]]:
+    if not hook_provided:
+        return gate, [], []
+    updated = dict(gate)
+    improved = list_values(updated.get(improved_key))
+    independent = [field for field in improved if metric_is_independently_verified(field, provenance, hook_provided)]
+    attested = [field for field in improved if field not in independent]
+    updated[improved_key] = independent
+    updated[pass_key] = bool(independent)
+    if improved and not independent:
+        updated["status"] = "block"
+    elif independent:
+        updated["status"] = "pass"
+    updated["evidence_provenance_status"] = "provided"
+    updated["independently_verified_fields"] = independent
+    updated["producer_attested_fields"] = attested
+    updated["attested_only_movement"] = bool(attested and not independent)
+    return updated, independent, attested
+
+
+def evidence_provenance_gate(
+    *,
+    hook_provided: bool,
+    provenance: dict[str, str],
+    independent_fields: list[str],
+    attested_fields: list[str],
+    adapter_error: str | None,
+    source_separation_gate: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    attested_only = bool(attested_fields and not independent_fields)
+    source_separation_gate = source_separation_gate or {}
+    return {
+        "gate": "F2-EVIDENCE-PROVENANCE",
+        "evidence_provenance_status": "provided" if hook_provided else ("error" if adapter_error else "not_provided"),
+        "adapter_error": adapter_error,
+        "provenance_by_metric": provenance,
+        "independently_verified_fields": sorted(set(independent_fields)),
+        "producer_attested_fields": sorted(set(attested_fields)),
+        "attested_only_movement": attested_only,
+        "verification_source_separation_gate": source_separation_gate,
+        "verification_input_paths": source_separation_gate.get("verification_input_paths") or [],
+        "verified_artifact_paths": source_separation_gate.get("verified_artifact_paths") or [],
+        "independent_source_separation_status": source_separation_gate.get("independent_source_separation_status"),
+        "independently_verified_downgraded_fields": source_separation_gate.get("independently_verified_downgraded_fields") or [],
+        "status": "warn" if attested_only else ("pass" if independent_fields else ("not_evaluated" if not hook_provided else "ok")),
+        "constrains_disposition": False,
+    }
+
+
 def infer_reachability_verdict(acceptance_min_output: Any, frozen_envelope: Any) -> str:
     minimums = numeric_vector(acceptance_min_output)
     envelope = numeric_vector(frozen_envelope)
@@ -1548,14 +2247,157 @@ def infer_reachability_verdict(acceptance_min_output: Any, frozen_envelope: Any)
     return "reachable" if comparable else "indeterminate"
 
 
+def normalize_gate_evaluation_status(value: Any) -> str | None:
+    text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if not text:
+        return None
+    if text in {"pass", "passed", "ok", "valid", "verified", "satisfied", "complete", "true"}:
+        return "pass"
+    if text in {"fail", "failed", "block", "blocked", "invalid", "unverified", "unsatisfied", "false"}:
+        return "fail"
+    if text in {
+        "not_evaluated",
+        "not_eval",
+        "not_provided",
+        "missing",
+        "unknown",
+        "indeterminate",
+        "not_applicable",
+        "none",
+        "null",
+    }:
+        return "not_evaluated"
+    return None
+
+
+def verifier_evaluation_status(value: dict[str, Any], verifier_contract: dict[str, Any], prefix: str) -> str | None:
+    keys = (
+        f"{prefix}_verifier_evaluation_status",
+        f"{prefix}_verifier_status",
+        "verifier_evaluation_status",
+        "verifier_status",
+        "live_verifier_status",
+    )
+    for key in keys:
+        normalized = normalize_gate_evaluation_status(value.get(key))
+        if normalized:
+            return normalized
+    for key in ("evaluation_status", "status", "verdict"):
+        normalized = normalize_gate_evaluation_status(verifier_contract.get(key))
+        if normalized:
+            return normalized
+    return None
+
+
+def normalize_verifier_contract(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        source: Any = value
+        for key in (
+            "acceptance_verifier_contract",
+            "metric_verifier_contract",
+            "verifier_contract",
+            "target_required_verifier",
+            "required_verifier_contract",
+        ):
+            if key in value:
+                source = value.get(key)
+                break
+        if isinstance(source, str):
+            source = {"required_verifier": source}
+        if not isinstance(source, dict):
+            return {}
+        contract = dict(source)
+    elif isinstance(value, str) and value.strip():
+        contract = {"required_verifier": value.strip()}
+    else:
+        return {}
+    required_verifier = (
+        contract.get("required_verifier")
+        or contract.get("verifier_id")
+        or contract.get("id")
+        or contract.get("name")
+    )
+    if required_verifier and not contract.get("required_verifier"):
+        contract["required_verifier"] = required_verifier
+    if required_verifier and "verifier_required" not in contract and "required" not in contract:
+        contract["verifier_required"] = True
+    return contract
+
+
+def acceptance_target_from_value(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return None
+    for key in (
+        "target",
+        "measurable_target",
+        "acceptance_target",
+        "original_target",
+        "acceptance_min_output",
+        "min_output",
+        "minimum_output",
+    ):
+        if key in value and value.get(key) not in (None, "", []):
+            return value.get(key)
+    nested_gate = value.get("acceptance_reachability_gate")
+    if isinstance(nested_gate, dict):
+        return acceptance_target_from_value(nested_gate)
+    return None
+
+
+def merge_acceptance_verifier_contract(acceptance_value: Any, verifier_value: Any) -> Any:
+    contract = normalize_verifier_contract(verifier_value)
+    if not contract:
+        return acceptance_value
+    if isinstance(acceptance_value, dict):
+        merged_value = dict(acceptance_value)
+    else:
+        merged_value = {}
+    existing = merged_value.get("acceptance_verifier_contract") or merged_value.get("verifier_contract") or {}
+    if not isinstance(existing, dict):
+        existing = normalize_verifier_contract(existing)
+    merged_value["acceptance_verifier_contract"] = {**contract, **existing}
+    return merged_value
+
+
 def acceptance_reachability_gate(value: Any) -> dict[str, Any]:
     if isinstance(value, dict) and isinstance(value.get("acceptance_reachability_gate"), dict):
         value = value["acceptance_reachability_gate"]
+    verifier_required = False
+    required_verifier = None
+    verifier_status: str | None = None
     if not isinstance(value, dict):
         verdict = "indeterminate"
         acceptance_min_output: Any = {}
         frozen_envelope: Any = {}
+        residual_gap_policy: Any = None
+        residual_gap_ratio: Any = None
+        marginal_repair: bool = False
+        envelope_thaw_item: Any = None
+        thaw_condition: Any = None
+        thaw_schedule: Any = None
     else:
+        verifier_contract = (
+            value.get("acceptance_verifier_contract")
+            or value.get("verifier_contract")
+            or value.get("required_verifier_contract")
+            or {}
+        )
+        if not isinstance(verifier_contract, dict):
+            verifier_contract = {}
+        required_verifier = (
+            value.get("required_verifier")
+            or value.get("verifier_id")
+            or verifier_contract.get("required_verifier")
+            or verifier_contract.get("verifier_id")
+        )
+        verifier_required = bool_value(
+            value.get("verifier_required")
+            or value.get("required_for_acceptance")
+            or value.get("acceptance_verifier_required")
+            or verifier_contract.get("required")
+            or verifier_contract.get("verifier_required")
+        ) or bool(str(required_verifier or "").strip())
+        verifier_status = verifier_evaluation_status(value, verifier_contract, "acceptance")
         acceptance_min_output = (
             value.get("acceptance_min_output")
             or value.get("min_output")
@@ -1563,6 +2405,16 @@ def acceptance_reachability_gate(value: Any) -> dict[str, Any]:
             or {}
         )
         frozen_envelope = value.get("frozen_envelope") or value.get("envelope") or value.get("bounds") or {}
+        envelope_thaw_item = (
+            value.get("envelope_thaw_item")
+            or value.get("thaw_item")
+            or value.get("thaw_plan_item")
+        )
+        thaw_condition = value.get("thaw_condition") or value.get("thaw_exit_condition")
+        thaw_schedule = value.get("thaw_schedule") or value.get("envelope_ladder") or value.get("envelope_thaw_schedule")
+        residual_gap_policy = value.get("residual_gap_policy")
+        residual_gap_ratio = value.get("residual_gap_ratio") or value.get("gap_ratio")
+        marginal_repair = bool_value(value.get("marginal_repair") or value.get("marginal_repair_candidate"))
         verdict = str(
             value.get("reachability_verdict")
             or value.get("verdict")
@@ -1574,17 +2426,47 @@ def acceptance_reachability_gate(value: Any) -> dict[str, Any]:
         if verdict not in {"reachable", "unreachable", "indeterminate"}:
             verdict = infer_reachability_verdict(acceptance_min_output, frozen_envelope)
     unreachable = verdict == "unreachable"
+    frozen_envelope_present = bool(frozen_envelope)
+    thaw_item_present = bool(envelope_thaw_item or thaw_condition or thaw_schedule)
+    envelope_thaw_item_required = unreachable and frozen_envelope_present and not thaw_item_present
+    reachability_status = "fail" if unreachable else ("pass" if verdict == "reachable" else "not_evaluated")
+    if verifier_required and verifier_status is None:
+        verifier_status = "not_evaluated"
+    verifier_failed = verifier_required and verifier_status == "fail"
+    if unreachable or verifier_failed:
+        evaluation_status = "fail"
+    elif verifier_required and verifier_status != "pass":
+        evaluation_status = "not_evaluated"
+    else:
+        evaluation_status = reachability_status
+    acceptance_verifier_not_evaluated = verifier_required and verifier_status == "not_evaluated"
+    unverifiable_acceptance_contract = verifier_required and acceptance_verifier_not_evaluated
+    blocked = unreachable or verifier_failed or unverifiable_acceptance_contract or envelope_thaw_item_required
     return {
         "gate": "G-REACH",
         "acceptance_min_output": acceptance_min_output,
         "frozen_envelope": frozen_envelope,
         "reachability_verdict": verdict,
+        "evaluation_status": evaluation_status,
+        "required_verifier": required_verifier,
+        "verifier_required": verifier_required,
+        "acceptance_verifier_not_evaluated": acceptance_verifier_not_evaluated,
+        "unverifiable_acceptance_contract": unverifiable_acceptance_contract,
+        "residual_gap_policy": residual_gap_policy,
+        "residual_gap_ratio": residual_gap_ratio,
+        "marginal_repair": marginal_repair,
+        "envelope_thaw_item": envelope_thaw_item,
+        "thaw_condition": thaw_condition,
+        "thaw_schedule": thaw_schedule,
+        "envelope_thaw_item_present": thaw_item_present,
+        "envelope_thaw_item_required": envelope_thaw_item_required,
         "acceptance_unreachable_under_frozen_config": unreachable,
-        "relaxation_or_escalation_required": unreachable,
-        "status": "block" if unreachable else verdict,
-        "constrains_disposition": unreachable,
+        "relaxation_or_escalation_required": blocked,
+        "status": "block" if blocked else verdict,
+        "constrains_disposition": blocked,
         "allowed_dispositions": ["goal_productive", "terminal_blocked", "user_escalation"],
-        "blocked_micro_repair_under_frozen_envelope": unreachable,
+        "allowed_task_kinds": ["constraint_relaxation", "envelope_thaw_item", "verifier_contract_supply"],
+        "blocked_micro_repair_under_frozen_envelope": blocked,
     }
 
 
@@ -1612,14 +2494,55 @@ def oracle_metric_validity_gate(value: Any) -> dict[str, Any]:
     states = metric_validity_states(value)
     tautological = any(state in {"tautological", "constant", "self_fulfilling", "self-fulfilling"} for state in states)
     provided = value is not None
+    verifier_required = False
+    required_verifier = None
+    verifier_status: str | None = None
+    if isinstance(value, dict):
+        verifier_contract = (
+            value.get("metric_verifier_contract")
+            or value.get("verifier_contract")
+            or value.get("required_verifier_contract")
+            or {}
+        )
+        if not isinstance(verifier_contract, dict):
+            verifier_contract = {}
+        required_verifier = (
+            value.get("required_verifier")
+            or value.get("verifier_id")
+            or verifier_contract.get("required_verifier")
+            or verifier_contract.get("verifier_id")
+        )
+        verifier_required = bool_value(
+            value.get("verifier_required")
+            or value.get("required_for_acceptance")
+            or value.get("metric_verifier_required")
+            or verifier_contract.get("required")
+            or verifier_contract.get("verifier_required")
+        ) or bool(str(required_verifier or "").strip())
+        verifier_status = verifier_evaluation_status(value, verifier_contract, "metric")
+    if verifier_required and verifier_status is None:
+        verifier_status = "not_evaluated"
+    verifier_failed = verifier_required and verifier_status == "fail"
+    if tautological or verifier_failed:
+        evaluation_status = "fail"
+    elif verifier_required and verifier_status != "pass":
+        evaluation_status = "not_evaluated"
+    else:
+        evaluation_status = "pass" if provided else "not_evaluated"
+    metric_verifier_not_evaluated = verifier_required and verifier_status == "not_evaluated"
+    required_not_evaluated = verifier_required and metric_verifier_not_evaluated
     return {
         "gate": "G-OENV",
         "metric_validity": "tautological" if tautological else ("checked" if provided else "unknown"),
         "metric_validity_states": states[:20],
         "metric_validity_self_check_provided": provided,
-        "metric_goal_productive_excluded": tautological,
-        "status": "block" if tautological else ("ok" if provided else "not_provided"),
-        "constrains_disposition": tautological,
+        "evaluation_status": evaluation_status,
+        "required_verifier": required_verifier,
+        "verifier_required": verifier_required,
+        "metric_verifier_not_evaluated": metric_verifier_not_evaluated,
+        "metric_goal_productive_excluded": tautological or verifier_failed or required_not_evaluated,
+        "status": "block" if tautological or verifier_failed or required_not_evaluated else ("ok" if provided else "not_provided"),
+        "constrains_disposition": tautological or verifier_failed or required_not_evaluated,
         "allowed_dispositions": ["goal_productive", "terminal_blocked", "user_escalation"],
     }
 
@@ -2812,27 +3735,156 @@ def semantic_progress_from_high_water(
     return bool(coverage_quality_delta_gate(quality, prev_high, provider_request_count, epsilon)["quality_delta_pass"])
 
 
-def updated_high_water(quality: dict[str, Any], prev_high: dict[str, Any], provider_request_count: int) -> dict[str, Any]:
+def updated_high_water(
+    quality: dict[str, Any],
+    prev_high: dict[str, Any],
+    provider_request_count: int,
+    allowed_quality_keys: set[str] | None = None,
+) -> dict[str, Any]:
+    def updated(key: str) -> bool:
+        return allowed_quality_keys is None or key in allowed_quality_keys
+
     return {
-        "event_named_ratio": max(high_water_metric_value(prev_high, "event_named_ratio"), quality_metric_value(quality, "event_named_ratio")),
+        "event_named_ratio": (
+            max(high_water_metric_value(prev_high, "event_named_ratio"), quality_metric_value(quality, "event_named_ratio"))
+            if updated("event_named_ratio")
+            else high_water_metric_value(prev_high, "event_named_ratio")
+        ),
         "proper_noun_character_ratio": max(
             high_water_metric_value(prev_high, "proper_noun_character_ratio"),
             quality_metric_value(quality, "proper_noun_character_ratio"),
-        ),
+        )
+        if updated("proper_noun_character_ratio")
+        else high_water_metric_value(prev_high, "proper_noun_character_ratio"),
         "coreference_resolved_ratio": max(
             high_water_metric_value(prev_high, "coreference_resolved_ratio"),
             quality_metric_value(quality, "coreference_resolved_ratio"),
-        ),
+        )
+        if updated("coreference_resolved_ratio")
+        else high_water_metric_value(prev_high, "coreference_resolved_ratio"),
         "causal_edge_count": max(
             int_metric(high_water_metric_value(prev_high, "causal_edge_count")),
             int_metric(quality_metric_value(quality, "causal_edge_count")),
-        ),
+        )
+        if updated("causal_edge_count")
+        else int_metric(high_water_metric_value(prev_high, "causal_edge_count")),
         "windows_covered": max(
             int_metric(high_water_metric_value(prev_high, "windows_covered")),
             int_metric(quality_metric_value(quality, "windows_covered")),
-        ),
-        "ever_causal_edge": bool_value(prev_high.get("ever_causal_edge")) or bool_value(quality.get("causal_edge_present")),
+        )
+        if updated("windows_covered")
+        else int_metric(high_water_metric_value(prev_high, "windows_covered")),
+        "ever_causal_edge": bool_value(prev_high.get("ever_causal_edge"))
+        or (updated("causal_edge_count") and bool_value(quality.get("causal_edge_present"))),
         "ever_provider_dispatch": bool_value(prev_high.get("ever_provider_dispatch")) or provider_request_count > 0,
+    }
+
+
+def previous_primary_metric_value(latest: dict[str, Any] | None) -> float:
+    if not isinstance(latest, dict):
+        return 0.0
+    gate = latest.get("primary_metric_gate")
+    if isinstance(gate, dict):
+        for key in ("primary_metric_high_water", "primary_metric_value", "value"):
+            if key in gate:
+                return float_value(gate.get(key))
+    for key in ("primary_metric_high_water", "primary_metric_value"):
+        if key in latest:
+            return float_value(latest.get(key))
+    return 0.0
+
+
+def primary_metric_zero_movement_streak(
+    rows: list[dict[str, Any]],
+    scope_key: str,
+    moved: bool,
+) -> int:
+    if moved:
+        return 0
+    streak = 1
+    for row in reversed(rows):
+        gate = row.get("primary_metric_gate")
+        if not isinstance(gate, dict):
+            continue
+        row_scope = str(gate.get("primary_metric_scope_key") or row.get("cumulative_goal_distance_scope_key") or "")
+        if row_scope != scope_key:
+            continue
+        if bool_value(gate.get("primary_metric_high_water_moved")):
+            break
+        streak += 1
+    return streak
+
+
+def normalize_primary_metric_gate(
+    value: Any,
+    *,
+    previous_value: float,
+    rows: list[dict[str, Any]],
+    scope_key: str,
+    cap: int,
+    epsilon: float,
+    provenance: dict[str, str],
+    provenance_hook_provided: bool,
+) -> dict[str, Any]:
+    if value is None:
+        return {
+            "gate": "G-CHAIN-PRIMARY-METRIC",
+            "evaluation_status": "not_evaluated",
+            "status": "not_evaluated",
+            "constrains_disposition": False,
+        }
+    source = value
+    if isinstance(value, dict) and isinstance(value.get("primary_metric"), dict):
+        source = value["primary_metric"]
+    if not isinstance(source, dict):
+        source = {"value": value}
+    metric_id = str(source.get("metric_id") or source.get("name") or "primary_metric")
+    current_value = float_value(
+        source.get("value")
+        if "value" in source
+        else source.get("primary_metric_value")
+        if "primary_metric_value" in source
+        else source.get("current")
+    )
+    previous = float_value(source.get("previous_value") or source.get("previous_primary_metric") or previous_value)
+    raw_moved = (
+        bool_value(source.get("primary_metric_high_water_moved"))
+        if "primary_metric_high_water_moved" in source
+        else current_value > previous + epsilon
+    )
+    metric_provenance = normalize_provenance_label(
+        source.get("evidence_provenance")
+        or source.get("provenance")
+        or provenance_for_metric(metric_id, provenance, provenance_hook_provided)
+        or provenance_for_metric("primary_metric", provenance, provenance_hook_provided)
+    )
+    independent = not provenance_hook_provided or metric_provenance == "independently_verified"
+    moved = raw_moved and independent
+    attested_only = raw_moved and not independent
+    zero_streak = primary_metric_zero_movement_streak(rows, scope_key, moved)
+    adapter_stalled = bool_value(
+        source.get("primary_metric_stalled")
+        or (value.get("primary_metric_stalled") if isinstance(value, dict) else False)
+    )
+    stalled = adapter_stalled or (not moved and zero_streak >= max(1, cap))
+    return {
+        "gate": "G-CHAIN-PRIMARY-METRIC",
+        "metric_id": metric_id,
+        "primary_metric_value": current_value,
+        "previous_primary_metric_value": previous,
+        "primary_metric_high_water": max(previous, current_value) if moved else previous,
+        "primary_metric_high_water_moved": moved,
+        "raw_primary_metric_high_water_moved": raw_moved,
+        "evidence_provenance": metric_provenance,
+        "attested_only_movement": attested_only,
+        "primary_metric_scope_key": scope_key,
+        "primary_metric_zero_movement_streak": zero_streak,
+        "primary_metric_stall_cap": max(1, cap),
+        "primary_metric_stalled": stalled,
+        "evaluation_status": "pass" if moved else "fail",
+        "status": "block" if stalled else ("warn" if attested_only else ("pass" if moved else "ok")),
+        "constrains_disposition": stalled,
+        "allowed_dispositions": ["goal_productive", "terminal_blocked", "user_escalation"],
     }
 
 
@@ -2854,6 +3906,11 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
     prev_fingerprint = (latest or {}).get("current_output_fingerprint")
 
     paths = load_artifact_paths(root, args.artifact_paths_json, args.artifact_path)
+    changed_files = load_changed_files(
+        root,
+        getattr(args, "changed_files_json", None),
+        getattr(args, "changed_file", []) or [],
+    )
     adapter_candidates = domain_adapter_candidate_paths(root, getattr(args, "domain_adapter", None))
     adapter_registered = bool(adapter_candidates)
     adapter_expected_path = adapter_candidates[0].expanduser().resolve().as_posix() if adapter_candidates else None
@@ -2878,6 +3935,7 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
         gate_inputs.extend(extract_disposition_gates(load_json_value(root, raw_gate)))
     runner_validation = load_json_value(root, getattr(args, "runner_validation_json", None))
     output_delta = load_json_value(root, getattr(args, "output_delta_json", None))
+    failure_autopsies = load_json_values(root, getattr(args, "failure_autopsy_json", []) or [])
     validator_gate = validator_integrity_gate(runner_validation, output_delta, gate_inputs)
     if bool_value(validator_gate.get("constrains_disposition")):
         gate_inputs.append({"name": "validator_integrity_gate", **validator_gate})
@@ -2965,19 +4023,89 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
         )
         latest = latest_terminal_family or latest
         prev_count = max(prev_count, int((latest or {}).get("micro_hardening_count") or 0))
+    failure_contexts = [runner_validation, output_delta, quality, gate_inputs, *failure_autopsies]
+    root_dominant_parameter_key = (
+        first_named_value(failure_contexts, {"root_dominant_parameter_key", "dominant_parameter_key", "deficit_axis"})
+        or current_root_key
+    )
+    execution_stage_ladder_value, execution_stage_ladder_error = call_adapter(
+        domain_adapter,
+        "execution_stage_ladder",
+        root=root,
+        artifact_paths=[rel_path(root, path) for path in paths],
+        quality_vector=quality,
+        output_delta=output_delta,
+        runner_validation=runner_validation,
+        failure_autopsies=failure_autopsies,
+        family_key=family_key,
+        root_key=current_root_key,
+        root_family_key=current_root_family_key,
+    )
+    if execution_stage_ladder_value is None:
+        execution_stage_ladder_value = first_field_value(failure_contexts, {"execution_stage_ladder", "stage_ladder"})
+    terminal_stage_map_value, terminal_stage_map_error = call_adapter(
+        domain_adapter,
+        "terminal_classification_stage_map",
+        root=root,
+        artifact_paths=[rel_path(root, path) for path in paths],
+        quality_vector=quality,
+        output_delta=output_delta,
+        runner_validation=runner_validation,
+        failure_autopsies=failure_autopsies,
+        family_key=family_key,
+        root_key=current_root_key,
+        root_family_key=current_root_family_key,
+    )
+    failure_surface_gate = terminal_stage_resolution_gate(
+        ladder_value=execution_stage_ladder_value,
+        classification_map_value=terminal_stage_map_value,
+        contexts=failure_contexts,
+        root_family_key=current_root_family_key,
+        dominant_parameter=str(root_dominant_parameter_key),
+    )
+    if execution_stage_ladder_error:
+        failure_surface_gate["execution_stage_ladder_error"] = execution_stage_ladder_error
+    if terminal_stage_map_error:
+        failure_surface_gate["terminal_classification_stage_map_error"] = terminal_stage_map_error
+    effective_count_key = str(failure_surface_gate.get("failure_surface_count_key") or current_root_family_key)
+    if bool_value(failure_surface_gate.get("constrains_disposition")):
+        gate_inputs.append({"name": "failure_surface_stage_gate", **failure_surface_gate})
+    input_contract_gate = same_input_contract_gate(failure_contexts)
+    if bool_value(input_contract_gate.get("constrains_disposition")):
+        gate_inputs.append({"name": "same_input_contract_gate", **input_contract_gate})
+    instrumentation_threshold_value, instrumentation_threshold_error = call_adapter(
+        domain_adapter,
+        "instrumentation_trigger_threshold",
+        root=root,
+        artifact_paths=[rel_path(root, path) for path in paths],
+        quality_vector=quality,
+        output_delta=output_delta,
+        runner_validation=runner_validation,
+        failure_autopsies=failure_autopsies,
+        family_key=family_key,
+        root_key=current_root_key,
+        root_family_key=current_root_family_key,
+    )
+    instrumentation_threshold = (
+        int(float_value(instrumentation_threshold_value))
+        or int(getattr(args, "instrumentation_trigger_threshold", INSTRUMENTATION_TRIGGER_THRESHOLD_DEFAULT))
+        or INSTRUMENTATION_TRIGGER_THRESHOLD_DEFAULT
+    )
+    diagnostics_gate = diagnostics_unavailable_gate(
+        registry_rows=registry_rows,
+        failure_surface_count_key=failure_surface_gate.get("failure_surface_count_key"),
+        contexts=failure_contexts,
+        threshold=instrumentation_threshold,
+    )
+    if instrumentation_threshold_error:
+        diagnostics_gate["adapter_error"] = instrumentation_threshold_error
+    if bool_value(diagnostics_gate.get("constrains_disposition")):
+        gate_inputs.append({"name": "diagnostics_unavailable_gate", **diagnostics_gate})
     current_check_ids = set(getattr(args, "measurement_check_id", []) or [])
     current_check_ids.update(extract_check_ids(measurement_ids_value, runner_validation, output_delta, quality, gate_inputs))
     current_frontiers = {frontier_key(item) for item in getattr(args, "measurement_frontier", []) or [] if item}
     current_frontiers.update(extract_frontier_observations(runner_validation, output_delta, quality, gate_inputs))
     coverage_gate = coverage_quality_delta_gate(quality, prev_high, provider_request_count, args.epsilon)
-    output_delta_coverage_gate = find_coverage_quality_delta_gate(output_delta)
-    coverage_reconciliation_gate = coverage_quality_delta_reconciliation_gate(coverage_gate, output_delta_coverage_gate, args.epsilon)
-    coverage_reconciliation_blocks = bool_value(coverage_reconciliation_gate.get("constrains_disposition"))
-    if coverage_reconciliation_blocks:
-        gate_inputs.append({"name": "coverage_quality_delta_reconciliation_gate", **coverage_reconciliation_gate})
-    dispatch_gate = provider_scale_dispatch_gate(prev_high, coverage_gate, provider_request_count)
-    if bool_value(dispatch_gate.get("constrains_disposition")):
-        gate_inputs.append({"name": "provider_scale_dispatch_gate", **dispatch_gate})
     substance_value = load_json_value(root, getattr(args, "substance_metrics_json", None))
     if substance_value is None:
         substance_value, substance_error = call_adapter(
@@ -3012,6 +4140,77 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
         previous_field="previous_substance_vector",
         epsilon=args.epsilon,
     )
+    evidence_provenance_value, evidence_provenance_error = call_adapter(
+        domain_adapter,
+        "evidence_provenance",
+        root=root,
+        artifact_paths=[rel_path(root, path) for path in paths],
+        quality_vector=quality,
+        substance_metrics=current_substance,
+        output_delta=output_delta,
+        runner_validation=runner_validation,
+        family_key=family_key,
+        root_key=current_root_key,
+        candidate_metric_keys=[*QUALITY_DELTA_KEYS, *sorted(numeric_vector(current_substance))],
+    )
+    evidence_provenance, evidence_provenance_provided = normalize_evidence_provenance(evidence_provenance_value)
+    coverage_gate, independent_coverage_fields, attested_coverage_fields = apply_evidence_provenance_filter(
+        coverage_gate,
+        improved_key="improved_fields",
+        pass_key="quality_delta_pass",
+        provenance=evidence_provenance,
+        hook_provided=evidence_provenance_provided,
+    )
+    substance_gate, independent_substance_fields, attested_substance_fields = apply_evidence_provenance_filter(
+        substance_gate,
+        improved_key="improved_axes",
+        pass_key="substance_delta_pass",
+        provenance=evidence_provenance,
+        hook_provided=evidence_provenance_provided,
+    )
+    source_separation_gate = verification_source_separation_gate(
+        provenance_value=evidence_provenance_value,
+        verified_artifact_paths=[rel_path(root, path) for path in paths],
+        independently_verified_fields=[*independent_coverage_fields, *independent_substance_fields],
+    )
+    downgraded_fields = set(source_separation_gate.get("independently_verified_downgraded_fields") or [])
+    if downgraded_fields:
+        coverage_downgraded = [field for field in independent_coverage_fields if field in downgraded_fields]
+        substance_downgraded = [field for field in independent_substance_fields if field in downgraded_fields]
+        independent_coverage_fields = [field for field in independent_coverage_fields if field not in downgraded_fields]
+        independent_substance_fields = [field for field in independent_substance_fields if field not in downgraded_fields]
+        attested_coverage_fields = sorted(set(attested_coverage_fields + coverage_downgraded))
+        attested_substance_fields = sorted(set(attested_substance_fields + substance_downgraded))
+        if coverage_downgraded:
+            coverage_gate["improved_fields"] = independent_coverage_fields
+            coverage_gate["quality_delta_pass"] = bool(independent_coverage_fields)
+            coverage_gate["status"] = "pass" if independent_coverage_fields else "block"
+            coverage_gate["independently_verified_fields"] = independent_coverage_fields
+            coverage_gate["producer_attested_fields"] = attested_coverage_fields
+            coverage_gate["attested_only_movement"] = bool(attested_coverage_fields and not independent_coverage_fields)
+        if substance_downgraded:
+            substance_gate["improved_axes"] = independent_substance_fields
+            substance_gate["substance_delta_pass"] = bool(independent_substance_fields)
+            substance_gate["status"] = "pass" if independent_substance_fields else "block"
+            substance_gate["independently_verified_fields"] = independent_substance_fields
+            substance_gate["producer_attested_fields"] = attested_substance_fields
+            substance_gate["attested_only_movement"] = bool(attested_substance_fields and not independent_substance_fields)
+    evidence_gate = evidence_provenance_gate(
+        hook_provided=evidence_provenance_provided,
+        provenance=evidence_provenance,
+        independent_fields=[*independent_coverage_fields, *independent_substance_fields],
+        attested_fields=[*attested_coverage_fields, *attested_substance_fields],
+        adapter_error=evidence_provenance_error,
+        source_separation_gate=source_separation_gate,
+    )
+    output_delta_coverage_gate = find_coverage_quality_delta_gate(output_delta)
+    coverage_reconciliation_gate = coverage_quality_delta_reconciliation_gate(coverage_gate, output_delta_coverage_gate, args.epsilon)
+    coverage_reconciliation_blocks = bool_value(coverage_reconciliation_gate.get("constrains_disposition"))
+    if coverage_reconciliation_blocks:
+        gate_inputs.append({"name": "coverage_quality_delta_reconciliation_gate", **coverage_reconciliation_gate})
+    dispatch_gate = provider_scale_dispatch_gate(prev_high, coverage_gate, provider_request_count)
+    if bool_value(dispatch_gate.get("constrains_disposition")):
+        gate_inputs.append({"name": "provider_scale_dispatch_gate", **dispatch_gate})
     if bool_value(substance_gate.get("constrains_disposition")):
         gate_inputs.append({"name": "substance_delta_gate", **substance_gate})
     corrective_value = load_json_value(root, getattr(args, "corrective_resolution_json", None))
@@ -3044,6 +4243,23 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
             family_key=family_key,
             root_key=current_root_key,
         )
+    target_required_verifier_error: str | None = None
+    target_required_verifier_value, target_required_verifier_error = call_adapter(
+        domain_adapter,
+        "target_required_verifier",
+        root=root,
+        target=acceptance_target_from_value(acceptance_value),
+        acceptance=acceptance_value,
+        acceptance_reachability=acceptance_value,
+        artifact_paths=[rel_path(root, path) for path in paths],
+        quality_vector=quality,
+        output_delta=output_delta,
+        runner_validation=runner_validation,
+        family_key=family_key,
+        root_key=current_root_key,
+    )
+    if target_required_verifier_value is not None:
+        acceptance_value = merge_acceptance_verifier_contract(acceptance_value, target_required_verifier_value)
     reachability_gate = acceptance_reachability_gate(acceptance_value)
     if bool_value(reachability_gate.get("constrains_disposition")):
         gate_inputs.append({"name": "acceptance_reachability_gate", **reachability_gate})
@@ -3129,15 +4345,20 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
         semantic_progress = False
         evidence_class = "insufficient_evidence"
         high_water = prev_high
-        count = max(prev_count, previous_micro_hardening_count(registry_rows, current_root_family_key)) + 1
+        count = previous_micro_hardening_count_for_count_key(registry_rows, effective_count_key) + 1
         disposition = "conservative_hold"
         hard_stop = True
     else:
-        semantic_progress = semantic_progress_from_high_water(quality, prev_high, provider_request_count, args.epsilon)
+        semantic_progress = bool_value(coverage_gate.get("quality_delta_pass"))
         evidence_class = "computed"
-        high_water = updated_high_water(quality, prev_high, provider_request_count) if semantic_progress else prev_high
-        previous_family_count = previous_micro_hardening_count(registry_rows, current_root_family_key)
-        count = 0 if semantic_progress else max(prev_count, previous_family_count) + 1
+        allowed_high_water_keys = set(coverage_gate.get("improved_fields") or []) if evidence_provenance_provided else None
+        high_water = (
+            updated_high_water(quality, prev_high, provider_request_count, allowed_high_water_keys)
+            if semantic_progress
+            else prev_high
+        )
+        previous_family_count = previous_micro_hardening_count_for_count_key(registry_rows, effective_count_key)
+        count = 0 if semantic_progress else previous_family_count + 1
         if semantic_progress:
             disposition = "open"
             hard_stop = False
@@ -3234,6 +4455,33 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
         current_cycle_id=args.cycle_id,
         cap=getattr(args, "cumulative_chain_streak_cap", CUMULATIVE_CHAIN_STREAK_CAP_DEFAULT),
     )
+    primary_metric_value, primary_metric_error = call_adapter(
+        domain_adapter,
+        "primary_metric",
+        root=root,
+        artifact_paths=[rel_path(root, path) for path in paths],
+        quality_vector=quality,
+        substance_metrics=current_substance,
+        output_delta=output_delta,
+        runner_validation=runner_validation,
+        family_key=family_key,
+        root_key=current_root_key,
+        root_family_key=current_root_family_key,
+        previous_primary_metric=previous_primary_metric_value(latest),
+        evidence_provenance=evidence_provenance,
+    )
+    primary_metric_gate = normalize_primary_metric_gate(
+        primary_metric_value,
+        previous_value=previous_primary_metric_value(latest),
+        rows=registry_rows,
+        scope_key=str(chain_gate.get("cumulative_goal_distance_scope_key") or family_key),
+        cap=getattr(args, "cumulative_chain_streak_cap", CUMULATIVE_CHAIN_STREAK_CAP_DEFAULT),
+        epsilon=args.epsilon,
+        provenance=evidence_provenance,
+        provenance_hook_provided=evidence_provenance_provided,
+    )
+    if primary_metric_error:
+        primary_metric_gate["adapter_error"] = primary_metric_error
     capability_ladder_value, capability_ladder_error = call_adapter(
         domain_adapter,
         "capability_ladder",
@@ -3260,6 +4508,16 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
         chain_gate["allowed_dispositions"] = ["goal_productive", "terminal_blocked", "user_escalation"]
         chain_gate["allowed_task_kinds"] = forced_retarget_gate.get("allowed_task_kinds") or []
         gate_inputs.append({"name": "chain_stall_forced_retarget_gate", **forced_retarget_gate})
+    c4_user_escalation_backstop_required = False
+    if bool_value(primary_metric_gate.get("primary_metric_stalled")):
+        forced_task_kinds = normalize_task_kinds(forced_retarget_gate.get("allowed_task_kinds") or [])
+        if forced_task_kinds:
+            primary_metric_gate["allowed_task_kinds"] = sorted(forced_task_kinds)
+        else:
+            c4_user_escalation_backstop_required = True
+            primary_metric_gate["c4_user_escalation_backstop_required"] = True
+            primary_metric_gate["allowed_dispositions"] = ["user_escalation"]
+        gate_inputs.append({"name": "primary_metric_gate", **primary_metric_gate})
     if (
         bool_value(chain_gate.get("cumulative_goal_distance_stalled"))
         and not bool_value(adapter_gate.get("adapter_mandate_required"))
@@ -3274,10 +4532,102 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
             chain_gate.get("cumulative_goal_distance_stalled")
         ):
             disposition = "relaxation_or_escalation_required"
+    if bool_value(reachability_gate.get("unverifiable_acceptance_contract")):
+        hard_stop = True
+        if disposition in {"open", "prefer_provider_or_semantic", "measurement_progress_goal_productive_candidate"}:
+            disposition = "verifier_contract_required"
     if bool_value(metric_validity_gate.get("metric_goal_productive_excluded")):
         hard_stop = True
         if disposition in {"open", "prefer_provider_or_semantic", "measurement_progress_goal_productive_candidate"}:
             disposition = "metric_definition_correction_required"
+    if bool_value(primary_metric_gate.get("primary_metric_stalled")):
+        hard_stop = True
+        if c4_user_escalation_backstop_required:
+            disposition = "user_escalation"
+        elif disposition in {"open", "prefer_provider_or_semantic", "measurement_progress_goal_productive_candidate"}:
+            disposition = "primary_metric_forced_retarget_required"
+    if bool_value(failure_surface_gate.get("terminal_classification_stage_contradiction")):
+        hard_stop = True
+        if disposition in {"open", "prefer_provider_or_semantic", "measurement_progress_goal_productive_candidate"}:
+            disposition = "terminal_classification_stage_repair_required"
+    if bool_value(input_contract_gate.get("same_input_contract_violation")):
+        hard_stop = True
+        if disposition in {"open", "prefer_provider_or_semantic", "measurement_progress_goal_productive_candidate"}:
+            disposition = "input_set_contract_repair_required"
+    if bool_value(diagnostics_gate.get("instrumentation_supply_required")):
+        hard_stop = True
+        if disposition in {"open", "prefer_provider_or_semantic", "measurement_progress_goal_productive_candidate"}:
+            disposition = "instrumentation_supply_required"
+    verifier_source_value, verifier_source_error = call_adapter(
+        domain_adapter,
+        "verifier_source_paths",
+        root=root,
+        artifact_paths=[rel_path(root, path) for path in paths],
+        changed_files=changed_files,
+        gate_results=gate_inputs,
+        quality_vector=quality,
+        output_delta=output_delta,
+        runner_validation=runner_validation,
+        family_key=family_key,
+        root_key=current_root_key,
+    )
+    verifier_source_map, verifier_source_hook_provided = normalize_verifier_source_paths(verifier_source_value)
+    verifier_coupling_gate = coupled_verifier_gate(
+        changed_files=changed_files,
+        verifier_source_map=verifier_source_map,
+        hook_provided=verifier_source_hook_provided,
+        gates=[
+            adapter_load_gate,
+            validator_gate,
+            coverage_gate,
+            coverage_reconciliation_gate,
+            dispatch_gate,
+            substance_gate,
+            corrective_gate,
+            reachability_gate,
+            metric_validity_gate,
+            advice_gate,
+            structure_gate,
+            adapter_gate,
+            chain_gate,
+            forced_retarget_gate,
+            primary_metric_gate,
+            *gate_inputs,
+        ],
+    )
+    if verifier_source_error:
+        verifier_coupling_gate["adapter_error"] = verifier_source_error
+    if bool_value(verifier_coupling_gate.get("pass_with_coupled_verifier")):
+        hard_stop = True
+        if disposition in {"open", "prefer_provider_or_semantic", "measurement_progress_goal_productive_candidate"}:
+            disposition = "coupled_verifier_revalidation_required"
+        gate_inputs.append({"name": "coupled_verifier_gate", **verifier_coupling_gate})
+    envelope_thaw_streak = 0
+    if bool_value(reachability_gate.get("envelope_thaw_item_required")):
+        envelope_thaw_streak = 1
+        for prior_row in reversed(registry_rows):
+            if row_root_family(prior_row) != current_root_family_key:
+                continue
+            if bool_value(prior_row.get("envelope_thaw_item_required")):
+                envelope_thaw_streak += 1
+                continue
+            break
+    forced_task_options = list(forced_retarget_gate.get("forced_selected_task_options") or [])
+    if bool_value(diagnostics_gate.get("instrumentation_supply_required")):
+        existing_forced_kinds = gate_allowed_task_kinds({"forced_selected_task_options": forced_task_options})
+        if not existing_forced_kinds.intersection({"instrumentation_supply", "execution_diagnostics_supply"}):
+            forced_task_options.append(
+                {
+                    "selected_task_kind": "instrumentation_supply",
+                    "task_kind": "instrumentation_supply",
+                    "source": "diagnostics_unavailable_gate",
+                    "actionable": True,
+                    "failure_surface_count_key": failure_surface_gate.get("failure_surface_count_key"),
+                    "diagnostics_unavailable_streak": diagnostics_gate.get("diagnostics_unavailable_streak"),
+                    "instrumentation_trigger_threshold": diagnostics_gate.get("instrumentation_trigger_threshold"),
+                }
+            )
+    forced_selected_task = forced_retarget_gate.get("forced_selected_task") or (forced_task_options[0] if forced_task_options else None)
 
     row = {
         "schema_version": SCHEMA_VERSION,
@@ -3314,18 +4664,30 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
         "cumulative_goal_distance_stall_streak": chain_gate.get("cumulative_goal_distance_stall_streak"),
         "cumulative_goal_distance_stalled": bool_value(chain_gate.get("cumulative_goal_distance_stalled")),
         "chain_stall_forced_retarget_gate": forced_retarget_gate,
-        "forced_selected_task": forced_retarget_gate.get("forced_selected_task"),
-        "forced_selected_task_options": forced_retarget_gate.get("forced_selected_task_options") or [],
+        "forced_selected_task": forced_selected_task,
+        "forced_selected_task_options": forced_task_options,
         "high_water_vector": chain_gate.get("high_water_vector"),
         "high_water_last_improved_cycle": chain_gate.get("high_water_last_improved_cycle"),
         "acceptance_reachability_gate": reachability_gate,
         "acceptance_unreachable_under_frozen_config": bool_value(
             reachability_gate.get("acceptance_unreachable_under_frozen_config")
         ),
+        "acceptance_verifier_not_evaluated": bool_value(
+            reachability_gate.get("acceptance_verifier_not_evaluated")
+        ),
+        "unverifiable_acceptance_contract": bool_value(
+            reachability_gate.get("unverifiable_acceptance_contract")
+        ),
         "relaxation_or_escalation_required": bool_value(
             reachability_gate.get("relaxation_or_escalation_required")
         ),
+        "residual_gap_policy": reachability_gate.get("residual_gap_policy"),
+        "residual_gap_ratio": reachability_gate.get("residual_gap_ratio"),
+        "marginal_repair": bool_value(reachability_gate.get("marginal_repair")),
         "oracle_metric_validity_gate": metric_validity_gate,
+        "metric_verifier_not_evaluated": bool_value(
+            metric_validity_gate.get("metric_verifier_not_evaluated")
+        ),
         "repo_owned_source_roots": repo_owned_source_roots,
         "repo_owned_source_roots_status": repo_owned_source_roots_status,
         "repo_owned_source_roots_error": repo_owned_source_roots_error,
@@ -3342,6 +4704,8 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
         "advice_freshness_gate": advice_gate,
         "partial_progress_axes_gate": partial_progress_gate,
         "structure_metrics_gate": structure_gate,
+        "structure_high_water_key_scope": structure_gate.get("structure_high_water_key_scope"),
+        "structure_global_invariant_metrics": structure_gate.get("structure_global_invariant_metrics") or {},
         "provider_scale_dispatch_gate": dispatch_gate,
         "changed_vs_previous": changed_vs_previous,
         "semantic_progress": semantic_progress,
@@ -3375,6 +4739,43 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
         "detection_only_streak_cap": args.detection_only_streak_cap,
         "requires_correction_or_terminal": requires_correction_or_terminal,
         "validator_integrity_gate": validator_gate,
+        "evidence_provenance_gate": evidence_gate,
+        "producer_attested_fields": evidence_gate.get("producer_attested_fields") or [],
+        "independently_verified_fields": evidence_gate.get("independently_verified_fields") or [],
+        "attested_only_movement": bool_value(evidence_gate.get("attested_only_movement")),
+        "primary_metric_gate": primary_metric_gate,
+        "primary_metric_high_water_moved": bool_value(primary_metric_gate.get("primary_metric_high_water_moved")),
+        "primary_metric_zero_movement_streak": primary_metric_gate.get("primary_metric_zero_movement_streak"),
+        "primary_metric_stalled": bool_value(primary_metric_gate.get("primary_metric_stalled")),
+        "c4_user_escalation_backstop_required": c4_user_escalation_backstop_required,
+        "failure_surface_stage_gate": failure_surface_gate,
+        "execution_stage_ladder_status": failure_surface_gate.get("execution_stage_ladder_status"),
+        "last_successful_stage": failure_surface_gate.get("last_successful_stage"),
+        "failure_surface_stage": failure_surface_gate.get("failure_surface_stage"),
+        "failure_surface_count_key": failure_surface_gate.get("failure_surface_count_key"),
+        "terminal_classification_stage_contradiction": bool_value(
+            failure_surface_gate.get("terminal_classification_stage_contradiction")
+        ),
+        "terminal_classification_invalid_for_counting": bool_value(
+            failure_surface_gate.get("terminal_classification_invalid_for_counting")
+        ),
+        "same_input_contract_gate": input_contract_gate,
+        "same_input_contract_violation": bool_value(input_contract_gate.get("same_input_contract_violation")),
+        "diagnostics_unavailable_gate": diagnostics_gate,
+        "diagnostics_unavailable": bool_value(diagnostics_gate.get("diagnostics_unavailable")),
+        "diagnostics_unavailable_streak": diagnostics_gate.get("diagnostics_unavailable_streak"),
+        "instrumentation_supply_required": bool_value(diagnostics_gate.get("instrumentation_supply_required")),
+        "verification_source_separation_gate": source_separation_gate,
+        "independent_source_separation_status": source_separation_gate.get("independent_source_separation_status"),
+        "independently_verified_downgraded_fields": source_separation_gate.get("independently_verified_downgraded_fields") or [],
+        "root_dominant_parameter_key": root_dominant_parameter_key,
+        "effective_count_key": effective_count_key,
+        "envelope_thaw_item_required": bool_value(reachability_gate.get("envelope_thaw_item_required")),
+        "envelope_thaw_item": reachability_gate.get("envelope_thaw_item"),
+        "envelope_thaw_streak": envelope_thaw_streak,
+        "coupled_verifier_gate": verifier_coupling_gate,
+        "pass_with_coupled_verifier": bool_value(verifier_coupling_gate.get("pass_with_coupled_verifier")),
+        "changed_verifier_source_paths": verifier_coupling_gate.get("changed_verifier_source_paths") or [],
         "previous_output_fingerprint": prev_fingerprint,
         "current_output_fingerprint": quality.get("current_output_fingerprint"),
         "previous_accepted_baseline": {
@@ -3561,6 +4962,114 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
                 "evidence": row["adapter_wiring_gate"],
             }
         )
+    if row["pass_with_coupled_verifier"]:
+        findings.append(
+            {
+                "severity": "block",
+                "code": "pass_with_coupled_verifier",
+                "message": "a passing verifier gate was modified in the same change set; do not read this pass as completion or goal-productive evidence until a non-coupled revalidation or independent evidence recalculation exists.",
+                "evidence": row["coupled_verifier_gate"],
+            }
+        )
+    if row["terminal_classification_stage_contradiction"]:
+        findings.append(
+            {
+                "severity": "block",
+                "code": "terminal_classification_stage_contradiction",
+                "message": "terminal classification contradicts the adapter-owned execution stage observation; do not use that classification for counting or close.",
+                "evidence": row["failure_surface_stage_gate"],
+            }
+        )
+    if row["same_input_contract_violation"]:
+        findings.append(
+            {
+                "severity": "block",
+                "code": "same_input_contract_violation",
+                "message": "a same-condition comparison changed the input set size; the comparison conclusion is not valid close evidence.",
+                "evidence": row["same_input_contract_gate"],
+            }
+        )
+    if row["instrumentation_supply_required"]:
+        findings.append(
+            {
+                "severity": "block",
+                "code": "instrumentation_supply_required",
+                "message": "diagnostics were unavailable for the same failure surface across the configured threshold; derive must enumerate instrumentation supply before another hypothesis repair can count.",
+                "evidence": row["diagnostics_unavailable_gate"],
+            }
+        )
+    elif row["diagnostics_unavailable"]:
+        findings.append(
+            {
+                "severity": "warn",
+                "code": "diagnostics_unavailable",
+                "message": "failure autopsy explicitly reported missing post-failure scalar diagnostics; this is trace evidence for instrumentation-first derivation if it repeats.",
+                "evidence": row["diagnostics_unavailable_gate"],
+            }
+        )
+    if row["independently_verified_downgraded_fields"]:
+        findings.append(
+            {
+                "severity": "warn",
+                "code": "independent_verification_source_not_disjoint",
+                "message": "independently_verified fields were downgraded because verification inputs were missing or overlapped the verified artifacts.",
+                "evidence": row["verification_source_separation_gate"],
+            }
+        )
+    if verifier_source_error:
+        findings.append(
+            {
+                "severity": "warn",
+                "code": "domain_adapter_verifier_source_paths_failed",
+                "message": "domain adapter verifier_source_paths() failed; verifier-source coupling was not applied.",
+                "evidence": {"error": verifier_source_error},
+            }
+        )
+    if row["attested_only_movement"]:
+        findings.append(
+            {
+                "severity": "warn",
+                "code": "attested_only_movement",
+                "message": "metric movement was producer-attested only; it did not update high-water state or reset stall counters.",
+                "evidence": row["evidence_provenance_gate"],
+            }
+        )
+    if evidence_provenance_error:
+        findings.append(
+            {
+                "severity": "warn",
+                "code": "domain_adapter_evidence_provenance_failed",
+                "message": "domain adapter evidence_provenance() failed; legacy progress accounting was used where no explicit provenance packet was supplied.",
+                "evidence": {"error": evidence_provenance_error},
+            }
+        )
+    if row["primary_metric_stalled"]:
+        findings.append(
+            {
+                "severity": "block",
+                "code": "primary_metric_stalled",
+                "message": "adapter-owned primary metric high-water did not move; C4 forced retargeting remains active and label churn cannot reset the stall.",
+                "evidence": row["primary_metric_gate"],
+            }
+        )
+    elif bool_value(primary_metric_gate.get("attested_only_movement")):
+        findings.append(
+            {
+                "severity": "warn",
+                "code": "primary_metric_attested_only_movement",
+                "message": "primary metric movement was producer-attested only; it did not move primary-metric high-water.",
+                "evidence": row["primary_metric_gate"],
+            }
+        )
+    if primary_metric_error:
+        findings.append(
+            {
+                "severity": "warn",
+                "code": "domain_adapter_primary_metric_failed",
+                "message": "domain adapter primary_metric() failed; primary-metric C4 trigger fell back to existing chain-stall behavior.",
+                "evidence": {"error": primary_metric_error},
+            }
+        )
     if row["adapter_mandate_required"]:
         findings.append(
             {
@@ -3597,6 +5106,29 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
                 "evidence": reachability_gate,
             }
         )
+    envelope_thaw_cap = int(getattr(args, "envelope_thaw_streak_cap", ENVELOPE_THAW_STREAK_CAP_DEFAULT)) or ENVELOPE_THAW_STREAK_CAP_DEFAULT
+    if row["envelope_thaw_item_required"]:
+        findings.append(
+            {
+                "severity": "block" if envelope_thaw_streak >= envelope_thaw_cap else "warn",
+                "code": "envelope_thaw_item_required",
+                "message": "acceptance is unreachable under a frozen envelope and no thaw item is reserved; preserve a thaw condition or staged thaw schedule before another envelope-internal task.",
+                "evidence": {
+                    "acceptance_reachability_gate": reachability_gate,
+                    "envelope_thaw_streak": envelope_thaw_streak,
+                    "cap": envelope_thaw_cap,
+                },
+            }
+        )
+    if row["unverifiable_acceptance_contract"]:
+        findings.append(
+            {
+                "severity": "block",
+                "code": "unverifiable_acceptance_contract",
+                "message": "a measurable acceptance target requires a live verifier, but the verifier was not evaluated; not_evaluated is not a pass.",
+                "evidence": reachability_gate,
+            }
+        )
     if bool_value(metric_validity_gate.get("metric_goal_productive_excluded")):
         findings.append(
             {
@@ -3622,6 +5154,15 @@ def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, A
                 "code": "domain_adapter_acceptance_reachability_failed",
                 "message": "domain adapter acceptance_reachability() failed; G-REACH remained indeterminate unless explicit reachability input was supplied.",
                 "evidence": {"error": acceptance_error},
+            }
+        )
+    if target_required_verifier_error:
+        findings.append(
+            {
+                "severity": "warn",
+                "code": "domain_adapter_target_required_verifier_failed",
+                "message": "domain adapter target_required_verifier() failed; measurable acceptance verifier mapping was not applied.",
+                "evidence": {"error": target_required_verifier_error},
             }
         )
     if metric_validity_error:
@@ -3985,10 +5526,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--provider-request-count", type=int, default=0)
     parser.add_argument("--artifact-path", action="append", default=[])
     parser.add_argument("--artifact-paths-json")
+    parser.add_argument("--changed-file", action="append", default=[], help="Changed repository file path used for verifier-source coupling checks.")
+    parser.add_argument("--changed-files-json", help="Path or JSON list/dict of changed repository files for verifier-source coupling checks.")
     parser.add_argument("--gate-state-json", action="append", default=[], help="Path or JSON containing disposition gates from loop detection or portfolio planning.")
     parser.add_argument("--recent-progress-json", help="Path or JSON containing recent progress items for consolidation-streak calculation.")
     parser.add_argument("--runner-validation-json", help="Path or JSON for strict runner validation, used only to detect semantic-progress disagreement.")
     parser.add_argument("--output-delta-json", help="Path or JSON for output-delta packet, used only to detect semantic-progress disagreement.")
+    parser.add_argument("--failure-autopsy-json", action="append", default=[], help="Path or JSON for scalar-safe failure autopsy packets from run-task-code-and-log.")
     parser.add_argument("--substance-metrics-json", help="Path or JSON object with adapter-compatible substance_metrics/current_substance_vector values.")
     parser.add_argument("--corrective-resolution-json", help="Path or JSON with corrective lane attempted/resolved counts.")
     parser.add_argument("--facet-root-map-json", help="Path or JSON mapping facet labels to root families.")
@@ -4007,6 +5551,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--detection-only-streak-cap", type=int, default=DETECTION_ONLY_STREAK_CAP_DEFAULT)
     parser.add_argument("--adapter-mandate-streak-cap", type=int, default=ADAPTER_MANDATE_STREAK_CAP_DEFAULT)
     parser.add_argument("--cumulative-chain-streak-cap", type=int, default=CUMULATIVE_CHAIN_STREAK_CAP_DEFAULT)
+    parser.add_argument("--instrumentation-trigger-threshold", type=int, default=INSTRUMENTATION_TRIGGER_THRESHOLD_DEFAULT)
+    parser.add_argument("--envelope-thaw-streak-cap", type=int, default=ENVELOPE_THAW_STREAK_CAP_DEFAULT)
     parser.add_argument("--blocker-signature", help="Stable current blocker signature before suffix normalization.")
     parser.add_argument("--blocker-rung", help="Current capability-ladder rung for the blocker family.")
     parser.add_argument("--max-forward-mutations", type=int, default=MAX_FORWARD_MUTATIONS_DEFAULT)

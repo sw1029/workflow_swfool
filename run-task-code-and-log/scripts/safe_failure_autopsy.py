@@ -148,6 +148,83 @@ def compact_safe_value(value: Any, *, depth: int = 0) -> Any:
     return str(type(value).__name__)
 
 
+def normalize_stage_name(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip().lower().replace(" ", "_").replace("-", "_")
+    return text or None
+
+
+def normalize_execution_stage_ladder(value: Any) -> tuple[list[str], str]:
+    if value is None:
+        return [], "not_provided"
+    source = value
+    if isinstance(value, dict):
+        for key in ("execution_stage_ladder", "stage_ladder", "stages", "ladder"):
+            if key in value:
+                source = value.get(key)
+                break
+    stages: list[str] = []
+    if isinstance(source, list):
+        for item in source:
+            stage = item.get("name") if isinstance(item, dict) else item
+            normalized = normalize_stage_name(stage)
+            if normalized and normalized not in stages:
+                stages.append(normalized)
+    elif isinstance(source, dict):
+        raw_stages = source.get("stages") or source.get("execution_stage_ladder") or source.get("stage_ladder")
+        if isinstance(raw_stages, list):
+            return normalize_execution_stage_ladder(raw_stages)
+        for key in sorted(source, key=lambda item: str(source[item]) if isinstance(source.get(item), int) else str(item)):
+            normalized = normalize_stage_name(key)
+            if normalized and normalized not in stages:
+                stages.append(normalized)
+    elif isinstance(source, str):
+        for item in re.split(r"[,>\s]+", source):
+            normalized = normalize_stage_name(item)
+            if normalized and normalized not in stages:
+                stages.append(normalized)
+    return stages, "provided" if stages else "malformed"
+
+
+def safe_scalar_diagnostics(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        source = value.get("post_failure_diagnostics") if isinstance(value.get("post_failure_diagnostics"), dict) else value
+    else:
+        source = {}
+    diagnostics: dict[str, Any] = {}
+    if not isinstance(source, dict):
+        return diagnostics
+    for key, child in source.items():
+        text_key = str(key)
+        if SENSITIVE_FIELD_RE.search(text_key):
+            continue
+        if child is None or isinstance(child, (bool, int, float)):
+            diagnostics[text_key] = child
+        elif isinstance(child, str):
+            text = child.strip()
+            if text and len(text) <= 120:
+                diagnostics[text_key] = text
+        elif isinstance(child, (list, tuple, set)):
+            diagnostics[f"{text_key}_count"] = len(child)
+        elif isinstance(child, dict):
+            diagnostics[f"{text_key}_field_count"] = len(child)
+        if len(diagnostics) >= 24:
+            break
+    return diagnostics
+
+
+def next_failure_stage(stages: list[str], last_successful_stage: str | None) -> str | None:
+    if not stages or not last_successful_stage:
+        return None
+    if last_successful_stage not in stages:
+        return None
+    index = stages.index(last_successful_stage)
+    if index + 1 >= len(stages):
+        return None
+    return stages[index + 1]
+
+
 def normalize_gate_selfcheck(
     value: Any,
     *,
@@ -340,6 +417,10 @@ def autopsy(
     command: str | None,
     allow_secret_env_key_names: bool,
     gate_selfchecks: list[dict[str, Any]] | None = None,
+    execution_stage_ladder: Any = None,
+    last_successful_stage: str | None = None,
+    post_failure_diagnostics: Any = None,
+    execution_stage_ladder_error: str | None = None,
 ) -> dict[str, Any]:
     combined = "\n".join(part for part in (stdout_text, stderr_text) if part)
     exc = exception_class(combined)
@@ -366,6 +447,12 @@ def autopsy(
         ),
         None,
     )
+    stages, stage_ladder_status = normalize_execution_stage_ladder(execution_stage_ladder)
+    normalized_last_stage = normalize_stage_name(last_successful_stage)
+    failure_surface_stage = next_failure_stage(stages, normalized_last_stage)
+    scalar_diagnostics = safe_scalar_diagnostics(post_failure_diagnostics)
+    stage_surface_declared = bool(stages or normalized_last_stage)
+    diagnostics_unavailable = stage_surface_declared and not scalar_diagnostics
     result = {
         "schema_version": "safe-failure-autopsy-v1",
         "autopsy_status": "complete" if combined or exit_code is not None else "no_failure_text",
@@ -383,6 +470,18 @@ def autopsy(
         "classification": classification,
         "alternative_evidence_source": alternative_evidence_source,
         "gate_selfcheck": gate_selfchecks,
+        "execution_stage_ladder_status": stage_ladder_status,
+        "execution_stage_ladder": stages,
+        "execution_stage_ladder_error": execution_stage_ladder_error,
+        "last_successful_stage": normalized_last_stage,
+        "failure_surface_stage": failure_surface_stage,
+        "post_failure_scalar_diagnostics": scalar_diagnostics,
+        "diagnostics_unavailable": diagnostics_unavailable,
+        "diagnostics_unavailable_reason": (
+            "no_post_failure_scalar_diagnostics"
+            if diagnostics_unavailable
+            else None
+        ),
         "mitigations_attempted": attempted,
         "mitigations_unavailable": unavailable,
         "command_present": bool(command),
@@ -410,6 +509,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--domain-adapter", help="Optional repository adapter exposing gate_selfcheck(...).")
     parser.add_argument("--gate-artifact-json", action="append", default=[], help="Path or JSON for a pre-execution gate artifact or self-check packet.")
     parser.add_argument("--gate-id", help="Stable gate id for gate_selfcheck classification.")
+    parser.add_argument("--execution-stage-ladder-json", help="Path or JSON list/dict of adapter-owned execution stages.")
+    parser.add_argument("--last-successful-stage", help="Adapter-owned stage name reached before failure.")
+    parser.add_argument("--post-failure-diagnostics-json", help="Path or JSON object containing scalar/enum post-failure diagnostics.")
     parser.add_argument(
         "--repo-owned-pre-exec-blocker",
         action="store_true",
@@ -425,6 +527,16 @@ def main(argv: list[str] | None = None) -> int:
     stdout_text = args.stdout_text if args.stdout_text is not None else read_text(Path(args.stdout_path) if args.stdout_path else None)
     stderr_text = args.stderr_text if args.stderr_text is not None else read_text(Path(args.stderr_path) if args.stderr_path else None)
     adapter = load_python_module(Path(args.domain_adapter), "safe_failure_autopsy_domain_adapter") if args.domain_adapter else None
+    execution_stage_ladder = read_json_value(args.execution_stage_ladder_json)
+    execution_stage_ladder_error = None
+    if execution_stage_ladder is None:
+        execution_stage_ladder, execution_stage_ladder_error = call_adapter(
+            adapter,
+            "execution_stage_ladder",
+            command=args.command,
+            exit_code=args.exit_code,
+        )
+    post_failure_diagnostics = read_json_value(args.post_failure_diagnostics_json)
     gate_selfchecks: list[dict[str, Any]] = []
     for raw_gate in args.gate_artifact_json or []:
         gate_artifact = read_json_value(raw_gate)
@@ -450,6 +562,10 @@ def main(argv: list[str] | None = None) -> int:
         args.command,
         args.allow_secret_env_key_names,
         gate_selfchecks,
+        execution_stage_ladder,
+        args.last_successful_stage,
+        post_failure_diagnostics,
+        execution_stage_ladder_error,
     )
     payload = json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     if args.output:

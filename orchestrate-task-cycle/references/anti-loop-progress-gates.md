@@ -7,6 +7,10 @@ Use this reference when recent task-cycle evidence shows safe but stationary wor
 - [Ownership](#ownership)
 - [Domain-Adapter Contract](#domain-adapter-contract)
 - [Part D In-Place Revision Contract](#part-d-in-place-revision-contract)
+- [Part E In-Place Revision Contract](#part-e-in-place-revision-contract)
+- [Part F In-Place Revision Contract](#part-f-in-place-revision-contract)
+- [Part G In-Place Revision Contract](#part-g-in-place-revision-contract)
+- [Part H In-Place Revision Contract](#part-h-in-place-revision-contract)
 - [G1 Disposition Intersection Gate](#g1-disposition-intersection-gate)
 - [G0 Pre-Cycle Regression Guard](#g0-pre-cycle-regression-guard)
 - [G0-SAT Gate Satisfiability Precheck](#g0-sat-gate-satisfiability-precheck)
@@ -59,19 +63,28 @@ Gate logic must stay domain-agnostic. A repository may supply a domain adapter t
 - `corrective_resolution(...)`: corrective/backfill lanes with `attempted/resolved` counts for G-VACUOUS.
 - `facet_root_map(...)`: facet labels mapped to root families for G-FACET.
 - `min_envelope_for(target, **context)`: optional D1 helper returning adapter-owned `envelope_floor` and `deficit_axis` for measurable acceptance targets.
+- `residual_gap_policy(target, **context)`: optional F3 helper returning adapter-owned residual gap threshold, comparison basis, and marginal-repair policy for measurable acceptance targets. The workflow consumes only abstract fields such as residual gap ratio and threshold status; metric definitions and threshold values stay adapter-owned.
 - `output_fingerprint(...)`: current primary-output fingerprint for G-ADVICE-FRESH.
 - `previous_accepted_fp(...)`: previous accepted primary-output fingerprint, optionally with previous quality/high-water vector, for R-GCOV baseline selection.
-- `structure_metrics(...)`: optional structure metrics for S-STRUCT, such as entrypoint LOC, command count, active/legacy ratio, mechanical shard count, version-suffix file count, global-rebinding/coupling signal count, duplicate definition count, tree depth, directory fan-out, reuse ratio, max file LOC, consolidation recommendation, `structure_high_water_moved`, `improved_structure_axes`, and `refactor_effect_required`.
+- `structure_metrics(...)`: optional structure metrics for S-STRUCT, such as entrypoint LOC, command count, active/legacy ratio, mechanical shard count, version-suffix file count, global-rebinding/coupling signal count, duplicate definition count, tree depth, directory fan-out, reuse ratio, max file LOC, consolidation recommendation, `structure_high_water_moved`, `improved_structure_axes`, and `refactor_effect_required`. It may expose `global_invariants`, `global_*` numeric fields, `global_structure_high_water_moved`, and `structure_high_water_key_scope=global_invariant` when structure progress must be keyed by fixed global invariants rather than a selected local scope.
 - `producer_progress_claim_fields(...)`: optional D2 helper listing producer-owned progress/completion fields that must be stored only as `observed_producer_claim`.
 - `adapter_load_status(...)` or packet fields `adapter_loaded`/`adapter_path`: optional registered-adapter load status. A registered adapter that is not loaded is `adapter_wiring_defect`, not adapter absence.
 - `capability_ladder(...)`: optional next-rung options for G-CHAIN forced retargeting, including abstract `selected_task_kind`, actionability, authority, local-data, and provider-bound prerequisites.
 - `primary_metric(...)`: optional D4 helper exposing one adapter-owned north-star progress value and high-water comparison semantics for G-CHAIN/C4 trigger keying.
+- `verifier_source_paths(...)`: optional F1 helper exposing abstract gate IDs mapped to verifier source paths or globs. If the current change set touches a mapped verifier source, that gate's pass becomes `pass_with_coupled_verifier` and is not an effective pass for close or progress. Missing hooks fail quiet.
+- `evidence_provenance(...)`: optional F2 helper exposing metric-field provenance as `independently_verified` or `producer_attested`. When present, untagged movement is treated as `producer_attested`; only independently verified metric movement can update high-water, reset stall counters, or support `goal_productive`. Missing hooks fail quiet.
 - `root_cause_hypotheses(...)`: optional root-cause hypothesis rows with domain-owned slugs and actionability booleans for the generic root-cause ledger.
 - `repo_owned_source_roots(...)`: optional repository-owned source glob roots for provenance-based root-cause actionability. When a blocker hypothesis points to a repo-owned source under these roots, `$audit-cycle-loopback` derives `local=true`, `in_scope=true`, and `actionable=true` from provenance and rejects conflicting producer self-report fields. If absent, fail quiet and keep legacy actionability rules.
 - `gate_selfcheck(...)`: optional pre-execution gate artifact self-check consumed by `$run-task-code-and-log` failure autopsy. It may report `blocked_pre_exec`, `contradicting_evidence`, `trusted_evidence_source`, `prior_pass_observed`, and `repo_owned_pre_exec_blocker`.
 - `partial_progress_axes(...)`: optional warn-only axes for all-or-nothing gate flatlining. Use it to recommend gate decomposition; never let this hook alone promote or block progress.
 - `acceptance_reachability(...)`: optional abstract G-REACH input with `acceptance_min_output`, `frozen_envelope`, and optional `reachability_verdict`.
 - `metric_validity_self_check(...)`: optional G-OENV input that reports tautological, constant, or self-fulfilling metrics/oracles.
+- `target_required_verifier(target, **context)`: optional target-to-verifier mapping for measurable acceptance, returning abstract `required_verifier`, `verifier_required`, and current `evaluation_status: pass|fail|not_evaluated` when available.
+- `goal_axis_map(targets, quality_vector, **context)`: optional mapping from active measurable goals to adapter-owned quality/vector axes that observe each goal. The workflow checks only whether each active measurable goal has at least one mapped axis; axis definitions, formulas, thresholds, and source artifacts stay adapter-owned.
+- `execution_stage_ladder(**context)`: optional H1/H2 ordered execution stages, optionally with `terminal_classification_stage_map`. Loopback combines this with `last_successful_stage` from failure autopsy to derive `failure_surface_stage`.
+- `terminal_classification_stage_map(**context)`: optional mapping of terminal classifications to allowed failure stages. A contradiction makes the terminal classification invalid for counting or close.
+- `instrumentation_trigger_threshold(**context)`: optional H3 threshold for repeated `diagnostics_unavailable` on the same failure surface. Missing hook defaults to `2`.
+- Verification source metadata in `evidence_provenance(...)` or a dedicated hook: `verification_input_paths`, `verified_artifact_paths`, and `self_grounded` axes for H4 independent-source separation.
 
 If the adapter is absent or omits a required vector, promotion must fail closed for the affected gate while packet production continues. If the adapter is registered by path or declaration but `adapter_loaded!=true`, set `adapter_wiring_defect=true`, route as `self_inflicted_gate_defect`, and select wiring/load correction instead of creating a new adapter. Do not hardcode project module paths, metric names, lexicon paths, or artifact filenames in the generic workflow skill body.
 
@@ -83,6 +96,50 @@ These rules revise existing decision points. They do not create new detector pha
 - D2 producer verdict seal: `$run-task-code-and-log` and downstream packets must downgrade producer progress labels to `observed_producer_claim`. Authoritative progress comes only from adapter recomputation, loopback/output-delta, or completion validation. A conflict is `split_brain_progress_claim` warning evidence, not a second truth source.
 - D3 root-cause rekeying: distinct-root-cause vetoes and stall streaks use adapter-collapsed root family plus an adapter-owned dominant parameter such as `min_envelope_for(...).deficit_axis` when present. Proximate label churn cannot create a fresh untried root for the same pair. Missing hooks fail quiet to legacy keys.
 - D4 C4 trigger rekeying: when `primary_metric(...)` is present, C4 forced-retargeting is triggered by zero high-water movement on that adapter-owned primary metric, not by mutable blocker labels. If C4 finds no actionable forced option, emit exactly one `user_escalation` backstop with the missing input, authority, or evidence kind.
+
+## Part E In-Place Revision Contract
+
+These rules revise existing decision meanings and keys. They do not add a new report, new derive phase, new detector family, authority grant, retry, or gate bypass.
+
+- E1 gate result three-state: existing gate packets use `evaluation_status: pass|fail|not_evaluated`. A fail-quiet missing hook is `not_evaluated`, not `pass`. Consumers may ignore a missing optional hook only when no measurable acceptance or caller contract says that verifier is required.
+- E2 acceptance completeness: measurable acceptance means measurable and verifiable. When `target_required_verifier(...)` or an acceptance packet marks a verifier as required and the gate is `not_evaluated`, normalize `unverifiable_acceptance_contract=true`. B1 acceptance provenance consumes that as incomplete acceptance, normally `partial`, and preserves a verifier-hook follow-up or explicit descope with residual scope.
+- E3 structure high-water rekeying: when `structure_metrics(...)` exposes fixed global invariants, key S-STRUCT high-water by those invariants instead of the per-cycle selected scope. Local reductions are useful but cannot reset structural progress when `structure_high_water_key_scope=global_invariant` and the global invariant is flat.
+
+If the required mapping or global invariant hook is absent, fail quiet to the existing D1-D4 behavior. Do not invent project-specific verifier names, invariant names, thresholds, paths, models, or capacities in this generic reference.
+
+## Part F In-Place Revision Contract
+
+These rules revise existing decision meanings, evidence definitions, and task-selection keys. They do not add a new phase, new report, new detector family, authority grant, automatic retry, or gate bypass.
+
+- F1 verifier-source coupling: a gate result counts as effective `pass` only when the current change set did not modify that gate's verifier source according to adapter `verifier_source_paths(...)`. A passing gate whose verifier source changed in the same cycle is `pass_with_coupled_verifier`, which consumers must read as not-pass for close, high-water movement, and `goal_productive`. Route through B1 as `partial` with residual work for non-coupled revalidation or F2 independent evidence recalculation. Legitimate verifier fixes are allowed; they require a separate verification cycle or independent recalculation before the pass is consumed.
+- F2 evidence provenance: primary-metric high-water movement, G-COV/G-SUBSTANCE movement, measurement promotion, and `goal_productive` evidence may count only fields whose adapter provenance is `independently_verified`. Producer-recorded scalar movement is `producer_attested` trace evidence; it cannot move high-water, reset stall counters, or silence C4/D4 forced retargeting. When the hook is provided, missing per-field provenance is interpreted as `producer_attested`. When absent, fail quiet to legacy accounting.
+- F3 residual gap marginal value: derive selects residual acceptance-gap repair by comparing marginal gap value against explicit descope-with-residual plus the next capability-ladder rung, not by gap existence alone. Use the existing target-envelope distance from `min_envelope_for(...)` and adapter `residual_gap_policy` when supplied. Gaps below policy threshold default to B1 partial/descope with residual scope plus the next rung; repeated marginal repair is keyed like D3 dominant-parameter retry. Missing hooks fail quiet to existing selection.
+
+Keep verifier source mappings, independent-source definitions, residual thresholds, metric names, paths, and domain source-data policy in the repository adapter or project-owned contracts.
+
+## Part G In-Place Revision Contract
+
+These rules revise the basis on which existing gates stand. They do not add a new phase, detector family, report surface, authority grant, retry, or gate bypass.
+
+- G1 count-key hygiene: same-family counters, root-cause distinctness, family seals, and stall keys are valid only when the effective count key is generation-independent. Plan/advice/task-pack IDs, cycle IDs, run IDs, timestamps, hash-only suffixes, and version/date suffixes are trace material, not count-key material. If a generated key contains those components, preserve it only as a legacy/trace key and count with the adapter-collapsed root plus dominant parameter, or with the existing terminal-outcome family fallback when the adapter map is absent. Unmapped facets must merge conservatively by `terminal_outcome_key` rather than minting a new family.
+- G2 required gate hooks: when a measurable acceptance contract depends on a gate named in a SKILL.md contract and that gate's required adapter hook is absent or `not_evaluated`, treat it as E2 `unverifiable_acceptance_contract`. Fail-quiet remains valid only for optional gates that no acceptance, task, advice, issue, or caller packet requires.
+- G3 goal-axis completeness: a qualitative review `pass` is consumable only if every active measurable goal has at least one adapter-supplied quality/vector axis observing it. If a goal has zero mapped axes, the review result is `pass_with_unobserved_axes`, not pass, and consumers must preserve B1 partial/residual scope plus an adapter follow-up to supply axes. Missing `goal_axis_map` fails quiet to legacy review semantics.
+- G4 cycle-cost denominator: F3 residual-gap selection compares `marginal_gap_value / cycle_fixed_cost` against the alternative's expected value per cycle cost. Reuse `$profile-cycle-efficiency` or equivalent cycle-efficiency evidence; when the denominator is absent, use `1` and preserve legacy F3. Below-policy ratios default to explicit descope-with-residual plus the next capability rung unless adapter evidence records a higher value case.
+
+Keep generation-key rules, required-hook lists, goal-axis maps, residual value thresholds, and cycle-cost measurement details in repository adapters, caller packets, or existing workflow profile evidence. Generic skills consume abstract fields only.
+
+## Part H In-Place Revision Contract
+
+These rules revise existing failure autopsy, loopback counting, evidence provenance, reachability, and ledger-cost decisions. They do not add a new detector, phase, report, retry authority, or gate bypass.
+
+- H1 failure autopsy stage/diagnostics: failed runs should carry `execution_stage_ladder`, `last_successful_stage`, and derived `failure_surface_stage` when the adapter or caller supplies a stage ladder. Store only safe scalar/enum post-failure diagnostics; if none are available, emit `diagnostics_unavailable=true`. Redaction/no-body policy still permits scalar stage names, status codes, counts, and enum labels.
+- H2 failure-surface count key: same-family counting extends from collapsed root plus dominant parameter to `(root, dominant parameter, failure_surface_stage)`. A terminal classification whose allowed stage map contradicts the observed `failure_surface_stage` is invalid for counting/close. A same-condition input-set mismatch also invalidates comparison.
+- H3 instrumentation supply trigger: when `diagnostics_unavailable=true` repeats for the same failure surface for the configured threshold, loopback emits `instrumentation_supply_required=true`. Derive must include/select instrumentation supply unless a hypothesis repair records why success/failure is already observable without new instrumentation.
+- H4 independent source separation: `independently_verified` requires `verification_input_paths` disjoint from verified artifacts unless the adapter marks the axis `self_grounded=true`. Missing or overlapping inputs downgrade affected fields to attested, and zero-disagreement is clean only when separation holds.
+- H5 frozen-envelope thaw: when G-REACH says acceptance is unreachable under a frozen envelope, consumers must reserve `envelope_thaw_item` with thaw condition/schedule or route to constraint relaxation, explicit descope, terminal blocker, or user escalation. Repeated thaw omission becomes a blocking reachability finding.
+- H6 unchanged packet reference: ledger packets identical to a previous event by path and hash should use `unchanged_ref(path+hash)` rather than reserializing identical content. Profile uses `unchanged_ref_count` in the conservative fixed-cost denominator.
+
+Keep stage names, classification maps, diagnostics thresholds, verification-source definitions, self-grounded axes, envelope thaw policy, and any project-specific artifact paths in repository adapters or caller packets. Generic skills consume abstract fields only.
 
 ## G1 Disposition Intersection Gate
 
@@ -215,7 +272,7 @@ Do not re-add `goal_productive` to `effective_allowed_dispositions` merely becau
 
 Normalize blocker and measurement families by removing version/date/run-directory suffixes and facet labels. When the domain adapter supplies `facet_root_map`, collapse facet labels through that map before applying family-level caps. Use `root_family_key` or `blocker_root_family`; do not let equivalent facet renames reset the measurement exception counter.
 
-When `facet_root_map` is absent, empty, or fails, do not fall back to raw proximate blocker text as the family key. Emit `facet_root_map_missing=true` and group by a stable terminal-outcome family such as `artifact_family + terminal_outcome_key`; use that value as `family_key` and `root_family_key`, and preserve the previous artifact/signature key as `legacy_family_key`. The packet should expose `terminal_outcome_key`, `terminal_outcome_family_key`, `terminal_outcome_family_fallback_applied`, and `terminal_outcome_family_previous_count`. This fallback is intentionally conservative: if the terminal outcome is unchanged, blocker-label mutation cannot reset the same-family cap.
+When `facet_root_map` is absent, empty, or fails, do not fall back to raw proximate blocker text as the family key. Emit `facet_root_map_missing=true` and group by a stable terminal-outcome family such as `artifact_family + terminal_outcome_key`; use that value as `family_key` and `root_family_key`, and preserve the previous artifact/signature key as `legacy_family_key`. If the raw key contains generation-dependent components, mark that raw key trace-only and keep counting on the terminal-outcome family. The packet should expose `terminal_outcome_key`, `terminal_outcome_family_key`, `terminal_outcome_family_fallback_applied`, and `terminal_outcome_family_previous_count`. This fallback is intentionally conservative: if the terminal outcome is unchanged, blocker-label mutation or generation churn cannot reset the same-family cap.
 
 Packets should expose `measurement_progress_streak_for_root_family` alongside `measurement_progress_streak_for_root_key`. `measurement_progress_allowed=true` is valid only when both the root-key and root-family streaks are within cap and G-COV/G-SUBSTANCE passed.
 
@@ -257,7 +314,7 @@ If an option exists, expose it as `forced_selected_task` and allow `goal_product
 
 Use this gate for the "distinct but non-converging hypothesis chain" case: each repair can be locally valid and still fail to reduce goal distance. Do not delete or weaken A2b; G-CHAIN adds a separate cumulative no-progress axis.
 
-When the adapter exposes `primary_metric(...)`, key the C4 forced-retarget trigger to primary-metric high-water movement. If the primary metric has zero high-water movement for the configured cap, renamed labels, facets, or version suffixes cannot reset the trigger. If no forced option is actionable, emit one user-escalation backstop with the missing input, authority, or evidence kind; do not schedule another same-family retry solely to recheck the condition.
+When the adapter exposes `primary_metric(...)`, key the C4 forced-retarget trigger to primary-metric high-water movement. If the primary metric has zero independently verified high-water movement for the configured cap, renamed labels, facets, version suffixes, or producer-attested scalar movement cannot reset the trigger. If no forced option is actionable, emit one user-escalation backstop with the missing input, authority, or evidence kind; do not schedule another same-family retry solely to recheck the condition.
 
 ## G-REACH Acceptance Reachability Gate
 
@@ -267,17 +324,23 @@ Before derive promotes another repair inside a frozen envelope, compare the task
 - `frozen_envelope`
 - `reachability_verdict: reachable|unreachable|indeterminate`
 - `acceptance_unreachable_under_frozen_config`
+- `envelope_thaw_item_required`
+- `envelope_thaw_item`
 - `relaxation_or_escalation_required`
 
-If `reachability_verdict=unreachable`, another envelope-internal micro-repair is not goal-productive. Derive must choose a constraint-relaxation task when authority permits it, or `user_escalation` when relaxation needs user approval. If the values are absent or not comparable, use `indeterminate` and do not block solely from G-REACH.
+If `reachability_verdict=unreachable`, another envelope-internal micro-repair is not goal-productive. Derive must choose a constraint-relaxation task when authority permits it, reserve an `envelope_thaw_item` with thaw condition/schedule, explicitly descope with residual scope, or choose `user_escalation` when relaxation/thaw needs user approval. If the values are absent or not comparable, use `indeterminate` and do not block solely from G-REACH.
 
 When an `acceptance_envelope_contract` exists, treat `envelope_below_floor=true` as the same acceptance-incomplete condition before derive selects a task slice. This is not a new gate; it is the normalized acceptance contract saying the selected envelope cannot satisfy the target.
+
+When an `acceptance_verifier_contract` or adapter mapping marks a live verifier required, the same gate must expose `evaluation_status`. `not_evaluated` means the gate did not run and cannot be read as pass. If the target is measurable and the verifier remains `not_evaluated`, set `unverifiable_acceptance_contract=true` and preserve residual verifier work rather than consuming the target.
 
 ## G-OENV Oracle/Metric Validity Gate
 
 When the adapter exposes `metric_validity_self_check(...)`, check whether a metric/oracle can pass tautologically, by constant output, or by echoing an input/order it is supposed to evaluate. The packet should expose `oracle_metric_validity_gate` with `metric_validity`, `metric_validity_states`, `metric_validity_self_check_provided`, and `metric_goal_productive_excluded`.
 
 If `metric_goal_productive_excluded=true`, do not use that oracle/metric pass to justify measurement progress, capability-ladder promotion, or completion. The next task must correct the metric/oracle definition or provide independent strict changed-and-semantic output-delta evidence. If the adapter omits the self-check, warn only.
+
+If a metric validity self-check is required by the acceptance verifier contract but is `not_evaluated`, treat the metric as unavailable for goal-productive support. Do not treat the missing check as a passing validity check.
 
 ## G-ADVICE-FRESH Advice Freshness Gate
 
@@ -339,7 +402,9 @@ Allow a goal-productive disposition only for strict changed-and-semantic primary
 
 When the domain adapter supplies `structure_metrics(...)`, expose `structure_metrics_gate` with numeric structure metrics, `structure_consolidation_recommended`, optional `structure_high_water_moved`, `improved_structure_axes`, and `refactor_effect_required`. Semantic structure metrics may include mechanical shard count, version-suffix file count, global-rebinding or hidden-coupling signal count, duplicate public definition count, tree depth, directory fan-out, reuse ratio, and max file LOC. Treat the adapter hook as the single truth source for structure progress; producer-local structure reports are advisory until absorbed into this hook. Treat the signal as warn-level unless another gate makes command-surface pressure hard. Use it to justify Class C consolidation, `semantic_consolidation`, `reuse_extraction`, `coupling_reduction`, or module-boundary work when that work reduces the reported structure burden.
 
-For behavior-preserving refactor tasks whose objective is structural reduction, downstream validation must require real structure high-water movement. New modules, relocated helpers, additional files, token/pattern avoidance, or green tests are not enough when the adapter reports `refactor_effect_required=true` and `structure_high_water_moved=false`. Define coupling axes by durable dependency/reference counts or equivalent movement-resistant metrics, not only by absence of forbidden token strings.
+When the adapter supplies `global_invariants` or `global_*` metrics, expose `structure_high_water_key_scope=global_invariant` and `structure_global_invariant_metrics`. For structural objectives, high-water movement must come from those fixed invariants before a task can claim global structure progress. A cycle-local reduction inside a newly selected scope is not enough if global invariants are flat.
+
+For behavior-preserving refactor tasks whose objective is structural reduction, downstream validation must require real structure high-water movement. New modules, relocated helpers, additional files, token/pattern avoidance, or green tests are not enough when the adapter reports `refactor_effect_required=true` and `structure_high_water_moved=false`. Define coupling axes by durable dependency/reference counts or equivalent movement-resistant metrics, not only by absence of forbidden token strings. If `structure_high_water_key_scope=global_invariant`, validation must not close the refactor as global progress from selected-scope improvement alone.
 
 If the adapter omits structure metrics, do nothing beyond warn-only generic code-structure audit findings. Do not hardcode project-specific module paths, metric names, kernel/reuse roots, dependency DAGs, or thresholds into this generic workflow reference.
 
@@ -373,6 +438,11 @@ The producer must compute `anti_loop_progress_gate` from raw artifact content an
 - `repo_owned_source_roots_status`, `partial_progress_axes_gate`, and provenance-hardened root-cause actionability fields when supplied by the adapter
 - `terminal_outcome_changed`, `observed_delta_class`, `forward_mutation_vacuous`, `root_cause_ledger_path`, `root_cause_unverified_hypotheses`, `root_cause_duplicate_hypotheses`, `untried_actionable_root_cause_exists`, `untried_root_cause_hypotheses`, `untried_promotion_budget`, `vacuous_untried_streak`, and `hypothesis_exhausted` when applicable
 - `adapter_mandate_required`, `adapter_missing_streak`, `adapter_contract_unmet`, `adapter_loaded`, `adapter_wiring_defect`, `cumulative_goal_distance_stalled`, `cumulative_goal_distance_stall_streak`, `forced_selected_task_options`, `untried_veto_overridden_by_chain_stall`, `acceptance_unreachable_under_frozen_config`, `relaxation_or_escalation_required`, and `oracle_metric_validity_gate` when applicable
+- `evidence_provenance_gate`, `independently_verified_fields`, `producer_attested_fields`, `attested_only_movement`, `primary_metric_gate`, `primary_metric_stalled`, `primary_metric_zero_movement_streak`, `c4_user_escalation_backstop_required`, `coupled_verifier_gate`, `pass_with_coupled_verifier`, and `changed_verifier_source_paths` when applicable
+- `evaluation_status` on required gate packets, `acceptance_verifier_not_evaluated`, `unverifiable_acceptance_contract`, `metric_verifier_not_evaluated`, `structure_high_water_key_scope`, and `structure_global_invariant_metrics` when applicable
+- count-key hygiene fields when available, such as `legacy_family_key`, `raw_root_family_key`, `terminal_outcome_family_key`, `terminal_outcome_family_fallback_applied`, and any adapter-supplied dominant parameter that makes counting generation-independent
+- goal-axis completeness fields when supplied by review/caller packets, such as `goal_axis_map`, `unobserved_goal_axes`, and `pass_with_unobserved_axes`
+- residual-gap cost-ratio fields when supplied by normalize/derive/profile packets, such as `cycle_fixed_cost`, `alternative_cycle_cost`, `marginal_value_per_cycle_cost`, and `residual_gap_cost_policy`
 - `recommended_disposition`, `hard_stop_required`, `evidence_class`, and evidence paths
 
 The repository adapter or shared module must fail closed on noisy quality inputs. If confidence is low, artifacts are missing/malformed, adapter output is missing, or domain interpretation is uncertain, emit `evidence_class: insufficient_evidence`, `recommended_disposition: conservative_hold`, and `hard_stop_required: true`. Legacy repository quality modules may remain as compatibility fallbacks, but new domain-specific metrics, paths, lexicons, and thresholds belong behind the adapter interface.
@@ -384,6 +454,9 @@ Use the packet as a derive gate:
 - `evidence_class=insufficient_evidence` blocks `goal_productive` unless the next task supplies the missing raw artifacts, runs a bounded provider/semantic transition, or records terminal/user escalation with evidence.
 - `effective_allowed_dispositions` bounds the next selected disposition. Do not choose a disposition by taking a union of individual gates.
 - `disposition_intersection_basis.allowed_task_kinds` binds `goal_productive` to those task kinds. A label-only `goal_productive` task with another kind is not valid progress.
+- `pass_with_coupled_verifier=true` means a modified verifier source produced the pass in the same change set. Consumers must not count that pass for close, high-water movement, or `goal_productive`; choose verifier-source-independent revalidation, independent evidence recalculation, residual descope, terminal blocker, or user escalation.
+- `attested_only_movement=true` means producer-attested scalar movement was observed but excluded from high-water. It does not reset stall counters and cannot satisfy a hard `goal_productive` requirement without independent recalculation.
+- `primary_metric_gate.primary_metric_stalled=true` applies C4 forced retargeting on the adapter-owned primary metric. If `c4_user_escalation_backstop_required=true`, derive must emit `user_escalation` with the missing input/authority/evidence rather than another same-family retry.
 - `substance_delta_gate.substance_delta_pass=false` blocks measurement promotion unless strict changed-and-semantic primary-output evidence exists.
 - `blocker_mutation_kind=forward_mutation` blocks rung promotion unless `terminal_outcome_changed=true`; set `forward_mutation_vacuous=true` when the ladder moved but observed domain output did not.
 - `adapter_mandate_required=true` forces adapter registration/strengthening before another domain repair can count as `goal_productive`.
@@ -392,12 +465,17 @@ Use the packet as a derive gate:
 - `untried_actionable_root_cause_exists=true` invalidates terminal blocking and forces derive to select the untried root-cause repair only when `hypothesis_exhausted=false`, `untried_veto_overridden_by_chain_stall=false`, and the hypothesis is actionability-verified.
 - `repo_owned_source_roots_status=provided` means repository-owned provenance can override conflicting producer self-report fields for root-cause `local`, `in_scope`, and `actionable`. Do not trust self-reported `local=false`, `in_scope=false`, or `actionable=false` for that hypothesis.
 - `acceptance_unreachable_under_frozen_config=true` forces constraint relaxation or `user_escalation`.
+- `unverifiable_acceptance_contract=true` blocks full target consumption and forces verifier-hook implementation, explicit descope with residual scope, terminal blocker, or user escalation.
+- `pass_with_unobserved_axes=true` blocks review pass consumption for the affected measurable goals and forces adapter axis supply, explicit descope with residual scope, terminal blocker, or user escalation.
+- generation-dependent `legacy_family_key` or unmapped facet fallback evidence must not support a claim that a blocker family is new. Count, seal, and stall on the effective root family/dominant-parameter key or terminal-outcome family.
+- below-policy `marginal_value_per_cycle_cost` must not support another same-gap `goal_productive` repair unless the derive result records a higher value case; preserve descope-with-residual and the next capability rung.
 - `oracle_metric_validity_gate.metric_goal_productive_excluded=true` blocks tautological metric/oracle passes from supporting progress.
 - `root_cause_unverified_hypotheses` and `root_cause_duplicate_hypotheses` never override terminal/quiescence. Self-asserted actionability without structural fields or provenance is not enough, and rename/version suffix equivalents are not fresh hypotheses.
 - `hypothesis_exhausted=true` means the same family has spent the untried repair budget on vacuous attempts; derive must terminal-block or user-escalate unless a supplied input delta changes the family.
 - `vacuous_corrective_gate.surface_corrective_noop=true` blocks counting unresolved corrective rows as output delta.
 - `partial_progress_axes_gate.status=warn` is advisory only: it recommends decomposing all-or-nothing gates when partial axes exist but high-water remains flat. It must not add a new blocker.
 - `structure_metrics_gate.refactor_effect_required=true` with `structure_high_water_moved=false` means a refactor may be useful but cannot be completed as structural goal progress without residual work or explicit descope. File-count growth, mechanical splitting, token avoidance, or producer self-reports must not be treated as an improved structure axis.
+- `structure_high_water_key_scope=global_invariant` means per-scope local improvement cannot reset global structure stall or satisfy global structure acceptance unless `global_structure_high_water_moved=true` or equivalent global invariant movement is present.
 
 ## A1 Measurement Progress Exemption
 

@@ -51,6 +51,8 @@ MIN_FIELDS = [
     "next_task_id",
     "changed_files",
     "artifacts",
+    "artifact_refs",
+    "unchanged_refs",
     "validation_verdict",
     "progress_verdict",
     "blockers",
@@ -136,6 +138,64 @@ def normalize_list(*values: Any) -> list[str]:
         elif str(value) != "":
             result.append(str(value))
     return result
+
+
+def file_sha256(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return None
+    return digest.hexdigest()
+
+
+def artifact_path(root: Path, artifact: str) -> Path:
+    path = Path(artifact)
+    return path if path.is_absolute() else root / path
+
+
+def prior_artifact_refs(root: Path, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    for event in events:
+        for ref in event.get("artifact_refs") or []:
+            if isinstance(ref, dict) and ref.get("path") and ref.get("sha256"):
+                refs.append(ref)
+        for artifact in normalize_list(event.get("artifacts")):
+            if not artifact:
+                continue
+            refs.append({"path": artifact, "sha256": file_sha256(artifact_path(root, artifact))})
+    return refs
+
+
+def annotate_artifact_refs(root: Path, event: dict[str, Any], previous_events: list[dict[str, Any]]) -> None:
+    previous = prior_artifact_refs(root, previous_events)
+    artifact_refs: list[dict[str, Any]] = []
+    unchanged_refs: list[dict[str, str]] = []
+    for artifact in normalize_list(event.get("artifacts")):
+        digest = file_sha256(artifact_path(root, artifact))
+        if not digest:
+            continue
+        ref: dict[str, Any] = {"path": artifact, "sha256": digest}
+        prior = next(
+            (
+                item
+                for item in reversed(previous)
+                if item.get("sha256") == digest and item.get("path") == artifact
+            ),
+            None,
+        ) or next((item for item in reversed(previous) if item.get("sha256") == digest), None)
+        if prior and prior.get("path") and prior.get("sha256"):
+            ref["unchanged_ref"] = {"path": str(prior["path"]), "sha256": str(prior["sha256"])}
+            unchanged_refs.append(ref["unchanged_ref"])
+        artifact_refs.append(ref)
+    if artifact_refs:
+        event["artifact_refs"] = artifact_refs
+    if unchanged_refs:
+        event["unchanged_refs"] = unchanged_refs
 
 
 def make_event_id(cycle_id: str, step: str, created_at: str, event: dict[str, Any]) -> str:
@@ -239,11 +299,13 @@ def append_event(root: Path, cycle_id: str, event: dict[str, Any], allow_noncano
     directory = cycle_dir(root, cycle_id)
     (directory / "packets").mkdir(parents=True, exist_ok=True)
     path = ledger_path(root, cycle_id)
+    previous_events = read_events(root, cycle_id)
     event = validate_event_step(event, allow_noncanonical_step)
     completed = complete_event(cycle_id, event)
+    annotate_artifact_refs(root, completed, previous_events)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(completed, ensure_ascii=False, sort_keys=True) + "\n")
-    current = write_current(root, cycle_id, read_events(root, cycle_id))
+    current = write_current(root, cycle_id, previous_events + [completed])
     return {"event": completed, "current_stage": current, "ledger_path": rel_path(root, path), "current_stage_path": rel_path(root, current_stage_path(root, cycle_id))}
 
 
@@ -273,6 +335,7 @@ def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
     latest_by_step: dict[str, dict[str, Any]] = {}
     changed_files: list[str] = []
     artifacts: list[str] = []
+    unchanged_refs: list[dict[str, Any]] = []
     blockers: list[str] = []
     task_pack_values: list[str] = []
     malformed_events: list[dict[str, Any]] = []
@@ -284,6 +347,7 @@ def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
             malformed_events.append(event)
         changed_files.extend(normalize_list(event.get("changed_files")))
         artifacts.extend(normalize_list(event.get("artifacts")))
+        unchanged_refs.extend(ref for ref in event.get("unchanged_refs") or [] if isinstance(ref, dict))
         blockers.extend(normalize_list(event.get("blockers")))
         task_pack_values.extend(
             normalize_list(
@@ -304,6 +368,8 @@ def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
         "steps": {step: {"status": event.get("status"), "reason": event.get("reason")} for step, event in latest_by_step.items()},
         "changed_files": sorted(set(changed_files)),
         "artifacts": sorted(set(artifacts)),
+        "unchanged_ref_count": len(unchanged_refs),
+        "unchanged_refs": unchanged_refs[-20:],
         "blockers": sorted(set(blockers)),
         "task_pack": sorted(set(task_pack_values)),
         "malformed_events": [
@@ -330,6 +396,7 @@ def render_markdown(summary: dict[str, Any]) -> str:
         f"- 이벤트 수(event_count): {summary.get('event_count') or 0}",
         f"- 최신 단계(latest_step): {summary.get('latest_step') or 'none'}",
         f"- 최신 상태(latest_status): {summary.get('latest_status') or 'none'}",
+        f"- unchanged_ref 수(unchanged_ref_count): {summary.get('unchanged_ref_count') or 0}",
         f"- 검증 판정(validation_verdict): {summary.get('validation_verdict') or 'not_run'}",
         f"- 진행 판정(progress_verdict): {summary.get('progress_verdict') or 'not_run'}",
         f"- task ID(task_id): {summary.get('task_id') or 'unknown'}",

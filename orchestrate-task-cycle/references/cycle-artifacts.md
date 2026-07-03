@@ -59,6 +59,8 @@ Each stage event should include these fields when known:
 - `next_task_id`
 - `changed_files`
 - `artifacts`
+- `artifact_refs`
+- `unchanged_refs`
 - `validation_verdict`
 - `progress_verdict`
 - `progress_kind`
@@ -73,6 +75,14 @@ Each stage event should include these fields when known:
 - `goal_distance_gate`
 - `input_delta_gate`
 - `supplied_input_delta_gate`
+- `count_key_hygiene_gate`
+- `failure_surface_stage_gate`
+- `diagnostics_unavailable_gate`
+- `verification_source_separation_gate`
+- `envelope_thaw_item_required`
+- `envelope_thaw_item`
+- `goal_axis_completeness_gate`
+- `residual_gap_cost_policy`
 - `provider_reattempt_gate`
 - `command_surface_budget`
 - `anti_loop_progress_gate`
@@ -88,6 +98,8 @@ Ledger append calls must provide a non-empty canonical `step`. Noncanonical step
 
 Ledger `status` is a workflow-stage lifecycle status, not the owning subskill's raw result status. Use `complete` for a stage whose owning skill produced successful completion evidence. Keep result statuses such as run `success`, validation `passed`, or commit-specific statuses in the subskill result packet or in a separate field such as `source_status`/`result_status`. The ledger writer normalizes incoming stage `success` or `succeeded` to `complete` and preserves the original in `source_status`; transition validators should stay strict on canonical lifecycle statuses.
 
+When an event references an artifact path already recorded with the same SHA-256, the ledger writer should emit `artifact_refs[].unchanged_ref: {path, sha256}` and top-level `unchanged_refs`. Downstream profile snapshots use `unchanged_ref_count` to avoid counting repeated packet bodies as fresh fixed cost.
+
 ## Result Contracts
 
 Use `$validate-subskill-result-contract` or `scripts/result_contract.py` before advancing major stages.
@@ -96,9 +108,9 @@ Use `$validate-subskill-result-contract` or `scripts/result_contract.py` before 
 - Use `block` mode for final report fields, running execution details, issue closure, candidate deletion, or commit creation gates.
 - Required fields vary by target but generally include `task_id`, verdicts, changed files, blockers, evidence paths, commit status, and skipped/pending reasons.
 - Result contracts also check ledger-envelope readiness for direct append: the top-level `step` should match the target. This is a warning in normal `warn` mode because a coordinator may instead pass `--step` at append time.
-- The `qualitative_review` target must include `task_id`, `review_agent_count`, `reviewer_routing`, `review_status`, `quality_verdict`, `reviewed_artifacts`, `direct_read_scope`, `qualitative_findings`, `direction_recommendations`, `blocker_taxonomy_delta`, `no_overclaim_flags`, and `evidence_paths`; exactly one read-only reviewer agent must be reported. Do not satisfy this contract by naming the main coordinator as the reviewer. When reviewer delegation is unavailable, use `review_status: blocked|partial|not_applicable` with `reviewer_delegation_unavailable_reason` instead of `complete`.
+- The `qualitative_review` target must include `task_id`, `review_agent_count`, `reviewer_routing`, `review_status`, `quality_verdict`, `reviewed_artifacts`, `direct_read_scope`, `qualitative_findings`, `direction_recommendations`, `blocker_taxonomy_delta`, `no_overclaim_flags`, and `evidence_paths`; exactly one read-only reviewer agent must be reported. Do not satisfy this contract by naming the main coordinator as the reviewer. When reviewer delegation is unavailable, use `review_status: blocked|partial|not_applicable` with `reviewer_delegation_unavailable_reason` instead of `complete`. When `goal_axis_map` is supplied and any active measurable goal has zero mapped axes, the target must carry `goal_axis_completeness_gate`, `unobserved_goal_axes`, or `pass_with_unobserved_axes` and must not report that review as an acceptable pass for those goals.
 - The `qualitative_review` target must carry the output-delta handoff shape with `output_delta_status`, `changed_vs_previous`, `semantic_progress`, `produced_domain_delta`, `metadata_only`, `effective_progress_kind`, and `progress_cap`, using explicit false/not-applicable/blocked values rather than omitting fields. When durable evidence is written, include `.task/quality_review/<cycle-id>-direct-output-quality-review.{md,json}` in `evidence_paths`.
-- The `loopback_audit` target must include `cycle_id`, `family_key`, `changed_vs_previous`, `semantic_progress`, `same_family_micro_hardening_count`, `recommended_disposition`, `hard_stop_required`, `evidence_class`, and `evidence_paths`.
+- The `loopback_audit` target must include `cycle_id`, `family_key`, `changed_vs_previous`, `semantic_progress`, `same_family_micro_hardening_count`, `recommended_disposition`, `hard_stop_required`, `evidence_class`, and `evidence_paths`. When applicable, it must preserve `pass_with_coupled_verifier`, `coupled_verifier_gate`, `evidence_provenance_gate`, `attested_only_movement`, `primary_metric_gate`, `c4_user_escalation_backstop_required`, count-key hygiene fields, `failure_surface_stage_gate`, `same_input_contract_gate`, `diagnostics_unavailable_gate`, `verification_source_separation_gate`, `envelope_thaw_item_required`, required gate-hook completeness, goal-axis completeness fields, and residual value-per-cycle-cost fields.
 - The `code_structure_audit` target must include `task_id`, `audit_status`, `changed_files_scanned`, `oversize_files`, `thresholds`, `responsibility_clusters`, `semantic_structure_metrics`, `semantic_structure_findings`, `convention_conformance`, `moduleization_required`, `suggested_module_root`, `responsibility_split_plan`, `semantic_refactor_plan`, and `evidence_paths`. Use `audit_status: pass|warn|refactor_required|blocked|not_applicable`. `moduleization_required=true` requires a non-empty `responsibility_split_plan` or a concrete existing-debt exemption. This target must not include raw source bodies.
 - The `validation_set_plan` target must include `task_id`, `validation_set_need`, `task_family`, `oracle_strategy`, `split_strategy`, and `evidence_paths` when applicable.
 - The `validation_set_build` target must include `task_id`, `validation_set_id`, `validation_set_status`, `quality_tier`, `not_gold`, `item_count`, `oracle_manifest_path`, `split_manifest_path`, `leakage_report_path`, `validation_set_root_path`, and `evidence_paths`. Block unsupported `quality_tier: gold`, raw body persistence, source-class promotion, and sealed holdout label exposure.
@@ -109,10 +121,13 @@ Use `$validate-subskill-result-contract` or `scripts/result_contract.py` before 
 - If `command_surface_budget.consolidation_candidate_required=true`, the `derive` result must record `consolidation_candidate_registered=true`, select consolidation work, select goal-productive work, or record terminal state.
 - Use `progress_kind: goal_productive` only when the selected task is expected to produce goal-relevant output, quality evidence, source-backed validation, or another non-sidecar artifact that reduces goal distance. Use `progress_kind: governance_only` for workflow, metadata, reconciliation, or sidecar-only tasks even when `progress_verdict` may later pass validation.
 - Use `effective_progress_kind: governance_only` when output-delta review reports `produced_domain_delta: false` or `metadata_only: true`. A self-reported `progress_kind: goal_productive` is invalid when the output-delta gate proves the work is metadata-only and no independent validated positive evidence is recorded.
+- `goal_productive` is invalid when it relies on `pass_with_coupled_verifier=true`, `attested_only_movement=true`, or producer-attested metric fields without independent recalculation.
+- `goal_productive` is invalid when it relies on `pass_with_unobserved_axes=true`, generation-dependent raw family keys, terminal-classification/failure-stage contradiction, same-input contract mismatch, unresolved `instrumentation_supply_required`, non-disjoint independent verification inputs, missing `envelope_thaw_item` for frozen-envelope reachability, acceptance-required gate hooks that are absent/not_evaluated, or below-policy residual value per cycle cost without residual descope plus the next rung or a higher value case.
 - Terminal or sealed blocker-family derivation should include `root_cause_attempted_for_family: true`, or an explicit rationale that root-cause repair is impossible, unauthorized, or unsafe.
 - Preserve both `blocker_signature` and `semantic_signature`: `blocker_signature` remains compatibility evidence, while `semantic_signature` removes volatile target-surface/run suffixes and drives repeated-family loop breakers.
 - The `report` target must preserve task-pack promotion provenance when it references `.task/task_pack/` evidence or the next task was promoted from a pack: include `task_pack_status`, `task_pack_path`, and `task_pack_item_id` or `promoted_item_id`.
 - Commit targets must include `commit_role`: use `implementation` for the validation/issue-gated change set and `closeout` for report/dashboard/ledger/advice artifacts. Created commits must include `commit_hash` and `commit_subject`; skipped, blocked, or failed commits must include `commit_skipped_reason`.
+- The `validate` target must preserve Part G/H gates when supplied: `count_key_hygiene_gate`, `failure_surface_stage_gate`, `same_input_contract_gate`, `diagnostics_unavailable_gate`, `verification_source_separation_gate`, `envelope_thaw_item_required`, `goal_axis_completeness_gate`, `residual_gap_marginality_gate` or `residual_gap_cost_policy`, and required gate-hook fields. `complete` or `advanced` is invalid when these gates show generation-key family reset, contradictory terminal classification, same-input mismatch, unresolved instrumentation supply, non-disjoint independent verification, missing thaw item, unobserved measurable axes, missing required hooks, or below-policy residual value per cycle cost without explicit residual handling.
 - When active `.agent_advice/active/` exists, governance, validation-set planning/building, derivation, and validation result contracts must include `used_advice` or an explicit advice disposition rationale such as `advice_deferred_reason`, `advice_rejected_reason`, `advice_not_applicable_reason`, or `advice_handling_rationale`.
 
 ## Visible Increment
@@ -151,7 +166,7 @@ Evidence cache records live in `.task/evidence_cache/index.jsonl` by default. Th
 
 ## Dashboard And Profile Snapshots
 
-Dashboard and efficiency-profile artifacts are point-in-time renders over `stage.jsonl`. They must include or preserve the ledger `event_count` they were rendered from. If a later `closeout_commit` event updates `stage.jsonl` or `current_stage.json`, the earlier dashboard/profile are pre-closeout snapshots; either regenerate them after the final append or state that snapshot boundary in the user-facing summary.
+Dashboard and efficiency-profile artifacts are point-in-time renders over `stage.jsonl`. They must include or preserve the ledger `event_count` they were rendered from. Profile snapshots should also preserve `unchanged_ref_count` and `cycle_cost_basis` when available so duplicate unchanged packets do not inflate fixed-cost accounting. If a later `closeout_commit` event updates `stage.jsonl` or `current_stage.json`, the earlier dashboard/profile are pre-closeout snapshots; either regenerate them after the final append or state that snapshot boundary in the user-facing summary.
 
 ## Running Execution
 

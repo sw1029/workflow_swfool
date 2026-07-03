@@ -214,6 +214,12 @@ def validate_pack(data: dict[str, Any], path: Path | None = None) -> list[dict[s
             has_target = non_empty(original_target)
             narrowed = truthy(record.get("narrowed"))
             residual_item_id = str(record.get("residual_item_id") or "").strip()
+            verifier_contract = (
+                record.get("acceptance_verifier_contract")
+                if isinstance(record.get("acceptance_verifier_contract"), dict)
+                else item.get("acceptance_verifier_contract") if isinstance(item.get("acceptance_verifier_contract"), dict)
+                else {}
+            )
 
             if has_target and not directive_id:
                 add(
@@ -272,6 +278,230 @@ def validate_pack(data: dict[str, Any], path: Path | None = None) -> list[dict[s
                         "block",
                         "measurable_target_unmet_without_descope",
                         "Consumed measurable pack items must meet the original target or record an explicit descope decision with residual scope.",
+                        {"item_id": item_id, "directive_id": directive_id or None},
+                    )
+                verifier_gate = result.get("acceptance_verifier_gate") if isinstance(result.get("acceptance_verifier_gate"), dict) else {}
+                verifier_gate = verifier_gate or (
+                    result.get("acceptance_verifier_contract")
+                    if isinstance(result.get("acceptance_verifier_contract"), dict)
+                    else {}
+                )
+                verifier_required = truthy(
+                    verifier_contract.get("verifier_required")
+                    or verifier_contract.get("required")
+                    or verifier_gate.get("verifier_required")
+                    or verifier_gate.get("required")
+                ) or non_empty(verifier_contract.get("required_verifier")) or non_empty(verifier_gate.get("required_verifier"))
+                evaluation_status = str(
+                    verifier_gate.get("evaluation_status")
+                    or verifier_contract.get("evaluation_status")
+                    or ""
+                ).strip().lower()
+                required_hooks = (
+                    verifier_gate.get("required_gate_hooks")
+                    or verifier_contract.get("required_gate_hooks")
+                    or record.get("required_gate_hooks")
+                    or item.get("required_gate_hooks")
+                )
+                hook_status = str(
+                    verifier_gate.get("gate_hook_status")
+                    or verifier_contract.get("gate_hook_status")
+                    or record.get("gate_hook_status")
+                    or item.get("gate_hook_status")
+                    or ""
+                ).strip().lower()
+                pass_with_coupled_verifier = truthy(
+                    verifier_gate.get("pass_with_coupled_verifier")
+                    or verifier_contract.get("pass_with_coupled_verifier")
+                    or result.get("pass_with_coupled_verifier")
+                    or (
+                        result.get("coupled_verifier_gate", {}).get("pass_with_coupled_verifier")
+                        if isinstance(result.get("coupled_verifier_gate"), dict)
+                        else False
+                    )
+                )
+                if verifier_required and (evaluation_status != "pass" or pass_with_coupled_verifier) and not explicit_descope:
+                    add(
+                        "block",
+                        "acceptance_verifier_not_passed_item_consumed",
+                        "Consumed measurable pack items require each required live verifier to pass without same-changeset verifier-source coupling, or an explicit descope decision with residual scope.",
+                        {
+                            "item_id": item_id,
+                            "directive_id": directive_id or None,
+                            "evaluation_status": evaluation_status or None,
+                            "pass_with_coupled_verifier": pass_with_coupled_verifier,
+                        },
+                    )
+                if non_empty(required_hooks) and hook_status in {"", "not_supplied", "absent", "missing", "fail_quiet", "not_evaluated"} and not explicit_descope:
+                    add(
+                        "block",
+                        "required_gate_hook_missing_item_consumed",
+                        "Consumed measurable pack items cannot depend on an acceptance-required gate hook that is absent, fail-quiet, or not_evaluated; preserve hook-supply work or residual scope.",
+                        {
+                            "item_id": item_id,
+                            "directive_id": directive_id or None,
+                            "gate_hook_status": hook_status or None,
+                        },
+                    )
+                goal_axis_contract = (
+                    record.get("goal_axis_contract")
+                    if isinstance(record.get("goal_axis_contract"), dict)
+                    else item.get("goal_axis_contract") if isinstance(item.get("goal_axis_contract"), dict)
+                    else {}
+                )
+                goal_axis_gate = result.get("goal_axis_completeness_gate") if isinstance(result.get("goal_axis_completeness_gate"), dict) else {}
+                pass_with_unobserved_axes = truthy(
+                    goal_axis_gate.get("pass_with_unobserved_axes")
+                    or goal_axis_contract.get("pass_with_unobserved_axes")
+                    or result.get("pass_with_unobserved_axes")
+                    or item.get("pass_with_unobserved_axes")
+                )
+                unobserved_goal_axes = (
+                    goal_axis_gate.get("unobserved_goal_axes")
+                    or goal_axis_contract.get("unobserved_goal_axes")
+                    or result.get("unobserved_goal_axes")
+                    or item.get("unobserved_goal_axes")
+                )
+                if (pass_with_unobserved_axes or non_empty(unobserved_goal_axes)) and not explicit_descope:
+                    add(
+                        "block",
+                        "unobserved_goal_axes_item_consumed",
+                        "Consumed review-backed measurable pack items require at least one mapped observing axis per active goal, or explicit residual/descope handling.",
+                        {
+                            "item_id": item_id,
+                            "directive_id": directive_id or None,
+                            "unobserved_goal_axes": unobserved_goal_axes or None,
+                        },
+                    )
+                evidence_gate = result.get("evidence_provenance_gate") if isinstance(result.get("evidence_provenance_gate"), dict) else {}
+                attested_only = truthy(result.get("attested_only_movement") or evidence_gate.get("attested_only_movement"))
+                producer_attested = result.get("producer_attested_fields") or evidence_gate.get("producer_attested_fields")
+                independently_verified = result.get("independently_verified_fields") or evidence_gate.get("independently_verified_fields")
+                if (attested_only or (producer_attested and not independently_verified)) and not explicit_descope:
+                    add(
+                        "block",
+                        "producer_attested_progress_item_consumed",
+                        "Consumed measurable pack items cannot rely on producer-attested metric movement without independently verified evidence or explicit residual descope.",
+                        {"item_id": item_id, "directive_id": directive_id or None},
+                    )
+                verification_gate = result.get("verification_source_separation_gate") if isinstance(result.get("verification_source_separation_gate"), dict) else {}
+                independent_source_status = str(
+                    result.get("independent_source_separation_status")
+                    or verification_gate.get("independent_source_separation_status")
+                    or evidence_gate.get("independent_source_separation_status")
+                    or ""
+                ).strip().lower()
+                independently_verified_downgraded = (
+                    result.get("independently_verified_downgraded_fields")
+                    or verification_gate.get("independently_verified_downgraded_fields")
+                    or evidence_gate.get("independently_verified_downgraded_fields")
+                )
+                if independently_verified and independent_source_status in {"missing", "overlap", "blocked"} and not explicit_descope:
+                    add(
+                        "block",
+                        "independent_verification_source_not_disjoint_item_consumed",
+                        "Consumed measurable pack items cannot rely on independently_verified evidence unless verification_input_paths are disjoint from verified artifacts or the axis is self_grounded.",
+                        {
+                            "item_id": item_id,
+                            "directive_id": directive_id or None,
+                            "independent_source_separation_status": independent_source_status,
+                        },
+                    )
+                if non_empty(independently_verified_downgraded) and not explicit_descope:
+                    add(
+                        "block",
+                        "downgraded_independent_verification_item_consumed",
+                        "Consumed measurable pack items cannot count independently_verified fields that were auto-downgraded to attested.",
+                        {"item_id": item_id, "directive_id": directive_id or None, "downgraded_fields": independently_verified_downgraded},
+                    )
+                reachability_gate = result.get("acceptance_reachability_gate") if isinstance(result.get("acceptance_reachability_gate"), dict) else {}
+                envelope_thaw_required = truthy(result.get("envelope_thaw_item_required") or reachability_gate.get("envelope_thaw_item_required"))
+                envelope_thaw_item = result.get("envelope_thaw_item") or reachability_gate.get("envelope_thaw_item")
+                if envelope_thaw_required and not (explicit_descope or non_empty(envelope_thaw_item)):
+                    add(
+                        "block",
+                        "envelope_thaw_item_missing_item_consumed",
+                        "Consumed measurable pack items cannot close acceptance that is unreachable under a frozen envelope without a reserved envelope_thaw_item or explicit residual/descope handling.",
+                        {"item_id": item_id, "directive_id": directive_id or None},
+                    )
+                diagnostics_gate = result.get("diagnostics_unavailable_gate") if isinstance(result.get("diagnostics_unavailable_gate"), dict) else {}
+                instrumentation_required = truthy(result.get("instrumentation_supply_required") or diagnostics_gate.get("instrumentation_supply_required"))
+                observable_without_instrumentation = truthy(
+                    result.get("diagnostics_observable_without_new_instrumentation")
+                    or result.get("existing_diagnostics_sufficient")
+                    or result.get("success_failure_observable_without_instrumentation")
+                )
+                if instrumentation_required and not observable_without_instrumentation and not explicit_descope:
+                    add(
+                        "block",
+                        "instrumentation_supply_missing_item_consumed",
+                        "Consumed measurable pack items cannot close repeated diagnostics_unavailable without instrumentation supply or an explicit observability rationale.",
+                        {"item_id": item_id, "directive_id": directive_id or None},
+                    )
+                marginal_repair = truthy(record.get("marginal_repair") or item.get("marginal_repair"))
+                next_rung = record.get("next_capability_rung") or item.get("next_capability_rung")
+                higher_value = truthy(record.get("marginal_repair_higher_value") or item.get("marginal_repair_higher_value"))
+                cost_policy = result.get("residual_gap_cost_policy") if isinstance(result.get("residual_gap_cost_policy"), dict) else {}
+                residual_cost_below_policy = truthy(
+                    record.get("residual_gap_cost_below_policy")
+                    or item.get("residual_gap_cost_below_policy")
+                    or result.get("residual_gap_cost_below_policy")
+                    or cost_policy.get("below_policy")
+                    or cost_policy.get("cost_disproportionate")
+                )
+                cycle_fixed_cost = record.get("cycle_fixed_cost") or item.get("cycle_fixed_cost") or result.get("cycle_fixed_cost") or cost_policy.get("cycle_fixed_cost")
+                marginal_value_per_cycle_cost = (
+                    record.get("marginal_value_per_cycle_cost")
+                    or item.get("marginal_value_per_cycle_cost")
+                    or result.get("marginal_value_per_cycle_cost")
+                    or cost_policy.get("marginal_value_per_cycle_cost")
+                )
+                if marginal_repair and item.get("status") == "consumed" and not (explicit_descope and non_empty(next_rung)) and not higher_value:
+                    add(
+                        "block",
+                        "marginal_repair_item_consumed_without_value_case",
+                        "Consumed below-threshold residual-gap repairs require explicit descope plus the next capability rung, or recorded higher marginal value.",
+                        {"item_id": item_id, "directive_id": directive_id or None},
+                    )
+                if cycle_fixed_cost is not None and marginal_repair and not non_empty(marginal_value_per_cycle_cost):
+                    add(
+                        "block",
+                        "residual_cycle_cost_ratio_missing_item_consumed",
+                        "Consumed residual-gap repairs with cycle-cost evidence require `marginal_value_per_cycle_cost`.",
+                        {"item_id": item_id, "directive_id": directive_id or None},
+                    )
+                if residual_cost_below_policy and not (explicit_descope and non_empty(next_rung)) and not higher_value:
+                    add(
+                        "block",
+                        "residual_cost_below_policy_item_consumed",
+                        "Consumed residual-gap repairs below value-per-cycle-cost policy require residual descope plus the next capability rung, or recorded higher value.",
+                        {"item_id": item_id, "directive_id": directive_id or None},
+                    )
+                count_key_gate = result.get("count_key_hygiene_gate") if isinstance(result.get("count_key_hygiene_gate"), dict) else {}
+                generation_dependent_count_key = truthy(
+                    result.get("generation_dependent_count_key")
+                    or count_key_gate.get("generation_dependent_count_key")
+                    or item.get("generation_dependent_count_key")
+                )
+                generation_key_reset_claim = truthy(
+                    result.get("family_novelty_claim")
+                    or result.get("stall_reset_claim")
+                    or count_key_gate.get("family_novelty_claim")
+                    or count_key_gate.get("stall_reset_claim")
+                )
+                effective_count_key = result.get("effective_count_key") or count_key_gate.get("effective_count_key") or result.get("terminal_outcome_family_key")
+                if generation_dependent_count_key and not non_empty(effective_count_key):
+                    add(
+                        "block",
+                        "generation_count_key_without_effective_key_item_consumed",
+                        "Consumed pack items with generation-dependent raw keys must preserve an effective adapter-collapsed count key or terminal-outcome fallback.",
+                        {"item_id": item_id, "directive_id": directive_id or None},
+                    )
+                if generation_dependent_count_key and generation_key_reset_claim:
+                    add(
+                        "block",
+                        "generation_key_reset_claim_item_consumed",
+                        "Consumed pack items cannot treat task/advice/pack/cycle/run/date/hash/version churn as a new family or stall reset.",
                         {"item_id": item_id, "directive_id": directive_id or None},
                     )
 
@@ -803,6 +1033,116 @@ def command_mark_consumed(args: argparse.Namespace) -> int:
                     for evidence_path in args.acceptance_provenance_evidence_path:
                         if evidence_path not in paths:
                             paths.append(evidence_path)
+            if args.required_verifier or args.acceptance_verifier_status or args.acceptance_verifier_evidence_path:
+                gate = result.setdefault("acceptance_verifier_gate", {})
+                if args.required_verifier:
+                    gate["required_verifier"] = args.required_verifier
+                    gate["verifier_required"] = True
+                if args.acceptance_verifier_status:
+                    gate["evaluation_status"] = args.acceptance_verifier_status
+                    gate["acceptance_verifier_not_evaluated"] = args.acceptance_verifier_status == "not_evaluated"
+                    gate["unverifiable_acceptance_contract"] = args.acceptance_verifier_status == "not_evaluated"
+                if args.acceptance_verifier_evidence_path:
+                    paths = gate.setdefault("evidence_paths", [])
+                    for evidence_path in args.acceptance_verifier_evidence_path:
+                        if evidence_path not in paths:
+                            paths.append(evidence_path)
+            if args.required_gate_hook or args.gate_hook_status:
+                gate = result.setdefault("acceptance_verifier_gate", {})
+                if args.required_gate_hook:
+                    hooks = gate.setdefault("required_gate_hooks", [])
+                    for hook in args.required_gate_hook:
+                        if hook not in hooks:
+                            hooks.append(hook)
+                if args.gate_hook_status:
+                    gate["gate_hook_status"] = args.gate_hook_status
+                    if args.gate_hook_status in {"not_supplied", "absent", "fail_quiet", "not_evaluated"}:
+                        gate["unverifiable_acceptance_contract"] = True
+            if args.pass_with_unobserved_axes or args.unobserved_goal_axis:
+                gate = result.setdefault("goal_axis_completeness_gate", {})
+                if args.pass_with_unobserved_axes:
+                    gate["pass_with_unobserved_axes"] = True
+                if args.unobserved_goal_axis:
+                    axes = gate.setdefault("unobserved_goal_axes", [])
+                    for axis in args.unobserved_goal_axis:
+                        if axis not in axes:
+                            axes.append(axis)
+            if (
+                args.independently_verified_field
+                or args.producer_attested_field
+                or args.independent_source_separation_status
+                or args.independently_verified_downgraded_field
+                or args.verification_input_path
+                or args.verified_artifact_path
+            ):
+                gate = result.setdefault("evidence_provenance_gate", {})
+                if args.independently_verified_field:
+                    fields = gate.setdefault("independently_verified_fields", [])
+                    for field in args.independently_verified_field:
+                        if field not in fields:
+                            fields.append(field)
+                if args.producer_attested_field:
+                    fields = gate.setdefault("producer_attested_fields", [])
+                    for field in args.producer_attested_field:
+                        if field not in fields:
+                            fields.append(field)
+                if args.independent_source_separation_status:
+                    gate["independent_source_separation_status"] = args.independent_source_separation_status
+                if args.independently_verified_downgraded_field:
+                    fields = gate.setdefault("independently_verified_downgraded_fields", [])
+                    for field in args.independently_verified_downgraded_field:
+                        if field not in fields:
+                            fields.append(field)
+                if args.verification_input_path:
+                    paths = gate.setdefault("verification_input_paths", [])
+                    for path_value in args.verification_input_path:
+                        if path_value not in paths:
+                            paths.append(path_value)
+                if args.verified_artifact_path:
+                    paths = gate.setdefault("verified_artifact_paths", [])
+                    for path_value in args.verified_artifact_path:
+                        if path_value not in paths:
+                            paths.append(path_value)
+            if args.generation_dependent_count_key or args.effective_count_key:
+                gate = result.setdefault("count_key_hygiene_gate", {})
+                if args.generation_dependent_count_key:
+                    gate["generation_dependent_count_key"] = True
+                    gate["count_key_trace_only"] = True
+                if args.effective_count_key:
+                    gate["effective_count_key"] = args.effective_count_key
+            if args.envelope_thaw_item_required or args.envelope_thaw_item or args.thaw_condition or args.thaw_schedule:
+                gate = result.setdefault("acceptance_reachability_gate", {})
+                if args.envelope_thaw_item_required:
+                    gate["envelope_thaw_item_required"] = True
+                if args.envelope_thaw_item:
+                    gate["envelope_thaw_item"] = args.envelope_thaw_item
+                if args.thaw_condition:
+                    gate["thaw_condition"] = args.thaw_condition
+                if args.thaw_schedule:
+                    gate["thaw_schedule"] = args.thaw_schedule
+            if args.instrumentation_supply_required or args.diagnostics_unavailable_streak is not None or args.existing_diagnostics_sufficient:
+                gate = result.setdefault("diagnostics_unavailable_gate", {})
+                if args.instrumentation_supply_required:
+                    gate["instrumentation_supply_required"] = True
+                if args.diagnostics_unavailable_streak is not None:
+                    gate["diagnostics_unavailable_streak"] = args.diagnostics_unavailable_streak
+                if args.existing_diagnostics_sufficient:
+                    result["existing_diagnostics_sufficient"] = True
+            if (
+                args.cycle_fixed_cost is not None
+                or args.marginal_value_per_cycle_cost is not None
+                or args.residual_gap_cost_below_policy
+                or args.marginal_repair_higher_value
+            ):
+                policy = result.setdefault("residual_gap_cost_policy", {})
+                if args.cycle_fixed_cost is not None:
+                    policy["cycle_fixed_cost"] = args.cycle_fixed_cost
+                if args.marginal_value_per_cycle_cost is not None:
+                    policy["marginal_value_per_cycle_cost"] = args.marginal_value_per_cycle_cost
+                if args.residual_gap_cost_below_policy:
+                    policy["below_policy"] = True
+                if args.marginal_repair_higher_value:
+                    policy["marginal_repair_higher_value"] = True
             found = True
             break
     if not found:
@@ -873,6 +1213,32 @@ def main(argv: list[str] | None = None) -> int:
     consumed_p.add_argument("--explicit-descope-decision", action="store_true")
     consumed_p.add_argument("--residual-item-id")
     consumed_p.add_argument("--acceptance-provenance-evidence-path", action="append")
+    consumed_p.add_argument("--required-verifier")
+    consumed_p.add_argument("--acceptance-verifier-status", choices=["pass", "fail", "not_evaluated"])
+    consumed_p.add_argument("--acceptance-verifier-evidence-path", action="append")
+    consumed_p.add_argument("--required-gate-hook", action="append")
+    consumed_p.add_argument("--gate-hook-status", choices=["pass", "supplied", "present", "not_supplied", "absent", "fail_quiet", "not_evaluated"])
+    consumed_p.add_argument("--pass-with-unobserved-axes", action="store_true")
+    consumed_p.add_argument("--unobserved-goal-axis", action="append")
+    consumed_p.add_argument("--independently-verified-field", action="append")
+    consumed_p.add_argument("--producer-attested-field", action="append")
+    consumed_p.add_argument("--independent-source-separation-status", choices=["pass", "missing", "overlap", "blocked", "self_grounded"])
+    consumed_p.add_argument("--independently-verified-downgraded-field", action="append")
+    consumed_p.add_argument("--verification-input-path", action="append")
+    consumed_p.add_argument("--verified-artifact-path", action="append")
+    consumed_p.add_argument("--generation-dependent-count-key", action="store_true")
+    consumed_p.add_argument("--effective-count-key")
+    consumed_p.add_argument("--envelope-thaw-item-required", action="store_true")
+    consumed_p.add_argument("--envelope-thaw-item")
+    consumed_p.add_argument("--thaw-condition")
+    consumed_p.add_argument("--thaw-schedule")
+    consumed_p.add_argument("--instrumentation-supply-required", action="store_true")
+    consumed_p.add_argument("--diagnostics-unavailable-streak")
+    consumed_p.add_argument("--existing-diagnostics-sufficient", action="store_true")
+    consumed_p.add_argument("--cycle-fixed-cost")
+    consumed_p.add_argument("--marginal-value-per-cycle-cost")
+    consumed_p.add_argument("--residual-gap-cost-below-policy", action="store_true")
+    consumed_p.add_argument("--marginal-repair-higher-value", action="store_true")
     consumed_p.add_argument("--reason")
     consumed_p.add_argument("--language", default="ko")
     consumed_p.add_argument("--render", action="store_true")

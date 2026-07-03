@@ -80,6 +80,17 @@ Environment section rules:
 - Include `Authority Policy` for every task from `$manage-agent-authority`. Use `.agent_goal/agent_authority.md` when present; otherwise use `default_current_agent_permissions` and do not infer API/network/destructive authority.
 - Include `External Advice` as `none` unless an `.agent_advice/active` document influenced selection, requirements, constraints, or validation. When used, list the `adv-*` ID or path and keep it separate from goal truth.
 - Include task-pack fields as `none` for standalone tasks. When a pack item is promoted, list the pack ID/path, item ID, item position, and whether it was planned, inserted, or reordered.
+- When a measurable target has a required verifier, include the abstract verifier contract in acceptance or validation. Do not mark `evaluation_status: not_evaluated` as a passing condition.
+- When a measurable target depends on an acceptance-referenced gate with required adapter hooks, include required hook status in acceptance or validation. Missing, fail-quiet, or `not_evaluated` hook status means `unverifiable_acceptance_contract`, not pass.
+- When a verifier pass came from a verifier source modified in the same change set, include `pass_with_coupled_verifier` evidence and require later non-coupled revalidation or independent recalculation; do not consume it as `pass`.
+- When review evidence reports `pass_with_unobserved_axes` or non-empty `unobserved_goal_axes`, include adapter axis-supply, explicit residual scope, terminal blocker, or user escalation in the task; do not consume that review as pass.
+- When loopback reports generation-dependent count-key material, include the effective adapter-collapsed count key or terminal-outcome family fallback. Do not use task/advice/pack/cycle/run/date/hash/version labels as family novelty or stall reset.
+- When loopback reports failure-surface or same-input Part H blockers, include `failure_surface_stage`, `terminal_classification_stage_contradiction`, and/or `same_input_contract_violation` evidence and select classification/input-contract repair, instrumentation supply, terminal blocker, or user escalation rather than ordinary repair.
+- When loopback reports `instrumentation_supply_required`, include instrumentation supply acceptance or a concrete observability rationale proving success/failure is already measurable without new instrumentation.
+- When independently verified evidence lacks disjoint `verification_input_paths`, include source-separation repair or treat the fields as attested; do not claim high-water or `goal_productive` from them.
+- When frozen-envelope reachability reports `envelope_thaw_item_required`, include `envelope_thaw_item` with thaw condition/schedule, constraint relaxation, explicit residual descope, terminal blocker, or user escalation.
+- When metric movement is producer-attested, include `evidence_provenance_gate`, `producer_attested_fields`, and `attested_only_movement` evidence and require independent verification before claiming high-water movement or `goal_productive`.
+- When a residual measurable gap is below adapter policy, include `residual_gap_ratio`, `residual_gap_policy`, `marginal_repair`, cycle-cost fields when supplied, and either explicit descope-with-residual plus the next capability rung or higher marginal-value-per-cycle-cost evidence.
 
 ## Candidate Task Template
 
@@ -94,6 +105,8 @@ Store unapplied candidates under `.task/candidate_task/YYYYMMDD-HHMMSS-<slug>.md
 - Expected Progress: advanced | safety_only | no_progress | regressed
 - Progress Kind: goal_productive | governance_only
 - Semantic Signature:
+- Effective Count Key:
+- Count-Key Hygiene: generation-dependent raw keys trace-only | not_applicable
 - Supplied Input Delta Needed: yes | no
 - Validation Profile: current_only | affected_chain | full_chain
 - Authority Policy: `$manage-agent-authority` result (`.agent_goal/agent_authority.md` | default_current_agent_permissions)
@@ -124,6 +137,20 @@ Store unapplied candidates under `.task/candidate_task/YYYYMMDD-HHMMSS-<slug>.md
 ## Blocking Questions
 
 - <Unknowns or dependencies>
+
+## Part G Gates
+
+- Required Gate Hooks:
+- Goal Axis Completeness:
+- Residual Value Per Cycle Cost:
+
+## Part H Gates
+
+- Failure Surface Stage:
+- Same Input Contract:
+- Instrumentation Supply:
+- Verification Source Separation:
+- Envelope Thaw:
 ```
 
 ## Task Pack JSON Template
@@ -155,6 +182,18 @@ Store task packs under `.task/task_pack/pack-YYYYMMDD-HHMMSS-<slug>.json`. The J
       "blocker_signature_expected": "taxonomy|issue|surface|missing_input",
       "semantic_signature_expected": "stable-goal-axis-family",
       "progress_kind_expected": "goal_productive",
+      "effective_count_key_expected": "adapter-root|dominant-parameter",
+      "count_key_hygiene": {
+        "generation_dependent_count_key": false,
+        "trace_only_keys": []
+      },
+      "goal_axis_contract": {
+        "goal_axis_map_status": "not_supplied",
+        "active_goal_axes": [],
+        "quality_vector_axes": [],
+        "unobserved_goal_axes": [],
+        "pass_with_unobserved_axes": false
+      },
       "positive_input_delta_required": false,
       "required_new_input_kinds": [],
       "scope_fidelity": [
@@ -163,6 +202,21 @@ Store task packs under `.task/task_pack/pack-YYYYMMDD-HHMMSS-<slug>.json`. The J
           "original_target": {"metric": "abstract_metric", "comparator": ">=", "target": "original target"},
           "item_acceptance": ["Acceptance copied from or traceable to the original directive target."],
           "acceptance_envelope_contract": {"envelope_floor": "adapter-owned abstract floor", "deficit_axis": "adapter-owned axis", "status": "provided|not_provided|indeterminate"},
+          "acceptance_verifier_contract": {
+            "required_verifier": "adapter-owned abstract verifier",
+            "verifier_required": true,
+            "required_gate_hooks": [],
+            "gate_hook_status": "pass|fail|not_supplied|absent|fail_quiet|not_evaluated",
+            "evaluation_status": "pass|fail|not_evaluated"
+          },
+          "residual_gap_ratio": null,
+          "residual_gap_policy": null,
+          "envelope_thaw_item_required": false,
+          "envelope_thaw_item": null,
+          "cycle_fixed_cost": null,
+          "marginal_gap_value": null,
+          "marginal_value_per_cycle_cost": null,
+          "marginal_repair": false,
           "narrowed": false,
           "narrow_reason": null,
           "residual_item_id": null
@@ -194,6 +248,13 @@ Pack rules:
 - Promote only one item into the active `task.md` per derivation.
 - Preserve measurable directive scope with `scope_fidelity`. If a pack item narrows an original target, set `narrowed=true`, record `narrow_reason`, and create an open residual item rather than consuming the target under a weaker acceptance criterion.
 - Preserve adapter-owned `acceptance_envelope_contract` when it exists. If the planned item envelope is below the floor, keep the original target open and represent the item as envelope expansion, explicit descope with residual scope, terminal blocker, or user escalation rather than a weakened acceptance target.
+- Preserve adapter-owned `acceptance_verifier_contract` when it exists. If the required verifier is `not_evaluated`, keep verifier work or residual target scope open; do not consume the target under an unverified acceptance criterion.
+- Preserve acceptance-required gate-hook status when it exists. If a required hook is absent, fail-quiet, or `not_evaluated`, keep hook-supply work or residual target scope open; do not consume the target under fail-quiet.
+- Preserve goal-axis completeness fields when supplied. If `pass_with_unobserved_axes=true`, keep adapter axis-supply work, residual target scope, terminal blocker, or user escalation open.
+- Preserve count-key hygiene fields when supplied. Generation-dependent raw keys are trace-only; use `effective_count_key_expected` or terminal-outcome fallback for repeated-family decisions.
+- Preserve Part F fields when present. `pass_with_coupled_verifier` is not a passing verifier, `attested_only_movement` is not high-water progress, and `marginal_repair` for a below-threshold residual gap should stay behind explicit descope plus the next capability rung unless higher marginal value is recorded.
+- Preserve Part G residual cost fields when present. If cycle-cost evidence is supplied, same-gap repair must justify marginal value per cycle cost; otherwise keep denominator `1` legacy behavior.
+- Preserve Part H fields when present. Terminal-classification/stage contradictions and same-input mismatches cannot close or count work; repeated diagnostics unavailable must force instrumentation or explicit observability; independently verified fields need disjoint verification inputs or become attested; frozen-envelope unreachable acceptance needs `envelope_thaw_item`, residual/descope, terminal blocker, or user escalation.
 - Use `terminal_blocked` when no viable item remains and no supplied input delta, authority change, or external-state change exists. Include `semantic_signature`, `root_cause_attempted_for_family`, authorized-alternative-path status, provider re-attempt status, and dual-track attempt evidence when a hard loop gate applies, so later derivation can seal the family rather than only the current target surface.
 - Refresh the Markdown render with `$orchestrate-task-cycle/scripts/task_pack_queue.py --root . render --language <language>` after any JSON edit.
 

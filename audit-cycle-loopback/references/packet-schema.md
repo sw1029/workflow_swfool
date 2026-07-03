@@ -29,11 +29,19 @@ Required fields:
 - `cumulative_goal_distance_gate`: G-CHAIN packet summarizing high-water stall streak for an adapter-collapsed root family or adapter-missing artifact family.
 - `chain_stall_forced_retarget_gate`: C4 packet listing actionable forced retarget options when cumulative goal-distance stall reaches the forced-retarget threshold under lateral churn.
 - `primary_metric_gate`: optional adapter-supplied G-CHAIN/C4 trigger packet for single north-star high-water movement.
-- `acceptance_reachability_gate`: G-REACH packet with abstract acceptance minimum, frozen envelope, reachability verdict, and relaxation/escalation requirement.
+- `evidence_provenance_gate`: optional F2 packet that records independently verified versus producer-attested metric movement.
+- `verification_source_separation_gate`: optional H4 packet proving `independently_verified_fields` have disjoint verification input paths or adapter `self_grounded` status.
+- `failure_surface_stage_gate`: optional H2 packet resolving `last_successful_stage`, `failure_surface_stage`, terminal classification stage consistency, and count-key extension.
+- `diagnostics_unavailable_gate`: optional H3 packet tracking repeated unavailable diagnostics and whether instrumentation supply is required.
+- `coupled_verifier_gate`: optional F1 packet that records verifier-source coupling for gates whose verifier code changed in the current change set.
+- `acceptance_reachability_gate`: G-REACH packet with abstract acceptance minimum, frozen envelope, reachability verdict, `evaluation_status: pass|fail|not_evaluated`, and relaxation/escalation requirement.
 - `acceptance_envelope_contract`: optional normalized acceptance packet field binding a measurable target to an adapter-owned minimum executable envelope.
-- `oracle_metric_validity_gate`: G-OENV packet with optional oracle/metric validity self-check status and tautological-metric exclusion.
+- `oracle_metric_validity_gate`: G-OENV packet with optional oracle/metric validity self-check status, `evaluation_status: pass|fail|not_evaluated`, and tautological-metric exclusion.
 - `advice_freshness_gate`: G-ADVICE-FRESH packet comparing declared advice fingerprints to current output fingerprint when available.
-- `structure_metrics_gate`: S-STRUCT packet exposing optional adapter-supplied structure metrics and consolidation recommendations, including semantic structure axes when available.
+- `structure_metrics_gate`: S-STRUCT packet exposing optional adapter-supplied structure metrics and consolidation recommendations, including semantic structure axes and global invariant axes when available.
+- `count_key_hygiene_gate`: optional G1 packet or finding showing whether the effective count key is generation-independent. Generation-dependent raw keys are trace-only and must not reset family counters.
+- `goal_axis_completeness_gate`: optional G3 packet from review/caller evidence showing whether active measurable goals have at least one adapter-owned quality/vector axis.
+- `residual_gap_cost_policy`: optional G4 packet or passthrough fields comparing residual-gap value per cycle cost against alternatives when cycle-efficiency evidence is available.
 - `high_water_mark`
 - `recommended_disposition`
 - `hard_stop_required`
@@ -56,19 +64,29 @@ The D1-D4 fields in this list revise existing acceptance, progress truth-source,
 - `substance_delta_gate`: G-SUBSTANCE packet with `current_substance_vector`, `previous_substance_vector`, `improved_axes`, `substance_delta_pass`, `status`, and fail-closed disposition metadata.
 - `vacuous_corrective_gate`: G-VACUOUS packet with lane `attempted/resolved` counts, `surface_corrective_noop`, `excluded_delta_lanes`, and `status`.
 - `facet_root_map_applied` and `facet_root_map_size`: whether the domain adapter supplied facet-to-root family normalization before cap evaluation.
+- `count_key_hygiene_gate`, `generation_dependent_count_key`, `count_key_trace_only`, and `effective_count_key`: G1 fields. They indicate that raw plan/advice/task-pack/cycle/run/date/hash/version key material was excluded from counting and preserved only for traceability.
 - `adapter_mandate_required`, `adapter_missing_streak`, `adapter_contract_unmet`, and `adapter_mandate_gate`: G-ADAPTER fields. `adapter_contract_unmet` may include `facet_root_map`, `substance_metrics`, or `quality_vector`.
 - `adapter_wiring_defect`, `adapter_loaded`, `adapter_registered`, `adapter_path`, `adapter_expected_path`, and `adapter_wiring_gate`: C1 fields. `adapter_wiring_defect=true` supersedes `adapter_mandate_required` for the current cycle.
 - `cumulative_goal_distance_scope_key`, `cumulative_goal_distance_stall_streak`, `cumulative_goal_distance_stalled`, `cumulative_untried_chain_without_quality_delta`, `high_water_vector`, `high_water_last_improved_cycle`, and `untried_veto_overridden_by_chain_stall`: G-CHAIN fields.
 - `chain_stall_forced_retarget_gate`, `forced_selected_task`, and `forced_selected_task_options`: C4 fields. Options use abstract `selected_task_kind` values such as adapter wiring/load fixes or adapter-owned capability-ladder rungs.
 - `primary_metric_gate`, `primary_metric_high_water_moved`, `primary_metric_zero_movement_streak`, and `primary_metric_stalled`: D4/C4 trigger-key fields when the adapter exposes `primary_metric(...)`. The adapter owns the metric definition and comparison semantics.
+- `evidence_provenance_gate`, `independently_verified_fields`, `producer_attested_fields`, and `attested_only_movement`: F2 fields. When provenance is supplied, high-water movement and goal-productive support may use only `independently_verified` fields; untagged fields are `producer_attested`.
+- `verification_source_separation_gate`, `verification_input_paths`, `verified_artifact_paths`, `independent_source_separation_status`, and `independently_verified_downgraded_fields`: H4 fields. Missing or overlapping verification inputs downgrade affected independently verified fields to attested unless the adapter marks the axis `self_grounded`.
+- `execution_stage_ladder_status`, `execution_stage_ladder`, `last_successful_stage`, `failure_surface_stage`, `failure_surface_count_key`, `effective_count_key`, `failure_surface_stage_gate`, `terminal_classification_stage_contradiction`, and `terminal_classification_invalid_for_counting`: H1/H2 fields. They extend counting by observed failure surface and invalidate contradictory terminal classifications.
+- `same_input_contract_gate` and `same_input_contract_violation`: H2 fields. Same-condition comparisons with mismatched input sets are invalid for counting/close.
+- `diagnostics_unavailable`, `diagnostics_unavailable_streak`, `diagnostics_unavailable_gate`, and `instrumentation_supply_required`: H3 fields. Repeated unavailable diagnostics force instrumentation supply or an explicit observability rationale.
+- `coupled_verifier_gate`, `pass_with_coupled_verifier`, and `changed_verifier_source_paths`: F1 fields. A gate pass from a verifier source modified in the same change set is not an effective pass.
 - `c4_user_escalation_backstop_required`: boolean set only when C4/primary-metric stall has no actionable forced task option and the workflow must emit one user-escalation handoff instead of another same-family retry.
-- `acceptance_unreachable_under_frozen_config`, `relaxation_or_escalation_required`, and `acceptance_reachability_gate`: G-REACH fields.
+- `acceptance_unreachable_under_frozen_config`, `acceptance_verifier_not_evaluated`, `unverifiable_acceptance_contract`, `relaxation_or_escalation_required`, `envelope_thaw_item_required`, `envelope_thaw_item`, `envelope_thaw_streak`, and `acceptance_reachability_gate`: G-REACH/E2/H5 fields. `unverifiable_acceptance_contract=true` means a measurable target requires a live verifier but that verifier is `not_evaluated`; `envelope_thaw_item_required=true` means frozen-envelope-unreachable acceptance needs thaw/relax/descope/escalation before ordinary repair continues.
+- `residual_gap_policy`, `residual_gap_ratio`, and `marginal_repair`: F3 passthrough fields from normalized acceptance or adapter policy. They inform derive's marginal-value comparison but do not by themselves close or block work.
+- `cycle_fixed_cost`, `alternative_cycle_cost`, `marginal_gap_value`, `marginal_value_per_cycle_cost`, `alternative_value_per_cycle_cost`, and `residual_gap_cost_policy`: G4 passthrough fields from cycle-efficiency or normalized acceptance evidence. When absent, consumers use denominator `1` and legacy F3.
 - `acceptance_envelope_contract`, `envelope_floor`, `execution_envelope`, `envelope_deficit_axis`, and `envelope_below_floor`: optional D1 fields. These are abstract adapter-owned values; absence is warn-only and must not crash packet production.
-- `oracle_metric_validity_gate`: G-OENV fields. `metric_goal_productive_excluded=true` means tautological metric/oracle evidence cannot support goal-productive progress.
+- `oracle_metric_validity_gate` and `metric_verifier_not_evaluated`: G-OENV fields. `metric_goal_productive_excluded=true` means tautological or required-but-not-evaluated metric/oracle evidence cannot support goal-productive progress.
 - `advice_freshness_gate`: G-ADVICE-FRESH packet with `current_output_fingerprint`, declared fingerprint claims, stale advice paths, and `advice_metrics_stale`.
 - `advice_freshness_gate.gate_result_regression_stale`: warn-only signal for a supplied gate verdict that changed from passed to blocked under a stable environment fingerprint.
 - `partial_progress_axes_gate`: warn-only packet with adapter-supplied partial axes and `recommendation: decompose_all_or_nothing_gate` when high-water remains flat.
-- `structure_metrics_gate`: S-STRUCT packet with `structure_metrics`, `structure_consolidation_recommended`, optional `structure_high_water_moved`, `improved_structure_axes`, `refactor_effect_required`, `status`, and warning metadata. `structure_metrics` may include numeric semantic axes such as `mechanical_shard_file_count`, `version_suffix_file_count`, `global_rebinding_signal_count`, `duplicate_symbol_name_count`, `max_changed_tree_depth`, `max_changed_dir_fan_out`, `reuse_root_import_ratio`, and `max_file_logical_loc`.
+- `goal_axis_map`, `unobserved_goal_axes`, and `pass_with_unobserved_axes`: G3 fields. They mean review pass cannot be consumed for measurable goals whose observing axis set is empty.
+- `structure_metrics_gate`: S-STRUCT packet with `structure_metrics`, `structure_global_invariant_metrics`, `structure_high_water_key_scope`, `structure_consolidation_recommended`, optional `structure_high_water_moved`, `global_structure_high_water_moved`, `improved_structure_axes`, `refactor_effect_required`, `status`, and warning metadata. `structure_metrics` may include numeric semantic axes such as `mechanical_shard_file_count`, `version_suffix_file_count`, `global_rebinding_signal_count`, `duplicate_symbol_name_count`, `max_changed_tree_depth`, `max_changed_dir_fan_out`, `reuse_root_import_ratio`, and `max_file_logical_loc`.
 - `measurement_progress`: boolean indicating newly introduced or first-observed measurement/oracle coverage.
 - `measurement_progress_allowed`: boolean indicating the measurement exemption is still within `measurement_streak_cap`.
 - `measurement_streak` and `measurement_streak_cap`: bounded exemption counters for consecutive measurement cycles.
@@ -139,6 +157,14 @@ Root-cause ledger rule: `root_cause_ledger_entries` are non-GT workflow evidence
 
 Facet rule: adapter-supplied `facet_root_map` entries collapse facet labels before root-family streaks and measurement caps are computed. Without a map, the producer applies only conservative suffix/date/run/facet normalization.
 
+Count-key hygiene rule: same-family counters, hypothesis exhaustion, family seals, and stall streaks must use generation-independent keys. Raw keys that contain task/advice/task-pack identifiers, cycle IDs, run IDs, dates, hashes, or version suffixes are valid only as `legacy_family_key` or trace fields. The effective key must be the adapter-collapsed root plus dominant parameter, or the terminal-outcome family fallback when the adapter map is absent. Unmapped facets merge conservatively by `terminal_outcome_key` rather than creating a new family.
+
+Failure-surface stage rule: when `execution_stage_ladder` and `last_successful_stage` are available, count the failure by `failure_surface_stage` as part of `failure_surface_count_key`; loopback should expose that key as `effective_count_key` for same-family counter decisions. If `terminal_classification_stage_contradiction=true`, terminal classification is invalid for counting, close, or family seal until classification-stage repair or terminal/user escalation records the conflict.
+
+Same-input contract rule: if `same_input_contract_violation=true`, same-family comparison is invalid because the compared input sets/windows differ. Do not reset stalls, close, or seal from that comparison.
+
+Diagnostics instrumentation rule: if `instrumentation_supply_required=true`, derive must include/select instrumentation supply or record why success/failure is already observable without new instrumentation. Validation must not accept `advanced` progress while the requirement remains unresolved.
+
 Adapter mandate rule: `adapter_mandate_required=true` means adapter contract gaps have repeated for the same `artifact_family` with no quality/substance high-water improvement for the configured cap. Consumers must select adapter registration/strengthening as the next goal-productive task, or terminal/user-escalate with the exact missing adapter contract. If `adapter_wiring_defect=true`, do not use this rule for the same cycle; route the registered-but-unloaded adapter as self-inflicted wiring/load correction.
 
 Cumulative chain rule: `cumulative_goal_distance_stalled=true` means the same adapter-collapsed root family, or the same `artifact_family` when adapter collapse is unavailable, has not improved quality/substance high-water for the configured cap. If `cumulative_untried_chain_without_quality_delta=true`, distinct untried hypothesis labels do not override terminal/user escalation. When `chain_stall_forced_retarget_gate.chain_stall_force_retarget=true`, derive must first choose an actionable `forced_selected_task` option when one exists; only an empty option set permits terminal/user escalation.
@@ -147,15 +173,37 @@ Dominant-parameter key rule: when `root_dominant_parameter_key` is supplied, dis
 
 Primary metric C4 rule: when `primary_metric_gate.primary_metric_stalled=true`, C4 forced retargeting is keyed by zero high-water movement on the adapter-owned primary metric. Renamed labels, facets, or version suffixes cannot reset that trigger. If no `forced_selected_task_options` are actionable, emit `c4_user_escalation_backstop_required=true` and a single user-escalation handoff with the missing input, authority, or evidence kind.
 
-Reachability rule: `acceptance_unreachable_under_frozen_config=true` means the abstract acceptance minimum and frozen envelope are incompatible. Consumers must select constraint relaxation or `user_escalation`; another envelope-internal micro-repair is not goal-productive.
+Verifier coupling rule: `pass_with_coupled_verifier=true` means a passing verifier gate had a mapped verifier source path modified in the same change set. Consumers must not use that pass for close, high-water movement, semantic progress, or `goal_productive`. Route to non-coupled revalidation, independent evidence recalculation, explicit residual descope, terminal blocker, or user escalation.
+
+Evidence provenance rule: `attested_only_movement=true` means one or more metrics moved only through producer-attested evidence. The movement must not update high-water, reset G-CHAIN/C4 stall counters, or satisfy `goal_productive`. If `evidence_provenance(...)` is provided, missing per-field provenance is `producer_attested`; if it is absent, keep legacy accounting.
+
+Verification source separation rule: `independently_verified_fields` are consumable only when `verification_input_paths` are disjoint from `verified_artifact_paths`, unless the adapter marks the affected axis `self_grounded`. If `independent_source_separation_status` is `missing`, `overlap`, or `blocked`, consumers must treat `independently_verified_downgraded_fields` as attested and must not use those fields for high-water movement, close, or `goal_productive`.
+
+Gate evaluation rule: required gate packets use `evaluation_status: pass|fail|not_evaluated`. `not_evaluated` is not a pass. A required verifier with no explicit passing verifier status is `not_evaluated`. Consumers may fail quiet only when no measurable acceptance or caller contract says the gate is required.
+
+Reachability rule: `acceptance_unreachable_under_frozen_config=true` means the abstract acceptance minimum and frozen envelope are incompatible. Consumers must select constraint relaxation, reserve `envelope_thaw_item` with thaw condition/schedule, explicitly descope with residual scope, or `user_escalation`; another envelope-internal micro-repair is not goal-productive.
+
+Envelope thaw rule: `envelope_thaw_item_required=true` is unresolved reachability debt. Consumers must not complete or advance frozen-envelope-unreachable acceptance without `envelope_thaw_item`, residual/descope, terminal blocker, or user escalation. Repeated thaw omission can be a blocking G-REACH finding.
 
 Acceptance envelope rule: `acceptance_envelope_contract` binds a measurable target to an adapter-owned minimum envelope. If `envelope_below_floor=true`, consumers must treat the slice as acceptance-incomplete and choose envelope expansion, explicit descope with residual scope, or user escalation. Do not lower the target and do not reclassify the planned failure as a new prompt/tool/schema blocker.
 
 Metric validity rule: `oracle_metric_validity_gate.metric_goal_productive_excluded=true` means an oracle/metric can pass tautologically. Consumers must not use that metric pass as goal-productive evidence without independent changed-and-semantic output-delta proof. Missing metric validity self-check is warning-only.
 
+Verifier completeness rule: `unverifiable_acceptance_contract=true` means measurable acceptance is incomplete because the required live verifier is `not_evaluated`. Consumers must preserve a verifier-hook follow-up, explicit descope with residual scope, terminal blocker, or user escalation; they must not mark the original target consumed.
+
+Required-hook rule: a gate named by measurable acceptance inherits E2 verifier completeness for its required adapter hooks. If the hook is missing, unloaded, or `not_evaluated`, set or preserve `unverifiable_acceptance_contract=true`; fail-quiet does not mean pass for a required gate.
+
+Residual gap rule: `marginal_repair=true` or a below-threshold `residual_gap_policy` means derive should compare another same-gap repair against explicit descope-with-residual plus the next capability-ladder rung. The packet carries the adapter-owned abstract comparison only; thresholds and domain metrics stay outside this schema.
+
+Residual gap cost rule: when cycle-efficiency evidence supplies cost fields, compare residual work by value per cycle cost. If `marginal_value_per_cycle_cost` is below adapter policy, consumers must prefer descope-with-residual plus the next rung unless a higher value case is recorded. If cost fields are absent, the denominator is `1` and the legacy F3 rule is unchanged.
+
+Goal-axis completeness rule: a review-backed pass is not consumable for a measurable goal when `pass_with_unobserved_axes=true` or that goal appears in `unobserved_goal_axes`. Consumers must preserve adapter axis-supply work, explicit residual descope, terminal blocker, or user escalation. Missing `goal_axis_map` fails quiet to legacy review semantics.
+
 Balance rule: `requires_correction_or_terminal=true` blocks another detection-only next task as goal-productive. Consumers must choose correction/implementation work, `terminal_blocked`, or `user_escalation`.
 
 Idempotent replay rule: re-running the same `cycle_id` for the same `family_key` must preserve the recorded measurement, blocker-mutation, disposition, consolidation, and finding fields from the existing row. A replay must not erase A1/A2 progress fields by treating its own check IDs or frontiers as prior evidence.
+
+Unchanged packet rule: when ledger events reference packet content that is identical by path and hash to a previous event, consumers should store/use `unchanged_ref(path+hash)` instead of reserializing identical packet bodies. Profile/cost consumers should count `unchanged_ref_count` separately from fresh fixed-cost evidence.
 
 Metric rule: `quality_signal_confidence=low` is insufficient evidence for semantic progress and must fail closed as `conservative_hold`.
 
@@ -169,6 +217,6 @@ Gate regression rule: `advice_freshness_gate.gate_result_regression_stale=true` 
 
 Partial axes rule: `partial_progress_axes_gate.status=warn` recommends decomposing all-or-nothing progress gates when adapter-reported partial axes exist but quality/substance high-water remains flat. Consumers must not treat this warning as progress or as a blocker by itself.
 
-Structure rule: `structure_metrics_gate.structure_consolidation_recommended=true` is a warn-level signal that Class C surface reduction, semantic consolidation, reuse extraction, coupling reduction, module extraction, or responsibility separation may be valid when it reduces the reported structure burden. When `refactor_effect_required=true`, downstream validation must require `structure_high_water_moved=true` or explicit residual/descope handling before closing the refactor as complete. File/module count increases, relocated helpers, token/pattern avoidance, and producer self-reports are not structure high-water movement unless adapter `structure_metrics` records real movement on a project-owned axis. Absence of this optional adapter output must not crash packet production.
+Structure rule: `structure_metrics_gate.structure_consolidation_recommended=true` is a warn-level signal that Class C surface reduction, semantic consolidation, reuse extraction, coupling reduction, module extraction, or responsibility separation may be valid when it reduces the reported structure burden. When `refactor_effect_required=true`, downstream validation must require `structure_high_water_moved=true` or explicit residual/descope handling before closing the refactor as complete. File/module count increases, relocated helpers, token/pattern avoidance, and producer self-reports are not structure high-water movement unless adapter `structure_metrics` records real movement on a project-owned axis. When `structure_high_water_key_scope=global_invariant`, selected-scope improvement is insufficient unless `global_structure_high_water_moved=true` or equivalent global invariant movement is present. Absence of this optional adapter output must not crash packet production.
 
 OCR and typo rule: typoed extractor labels, OCR provenance, and OCR near-duplicate placeholder surfaces must fail closed. Missing or incomplete threshold config must use conservative defaults rather than disabling structural placeholder or locale-lock checks.

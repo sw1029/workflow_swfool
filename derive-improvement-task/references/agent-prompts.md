@@ -134,6 +134,15 @@ Return 3-5 candidates. For each:
 - task_pack_disposition: standalone | promote_pack_item | insert_pack_item | reorder_pack | terminal_block_pack | not_applicable
 - positive_input_delta: new input kind introduced plus non-empty supplied artifact path or `produced_domain_delta=true`, or why no delta is needed
 - scope_fidelity: affected measurable directive IDs, original target preservation, narrowed/descope status, and residual item needed
+- acceptance_verifier: required verifier status for measurable targets, especially `not_evaluated` verifier debt that must remain open or become the task
+- required_gate_hooks: whether an acceptance-referenced gate has absent, fail-quiet, or `not_evaluated` adapter hooks that must become hook-supply work or remain residual
+- goal_axis_completeness: whether review-backed measurable goals have mapped observing axes, or require axis-supply/residual handling because `pass_with_unobserved_axes=true`
+- count_key_hygiene: whether repeated-family evidence uses generation-independent effective keys instead of task/advice/pack/cycle/run/date/hash/version labels
+- failure_surface_stage: whether terminal classification agrees with the observed failure surface stage and same-input contract, or requires classification/input-contract repair
+- instrumentation_supply: whether repeated `diagnostics_unavailable` requires instrumentation supply or an observability rationale
+- verification_source_separation: whether independently verified evidence has disjoint verification input paths or should be treated as attested
+- envelope_thaw: whether frozen-envelope-unreachable acceptance requires an `envelope_thaw_item`, thaw condition/schedule, residual descope, terminal blocker, or user escalation
+- residual_value_per_cycle_cost: whether same-gap repair outranks descope plus next rung by value per cycle cost, or should be deferred/descoped
 - authority conflict handled or avoided
 - advice conflict handled, deferred, or marked not_applicable
 - should_be_next_task: yes/no with reason
@@ -169,6 +178,10 @@ Return 3-5 candidates. For each:
 - validation
 - task_pack_disposition: standalone | promote_pack_item | insert_pack_item | reorder_pack | terminal_block_pack | not_applicable
 - blocker_signature, semantic_signature, sealed-family, goal-distance, and input-delta implications
+- count-key implications: effective root/dominant-parameter key or terminal-outcome fallback when raw generated labels changed
+- structure_high_water_key_scope: whether any structure proposal moves adapter-owned global invariants or only a selected local scope
+- goal-axis and residual-cost implications: missing observing axes, required adapter hook supply, or below-policy value per cycle cost that changes task order
+- Part H implications: failure-surface/terminal-classification mismatch, same-input mismatch, instrumentation supply trigger, non-disjoint independent verification, or missing frozen-envelope thaw item
 - should_be_next_task: yes/no with reason
 ```
 
@@ -200,6 +213,11 @@ Return 3-5 candidates. For each:
 - batchability with related no-live or micro-contract candidates
 - task_pack_disposition: standalone | promote_pack_item | insert_pack_item | reorder_pack | terminal_block_pack | not_applicable
 - whether active pack order should change and why
+- acceptance_verifier risk: required verifier missing, failed, or `not_evaluated`
+- required gate-hook risk: acceptance-referenced gate hooks absent, fail-quiet, or `not_evaluated`
+- pass_with_unobserved_axes risk: measurable review target has zero mapped observing axes
+- residual cost risk: same-gap repair value per cycle cost is below policy or missing denominator
+- Part H risk: terminal-stage contradiction, same-input mismatch, diagnostics unavailable without instrumentation, non-disjoint independent verification, or frozen-envelope thaw debt
 - validation
 - should_be_next_task: yes/no with reason
 ```
@@ -219,7 +237,7 @@ Inputs:
 - active `.agent_advice` packet as non-GT direction evidence when present
 - active `.task/task_pack` packet and Markdown render when present
 - loop_breaker_packet: blocker signatures, semantic signatures, same-signature counts, same-semantic-family counts, sealed-family matches, goal-distance gate, governance-only streak, positive input delta gate with `has_supplied_input_delta` and `supplied_input_artifact_paths`, provider re-attempt gate, command-surface budget, terminal blocker recommendation
-- output_delta_packet, qualitative_review_packet, and anti_loop_progress_gate: `changed_vs_previous`, `semantic_progress`, semantic readiness/cap fields, `substance_delta_gate`, `vacuous_corrective_gate`, `adapter_mandate_required`, `cumulative_goal_distance_stalled`, `root_dominant_parameter_key`, `primary_metric_gate`, `primary_metric_stalled`, `c4_user_escalation_backstop_required`, `untried_veto_overridden_by_chain_stall`, `acceptance_envelope_contract`, `envelope_below_floor`, `acceptance_unreachable_under_frozen_config`, `oracle_metric_validity_gate`, `observed_producer_claim`, `split_brain_progress_claim`, `advice_freshness_gate`, `repo_owned_source_roots_status`, provenance-hardened root-cause entries, provider/env behavior booleans, same-family micro-hardening count, command-surface hard-stop state, and allowed dispositions
+- output_delta_packet, qualitative_review_packet, and anti_loop_progress_gate: `changed_vs_previous`, `semantic_progress`, semantic readiness/cap fields, `substance_delta_gate`, `vacuous_corrective_gate`, `adapter_mandate_required`, `cumulative_goal_distance_stalled`, `root_dominant_parameter_key`, `failure_surface_stage_gate`, `failure_surface_stage`, `terminal_classification_stage_contradiction`, `same_input_contract_gate`, `diagnostics_unavailable_gate`, `instrumentation_supply_required`, `verification_source_separation_gate`, `independent_source_separation_status`, `independently_verified_downgraded_fields`, `primary_metric_gate`, `primary_metric_stalled`, `c4_user_escalation_backstop_required`, `pass_with_coupled_verifier`, `coupled_verifier_gate`, `changed_verifier_source_paths`, `evidence_provenance_gate`, `independently_verified_fields`, `producer_attested_fields`, `attested_only_movement`, `residual_gap_ratio`, `residual_gap_policy`, `marginal_repair`, `cycle_fixed_cost`, `marginal_value_per_cycle_cost`, `residual_gap_cost_policy`, `generation_dependent_count_key`, `effective_count_key`, `terminal_outcome_family_key`, `goal_axis_completeness_gate`, `unobserved_goal_axes`, `pass_with_unobserved_axes`, required gate-hook status, `untried_veto_overridden_by_chain_stall`, `acceptance_envelope_contract`, `envelope_below_floor`, `acceptance_unreachable_under_frozen_config`, `envelope_thaw_item_required`, `envelope_thaw_item`, `oracle_metric_validity_gate`, `observed_producer_claim`, `split_brain_progress_claim`, `advice_freshness_gate`, `repo_owned_source_roots_status`, provenance-hardened root-cause entries, provider/env behavior booleans, same-family micro-hardening count, command-surface hard-stop state, and allowed dispositions
 - issue goal-fit report from `$manage-implementation-issues`
 - task_miss analysis
 - candidate_task analysis
@@ -255,6 +273,14 @@ Selection constraints:
 - If the last two completed tasks were `safety_only` for the same blocker, select evidence supply, bounded preflight/run, or a batched boundary task unless that is explicitly blocked.
 - Do not select a sequential micro-contract only because it is next in order; batch it with adjacent checks when target, issue, prerequisite chain, and validation surface are the same.
 - If recent cycles repeat the same normalized blocker signature, do not select another narrowing/handoff task unless a new input kind, authority change, external-state change, or safe pack item changes the state.
+- If the only novelty is task/advice/pack/cycle/run/date/hash/version label churn, preserve it as trace-only and select using the effective count key or terminal-outcome family fallback.
+- If a required gate hook for measurable acceptance is absent, fail-quiet, or `not_evaluated`, select hook-supply/verifier correction, explicit residual descope, terminal blocker, or user escalation; do not consume the target as goal-productive.
+- If `pass_with_unobserved_axes=true`, select adapter axis supply, output-producing work that supplies the missing observable axis, explicit residual descope, terminal blocker, or user escalation; do not consume the qualitative review as pass evidence.
+- If `terminal_classification_stage_contradiction=true`, `terminal_classification_invalid_for_counting=true`, or `same_input_contract_violation=true`, select classification-stage/input-contract repair, instrumentation supply, terminal blocker, or user escalation; do not close/count the family.
+- If `instrumentation_supply_required=true`, select instrumentation supply or record why success/failure is already observable without new instrumentation.
+- If `independent_source_separation_status=missing|overlap|blocked` or `independently_verified_downgraded_fields` is nonempty, treat those fields as attested and do not select `goal_productive` from them.
+- If `envelope_thaw_item_required=true`, select/reserve `envelope_thaw_item`, constraint relaxation, residual descope, terminal blocker, or user escalation before ordinary repair.
+- If residual value per cycle cost is below policy, prefer descope-with-residual plus the next capability rung unless a higher value case is recorded.
 - If recent cycles repeat the same suffix-normalized root key or semantic signature, treat it as the same blocker family even when target-surface, run names, dates, or `vN` suffixes changed.
 - If the goal-distance gate requires goal-productive work, select `progress_kind: goal_productive` or emit terminal blocker state; do not select another governance-only sidecar/reconciliation task.
 - If the progress-loop detector status is `block`, select `progress_kind: goal_productive` or emit terminal blocker state with provider-track and provider-neutral/quality-track attempt evidence.
@@ -264,12 +290,17 @@ Selection constraints:
 - If qualitative review caps progress because semantic output is not ready, placeholder events were found, or surface entities are suspected, preserve that cap unless strict changed-and-semantic output-delta evidence overrides it.
 - If anti-loop evidence reports `substance_delta_gate.substance_delta_pass=false` or `status=missing`, do not treat validator/oracle/metric existence or capability-ladder observation as `goal_productive` unless strict changed-and-semantic primary-output evidence exists.
 - If `acceptance_envelope_contract.envelope_below_floor=true`, select envelope expansion, explicit descope with residual scope, terminal blocker, or user escalation; do not choose envelope-internal work as `goal_productive`.
+- If `acceptance_verifier_contract` or loopback evidence reports a required verifier with `evaluation_status: not_evaluated`, select verifier implementation/correction, explicit descope with residual scope, terminal blocker, or user escalation; do not consume the measurable target.
 - If `root_dominant_parameter_key` is present, proximate root-cause label changes are not distinct untried repairs for the same collapsed root and dominant parameter.
 - If `primary_metric_stalled=true` or `primary_metric_gate.primary_metric_stalled=true`, apply the forced-retarget rule; if `c4_user_escalation_backstop_required=true`, select user escalation unless an actionable forced option exists.
+- If `pass_with_coupled_verifier=true`, do not cite the coupled verifier pass as completion, semantic progress, high-water movement, or `goal_productive`; select non-coupled revalidation, independent recalculation, explicit residual descope, terminal-block, or user escalation.
+- If `attested_only_movement=true` or only `producer_attested_fields` moved, treat the movement as no high-water progress. Do not reset stalls, avoid C4, or satisfy `goal_productive` from producer-attested scalar movement.
+- If `residual_gap_policy` marks a below-threshold residual gap or `marginal_repair=true`, rank explicit descope-with-residual plus the next capability-ladder rung ahead of another same-gap repair unless the candidate records higher marginal value.
 - If anti-loop evidence reports `vacuous_corrective_gate.surface_corrective_noop=true`, do not count attempted corrective/backfill rows as output delta; select lane-resolving correction work, terminal-block, or user escalation.
 - If root-cause actionability was derived from repo-owned source provenance, do not trust conflicting producer self-report fields such as `local=false`, `in_scope=false`, or `actionable=false`.
 - If anti-loop evidence reports `advice_freshness_gate.advice_metrics_stale=true`, refresh, defer, reject, or justify any use of that advice against current raw evidence.
 - If command-surface budget requires consolidation, register or select a consolidation candidate unless strict changed-and-semantic primary-output evidence already justifies goal-productive work, or the result is terminal/user escalation.
+- If `structure_high_water_key_scope=global_invariant`, require global invariant movement before classifying structure work as goal-productive; local selected-scope improvement alone is governance-only unless residual global scope remains open.
 - If anti-loop evidence shows 3 same-family micro-hardening tasks, block another same-family micro task as `goal_productive`; choose provider/semantic transition, consolidation, supplied-input/domain-delta work, or terminal/user escalation.
 - If a semantic family is sealed, do not select another non-terminal task in that family unless you name the new input kind, authority change, or external-state change that reopens it.
 - If `positive_input_delta_required` is true, name the newly introduced input kind and the supplied artifact path or `produced_domain_delta=true`. If no supplied delta exists, terminal-block or select a task that obtains the missing input.

@@ -313,6 +313,16 @@ def boolish(value: Any) -> bool:
     return False
 
 
+def non_empty(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple, set, dict)):
+        return bool(value)
+    return True
+
+
 def number_value(value: Any) -> int | None:
     if isinstance(value, bool):
         return int(value)
@@ -322,6 +332,19 @@ def number_value(value: Any) -> int | None:
         return int(value)
     if isinstance(value, str) and value.strip().isdigit():
         return int(value.strip())
+    return None
+
+
+def float_value(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
     return None
 
 
@@ -389,6 +412,26 @@ def allowed_task_kinds_from_basis(value: Any) -> set[str]:
                 if kind:
                     allowed.add(kind)
     return allowed
+
+
+INSTRUMENTATION_TASK_KINDS = {
+    "instrumentation_supply",
+    "diagnostic_instrumentation",
+    "diagnostics_supply",
+    "post_failure_diagnostics",
+    "adapter_instrumentation",
+    "measurement_instrumentation",
+}
+
+CLASSIFICATION_REPAIR_TASK_KINDS = {
+    "terminal_classification_stage_repair",
+    "classification_stage_repair",
+    "failure_surface_stage_repair",
+    "input_contract_repair",
+    "same_input_contract_repair",
+}
+
+ENVELOPE_THAW_TASK_KINDS = {"envelope_thaw_item", "constraint_relaxation", "verifier_contract_supply"}
 
 
 def forced_task_kind(result: dict[str, Any]) -> str:
@@ -666,6 +709,36 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                 "`qualitative_review` quality_verdict should use the owner skill vocabulary.",
                 {"quality_verdict": quality_verdict},
             )
+        pass_with_unobserved_axes = boolish(
+            first_present(
+                result,
+                [
+                    "pass_with_unobserved_axes",
+                    "goal_axis_completeness_gate.pass_with_unobserved_axes",
+                    "quality_review.pass_with_unobserved_axes",
+                    "qualitative_review.pass_with_unobserved_axes",
+                    "result.goal_axis_completeness_gate.pass_with_unobserved_axes",
+                ],
+            )
+        )
+        unobserved_goal_axes = first_present(
+            result,
+            [
+                "unobserved_goal_axes",
+                "goal_axis_completeness_gate.unobserved_goal_axes",
+                "quality_review.unobserved_goal_axes",
+                "qualitative_review.unobserved_goal_axes",
+                "result.goal_axis_completeness_gate.unobserved_goal_axes",
+            ],
+        )
+        if (pass_with_unobserved_axes or non_empty(unobserved_goal_axes)) and quality_verdict == "acceptable":
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "qualitative_review_unobserved_axes_acceptable",
+                "`qualitative_review` cannot report an acceptable pass for measurable goals with zero mapped observing axes; use pass_with_unobserved_axes and preserve axis-supply or residual work.",
+                {"unobserved_goal_axes": unobserved_goal_axes or None},
+            )
         reviewer_identity = str(
             first_present(
                 result,
@@ -859,6 +932,128 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
         )
         allowed_task_kinds = allowed_task_kinds_from_basis(disposition_basis)
         selected_kind = selected_task_kind_value(result)
+        terminal_selected = selected_source == "terminal_blocked" or has_value(result, "terminal_blocker")
+        terminal_stage_contradiction = boolish(
+            first_present(
+                result,
+                [
+                    "terminal_classification_stage_contradiction",
+                    "failure_surface_stage_gate.terminal_classification_stage_contradiction",
+                    "anti_loop_progress_gate.terminal_classification_stage_contradiction",
+                    "anti_loop_progress_gate.failure_surface_stage_gate.terminal_classification_stage_contradiction",
+                    "loopback_audit.terminal_classification_stage_contradiction",
+                    "result.anti_loop_progress_gate.terminal_classification_stage_contradiction",
+                ],
+            )
+        )
+        terminal_classification_invalid_for_counting = boolish(
+            first_present(
+                result,
+                [
+                    "terminal_classification_invalid_for_counting",
+                    "failure_surface_stage_gate.terminal_classification_invalid_for_counting",
+                    "anti_loop_progress_gate.terminal_classification_invalid_for_counting",
+                    "result.anti_loop_progress_gate.terminal_classification_invalid_for_counting",
+                ],
+            )
+        )
+        same_input_contract_violation = boolish(
+            first_present(
+                result,
+                [
+                    "same_input_contract_violation",
+                    "same_input_contract_gate.same_input_contract_violation",
+                    "anti_loop_progress_gate.same_input_contract_violation",
+                    "anti_loop_progress_gate.same_input_contract_gate.same_input_contract_violation",
+                    "result.anti_loop_progress_gate.same_input_contract_violation",
+                ],
+            )
+        )
+        instrumentation_supply_required = boolish(
+            first_present(
+                result,
+                [
+                    "instrumentation_supply_required",
+                    "diagnostics_unavailable_gate.instrumentation_supply_required",
+                    "anti_loop_progress_gate.instrumentation_supply_required",
+                    "anti_loop_progress_gate.diagnostics_unavailable_gate.instrumentation_supply_required",
+                    "result.anti_loop_progress_gate.instrumentation_supply_required",
+                ],
+            )
+        )
+        diagnostics_unavailable_streak = number_value(
+            first_present(
+                result,
+                [
+                    "diagnostics_unavailable_streak",
+                    "diagnostics_unavailable_gate.diagnostics_unavailable_streak",
+                    "anti_loop_progress_gate.diagnostics_unavailable_streak",
+                    "result.anti_loop_progress_gate.diagnostics_unavailable_streak",
+                ],
+            )
+        )
+        diagnostics_observable_without_new_instrumentation = boolish(
+            first_present(
+                result,
+                [
+                    "diagnostics_observable_without_new_instrumentation",
+                    "success_failure_observable_without_instrumentation",
+                    "existing_diagnostics_sufficient",
+                    "hypothesis_repair_observability_rationale",
+                    "derive.diagnostics_observable_without_new_instrumentation",
+                    "result.existing_diagnostics_sufficient",
+                ],
+            )
+        )
+        independent_source_status = str(
+            first_present(
+                result,
+                [
+                    "independent_source_separation_status",
+                    "verification_source_separation_gate.independent_source_separation_status",
+                    "evidence_provenance_gate.independent_source_separation_status",
+                    "anti_loop_progress_gate.independent_source_separation_status",
+                    "anti_loop_progress_gate.verification_source_separation_gate.independent_source_separation_status",
+                    "result.anti_loop_progress_gate.independent_source_separation_status",
+                ],
+            )
+            or ""
+        ).lower()
+        independently_verified_downgraded_fields = list_values(
+            first_present(
+                result,
+                [
+                    "independently_verified_downgraded_fields",
+                    "verification_source_separation_gate.independently_verified_downgraded_fields",
+                    "evidence_provenance_gate.independently_verified_downgraded_fields",
+                    "anti_loop_progress_gate.independently_verified_downgraded_fields",
+                    "result.anti_loop_progress_gate.independently_verified_downgraded_fields",
+                ],
+            )
+        )
+        envelope_thaw_item_required = boolish(
+            first_present(
+                result,
+                [
+                    "envelope_thaw_item_required",
+                    "acceptance_reachability_gate.envelope_thaw_item_required",
+                    "anti_loop_progress_gate.envelope_thaw_item_required",
+                    "anti_loop_progress_gate.acceptance_reachability_gate.envelope_thaw_item_required",
+                    "result.anti_loop_progress_gate.envelope_thaw_item_required",
+                ],
+            )
+        )
+        envelope_thaw_item = first_present(
+            result,
+            [
+                "envelope_thaw_item",
+                "acceptance_reachability_gate.envelope_thaw_item",
+                "anti_loop_progress_gate.envelope_thaw_item",
+                "anti_loop_progress_gate.acceptance_reachability_gate.envelope_thaw_item",
+                "selected_task.envelope_thaw_item",
+                "result.anti_loop_progress_gate.envelope_thaw_item",
+            ],
+        )
         if progress_kind == "goal_productive" and allowed_task_kinds and selected_source != "terminal_blocked":
             if not selected_kind:
                 add(
@@ -876,6 +1071,347 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                     "`derive` selected goal_productive by label but the task kind is outside the gate-constrained allowed set.",
                     {"selected_task_kind": selected_kind, "allowed_task_kinds": sorted(allowed_task_kinds)},
                 )
+        classification_repair_selected = selected_kind in CLASSIFICATION_REPAIR_TASK_KINDS or selected_disposition(result, selected_source, progress_kind) in {
+            "classification_stage_repair",
+            "input_contract_repair",
+        }
+        if (terminal_stage_contradiction or terminal_classification_invalid_for_counting) and not terminal_selected and not classification_repair_selected:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_terminal_classification_stage_repair_missing",
+                "`derive` cannot count or close a contradictory terminal classification; select a classification-stage repair/input-contract repair, terminal block, or user escalation.",
+            )
+        if same_input_contract_violation and not terminal_selected and not classification_repair_selected:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_same_input_contract_repair_missing",
+                "`derive` cannot compare same-family failures across mismatched input sets; select same-input contract repair before counting progress.",
+            )
+        if instrumentation_supply_required and not terminal_selected and selected_kind not in INSTRUMENTATION_TASK_KINDS and not diagnostics_observable_without_new_instrumentation:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_missing_instrumentation_supply",
+                "`derive` must enumerate/select instrumentation supply after repeated diagnostics_unavailable, or record why success/failure is already observable without new instrumentation.",
+                {"diagnostics_unavailable_streak": diagnostics_unavailable_streak},
+            )
+        if progress_kind == "goal_productive" and independent_source_status in {"missing", "overlap", "blocked"} and not terminal_selected:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_goal_productive_from_non_disjoint_independent_verification",
+                "`derive` cannot treat independently_verified evidence as goal_productive when verification inputs overlap verified artifacts or are missing; consume it as attested or repair the source separation.",
+                {"independent_source_separation_status": independent_source_status},
+            )
+        if progress_kind == "goal_productive" and independently_verified_downgraded_fields and not terminal_selected:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_goal_productive_from_downgraded_independent_verification",
+                "`derive` cannot use auto-downgraded independently_verified fields as progress without new disjoint verification input.",
+                {"downgraded_fields": independently_verified_downgraded_fields},
+            )
+        if envelope_thaw_item_required and not terminal_selected and selected_kind not in ENVELOPE_THAW_TASK_KINDS and not non_empty(envelope_thaw_item):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_envelope_thaw_item_missing",
+                "`derive` must reserve an envelope_thaw_item when acceptance is unreachable under a frozen envelope, before ordinary repair continues.",
+            )
+        coupled_verifier = boolish(
+            first_present(
+                result,
+                [
+                    "pass_with_coupled_verifier",
+                    "anti_loop_progress_gate.pass_with_coupled_verifier",
+                    "loopback_audit.pass_with_coupled_verifier",
+                    "coupled_verifier_gate.pass_with_coupled_verifier",
+                    "anti_loop_progress_gate.coupled_verifier_gate.pass_with_coupled_verifier",
+                    "result.anti_loop_progress_gate.pass_with_coupled_verifier",
+                    "result.anti_loop_progress_gate.coupled_verifier_gate.pass_with_coupled_verifier",
+                ],
+            )
+        )
+        attested_only_movement = boolish(
+            first_present(
+                result,
+                [
+                    "attested_only_movement",
+                    "anti_loop_progress_gate.attested_only_movement",
+                    "evidence_provenance_gate.attested_only_movement",
+                    "anti_loop_progress_gate.evidence_provenance_gate.attested_only_movement",
+                    "primary_metric_gate.attested_only_movement",
+                    "anti_loop_progress_gate.primary_metric_gate.attested_only_movement",
+                    "result.anti_loop_progress_gate.attested_only_movement",
+                    "result.anti_loop_progress_gate.evidence_provenance_gate.attested_only_movement",
+                ],
+            )
+        )
+        primary_metric_stalled = boolish(
+            first_present(
+                result,
+                [
+                    "primary_metric_stalled",
+                    "anti_loop_progress_gate.primary_metric_stalled",
+                    "primary_metric_gate.primary_metric_stalled",
+                    "anti_loop_progress_gate.primary_metric_gate.primary_metric_stalled",
+                    "result.anti_loop_progress_gate.primary_metric_stalled",
+                    "result.anti_loop_progress_gate.primary_metric_gate.primary_metric_stalled",
+                ],
+            )
+        )
+        c4_user_escalation = boolish(
+            first_present(
+                result,
+                [
+                    "c4_user_escalation_backstop_required",
+                    "anti_loop_progress_gate.c4_user_escalation_backstop_required",
+                    "primary_metric_gate.c4_user_escalation_backstop_required",
+                    "anti_loop_progress_gate.primary_metric_gate.c4_user_escalation_backstop_required",
+                    "result.anti_loop_progress_gate.c4_user_escalation_backstop_required",
+                    "result.anti_loop_progress_gate.primary_metric_gate.c4_user_escalation_backstop_required",
+                ],
+            )
+        )
+        marginal_repair = boolish(
+            first_present(
+                result,
+                [
+                    "marginal_repair",
+                    "residual_gap_policy.marginal_repair",
+                    "anti_loop_progress_gate.marginal_repair",
+                    "anti_loop_progress_gate.residual_gap_policy.marginal_repair",
+                    "result.anti_loop_progress_gate.marginal_repair",
+                ],
+            )
+        )
+        descope_with_residual = boolish(
+            first_present(
+                result,
+                [
+                    "descope_with_residual",
+                    "explicit_descope_decision",
+                    "residual_gap_policy.descope_with_residual",
+                    "anti_loop_progress_gate.descope_with_residual",
+                    "result.anti_loop_progress_gate.descope_with_residual",
+                ],
+            )
+        )
+        next_capability_rung = first_present(
+            result,
+            [
+                "next_capability_rung",
+                "capability_ladder.next_capability_rung",
+                "residual_gap_policy.next_capability_rung",
+                "anti_loop_progress_gate.next_capability_rung",
+                "result.anti_loop_progress_gate.next_capability_rung",
+            ],
+        )
+        marginal_repair_override = boolish(
+            first_present(
+                result,
+                [
+                    "marginal_repair_higher_value",
+                    "residual_gap_policy.marginal_repair_higher_value",
+                    "anti_loop_progress_gate.marginal_repair_higher_value",
+                    "result.anti_loop_progress_gate.marginal_repair_higher_value",
+                ],
+            )
+        )
+        pass_with_unobserved_axes = boolish(
+            first_present(
+                result,
+                [
+                    "pass_with_unobserved_axes",
+                    "goal_axis_completeness_gate.pass_with_unobserved_axes",
+                    "qualitative_review_packet.pass_with_unobserved_axes",
+                    "anti_loop_progress_gate.pass_with_unobserved_axes",
+                    "result.goal_axis_completeness_gate.pass_with_unobserved_axes",
+                    "result.anti_loop_progress_gate.pass_with_unobserved_axes",
+                ],
+            )
+        )
+        unobserved_goal_axes = first_present(
+            result,
+            [
+                "unobserved_goal_axes",
+                "goal_axis_completeness_gate.unobserved_goal_axes",
+                "qualitative_review_packet.unobserved_goal_axes",
+                "anti_loop_progress_gate.unobserved_goal_axes",
+                "result.goal_axis_completeness_gate.unobserved_goal_axes",
+                "result.anti_loop_progress_gate.unobserved_goal_axes",
+            ],
+        )
+        goal_axis_failed = boolish(
+            first_present(
+                result,
+                [
+                    "goal_axis_completeness_failed",
+                    "goal_axis_completeness_gate.failed",
+                    "goal_axis_completeness_gate.evaluation_failed",
+                    "anti_loop_progress_gate.goal_axis_completeness_gate.failed",
+                    "result.goal_axis_completeness_gate.failed",
+                ],
+            )
+        ) or str(
+            first_present(
+                result,
+                [
+                    "goal_axis_completeness_gate.evaluation_status",
+                    "anti_loop_progress_gate.goal_axis_completeness_gate.evaluation_status",
+                    "result.goal_axis_completeness_gate.evaluation_status",
+                ],
+            )
+            or ""
+        ).lower() == "fail"
+        generation_dependent_count_key = boolish(
+            first_present(
+                result,
+                [
+                    "generation_dependent_count_key",
+                    "count_key_hygiene_gate.generation_dependent_count_key",
+                    "anti_loop_progress_gate.generation_dependent_count_key",
+                    "anti_loop_progress_gate.count_key_hygiene_gate.generation_dependent_count_key",
+                    "result.anti_loop_progress_gate.generation_dependent_count_key",
+                    "result.anti_loop_progress_gate.count_key_hygiene_gate.generation_dependent_count_key",
+                ],
+            )
+        )
+        effective_count_key = first_present(
+            result,
+            [
+                "effective_count_key",
+                "count_key_hygiene_gate.effective_count_key",
+                "root_dominant_parameter_key",
+                "anti_loop_progress_gate.effective_count_key",
+                "anti_loop_progress_gate.root_dominant_parameter_key",
+                "anti_loop_progress_gate.terminal_outcome_family_key",
+                "result.anti_loop_progress_gate.effective_count_key",
+                "result.anti_loop_progress_gate.terminal_outcome_family_key",
+            ],
+        )
+        generation_key_novelty_claim = boolish(
+            first_present(
+                result,
+                [
+                    "family_novelty_claim",
+                    "new_family_claim",
+                    "stall_reset_claim",
+                    "count_key_hygiene_gate.family_novelty_claim",
+                    "count_key_hygiene_gate.stall_reset_claim",
+                    "anti_loop_progress_gate.count_key_hygiene_gate.family_novelty_claim",
+                    "result.anti_loop_progress_gate.count_key_hygiene_gate.stall_reset_claim",
+                ],
+            )
+        )
+        cycle_fixed_cost_present = first_present(
+            result,
+            [
+                "cycle_fixed_cost",
+                "residual_gap_cost_policy.cycle_fixed_cost",
+                "cycle_efficiency_profile.cycle_fixed_cost",
+                "anti_loop_progress_gate.cycle_fixed_cost",
+                "result.anti_loop_progress_gate.cycle_fixed_cost",
+            ],
+        ) is not None
+        marginal_value_per_cycle_cost = float_value(
+            first_present(
+                result,
+                [
+                    "marginal_value_per_cycle_cost",
+                    "residual_gap_cost_policy.marginal_value_per_cycle_cost",
+                    "anti_loop_progress_gate.marginal_value_per_cycle_cost",
+                    "result.anti_loop_progress_gate.marginal_value_per_cycle_cost",
+                ],
+            )
+        )
+        residual_cost_below_policy = boolish(
+            first_present(
+                result,
+                [
+                    "residual_gap_cost_below_policy",
+                    "value_per_cycle_cost_below_policy",
+                    "cost_disproportionate_residual",
+                    "residual_gap_cost_policy.below_policy",
+                    "residual_gap_cost_policy.cost_disproportionate",
+                    "anti_loop_progress_gate.residual_gap_cost_policy.below_policy",
+                    "result.anti_loop_progress_gate.residual_gap_cost_policy.below_policy",
+                ],
+            )
+        )
+        if progress_kind == "goal_productive" and coupled_verifier and selected_source != "terminal_blocked":
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_goal_productive_from_coupled_verifier",
+                "`derive` cannot classify work as goal_productive from pass_with_coupled_verifier; select non-coupled revalidation, independent recalculation, residual descope, terminal block, or user escalation.",
+            )
+        if progress_kind == "goal_productive" and attested_only_movement and selected_source != "terminal_blocked":
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_goal_productive_from_attested_only_movement",
+                "`derive` cannot classify producer-attested metric movement as goal_productive or high-water progress.",
+            )
+        if progress_kind == "goal_productive" and (pass_with_unobserved_axes or non_empty(unobserved_goal_axes) or goal_axis_failed) and selected_source != "terminal_blocked":
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_goal_productive_from_unobserved_axes",
+                "`derive` cannot consume a qualitative review pass as goal_productive for measurable goals with zero mapped observing axes; select axis supply, residual descope, terminal block, or user escalation.",
+                {"unobserved_goal_axes": unobserved_goal_axes or None},
+            )
+        if generation_dependent_count_key and not effective_count_key:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_generation_count_key_without_effective_key",
+                "Generation-dependent family/count keys are trace-only; derive must carry an effective adapter-collapsed key or terminal-outcome family fallback.",
+            )
+        if generation_dependent_count_key and generation_key_novelty_claim and not terminal_selected:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_family_novelty_from_generation_key",
+                "`derive` must not treat task/advice/pack/cycle/run/date/hash/version churn as a new family or stall reset.",
+            )
+        if c4_user_escalation and selected_source != "terminal_blocked" and selected_disposition(result, selected_source, progress_kind) != "user_escalation" and not forced_task_kind(result):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_c4_user_escalation_not_selected",
+                "`derive` must select user escalation when the primary-metric C4 backstop is required and no actionable forced task is present.",
+            )
+        if primary_metric_stalled and progress_kind == "goal_productive" and not forced_task_kind(result) and not terminal_selected:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_primary_metric_stall_without_forced_task",
+                "`derive` cannot choose ordinary goal_productive work during primary-metric stall without selecting an emitted forced-retarget task.",
+            )
+        if marginal_repair and progress_kind == "goal_productive" and not (descope_with_residual and next_capability_rung) and not marginal_repair_override and selected_source != "terminal_blocked":
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_marginal_repair_without_descope_or_value_case",
+                "`derive` must rank below-threshold residual-gap repair behind explicit descope-with-residual plus the next capability rung unless higher marginal value is recorded.",
+            )
+        if marginal_repair and cycle_fixed_cost_present and marginal_value_per_cycle_cost is None:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_residual_cycle_cost_missing_ratio",
+                "Residual repair with cycle-cost evidence must carry `marginal_value_per_cycle_cost`, or explicitly fall back to denominator 1 when cost evidence is absent.",
+            )
+        if progress_kind == "goal_productive" and residual_cost_below_policy and not (descope_with_residual and next_capability_rung) and not marginal_repair_override and selected_source != "terminal_blocked":
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_residual_cost_below_policy_goal_productive",
+                "`derive` cannot select another same-gap goal_productive repair when value per cycle cost is below policy without explicit residual descope, next rung, or a higher value case.",
+            )
         forced_kind = forced_task_kind(result)
         if forced_kind and selected_source != "terminal_blocked" and selected_kind and selected_kind != forced_kind:
             add(
@@ -1748,7 +2284,41 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
         forced_retarget_gate = deep_get(result, "chain_stall_forced_retarget_gate")
         forced_retarget_options = deep_get(result, "forced_selected_task_options")
         acceptance_unreachable = boolish(value_for(result, "acceptance_unreachable_under_frozen_config"))
+        unverifiable_acceptance = boolish(value_for(result, "unverifiable_acceptance_contract"))
         metric_goal_productive_excluded = boolish(deep_get(result, "oracle_metric_validity_gate.metric_goal_productive_excluded"))
+        pass_with_coupled_verifier = boolish(value_for(result, "pass_with_coupled_verifier")) or boolish(deep_get(result, "coupled_verifier_gate.pass_with_coupled_verifier"))
+        attested_only_movement = boolish(value_for(result, "attested_only_movement")) or boolish(deep_get(result, "evidence_provenance_gate.attested_only_movement")) or boolish(deep_get(result, "primary_metric_gate.attested_only_movement"))
+        pass_with_unobserved_axes = boolish(value_for(result, "pass_with_unobserved_axes")) or boolish(deep_get(result, "goal_axis_completeness_gate.pass_with_unobserved_axes"))
+        unobserved_goal_axes = value_for(result, "unobserved_goal_axes") or deep_get(result, "goal_axis_completeness_gate.unobserved_goal_axes")
+        generation_dependent_count_key = boolish(value_for(result, "generation_dependent_count_key")) or boolish(deep_get(result, "count_key_hygiene_gate.generation_dependent_count_key"))
+        effective_count_key = (
+            value_for(result, "effective_count_key")
+            or deep_get(result, "count_key_hygiene_gate.effective_count_key")
+            or value_for(result, "root_dominant_parameter_key")
+            or value_for(result, "terminal_outcome_family_key")
+        )
+        generation_key_novelty_claim = boolish(value_for(result, "family_novelty_claim")) or boolish(value_for(result, "stall_reset_claim")) or boolish(deep_get(result, "count_key_hygiene_gate.family_novelty_claim")) or boolish(deep_get(result, "count_key_hygiene_gate.stall_reset_claim"))
+        residual_cost_below_policy = boolish(value_for(result, "residual_gap_cost_below_policy")) or boolish(value_for(result, "value_per_cycle_cost_below_policy")) or boolish(deep_get(result, "residual_gap_cost_policy.below_policy"))
+        primary_metric_high_water_moved = boolish(value_for(result, "primary_metric_high_water_moved")) or boolish(deep_get(result, "primary_metric_gate.primary_metric_high_water_moved"))
+        primary_metric_stalled = boolish(value_for(result, "primary_metric_stalled")) or boolish(deep_get(result, "primary_metric_gate.primary_metric_stalled"))
+        c4_user_escalation = boolish(value_for(result, "c4_user_escalation_backstop_required")) or boolish(deep_get(result, "primary_metric_gate.c4_user_escalation_backstop_required"))
+        terminal_stage_contradiction = boolish(value_for(result, "terminal_classification_stage_contradiction")) or boolish(deep_get(result, "failure_surface_stage_gate.terminal_classification_stage_contradiction"))
+        terminal_classification_invalid_for_counting = boolish(value_for(result, "terminal_classification_invalid_for_counting")) or boolish(deep_get(result, "failure_surface_stage_gate.terminal_classification_invalid_for_counting"))
+        same_input_contract_violation = boolish(value_for(result, "same_input_contract_violation")) or boolish(deep_get(result, "same_input_contract_gate.same_input_contract_violation"))
+        instrumentation_supply_required = boolish(value_for(result, "instrumentation_supply_required")) or boolish(deep_get(result, "diagnostics_unavailable_gate.instrumentation_supply_required"))
+        independent_source_status = str(
+            value_for(result, "independent_source_separation_status")
+            or deep_get(result, "verification_source_separation_gate.independent_source_separation_status")
+            or deep_get(result, "evidence_provenance_gate.independent_source_separation_status")
+            or ""
+        ).lower()
+        independently_verified_downgraded_fields = list_values(
+            value_for(result, "independently_verified_downgraded_fields")
+            or deep_get(result, "verification_source_separation_gate.independently_verified_downgraded_fields")
+            or deep_get(result, "evidence_provenance_gate.independently_verified_downgraded_fields")
+        )
+        envelope_thaw_item_required = boolish(value_for(result, "envelope_thaw_item_required")) or boolish(deep_get(result, "acceptance_reachability_gate.envelope_thaw_item_required"))
+        envelope_thaw_item = value_for(result, "envelope_thaw_item") or deep_get(result, "acceptance_reachability_gate.envelope_thaw_item")
         blocker_mutation = str(value_for(result, "blocker_mutation_kind") or "").lower()
         forward_mutation_progress = blocker_mutation == "forward_mutation"
         terminal_outcome_value = value_for(result, "terminal_outcome_changed")
@@ -1851,12 +2421,120 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                 "loopback_unreachable_acceptance_without_relaxation_gate",
                 "`acceptance_unreachable_under_frozen_config` requires `relaxation_or_escalation_required=true`.",
             )
+        if unverifiable_acceptance and not hard_stop:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_unverifiable_acceptance_without_hard_stop",
+                "`unverifiable_acceptance_contract=true` means a required live verifier was not evaluated; the packet must hard-stop target consumption.",
+            )
         if metric_goal_productive_excluded and semantic_progress and measurement_progress_allowed:
             add(
                 findings,
                 "block" if mode == "block" else "warn",
                 "loopback_tautological_metric_claimed_progress",
                 "Tautological oracle/metric validity must not support semantic or measurement goal-productive progress without independent output-delta evidence.",
+            )
+        if pass_with_coupled_verifier and (not hard_stop or disposition == "goal_productive"):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_coupled_verifier_consumable_as_pass",
+                "`loopback_audit` must treat pass_with_coupled_verifier as not-pass and hard-stop target consumption.",
+            )
+        if attested_only_movement and (primary_metric_high_water_moved or measurement_progress_allowed or disposition == "goal_productive"):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_attested_only_movement_counted_as_progress",
+                "`loopback_audit` must not let producer-attested movement update high-water, allow measurement progress, or route goal_productive.",
+            )
+        if (pass_with_unobserved_axes or non_empty(unobserved_goal_axes)) and (not hard_stop or disposition == "goal_productive"):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_unobserved_axes_consumable_as_pass",
+                "`loopback_audit` must treat pass_with_unobserved_axes as not-pass for measurable goals and hard-stop target consumption.",
+                {"unobserved_goal_axes": unobserved_goal_axes or None},
+            )
+        if generation_dependent_count_key and not effective_count_key:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_generation_count_key_without_effective_key",
+                "Generation-dependent count-key material is trace-only; loopback must emit an effective adapter-collapsed key or terminal-outcome fallback.",
+            )
+        if generation_dependent_count_key and generation_key_novelty_claim:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_generation_key_claimed_family_reset",
+                "`loopback_audit` must not use task/advice/pack/cycle/run/date/hash/version key churn as family novelty, stall reset, hypothesis exhaustion, or seal escape.",
+            )
+        if residual_cost_below_policy and disposition == "goal_productive":
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_residual_cost_below_policy_goal_productive",
+                "`loopback_audit` must not route below-policy residual value per cycle cost as ordinary goal_productive repair.",
+            )
+        if primary_metric_stalled and not hard_stop:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_primary_metric_stall_without_hard_stop",
+                "`loopback_audit` primary_metric_stalled=true must hard-stop ordinary progress and route forced retargeting or user escalation.",
+            )
+        if c4_user_escalation and disposition != "user_escalation":
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_c4_user_escalation_misrouted",
+                "`loopback_audit` C4 user-escalation backstop must route to user_escalation when no forced option is actionable.",
+            )
+        if (terminal_stage_contradiction or terminal_classification_invalid_for_counting) and (disposition == "goal_productive" or not hard_stop):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_terminal_classification_stage_not_fail_closed",
+                "`loopback_audit` contradictory terminal classification must be invalid for counting/close and hard-stop target consumption.",
+            )
+        if same_input_contract_violation and (disposition == "goal_productive" or not hard_stop):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_same_input_contract_not_fail_closed",
+                "`loopback_audit` same-condition input-set mismatch must hard-stop counting until the comparison contract is repaired.",
+            )
+        if instrumentation_supply_required and (disposition == "goal_productive" or not hard_stop):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_instrumentation_supply_not_fail_closed",
+                "`loopback_audit` repeated diagnostics_unavailable must force instrumentation supply or an explicit observability rationale, not ordinary goal_productive routing.",
+            )
+        if independent_source_status in {"missing", "overlap", "blocked"} and (primary_metric_high_water_moved or measurement_progress_allowed or disposition == "goal_productive"):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_independent_verification_source_not_disjoint_counted",
+                "`loopback_audit` must downgrade independently_verified evidence to attested when verification inputs are missing or overlap verified artifacts.",
+                {"independent_source_separation_status": independent_source_status},
+            )
+        if independently_verified_downgraded_fields and (primary_metric_high_water_moved or measurement_progress_allowed or disposition == "goal_productive"):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_downgraded_independent_verification_counted",
+                "`loopback_audit` must not count auto-downgraded independently_verified fields as primary progress.",
+                {"downgraded_fields": independently_verified_downgraded_fields},
+            )
+        if envelope_thaw_item_required and (disposition == "goal_productive" or not hard_stop or not non_empty(envelope_thaw_item)):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_envelope_thaw_item_not_reserved",
+                "`loopback_audit` must reserve an envelope_thaw_item and hard-stop when acceptance is unreachable under a frozen envelope.",
             )
     if target == "validate":
         validation_verdict = str(value_for(result, "validation_verdict") or "").strip().lower()
@@ -1906,6 +2584,239 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                 ],
             )
         )
+        unverifiable_acceptance = boolish(
+            first_present(
+                result,
+                [
+                    "unverifiable_acceptance_contract",
+                    "acceptance_verifier_gate.unverifiable_acceptance_contract",
+                    "acceptance_verifier_contract.unverifiable_acceptance_contract",
+                    "result.acceptance_verifier_gate.unverifiable_acceptance_contract",
+                ],
+            )
+        )
+        required_verifier_not_evaluated = boolish(
+            first_present(
+                result,
+                [
+                    "acceptance_verifier_not_evaluated",
+                    "acceptance_verifier_gate.acceptance_verifier_not_evaluated",
+                    "acceptance_verifier_contract.acceptance_verifier_not_evaluated",
+                    "result.acceptance_verifier_gate.acceptance_verifier_not_evaluated",
+                ],
+            )
+        )
+        pass_with_coupled_verifier = boolish(
+            first_present(
+                result,
+                [
+                    "pass_with_coupled_verifier",
+                    "coupled_verifier_gate.pass_with_coupled_verifier",
+                    "acceptance_verifier_gate.pass_with_coupled_verifier",
+                    "anti_loop_progress_gate.pass_with_coupled_verifier",
+                    "result.coupled_verifier_gate.pass_with_coupled_verifier",
+                    "result.anti_loop_progress_gate.pass_with_coupled_verifier",
+                ],
+            )
+        )
+        non_coupled_revalidated = boolish(
+            first_present(
+                result,
+                [
+                    "non_coupled_revalidation_passed",
+                    "coupled_verifier_gate.non_coupled_revalidation_passed",
+                    "acceptance_verifier_gate.non_coupled_revalidation_passed",
+                    "independent_evidence_recalculation_passed",
+                    "evidence_provenance_gate.independent_evidence_recalculation_passed",
+                ],
+            )
+        )
+        attested_only_movement = boolish(
+            first_present(
+                result,
+                [
+                    "attested_only_movement",
+                    "evidence_provenance_gate.attested_only_movement",
+                    "anti_loop_progress_gate.attested_only_movement",
+                    "primary_metric_gate.attested_only_movement",
+                    "result.evidence_provenance_gate.attested_only_movement",
+                    "result.anti_loop_progress_gate.attested_only_movement",
+                ],
+            )
+        )
+        pass_with_unobserved_axes = boolish(
+            first_present(
+                result,
+                [
+                    "pass_with_unobserved_axes",
+                    "goal_axis_completeness_gate.pass_with_unobserved_axes",
+                    "anti_loop_progress_gate.pass_with_unobserved_axes",
+                    "result.goal_axis_completeness_gate.pass_with_unobserved_axes",
+                    "result.anti_loop_progress_gate.pass_with_unobserved_axes",
+                ],
+            )
+        )
+        unobserved_goal_axes = first_present(
+            result,
+            [
+                "unobserved_goal_axes",
+                "goal_axis_completeness_gate.unobserved_goal_axes",
+                "anti_loop_progress_gate.unobserved_goal_axes",
+                "result.goal_axis_completeness_gate.unobserved_goal_axes",
+                "result.anti_loop_progress_gate.unobserved_goal_axes",
+            ],
+        )
+        generation_dependent_count_key = boolish(
+            first_present(
+                result,
+                [
+                    "generation_dependent_count_key",
+                    "count_key_hygiene_gate.generation_dependent_count_key",
+                    "anti_loop_progress_gate.generation_dependent_count_key",
+                    "anti_loop_progress_gate.count_key_hygiene_gate.generation_dependent_count_key",
+                    "result.anti_loop_progress_gate.generation_dependent_count_key",
+                ],
+            )
+        )
+        generation_key_novelty_claim = boolish(
+            first_present(
+                result,
+                [
+                    "family_novelty_claim",
+                    "new_family_claim",
+                    "stall_reset_claim",
+                    "count_key_hygiene_gate.family_novelty_claim",
+                    "count_key_hygiene_gate.stall_reset_claim",
+                    "anti_loop_progress_gate.count_key_hygiene_gate.family_novelty_claim",
+                    "result.anti_loop_progress_gate.count_key_hygiene_gate.stall_reset_claim",
+                ],
+            )
+        )
+        residual_cost_below_policy = boolish(
+            first_present(
+                result,
+                [
+                    "residual_gap_cost_below_policy",
+                    "value_per_cycle_cost_below_policy",
+                    "cost_disproportionate_residual",
+                    "residual_gap_cost_policy.below_policy",
+                    "anti_loop_progress_gate.residual_gap_cost_policy.below_policy",
+                    "result.anti_loop_progress_gate.residual_gap_cost_policy.below_policy",
+                ],
+            )
+        )
+        marginal_repair_override = boolish(
+            first_present(
+                result,
+                [
+                    "marginal_repair_higher_value",
+                    "residual_gap_policy.marginal_repair_higher_value",
+                    "residual_gap_cost_policy.marginal_repair_higher_value",
+                    "anti_loop_progress_gate.marginal_repair_higher_value",
+                    "result.anti_loop_progress_gate.marginal_repair_higher_value",
+                ],
+            )
+        )
+        producer_attested_fields = first_present(
+            result,
+            [
+                "producer_attested_fields",
+                "evidence_provenance_gate.producer_attested_fields",
+                "anti_loop_progress_gate.producer_attested_fields",
+                "result.evidence_provenance_gate.producer_attested_fields",
+            ],
+        )
+        independently_verified_fields = first_present(
+            result,
+            [
+                "independently_verified_fields",
+                "evidence_provenance_gate.independently_verified_fields",
+                "anti_loop_progress_gate.independently_verified_fields",
+                "result.evidence_provenance_gate.independently_verified_fields",
+            ],
+        )
+        independent_source_status = str(
+            first_present(
+                result,
+                [
+                    "independent_source_separation_status",
+                    "verification_source_separation_gate.independent_source_separation_status",
+                    "evidence_provenance_gate.independent_source_separation_status",
+                    "anti_loop_progress_gate.independent_source_separation_status",
+                    "result.verification_source_separation_gate.independent_source_separation_status",
+                    "result.anti_loop_progress_gate.independent_source_separation_status",
+                ],
+            )
+            or ""
+        ).lower()
+        independently_verified_downgraded_fields = list_values(
+            first_present(
+                result,
+                [
+                    "independently_verified_downgraded_fields",
+                    "verification_source_separation_gate.independently_verified_downgraded_fields",
+                    "evidence_provenance_gate.independently_verified_downgraded_fields",
+                    "anti_loop_progress_gate.independently_verified_downgraded_fields",
+                    "result.verification_source_separation_gate.independently_verified_downgraded_fields",
+                    "result.anti_loop_progress_gate.independently_verified_downgraded_fields",
+                ],
+            )
+        )
+        envelope_thaw_item_required = boolish(
+            first_present(
+                result,
+                [
+                    "envelope_thaw_item_required",
+                    "acceptance_reachability_gate.envelope_thaw_item_required",
+                    "anti_loop_progress_gate.envelope_thaw_item_required",
+                    "result.acceptance_reachability_gate.envelope_thaw_item_required",
+                    "result.anti_loop_progress_gate.envelope_thaw_item_required",
+                ],
+            )
+        )
+        envelope_thaw_item = first_present(
+            result,
+            [
+                "envelope_thaw_item",
+                "acceptance_reachability_gate.envelope_thaw_item",
+                "anti_loop_progress_gate.envelope_thaw_item",
+                "result.acceptance_reachability_gate.envelope_thaw_item",
+                "result.anti_loop_progress_gate.envelope_thaw_item",
+            ],
+        )
+        terminal_stage_contradiction = boolish(
+            first_present(
+                result,
+                [
+                    "terminal_classification_stage_contradiction",
+                    "failure_surface_stage_gate.terminal_classification_stage_contradiction",
+                    "anti_loop_progress_gate.terminal_classification_stage_contradiction",
+                    "result.anti_loop_progress_gate.terminal_classification_stage_contradiction",
+                ],
+            )
+        )
+        same_input_contract_violation = boolish(
+            first_present(
+                result,
+                [
+                    "same_input_contract_violation",
+                    "same_input_contract_gate.same_input_contract_violation",
+                    "anti_loop_progress_gate.same_input_contract_violation",
+                    "result.anti_loop_progress_gate.same_input_contract_violation",
+                ],
+            )
+        )
+        instrumentation_supply_required = boolish(
+            first_present(
+                result,
+                [
+                    "instrumentation_supply_required",
+                    "diagnostics_unavailable_gate.instrumentation_supply_required",
+                    "anti_loop_progress_gate.instrumentation_supply_required",
+                    "result.anti_loop_progress_gate.instrumentation_supply_required",
+                ],
+            )
+        )
         if acceptance_diluted and validation_verdict in {"complete", "passed", "pass"}:
             add(
                 findings,
@@ -1919,6 +2830,100 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                 "block" if mode == "block" else "warn",
                 "validate_measurable_target_unmet_complete",
                 "`validate` cannot complete a measurable directive-derived item without meeting the original target or recording explicit descope plus residual scope.",
+            )
+        if (unverifiable_acceptance or required_verifier_not_evaluated) and validation_verdict in {"complete", "passed", "pass"} and not explicit_descope:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_unverifiable_acceptance_complete",
+                "`validate` cannot complete a measurable target when a required verifier is not_evaluated; return partial and preserve verifier or residual scope.",
+            )
+        if pass_with_coupled_verifier and validation_verdict in {"complete", "passed", "pass"} and not (explicit_descope or non_coupled_revalidated):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_coupled_verifier_complete",
+                "`validate` cannot complete verifier-backed work from pass_with_coupled_verifier; require later non-coupled revalidation, independent recalculation, or explicit residual descope.",
+            )
+        if (pass_with_unobserved_axes or non_empty(unobserved_goal_axes)) and validation_verdict in {"complete", "passed", "pass"} and not explicit_descope:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_unobserved_axes_complete",
+                "`validate` cannot complete review-backed measurable work from pass_with_unobserved_axes; require adapter axis supply, residual scope, terminal blocker, or user escalation.",
+                {"unobserved_goal_axes": unobserved_goal_axes or None},
+            )
+        if generation_dependent_count_key and generation_key_novelty_claim and progress_verdict == "advanced":
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_advanced_from_generation_key_reset",
+                "`validate` cannot accept family novelty, stall reset, hypothesis exhaustion, or seal escape based on generation-dependent task/advice/pack/cycle/run/date/hash/version keys.",
+            )
+        if residual_cost_below_policy and validation_verdict in {"complete", "passed", "pass"} and not (explicit_descope or marginal_repair_override):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_residual_cost_below_policy_complete",
+                "`validate` cannot complete another same-gap residual repair when value per cycle cost is below policy without residual descope or a higher value case.",
+            )
+        if attested_only_movement and progress_verdict == "advanced" and not independently_verified_fields:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_advanced_from_attested_only_movement",
+                "`validate` cannot report progress_verdict: advanced from producer-attested movement without independently verified fields.",
+            )
+        if producer_attested_fields and not independently_verified_fields and validation_verdict in {"complete", "passed", "pass"} and not explicit_descope:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_complete_from_producer_attested_fields",
+                "`validate` cannot complete measurable progress from producer-attested fields alone; require independently verified evidence or residual scope.",
+            )
+        if independently_verified_fields and independent_source_status in {"missing", "overlap", "blocked"} and validation_verdict in {"complete", "passed", "pass"} and not explicit_descope:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_independent_verification_source_not_disjoint",
+                "`validate` cannot complete from independently_verified evidence unless verification_input_paths are disjoint from verified artifacts or the adapter marks the axis self_grounded.",
+                {"independent_source_separation_status": independent_source_status},
+            )
+        if independently_verified_downgraded_fields and progress_verdict == "advanced" and not explicit_descope:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_advanced_from_downgraded_independent_verification",
+                "`validate` cannot report advanced progress from independently_verified fields that were auto-downgraded to attested.",
+                {"downgraded_fields": independently_verified_downgraded_fields},
+            )
+        if envelope_thaw_item_required and validation_verdict in {"complete", "passed", "pass"} and not (explicit_descope or non_empty(envelope_thaw_item)):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_frozen_envelope_complete_without_thaw_item",
+                "`validate` cannot complete acceptance that is unreachable under a frozen envelope without a reserved envelope_thaw_item or explicit descope.",
+            )
+        if terminal_stage_contradiction and validation_verdict in {"complete", "passed", "pass"}:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_complete_with_terminal_classification_contradiction",
+                "`validate` cannot complete while terminal classification contradicts the observed failure surface stage.",
+            )
+        if same_input_contract_violation and progress_verdict == "advanced":
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_advanced_with_same_input_contract_violation",
+                "`validate` cannot advance progress from same-family comparisons whose input sets do not match.",
+            )
+        if instrumentation_supply_required and progress_verdict == "advanced":
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_advanced_with_instrumentation_supply_required",
+                "`validate` cannot advance progress while repeated diagnostics_unavailable still requires instrumentation supply.",
             )
         behavior_change_live_required = boolish(
             first_present(
@@ -1986,6 +2991,39 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                 "block" if mode == "block" else "warn",
                 "validate_refactor_without_structure_high_water",
                 "`validate` cannot complete a behavior-preserving refactor from module creation and green tests alone; adapter-supplied structure high-water must move or the task remains partial.",
+            )
+        structure_key_scope = str(
+            first_present(
+                result,
+                [
+                    "structure_high_water_key_scope",
+                    "structure_metrics_gate.structure_high_water_key_scope",
+                    "result.structure_metrics_gate.structure_high_water_key_scope",
+                ],
+            )
+            or ""
+        ).lower()
+        global_structure_moved = boolish(
+            first_present(
+                result,
+                [
+                    "global_structure_high_water_moved",
+                    "structure_metrics_gate.global_structure_high_water_moved",
+                    "result.structure_metrics_gate.global_structure_high_water_moved",
+                ],
+            )
+        )
+        if (
+            refactor_effect_required
+            and validation_verdict in {"complete", "passed", "pass"}
+            and structure_key_scope == "global_invariant"
+            and not global_structure_moved
+        ):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_global_structure_invariant_not_moved",
+                "`validate` cannot complete global structure work from selected-scope movement while adapter-owned global invariants are flat.",
             )
         convention_status = str(
             first_present(

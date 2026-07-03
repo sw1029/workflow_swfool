@@ -12,6 +12,9 @@
 - `.agent_advice/*`는 비-GT 방향성 문서로만 취급한다.
 - `.task/*`, `.agent_log/*`, `.issue/*`, `.schema/*`, `.contract/*`, `.validation/*`는 워크플로우 증거와 추적 상태이다.
 - 완료 판정은 `$validate-task-completion`이 담당하며, 실행 성공/로그/대시보드/인덱스만으로 완료를 선언하지 않는다.
+- adapter나 caller가 verifier contract를 요구하는 measurable acceptance는 live verifier가 pass해야 완전하다. required verifier의 `not_evaluated`는 pass가 아니며, full close 대신 verifier follow-up, explicit descope, terminal blocker, user escalation 중 하나로 보존한다.
+- acceptance가 참조하는 gate의 required hook 부재, `pass_with_unobserved_axes`, generation-dependent count key, below-policy residual value per cycle cost는 pass/advance/close 근거가 아니다. hook supply, axis supply, effective key/terminal-outcome fallback, residual descope plus next rung, terminal blocker, user escalation 중 하나로 보존한다.
+- 구조 진전은 어댑터가 `structure_metrics.global_*` 전역 불변량을 제공하면 per-scope 감소가 아니라 global high-water 이동으로 판정한다.
 
 ### Mermaid Flowchart 1: 전체 task cycle orchestration
 
@@ -21,8 +24,8 @@ flowchart TD
   Context["context 수집<br/>README, task.md, .agent_goal, .task, .issue, .schema"]
   LedgerInit["$maintain-cycle-ledger<br/>cycle-id, stage.jsonl, current_stage.json, packets/ 초기화"]
   Authority["$manage-agent-authority<br/>권한/외부 호출/검증 우선순위 정책 요약"]
-  Acceptance["$normalize-acceptance-and-demo<br/>acceptance, non-goals, demo, validation commands 정규화"]
-  AdapterScan["repo-local skill adapter scan<br/>code_convention_contract, domain adapter, output-delta hook 탐색"]
+  Acceptance["$normalize-acceptance-and-demo<br/>acceptance, non-goals, demo, validation commands 정규화<br/>measurable -> verifier contract when mapped<br/>required gate hook absent -> unverifiable_acceptance_contract"]
+  AdapterScan["repo-local skill adapter scan<br/>code_convention_contract, domain adapter, output-delta hook,<br/>target_required_verifier, goal_axis_map,<br/>count-key collapse, structure_metrics.global_* 탐색"]
   RoutePlan["route_plan<br/>task.md 존재 여부와 cycle 경로 결정"]
 
   NoTask{"task.md 없음?"}
@@ -37,18 +40,18 @@ flowchart TD
   Run["$run-task-code-and-log<br/>명령 실행, 실패 autopsy, observed_producer_claim downgrade, .agent_log 기록"]
   Running{"run status = running?"}
   Monitor["$monitor-running-execution<br/>PID/log/heartbeat/stop command 추적"]
-  Quality["$review-cycle-output-quality<br/>단일 read-only xhigh 출력 품질 리뷰"]
-  Loopback["$audit-cycle-loopback<br/>semantic_progress, same-family loop, adapter metrics, allowed dispositions"]
+  Quality["$review-cycle-output-quality<br/>단일 read-only xhigh 출력 품질 리뷰<br/>zero mapped goal axes -> pass_with_unobserved_axes"]
+  Loopback["$audit-cycle-loopback<br/>semantic_progress, same-family loop, adapter metrics,<br/>3-state gates, verifier contract, count-key hygiene,<br/>goal-axis completeness, residual cost ratio"]
   ValSetBuild["$build-validation-set-with-agents build/consume<br/>validation assets 또는 oracle 결과 산출"]
   SchemaPreDerive["$manage-schema-contracts pre-derive<br/>schema/contract 영향과 stale contract 확인"]
   Visible["$record-visible-increment<br/>보이는 변화 기록; not_validation_evidence=true"]
   GapAnalysis["repo_skill_gap_analysis<br/>adapter/skill gap 또는 skill-creator 후보"]
   Profile["$profile-cycle-efficiency<br/>중복 로그, metadata-only 반복, command surface budget 감지"]
-  Slice["$optimize-task-slice<br/>state_transition, batch, evidence_supply, consolidation 등 advisory"]
+  Slice["$optimize-task-slice<br/>state_transition, batch, evidence_supply, verifier_completion, consolidation 등 advisory"]
   DeriveNext["$derive-improvement-task<br/>다음 task.md 또는 task_pack/terminal blocker 도출"]
   SchemaPost["$manage-schema-contracts post-derive<br/>새 task/schema/contract 링크 정리"]
   Index["$manage-task-state-index<br/>scan, link, audit; task/candidate/miss/log/schema/issue IDs"]
-  Validate["$validate-task-completion<br/>complete / partial / failed + progress_verdict"]
+  Validate["$validate-task-completion<br/>complete / partial / failed + progress_verdict<br/>required verifier pass + structure global effect 확인"]
   Issue["$manage-implementation-issues<br/>issue open/update/resolve, .issue mirror, GitHub fallback"]
   Commit["$repo-change-commit<br/>coherent implementation/checkpoint commit"]
   Dashboard["$render-cycle-dashboard<br/>한국어 dashboard.md"]
@@ -86,10 +89,10 @@ flowchart TD
   Authority["$manage-agent-authority<br/>.agent_goal/agent_authority.md"]
   SchemaRegistry["$manage-schema-contracts<br/>.schema/.contract registry 정렬"]
   AdviceIn["외부 조언 파일 또는 본문"]
-  Advice["$manage-external-advice<br/>raw -> active/deferred/applied/rejected"]
+  Advice["$manage-external-advice<br/>raw -> active/deferred/applied/rejected<br/>Part E advice는 기존 판정 의미/키 개정으로 정규화"]
   AdvicePacket["active advice packet<br/>not_goal_truth=true"]
   Index["$manage-task-state-index<br/>goal-*, int-*, adv-*, schema-* 링크"]
-  Consumers["orchestrate / derive / governance / validate<br/>GT와 비-GT를 분리 소비"]
+  Consumers["orchestrate / derive / governance / validate<br/>GT와 비-GT를 분리 소비<br/>additive signal 대신 acceptance/gate/progress key에 반영"]
 
   RawPrompt --> Shape --> Goal
   Goal --> DeepGate
@@ -142,14 +145,25 @@ flowchart TD
 
   LoopInputs["run + quality review + output-delta artifacts"]
   Loopback["$audit-cycle-loopback"]
-  LoopGate["anti_loop_progress_gate<br/>effective_allowed_dispositions,<br/>adapter_wiring_defect, adapter_mandate,<br/>cumulative_goal_distance_stalled,<br/>hypothesis_exhausted, acceptance_unreachable"]
-  Slice["$optimize-task-slice<br/>state_transition/batch/evidence/consolidation advisory"]
+  LoopGate["anti_loop_progress_gate<br/>effective_allowed_dispositions,<br/>adapter_wiring_defect, adapter_mandate,<br/>cumulative_goal_distance_stalled,<br/>hypothesis_exhausted,<br/>acceptance_unreachable, unverifiable_acceptance_contract,<br/>pass_with_unobserved_axes, count_key_hygiene,<br/>residual value/cycle cost, metric_verifier_not_evaluated,<br/>structure_global_invariant_metrics"]
+  VerifierDebt{"required verifier<br/>not_evaluated?"}
+  VerifierRoute["derive constraint<br/>verifier hook/metric correction/descope/<br/>terminal blocker/user escalation"]
+  GlobalInvariant{"structure global invariant<br/>metrics present?"}
+  GlobalMoved{"global high-water<br/>moved?"}
+  GlobalRoute["global invariant present + local-only reduction<br/>cannot consume global structure target"]
+  Slice["$optimize-task-slice<br/>state_transition/batch/evidence/verifier_completion/consolidation advisory"]
   Profile["$profile-cycle-efficiency<br/>sprawl, duplicate evidence, safety_only loops"]
 
   Trigger --> ExplicitDoctor
   ExplicitDoctor -- yes --> DoctorRead --> TaskDoctor --> DoctorArchive --> DoctorWrite --> DoctorIndex --> DoctorCommit
   ExplicitDoctor -- no --> NormalDerive
-  LoopInputs --> Loopback --> LoopGate --> NormalDerive
+  LoopInputs --> Loopback --> LoopGate --> VerifierDebt
+  VerifierDebt -- yes --> VerifierRoute --> NormalDerive
+  VerifierDebt -- no --> GlobalInvariant
+  GlobalInvariant -- no --> NormalDerive
+  GlobalInvariant -- yes --> GlobalMoved
+  GlobalMoved -- no --> GlobalRoute --> NormalDerive
+  GlobalMoved -- yes --> NormalDerive
   LoopGate --> Slice --> NormalDerive
   Profile --> NormalDerive
   NormalDerive --> Inputs --> Alignment --> MissAgents --> CandidateScan --> PackScan --> IssueFit --> ImproveAgents --> Synthesis --> Decision
@@ -163,7 +177,7 @@ flowchart TD
 ```mermaid
 flowchart TD
   Task([active task.md])
-  Acceptance["$normalize-acceptance-and-demo<br/>acceptance packet"]
+  Acceptance["$normalize-acceptance-and-demo<br/>acceptance packet<br/>envelope + acceptance_verifier_contract<br/>required hook completeness"]
   ValScope["$plan-validation-scope<br/>changed surfaces -> current_only/affected_chain/full_chain"]
   EnvNeed{"Python/dependency constrained?"}
   FindEnv["$find-local-python-envs<br/>local env inventory, ranked run commands"]
@@ -185,9 +199,9 @@ flowchart TD
   Log["$record-agent-work-log<br/>.agent_log + run evidence"]
   Running{"long-running authorized?"}
   Monitor["$monitor-running-execution<br/>PID/log/heartbeat/status"]
-  Quality["$review-cycle-output-quality<br/>single reviewer, output quality/delta/no-overclaim"]
+  Quality["$review-cycle-output-quality<br/>single reviewer, output quality/delta/no-overclaim<br/>goal-axis completeness"]
   Completion["$validate-task-completion"]
-  Gates["gates: env, execution, repo audit, OOM if relevant,<br/>task_miss, issue, advice, schema, acceptance,<br/>structure, behavior-change live evidence, ID"]
+  Gates["gates: env, execution, repo audit, OOM if relevant,<br/>task_miss, issue, advice, schema, acceptance,<br/>required verifier/hook pass, goal axes,<br/>count-key hygiene, residual cost ratio,<br/>structure global invariant, behavior-change live evidence, ID"]
   Verdict{"validation_verdict<br/>complete / partial / failed"}
   Progress{"progress_verdict<br/>advanced / safety_only / no_progress / regressed"}
 
@@ -305,12 +319,16 @@ flowchart TD
 +----------------------------+     +---------------------------------------------+
 | $normalize-acceptance      | --> | acceptance packet                           |
 | acceptance/non-goal/demo   |     | envelope_floor / deficit_axis when present  |
+| measurable target contract |     | acceptance_verifier_contract when mapped    |
+|                             |     | required verifier/hook not_evaluated != pass|
 +----------------------------+     +---------------------------------------------+
         |
         v
 +----------------------------+     +---------------------------------------------+
 | repo-local adapter scan    | --> | code_convention_contract                    |
 | adapters and hooks         |     | domain adapter / output-delta / gate hooks  |
+|                             |     | target_required_verifier, goal_axis_map,    |
+|                             |     | count-key collapse, global_* metrics        |
 +----------------------------+     +---------------------------------------------+
         |
         v
@@ -371,6 +389,10 @@ flowchart TD
         |                                +---------------------------------------+
         |                                | $audit-cycle-loopback                 |
         |                                | semantic_progress / anti-loop gates    |
+        |                                | pass/fail/not_evaluated gate meaning  |
+        |                                | verifier debt + count-key hygiene      |
+        |                                | goal-axis completeness + residual cost |
+        |                                | global invariant keys                  |
         |                                +---------------------------------------+
         |                                              |
         |                                              v
@@ -386,6 +408,7 @@ flowchart TD
         |                                | derive preparation                    |
         |                                | $profile-cycle-efficiency             |
         |                                | $optimize-task-slice                  |
+        |                                | verifier_completion when required     |
         |                                | $derive-improvement-task              |
         |                                | $manage-schema-contracts post-derive  |
         |                                | $manage-task-state-index              |
@@ -397,6 +420,8 @@ flowchart TD
 +----------------------------+     +---------------------------------------------+
 | $validate-task-completion  | --> | validation_verdict + progress_verdict      |
 | final completion gate      |     | complete/partial/failed + progress class   |
+|                             |     | required verifier pass before full close    |
+|                             |     | global structure target not consumed local  |
 +----------------------------+     +---------------------------------------------+
         |
         v
@@ -495,6 +520,8 @@ External advice side path:
 +-------------------------------+      +----------------------------------------+
 | external advice Markdown      | ---> | $manage-external-advice               |
 +-------------------------------+      | raw -> active/deferred/applied/rejected|
+                                       | workflow advice becomes in-place      |
+                                       | acceptance/gate/progress-key revision |
                                        +----------------------------------------+
                                                      |
                                                      v
@@ -544,14 +571,18 @@ External advice side path:
 +-------------------------------+        | - 3 improvement agents                |
 | write task.md or task_pack    |        | - 1 synthesis agent                   |
 | preserve scope_fidelity,      |        +---------------------------------------+
-| envelope, terminal override   |                         |
+| envelope, verifier contract,  |                         |
+| terminal/global residuals,    |                         |
+| G-axis/cost residuals         |                         |
 +-------------------------------+                         v
           |                              +---------------------------------------+
           v                              | apply hard selection gates            |
 +-------------------------------+        | anti_loop effective dispositions,     |
 | index / schema / issue /      |        | allowed_task_kinds, adapter defects,  |
 | advice reconciliation         |        | chain stalls, sealed families,        |
-+-------------------------------+        | no producer self-report truth         |
++-------------------------------+        | verifier debt, count-key hygiene,     |
+                                         | goal-axis, residual cost, global keys |
+          |                              | no producer self-report truth         |
           |                              +---------------------------------------+
           v                                               |
 +-------------------------------+                         v
@@ -593,13 +624,18 @@ Anti-loop and efficiency inputs into derive:
 | run + quality + output-delta  | ---> | $audit-cycle-loopback                  |
 +-------------------------------+      | semantic_progress, root family,        |
                                        | adapter metrics, effective dispositions|
+                                       | evaluation_status pass/fail/not_eval   |
+                                       | target_required_verifier + goal_axis   |
+                                       | count-key hygiene + residual cost      |
+                                       | global_*                               |
                                        +----------------------------------------+
                                                      |
                                                      v
                                        +----------------------------------------+
                                        | $optimize-task-slice                  |
                                        | state_transition / batch / evidence / |
-                                       | consolidation / stop advisory         |
+                                       | verifier_completion / consolidation / |
+                                       | stop advisory                         |
                                        +----------------------------------------+
                                                      |
                                                      v
@@ -621,6 +657,8 @@ Anti-loop and efficiency inputs into derive:
 +-------------------------------+      +----------------------------------------+
 | $normalize-acceptance         | ---> | acceptance packet                      |
 | criteria / non-goals / demo   |      | validation commands + envelope         |
+| measurable -> verifiable      |      | acceptance_verifier_contract           |
+|                               |      | when mapped                            |
 +-------------------------------+      +----------------------------------------+
               |
               v
@@ -712,6 +750,8 @@ Anti-loop and efficiency inputs into derive:
 | final gate matrix             |      | complete / partial / failed           |
 | env/run/repo/OOM/miss/issue/  |      | progress_verdict: advanced /          |
 | advice/schema/acceptance/ID   |      | safety_only / no_progress / regressed |
+| verifier/structure global     |      | not_evaluated verifier blocks         |
+|                               |      | complete                              |
 +-------------------------------+      +----------------------------------------+
 ```
 
@@ -845,7 +885,7 @@ Anti-loop and efficiency inputs into derive:
 
 ```text
 orchestrate-task-cycle
-  context -> ledger -> authority -> acceptance -> adapter scan -> validation planning -> governance -> run -> review -> loopback -> derive -> index -> validate -> issue -> commit -> dashboard/report -> closeout
+  context -> ledger -> authority -> acceptance/verifier contracts -> adapter scan -> validation planning -> governance -> run -> review -> loopback -> derive -> index -> validate -> issue -> commit -> dashboard/report -> closeout
 
 maintain-cycle-ledger
   cycle init -> stage append -> packet link -> dashboard/final_report render support
@@ -875,19 +915,19 @@ manage-schema-contracts
   goal schema contract + source/interfaces -> contract surfaces -> versions/causal map -> .schema/.contract updates
 
 manage-external-advice
-  raw advice -> normalize active advice -> audit stale/dead/degenerate claims -> apply/defer/reject -> adv-* links
+  raw advice -> normalize active advice -> in-place workflow revisions without GT upgrade -> audit stale/dead/degenerate claims -> apply/defer/reject -> adv-* links
 
 derive-improvement-task
-  context + agents + gates -> one next task/task_pack/terminal blocker -> archive old task -> write task.md -> index
+  context + agents + gates -> respect allowed dispositions, verifier debt, count-key hygiene, goal-axis completeness, residual cost, global invariant keys -> one next task/task_pack/terminal blocker -> archive old task -> write task.md -> index
 
 task-doctor
-  explicit doctor instruction -> read rules/task/advice -> archive old task -> rewrite task/task_pack -> reconcile schema/index/issue -> optional commit
+  explicit doctor instruction -> read rules/task/advice -> archive old task -> rewrite task/task_pack while preserving verifier/hook/axis/cost/global residuals -> reconcile schema/index/issue -> optional commit
 
 optimize-task-slice
-  blockers/candidates/loop signals -> classify next slice -> advisory packet for derive
+  blockers/candidates/loop signals -> classify next slice including verifier_completion, hook_supply, axis_supply, cost_disproportionate_residual -> advisory packet for derive
 
 profile-cycle-efficiency
-  ledger/logs/validation/issues -> detect repeated low-value cycles/sprawl -> recommended action for derive/report
+  ledger/logs/validation/issues -> detect repeated low-value cycles/sprawl and supply residual value-per-cycle-cost denominator -> recommended action for derive/report
 
 task-md-agent-governance
   task.md -> repo map -> worker implementation -> integration -> multi-agent audit -> task_miss report
@@ -908,7 +948,7 @@ plan-validation-scope
   changed surfaces -> current_only/affected_chain/full_chain -> validation manifest
 
 normalize-acceptance-and-demo
-  task context -> acceptance/non-goals/demo/validation packet -> governance/validation scope
+  task context -> acceptance/non-goals/demo/validation packet -> envelope/verifier/hook contract and residual cost fields -> governance/validation scope
 
 build-validation-set-with-agents
   task/evidence -> plan/build/refresh/consume/block -> .validation assets and result packet
@@ -920,13 +960,13 @@ monitor-running-execution
   running run evidence -> heartbeat/status check -> running/completed/stale/missing_details/not_running
 
 review-cycle-output-quality
-  output artifacts -> one read-only qualitative reviewer -> quality/output-delta/no-overclaim packet
+  output artifacts -> one read-only qualitative reviewer -> quality/output-delta/no-overclaim/goal-axis packet
 
 audit-cycle-loopback
-  run/review/output-delta/adapter -> anti-loop gates -> registry/root-cause ledger -> derive constraints
+  run/review/output-delta/adapter -> 3-state anti-loop gates, target_required_verifier, count-key hygiene, goal-axis completeness, residual cost, global invariant high-water -> registry/root-cause ledger -> derive constraints
 
 validate-task-completion
-  evidence bundle -> completion gates -> validation_verdict + progress_verdict -> validation report
+  evidence bundle -> completion gates -> required verifier/hook pass + observed goal axes + count-key hygiene + residual cost ratio + structure global effect -> validation_verdict + progress_verdict -> validation report
 
 manage-evidence-cache
   fingerprints -> reuse/fresh_required/stale/unsafe_to_reuse -> owning validator decides

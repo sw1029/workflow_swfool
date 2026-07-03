@@ -28,6 +28,8 @@ anti_loop_gate_provider = load_module(
     SKILLS_ROOT / "audit-cycle-loopback" / "scripts" / "anti_loop_gate_provider.py"
 )
 task_pack_queue = load_module(ORCHESTRATE_ROOT / "scripts" / "task_pack_queue.py")
+safe_failure_autopsy = load_module(SKILLS_ROOT / "run-task-code-and-log" / "scripts" / "safe_failure_autopsy.py")
+cycle_ledger = load_module(ORCHESTRATE_ROOT / "scripts" / "cycle_ledger.py")
 
 
 def base_pack(items: list[dict[str, Any]]) -> dict[str, Any]:
@@ -95,11 +97,90 @@ def test_task_pack_scope_fidelity_allows_explicit_descope_with_open_residual() -
     assert not any(finding.get("severity") == "block" for finding in findings)
 
 
+def test_task_pack_blocks_consumed_item_with_required_verifier_not_evaluated() -> None:
+    item = base_item("item-001", status="consumed")
+    item["scope_fidelity"] = {
+        "directive_id": "directive-r1",
+        "original_target": {"metric": "abstract_metric", "comparator": ">=", "target": 1},
+        "item_acceptance": ["Meet the original measurable target."],
+        "acceptance_verifier_contract": {
+            "required_verifier": "abstract_verifier",
+            "verifier_required": True,
+            "evaluation_status": "not_evaluated",
+        },
+    }
+    item["result"] = {
+        "validation_verdict": "complete",
+        "acceptance_provenance_gate": {"target_met": True},
+    }
+
+    findings = task_pack_queue.validate_pack(base_pack([item]))
+
+    assert any(
+        finding.get("code") == "acceptance_verifier_not_passed_item_consumed"
+        for finding in findings
+    )
+    assert task_pack_queue.status_from_findings(findings) == "block"
+
+
+def test_task_pack_blocks_coupled_verifier_pass_as_consumed() -> None:
+    item = base_item("item-001", status="consumed")
+    item["scope_fidelity"] = {
+        "directive_id": "directive-r1",
+        "original_target": {"metric": "abstract_metric", "comparator": ">=", "target": 1},
+        "item_acceptance": ["Meet the original measurable target."],
+        "acceptance_verifier_contract": {
+            "required_verifier": "abstract_verifier",
+            "verifier_required": True,
+            "evaluation_status": "pass",
+            "pass_with_coupled_verifier": True,
+        },
+    }
+    item["result"] = {
+        "validation_verdict": "complete",
+        "acceptance_provenance_gate": {"target_met": True},
+    }
+
+    findings = task_pack_queue.validate_pack(base_pack([item]))
+
+    assert any(
+        finding.get("code") == "acceptance_verifier_not_passed_item_consumed"
+        for finding in findings
+    )
+    assert task_pack_queue.status_from_findings(findings) == "block"
+
+
+def test_task_pack_blocks_producer_attested_consumed_progress() -> None:
+    item = base_item("item-001", status="consumed")
+    item["scope_fidelity"] = {
+        "directive_id": "directive-r1",
+        "original_target": {"metric": "abstract_metric", "comparator": ">=", "target": 1},
+        "item_acceptance": ["Meet the original measurable target."],
+    }
+    item["result"] = {
+        "validation_verdict": "complete",
+        "acceptance_provenance_gate": {"target_met": True},
+        "evidence_provenance_gate": {
+            "producer_attested_fields": ["abstract_metric"],
+            "attested_only_movement": True,
+        },
+    }
+
+    findings = task_pack_queue.validate_pack(base_pack([item]))
+
+    assert any(
+        finding.get("code") == "producer_attested_progress_item_consumed"
+        for finding in findings
+    )
+    assert task_pack_queue.status_from_findings(findings) == "block"
+
+
 def test_structure_metrics_gate_preserves_high_water_fields() -> None:
     gate = anti_loop_gate_provider.structure_metrics_gate(
         {
             "structure_metrics": {"entrypoint_loc": 1200, "structure_consolidation_recommended": True},
             "semantic_structure_metrics": {"mechanical_shard_file_count": 3},
+            "global_invariants": {"global_part_file_count": 113},
             "structure_high_water_moved": True,
             "improved_structure_axes": ["entrypoint_loc"],
             "refactor_effect_required": True,
@@ -111,6 +192,8 @@ def test_structure_metrics_gate_preserves_high_water_fields() -> None:
     assert gate["improved_structure_axes"] == ["entrypoint_loc"]
     assert gate["refactor_effect_required"] is True
     assert gate["structure_metrics"]["mechanical_shard_file_count"] == 3.0
+    assert gate["structure_high_water_key_scope"] == "global_invariant"
+    assert gate["structure_global_invariant_metrics"]["global_part_file_count"] == 113.0
 
 
 def test_code_structure_audit_reports_semantic_signals_warn_only_without_contract() -> None:
@@ -773,12 +856,133 @@ def test_reachability_and_metric_validity_gates_are_conservative() -> None:
         {"checks": [{"metric_validity": "tautological"}]}
     )
     missing_metric_validity = anti_loop_gate_provider.oracle_metric_validity_gate(None)
+    required_missing = anti_loop_gate_provider.acceptance_reachability_gate(
+        {"verifier_required": True, "required_verifier": "span_grounding"}
+    )
+    required_reachable_without_live_verifier = anti_loop_gate_provider.acceptance_reachability_gate(
+        {
+            "acceptance_min_output": {"candidate_count": 1},
+            "frozen_envelope": {"max_candidate_count": 1},
+            "required_verifier": "span_grounding",
+        }
+    )
+    required_reachable_with_live_verifier = anti_loop_gate_provider.acceptance_reachability_gate(
+        {
+            "acceptance_min_output": {"candidate_count": 1},
+            "frozen_envelope": {"max_candidate_count": 1},
+            "acceptance_verifier_contract": {
+                "required_verifier": "span_grounding",
+                "evaluation_status": "pass",
+            },
+        }
+    )
+    required_metric_without_live_verifier = anti_loop_gate_provider.oracle_metric_validity_gate(
+        {"required_verifier": "independent_metric"}
+    )
 
     assert reachability["reachability_verdict"] == "unreachable"
+    assert reachability["evaluation_status"] == "fail"
     assert reachability["relaxation_or_escalation_required"] is True
     assert metric_validity["metric_goal_productive_excluded"] is True
+    assert metric_validity["evaluation_status"] == "fail"
     assert missing_metric_validity["status"] == "not_provided"
+    assert missing_metric_validity["evaluation_status"] == "not_evaluated"
     assert missing_metric_validity["constrains_disposition"] is False
+    assert required_missing["unverifiable_acceptance_contract"] is True
+    assert required_missing["constrains_disposition"] is True
+    assert required_reachable_without_live_verifier["reachability_verdict"] == "reachable"
+    assert required_reachable_without_live_verifier["evaluation_status"] == "not_evaluated"
+    assert required_reachable_without_live_verifier["unverifiable_acceptance_contract"] is True
+    assert required_reachable_with_live_verifier["evaluation_status"] == "pass"
+    assert required_reachable_with_live_verifier["unverifiable_acceptance_contract"] is False
+    assert required_metric_without_live_verifier["evaluation_status"] == "not_evaluated"
+    assert required_metric_without_live_verifier["metric_goal_productive_excluded"] is True
+
+
+def test_evaluate_applies_target_required_verifier_adapter_contract() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        adapter = root / "domain_adapter.py"
+        adapter.write_text(
+            "\n".join(
+                [
+                    "def quality_vector(**kwargs):",
+                    "    return {'quality_vector': {'event_named_ratio': 0, 'proper_noun_character_ratio': 0, 'coreference_resolved_ratio': 0, 'causal_edge_count': 0, 'windows_covered': 0, 'current_output_fingerprint': 'fp-current'}}",
+                    "def substance_metrics(**kwargs):",
+                    "    return {'event_count': 0}",
+                    "def facet_root_map(**kwargs):",
+                    "    return {'same_root': 'same_root'}",
+                    "def acceptance_reachability(**kwargs):",
+                    "    return {'target': {'metric': 'candidate_count', 'target': 1}, 'acceptance_min_output': {'candidate_count': 1}, 'frozen_envelope': {'max_candidate_count': 1}}",
+                    "def target_required_verifier(target=None, **kwargs):",
+                    "    assert target == {'metric': 'candidate_count', 'target': 1}",
+                    "    return {'required_verifier': 'span_grounding', 'verifier_required': True}",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        args = argparse.Namespace(
+            root=str(root),
+            cycle_id="cycle-new",
+            task_id="task-new",
+            artifact_family="primary_output",
+            semantic_signature="same_root",
+            root_key="same_root",
+            domain_adapter=str(adapter),
+            provider_request_count=0,
+            artifact_path=[],
+            artifact_paths_json=None,
+            gate_state_json=[],
+            recent_progress_json=None,
+            runner_validation_json=None,
+            output_delta_json=json.dumps({"changed_vs_previous": False, "semantic_progress": False}),
+            substance_metrics_json=None,
+            corrective_resolution_json=None,
+            facet_root_map_json=None,
+            acceptance_reachability_json=None,
+            metric_validity_json=None,
+            root_cause_hypotheses_json=None,
+            hypothesized_root_cause=None,
+            root_cause_repair_attempted=False,
+            root_cause_repair_task_id=None,
+            root_cause_actionable=False,
+            untried_promotion_budget=2,
+            measurement_check_id=[],
+            measurement_check_ids_json=None,
+            measurement_frontier=[],
+            measurement_streak_cap=1,
+            detection_only_streak_cap=2,
+            adapter_mandate_streak_cap=3,
+            cumulative_chain_streak_cap=3,
+            blocker_signature="same_root",
+            blocker_rung=None,
+            max_forward_mutations=3,
+            consolidation_streak_cap=2,
+            registry_path=".task/anti_loop/family_progress_registry.jsonl",
+            root_cause_ledger_path=".task/anti_loop/root_cause_ledger.jsonl",
+            threshold=3,
+            epsilon=1e-9,
+            max_rows_per_family=200,
+            max_root_cause_rows_per_family=200,
+            write_registry=False,
+            output=None,
+        )
+
+        anti_loop_gate_provider._DOMAIN_ADAPTER_MODULE = None
+        packet, _, _ = anti_loop_gate_provider.evaluate(args)
+
+    reachability_gate = packet["acceptance_reachability_gate"]
+    assert reachability_gate["reachability_verdict"] == "reachable"
+    assert reachability_gate["required_verifier"] == "span_grounding"
+    assert reachability_gate["evaluation_status"] == "not_evaluated"
+    assert packet["unverifiable_acceptance_contract"] is True
+    assert packet["recommended_disposition"] == "verifier_contract_required"
+    assert any(
+        finding.get("code") == "unverifiable_acceptance_contract"
+        for finding in packet.get("findings", [])
+        if isinstance(finding, dict)
+    )
 
 
 def test_terminal_recheck_escalates_to_user_input() -> None:
@@ -864,7 +1068,353 @@ def test_result_contract_blocks_label_only_goal_productive_task_kind() -> None:
     )
 
 
+def test_result_contract_blocks_derive_goal_productive_from_part_f_failures() -> None:
+    result = result_contract.validate(
+        "derive",
+        {
+            "completed_task_id": "task-old",
+            "selected_task_source": "standalone",
+            "next_task_id": "task-new",
+            "progress_kind": "goal_productive",
+            "semantic_signature": "same-root",
+            "pass_with_coupled_verifier": True,
+            "attested_only_movement": True,
+            "primary_metric_stalled": True,
+            "evidence_paths": ["derive.json"],
+        },
+        "block",
+    )
+
+    codes = {finding.get("code") for finding in result["findings"]}
+    assert "derive_goal_productive_from_coupled_verifier" in codes
+    assert "derive_goal_productive_from_attested_only_movement" in codes
+    assert "derive_primary_metric_stall_without_forced_task" in codes
+
+
+def test_result_contract_blocks_loopback_part_f_misrouting() -> None:
+    result = result_contract.validate(
+        "loopback_audit",
+        {
+            "task_id": "task-1",
+            "cycle_id": "cycle-1",
+            "family_key": "family",
+            "changed_vs_previous": True,
+            "semantic_progress": True,
+            "same_family_micro_hardening_count": 0,
+            "recommended_disposition": "goal_productive",
+            "hard_stop_required": False,
+            "evidence_class": "direct",
+            "pass_with_coupled_verifier": True,
+            "evidence_provenance_gate": {"attested_only_movement": True},
+            "primary_metric_gate": {
+                "primary_metric_high_water_moved": True,
+                "primary_metric_stalled": True,
+                "c4_user_escalation_backstop_required": True,
+            },
+            "evidence_paths": ["loopback.json"],
+        },
+        "block",
+    )
+
+    codes = {finding.get("code") for finding in result["findings"]}
+    assert "loopback_coupled_verifier_consumable_as_pass" in codes
+    assert "loopback_attested_only_movement_counted_as_progress" in codes
+    assert "loopback_primary_metric_stall_without_hard_stop" in codes
+    assert "loopback_c4_user_escalation_misrouted" in codes
+
+
+def test_result_contract_blocks_validate_completion_from_part_f_failures() -> None:
+    result = result_contract.validate(
+        "validate",
+        {
+            "task_id": "task-1",
+            "validation_verdict": "complete",
+            "progress_verdict": "advanced",
+            "pass_with_coupled_verifier": True,
+            "evidence_provenance_gate": {
+                "producer_attested_fields": ["abstract_metric"],
+                "attested_only_movement": True,
+            },
+            "evidence_paths": ["validate.json"],
+        },
+        "block",
+    )
+
+    codes = {finding.get("code") for finding in result["findings"]}
+    assert "validate_coupled_verifier_complete" in codes
+    assert "validate_advanced_from_attested_only_movement" in codes
+    assert "validate_complete_from_producer_attested_fields" in codes
+
+
+def test_safe_failure_autopsy_records_stage_and_diagnostics_unavailable() -> None:
+    packet = safe_failure_autopsy.autopsy(
+        stdout_text="",
+        stderr_text="",
+        exit_code=1,
+        command="python run.py",
+        allow_secret_env_key_names=False,
+        execution_stage_ladder={"stages": ["load", "generate", "parse"]},
+        last_successful_stage="generate",
+        post_failure_diagnostics=None,
+    )
+
+    assert packet["execution_stage_ladder_status"] == "provided"
+    assert packet["last_successful_stage"] == "generate"
+    assert packet["failure_surface_stage"] == "parse"
+    assert packet["diagnostics_unavailable"] is True
+
+
+def test_loopback_stage_contradiction_blocks_counting() -> None:
+    gate = anti_loop_gate_provider.terminal_stage_resolution_gate(
+        ladder_value={"stages": ["load", "generate", "parse"]},
+        classification_map_value={"unavailable": ["load"]},
+        contexts=[{"last_successful_stage": "generate", "classification": "unavailable"}],
+        root_family_key="root",
+        dominant_parameter="window_count_64",
+    )
+
+    assert gate["failure_surface_stage"] == "parse"
+    assert gate["terminal_classification_stage_contradiction"] is True
+    assert gate["terminal_classification_invalid_for_counting"] is True
+    assert gate["status"] == "block"
+
+
+def test_loopback_uses_failure_surface_count_key_and_forces_instrumentation_option() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        registry = root / ".task" / "anti_loop" / "family_progress_registry.jsonl"
+        registry.parent.mkdir(parents=True, exist_ok=True)
+        current_count_key = anti_loop_gate_provider.normalize_root_family_key("same_root_family", "window_64", "parse")
+        other_count_key = anti_loop_gate_provider.normalize_root_family_key("same_root_family", "window_64", "record")
+        rows = [
+            {
+                "cycle_id": "cycle-other-surface",
+                "family_key": "legacy",
+                "root_family_key": "same_root_family",
+                "failure_surface_count_key": other_count_key,
+                "same_family_micro_hardening_count": 7,
+                "diagnostics_unavailable": True,
+                "semantic_progress": False,
+            },
+            {
+                "cycle_id": "cycle-same-surface",
+                "family_key": "legacy",
+                "root_family_key": "same_root_family",
+                "failure_surface_count_key": current_count_key,
+                "same_family_micro_hardening_count": 1,
+                "diagnostics_unavailable": True,
+                "semantic_progress": False,
+            },
+        ]
+        registry.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n", encoding="utf-8")
+        args = argparse.Namespace(
+            root=str(root),
+            cycle_id="cycle-new",
+            task_id="task-new",
+            artifact_family="primary_output",
+            semantic_signature="same_root",
+            root_key="same_root",
+            domain_adapter=None,
+            provider_request_count=0,
+            artifact_path=[],
+            artifact_paths_json=None,
+            gate_state_json=[],
+            recent_progress_json=None,
+            runner_validation_json=None,
+            output_delta_json=json.dumps({"changed_vs_previous": False, "semantic_progress": False}),
+            failure_autopsy_json=[
+                json.dumps(
+                    {
+                        "execution_stage_ladder": ["load", "generate", "parse"],
+                        "last_successful_stage": "generate",
+                        "root_dominant_parameter_key": "window_64",
+                        "diagnostics_unavailable": True,
+                    }
+                )
+            ],
+            instrumentation_trigger_threshold=2,
+            substance_metrics_json=None,
+            corrective_resolution_json=None,
+            facet_root_map_json=json.dumps({"same_root": "same_root_family"}),
+            acceptance_reachability_json=None,
+            metric_validity_json=None,
+            root_cause_hypotheses_json=None,
+            hypothesized_root_cause=None,
+            root_cause_repair_attempted=False,
+            root_cause_repair_task_id=None,
+            root_cause_actionable=False,
+            untried_promotion_budget=2,
+            measurement_check_id=[],
+            measurement_check_ids_json=None,
+            measurement_frontier=[],
+            measurement_streak_cap=1,
+            detection_only_streak_cap=2,
+            adapter_mandate_streak_cap=3,
+            cumulative_chain_streak_cap=3,
+            blocker_signature="same_root",
+            blocker_rung=None,
+            max_forward_mutations=3,
+            consolidation_streak_cap=2,
+            registry_path=".task/anti_loop/family_progress_registry.jsonl",
+            root_cause_ledger_path=".task/anti_loop/root_cause_ledger.jsonl",
+            threshold=3,
+            epsilon=1e-9,
+            max_rows_per_family=200,
+            max_root_cause_rows_per_family=200,
+            envelope_thaw_streak_cap=2,
+            write_registry=False,
+            output=None,
+        )
+
+        packet, _, _ = anti_loop_gate_provider.evaluate(args)
+
+    forced_kinds = {option.get("selected_task_kind") for option in packet["forced_selected_task_options"]}
+    assert packet["failure_surface_count_key"] == current_count_key
+    assert packet["effective_count_key"] == current_count_key
+    assert packet["same_family_micro_hardening_count"] == 2
+    assert packet["diagnostics_unavailable_streak"] == 2
+    assert packet["instrumentation_supply_required"] is True
+    assert "instrumentation_supply" in forced_kinds
+
+
+def test_loopback_downgrades_independent_when_verification_source_overlaps() -> None:
+    gate = anti_loop_gate_provider.verification_source_separation_gate(
+        provenance_value={
+            "verification_input_paths": ["artifacts/result.json"],
+            "evidence_provenance": {"metric": "independently_verified"},
+        },
+        verified_artifact_paths=["artifacts/result.json"],
+        independently_verified_fields=["metric"],
+    )
+
+    assert gate["independent_source_separation_status"] == "overlap"
+    assert gate["independently_verified_downgraded_fields"] == ["metric"]
+    assert gate["status"] == "block"
+
+
+def test_task_pack_blocks_independent_verified_without_source_separation() -> None:
+    item = base_item("item-001", status="consumed")
+    item["scope_fidelity"] = {
+        "directive_id": "directive-r1",
+        "original_target": {"metric": "abstract_metric", "comparator": ">=", "target": 1},
+        "item_acceptance": ["Meet the original measurable target."],
+    }
+    item["result"] = {
+        "validation_verdict": "complete",
+        "acceptance_provenance_gate": {"target_met": True},
+        "evidence_provenance_gate": {
+            "independently_verified_fields": ["abstract_metric"],
+            "independent_source_separation_status": "overlap",
+        },
+    }
+
+    findings = task_pack_queue.validate_pack(base_pack([item]))
+
+    assert any(
+        finding.get("code") == "independent_verification_source_not_disjoint_item_consumed"
+        for finding in findings
+    )
+    assert task_pack_queue.status_from_findings(findings) == "block"
+
+
+def test_result_contract_blocks_part_h_misrouting() -> None:
+    derive = result_contract.validate(
+        "derive",
+        {
+            "completed_task_id": "task-1",
+            "selected_task_source": "standalone",
+            "next_task_id": "task-2",
+            "progress_kind": "goal_productive",
+            "semantic_signature": "sig",
+            "selected_task_kind": "ordinary_repair",
+            "instrumentation_supply_required": True,
+            "terminal_classification_stage_contradiction": True,
+            "same_input_contract_violation": True,
+            "envelope_thaw_item_required": True,
+            "evidence_paths": ["derive.json"],
+        },
+        "block",
+    )
+    loopback = result_contract.validate(
+        "loopback_audit",
+        {
+            "task_id": "task-1",
+            "cycle_id": "cycle-1",
+            "family_key": "family",
+            "changed_vs_previous": False,
+            "semantic_progress": False,
+            "same_family_micro_hardening_count": 1,
+            "recommended_disposition": "goal_productive",
+            "hard_stop_required": False,
+            "evidence_class": "direct",
+            "terminal_classification_stage_contradiction": True,
+            "same_input_contract_violation": True,
+            "instrumentation_supply_required": True,
+            "envelope_thaw_item_required": True,
+            "evidence_paths": ["loopback.json"],
+        },
+        "block",
+    )
+    validate = result_contract.validate(
+        "validate",
+        {
+            "task_id": "task-1",
+            "validation_verdict": "complete",
+            "progress_verdict": "advanced",
+            "independently_verified_fields": ["metric"],
+            "independent_source_separation_status": "missing",
+            "envelope_thaw_item_required": True,
+            "terminal_classification_stage_contradiction": True,
+            "same_input_contract_violation": True,
+            "instrumentation_supply_required": True,
+            "evidence_paths": ["validate.json"],
+        },
+        "block",
+    )
+
+    derive_codes = {finding.get("code") for finding in derive["findings"]}
+    loopback_codes = {finding.get("code") for finding in loopback["findings"]}
+    validate_codes = {finding.get("code") for finding in validate["findings"]}
+    assert "derive_missing_instrumentation_supply" in derive_codes
+    assert "derive_terminal_classification_stage_repair_missing" in derive_codes
+    assert "derive_same_input_contract_repair_missing" in derive_codes
+    assert "derive_envelope_thaw_item_missing" in derive_codes
+    assert "loopback_terminal_classification_stage_not_fail_closed" in loopback_codes
+    assert "loopback_same_input_contract_not_fail_closed" in loopback_codes
+    assert "loopback_instrumentation_supply_not_fail_closed" in loopback_codes
+    assert "loopback_envelope_thaw_item_not_reserved" in loopback_codes
+    assert "validate_independent_verification_source_not_disjoint" in validate_codes
+    assert "validate_frozen_envelope_complete_without_thaw_item" in validate_codes
+    assert "validate_complete_with_terminal_classification_contradiction" in validate_codes
+
+
+def test_cycle_ledger_records_unchanged_ref_for_duplicate_artifact() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        artifact = root / "packet.json"
+        artifact.write_text(json.dumps({"same": True}, sort_keys=True), encoding="utf-8")
+        first = cycle_ledger.append_event(
+            root,
+            "cycle-1",
+            {"step": "run", "status": "complete", "artifacts": ["packet.json"]},
+        )
+        second = cycle_ledger.append_event(
+            root,
+            "cycle-1",
+            {"step": "validate", "status": "complete", "artifacts": ["packet.json"]},
+        )
+
+    assert first["event"]["artifact_refs"][0]["sha256"]
+    assert second["event"]["unchanged_refs"][0]["path"] == "packet.json"
+    assert second["current_stage"]["latest_event"]["unchanged_refs"][0]["sha256"] == first["event"]["artifact_refs"][0]["sha256"]
+
+
 def main() -> int:
+    test_task_pack_scope_fidelity_blocks_diluted_consumed_item()
+    test_task_pack_scope_fidelity_allows_explicit_descope_with_open_residual()
+    test_task_pack_blocks_consumed_item_with_required_verifier_not_evaluated()
+    test_task_pack_blocks_coupled_verifier_pass_as_consumed()
+    test_task_pack_blocks_producer_attested_consumed_progress()
     test_terminal_outcome_family_fallback_groups_mutating_blockers()
     test_adapter_mandate_blocks_missing_adapter_stall_chain()
     test_registered_adapter_load_failure_routes_wiring_defect()
@@ -872,9 +1422,20 @@ def main() -> int:
     test_chain_stall_forces_actionable_ladder_task_kind()
     test_repo_owned_source_provenance_rejects_nonactionable_self_report()
     test_reachability_and_metric_validity_gates_are_conservative()
+    test_evaluate_applies_target_required_verifier_adapter_contract()
     test_terminal_recheck_escalates_to_user_input()
     test_supplied_input_delta_prevents_terminal_escalation()
     test_result_contract_blocks_label_only_goal_productive_task_kind()
+    test_result_contract_blocks_derive_goal_productive_from_part_f_failures()
+    test_result_contract_blocks_loopback_part_f_misrouting()
+    test_result_contract_blocks_validate_completion_from_part_f_failures()
+    test_safe_failure_autopsy_records_stage_and_diagnostics_unavailable()
+    test_loopback_stage_contradiction_blocks_counting()
+    test_loopback_uses_failure_surface_count_key_and_forces_instrumentation_option()
+    test_loopback_downgrades_independent_when_verification_source_overlaps()
+    test_task_pack_blocks_independent_verified_without_source_separation()
+    test_result_contract_blocks_part_h_misrouting()
+    test_cycle_ledger_records_unchanged_ref_for_duplicate_artifact()
     print("loopback guard contract tests passed")
     return 0
 

@@ -75,6 +75,22 @@ This contract defines `.agent_advice/` artifacts. Advice is direction evidence, 
 
 - <How task.md, candidate_task, task-doctor, or derive should use this.>
 
+## Workflow Contract Revisions
+
+- in_place_revisions: []
+- additive_new_surfaces: []
+- exclusions: []
+- count_key_hygiene: <generation-independent count-key rule, or none>
+- required_gate_hooks: <acceptance-required gate hooks treated as verifier completeness, or none>
+- goal_axis_completeness: <goal-axis mapping/pass completeness rule, or none>
+- residual_gap_cost_policy: <value-per-cycle-cost comparison rule, or none>
+- failure_autopsy_contract: <last_successful_stage plus scalar diagnostics or diagnostics_unavailable rule, or none>
+- failure_surface_count_key: <root + dominant parameter + failure surface stage count-key rule, or none>
+- instrumentation_supply_rule: <diagnostics_unavailable streak rule and observability-rationale exception, or none>
+- verification_source_separation: <verification_input_paths disjointness/self_grounded rule, or none>
+- frozen_envelope_thaw: <envelope_thaw_item requirement and thaw-condition/schedule rule, or none>
+- ledger_unchanged_ref_policy: <unchanged_ref path+hash recording rule, or none>
+
 ## Design Integration
 
 - <How architecture/schema/theory/governance should use this.>
@@ -110,6 +126,7 @@ Record advice in `.agent_advice/index.jsonl` and `$manage-task-state-index`:
 - freshness fields: `advice_metrics_stale`, `declared_output_fingerprints`, `current_output_fingerprint`, `freshness_reason`
 - root-cause freshness fields: `re_advised_dead_hypothesis`, `dead_hypothesis_claims`, `root_cause_ledger_path`
 - measurable target fields: `directive_id`, `metric`, `comparator`, `target`, `acceptance_text`, `residual_policy`
+- workflow revision fields: `in_place_revisions`, `additive_new_surfaces`, `exclusions`, `count_key_hygiene`, `required_gate_hooks`, `goal_axis_completeness`, `residual_gap_cost_policy`, `failure_autopsy_contract`, `failure_surface_count_key`, `instrumentation_supply_rule`, `verification_source_separation`, `frozen_envelope_thaw`, `ledger_unchanged_ref_policy`
 - useful links: `advice_for`, `incorporated_into`, `applied_by`, `rejected_by`, `superseded_by`, `conflicts_with_goal`, `conflicts_with_authority`
 
 ## Audit Freshness Gate
@@ -138,3 +155,5 @@ If `advice_metrics_stale` is `true`, downstream workflows must refresh, defer, r
 If `re_advised_dead_hypothesis` is `true`, downstream workflows must not use that advice as fresh untried root-cause evidence unless it supplies a new input delta, authority change, or external-state change.
 
 If advice includes measurable targets, downstream `$task-doctor` and `$derive-improvement-task` must carry them into task-pack `scope_fidelity` or `task.md` acceptance. Do not mark the advice applied merely because a narrowed pilot/plan/slice was completed; either the original target is met, or explicit descope with residual scope is recorded.
+
+If advice includes workflow contract revisions, downstream workflows must keep them as non-GT in-place decision revisions unless the advice explicitly requests an additive surface and that surface is compatible with higher-priority instructions. For Part G/H-style advice, preserve abstract contracts without repo-specific names or thresholds: generation-dependent count keys are trace-only; acceptance-required gate hooks are `not_evaluated` when absent; review pass requires mapped axes for active measurable goals when `goal_axis_map` is available; residual-gap repair is compared by value per cycle cost when cycle-efficiency evidence exists; failure autopsy needs `last_successful_stage` plus scalar diagnostics or `diagnostics_unavailable`; loopback counting uses the failure-surface key when available; repeated unavailable diagnostics forces instrumentation supply or a concrete observability rationale; independently verified evidence requires disjoint `verification_input_paths` unless the axis is `self_grounded`; frozen unreachable envelopes require an `envelope_thaw_item`; and duplicate ledger packets should be referenced by `unchanged_ref(path+hash)`.
