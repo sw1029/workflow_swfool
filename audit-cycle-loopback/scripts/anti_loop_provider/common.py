@@ -1,0 +1,307 @@
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import difflib
+import fnmatch
+import hashlib
+import inspect
+import importlib.util
+import json
+import os
+import re
+import sys
+from pathlib import Path
+from typing import Any
+
+from typing import Any
+
+
+REGISTRY_REL_PATH = ".task/anti_loop/family_progress_registry.jsonl"
+ROOT_CAUSE_LEDGER_REL_PATH = ".task/anti_loop/root_cause_ledger.jsonl"
+SCHEMA_VERSION = "anti-loop-progress-gate-v1"
+LEGACY_QUALITY_MODULE_NAME = "novel_kg_quality_metrics.py"
+DOMAIN_ADAPTER_ENV = "TASK_CYCLE_DOMAIN_ADAPTER_PATH"
+DEFAULT_DOMAIN_ADAPTER_REL_PATH = ".task/domain_adapter.py"
+LEGACY_QUALITY_ENV = "NOVEL_KG_QUALITY_METRICS_PATH"
+DISPOSITION_UNIVERSE = {"goal_productive", "consolidation", "terminal_blocked", "user_escalation"}
+SAFETY_VALVES = {"terminal_blocked", "user_escalation"}
+CONSOLIDATION_STREAK_CAP_DEFAULT = 2
+MEASUREMENT_STREAK_CAP_DEFAULT = 1
+MAX_FORWARD_MUTATIONS_DEFAULT = 3
+DETECTION_ONLY_STREAK_CAP_DEFAULT = 2
+UNTRIED_PROMOTION_BUDGET_DEFAULT = 2
+ADAPTER_MANDATE_STREAK_CAP_DEFAULT = 3
+CUMULATIVE_CHAIN_STREAK_CAP_DEFAULT = 3
+INSTRUMENTATION_TRIGGER_THRESHOLD_DEFAULT = 2
+ENVELOPE_THAW_STREAK_CAP_DEFAULT = 2
+ROOT_CAUSE_LEDGER_MAX_ROWS_PER_FAMILY_DEFAULT = 200
+ROOT_STEERING_DOC_NAMES = {"task_advice.md", "skill_advice.md", "task_doctor_steering.md"}
+QUALITY_DELTA_KEYS = (
+    "event_named_ratio",
+    "proper_noun_character_ratio",
+    "coreference_resolved_ratio",
+    "causal_edge_count",
+    "windows_covered",
+)
+ROOT_KEY_KEYS = {"root_key", "semantic_root_key", "loop_root_key"}
+IDEMPOTENT_REPLAY_KEYS = (
+    "measurement_progress",
+    "measurement_progress_allowed",
+    "measurement_streak",
+    "measurement_streak_cap",
+    "measurement_check_ids",
+    "measurement_frontiers_observed",
+    "measurement_progress_basis",
+    "measurement_progress_streak_for_root_key",
+    "measurement_progress_streak_for_root_family",
+    "legacy_family_key",
+    "root_family_key",
+    "blocker_root_family",
+    "root_key",
+    "previous_high_water_mark",
+    "coverage_quality_delta_gate",
+    "coverage_quality_delta_reconciliation_gate",
+    "substance_metrics",
+    "substance_delta_gate",
+    "vacuous_corrective_gate",
+    "facet_root_map_applied",
+    "facet_root_map_missing",
+    "facet_root_map_size",
+    "terminal_outcome_key",
+    "terminal_outcome_family_key",
+    "terminal_outcome_family_fallback_applied",
+    "terminal_outcome_family_previous_count",
+    "advice_freshness_gate",
+    "partial_progress_axes_gate",
+    "structure_metrics_gate",
+    "structure_high_water_key_scope",
+    "structure_global_invariant_metrics",
+    "previous_accepted_baseline",
+    "provider_scale_dispatch_gate",
+    "measurement_goal_productive_allowed",
+    "requires_non_measurement_goal_productive",
+    "blocker_signature",
+    "blocker_ladder_rung",
+    "blocker_mutation_kind",
+    "forward_mutation_budget_remaining",
+    "terminal_outcome_changed",
+    "observed_delta_class",
+    "forward_mutation_vacuous",
+    "root_cause_ledger_path",
+    "root_cause_ledger_status",
+    "root_cause_ledger_entries",
+    "root_cause_unverified_hypotheses",
+    "root_cause_duplicate_hypotheses",
+    "repo_owned_source_roots",
+    "repo_owned_source_roots_status",
+    "repo_owned_source_roots_error",
+    "adapter_mandate_gate",
+    "adapter_mandate_required",
+    "adapter_missing_streak",
+    "adapter_contract_unmet",
+    "cumulative_goal_distance_gate",
+    "cumulative_goal_distance_scope_key",
+    "cumulative_goal_distance_stall_streak",
+    "cumulative_goal_distance_stalled",
+    "cumulative_untried_chain_without_quality_delta",
+    "high_water_vector",
+    "high_water_last_improved_cycle",
+    "untried_veto_overridden_by_chain_stall",
+    "acceptance_reachability_gate",
+    "acceptance_unreachable_under_frozen_config",
+    "acceptance_verifier_not_evaluated",
+    "unverifiable_acceptance_contract",
+    "relaxation_or_escalation_required",
+    "residual_gap_policy",
+    "residual_gap_ratio",
+    "marginal_repair",
+    "oracle_metric_validity_gate",
+    "metric_verifier_not_evaluated",
+    "adapter_wiring_gate",
+    "adapter_wiring_defect",
+    "adapter_loaded",
+    "adapter_path",
+    "adapter_registered",
+    "adapter_expected_path",
+    "chain_stall_forced_retarget_gate",
+    "forced_selected_task",
+    "forced_selected_task_options",
+    "untried_actionable_root_cause_exists",
+    "untried_root_cause_hypotheses",
+    "untried_promotion_budget",
+    "vacuous_untried_attempt_count",
+    "vacuous_untried_streak",
+    "hypothesis_exhausted",
+    "hypothesis_exhaustion_seal_path",
+    "terminal_blocked_invalid_due_to_untried_root_cause",
+    "force_implementation_cycle",
+    "task_correction_class",
+    "detection_only",
+    "detection_only_streak_for_root_family",
+    "detection_only_streak_cap",
+    "requires_correction_or_terminal",
+    "validator_integrity_gate",
+    "evidence_provenance_gate",
+    "producer_attested_fields",
+    "independently_verified_fields",
+    "attested_only_movement",
+    "primary_metric_gate",
+    "primary_metric_high_water_moved",
+    "primary_metric_zero_movement_streak",
+    "primary_metric_stalled",
+    "c4_user_escalation_backstop_required",
+    "failure_surface_stage_gate",
+    "execution_stage_ladder_status",
+    "last_successful_stage",
+    "failure_surface_stage",
+    "failure_surface_count_key",
+    "terminal_classification_stage_contradiction",
+    "terminal_classification_invalid_for_counting",
+    "same_input_contract_gate",
+    "same_input_contract_violation",
+    "diagnostics_unavailable",
+    "diagnostics_unavailable_streak",
+    "diagnostics_unavailable_gate",
+    "instrumentation_supply_required",
+    "verification_source_separation_gate",
+    "independent_source_separation_status",
+    "independently_verified_downgraded_fields",
+    "envelope_thaw_item_required",
+    "envelope_thaw_item",
+    "envelope_thaw_streak",
+    "root_dominant_parameter_key",
+    "coupled_verifier_gate",
+    "pass_with_coupled_verifier",
+    "changed_verifier_source_paths",
+    "effective_allowed_dispositions",
+    "disposition_intersection_basis",
+    "consolidation_streak",
+    "consolidation_reduces_goal_distance",
+    "consolidation_streak_cap",
+    "authoritative_semantic_progress",
+    "findings",
+)
+FRONTIER_CHECK_KEYS = {
+    "event_sequence_oracle",
+    "reconstruction_coverage",
+    "relation_class_filled",
+    "story_vs_narrative_split",
+}
+CHECK_ID_KEYS = {
+    "check_id",
+    "check_ids",
+    "check_name",
+    "check_names",
+    "metric_id",
+    "metric_ids",
+    "oracle_id",
+    "oracle_ids",
+    "oracle_name",
+    "oracle_names",
+    "validation_check",
+    "validation_checks",
+}
+BLOCKER_SIGNATURE_KEYS = {
+    "blocker",
+    "blocker_code",
+    "blocker_reason",
+    "blocker_signature",
+    "failed_reason",
+    "failure_reason",
+}
+LADDER_RANK = {
+    "single_window": 0,
+    "multi_window": 1,
+    "entity_coref": 2,
+    "causal_temporal": 3,
+    "pov_timeline": 4,
+    "reconstruction": 5,
+    "unseen_batch": 6,
+}
+RUNG_ALIASES = {
+    "single_window_sweep": "single_window",
+    "multi_window_sweep": "multi_window",
+    "coreference": "entity_coref",
+    "entity_coreference": "entity_coref",
+    "causal_temporal_edge": "causal_temporal",
+    "temporal_causal": "causal_temporal",
+    "timeline": "pov_timeline",
+    "pov": "pov_timeline",
+    "rich_profiles": "pov_timeline",
+    "reconstruction_oracle": "reconstruction",
+}
+VOLATILE_KEYS = {
+    "created_at",
+    "updated_at",
+    "run_id",
+    "cycle_id",
+    "timestamp",
+    "source_path",
+    "path",
+    "offset",
+    "start_offset",
+    "end_offset",
+}
+FACET_SUFFIX_RE = re.compile(
+    r"([_.:/|-])(?:v\d+|ver\d+|version\d+|facet|variant|case|mode|phase|stage|"
+    r"vocab|pov|timing|typing|schema|contract|gate|metric|oracle|validator|lineage|"
+    r"coverage|preflight|handoff|packet|dashboard|report|field|scalar|check|review|surface)$",
+    re.IGNORECASE,
+)
+PASS_STATUS_VALUES = {"pass", "passed", "ok", "valid", "success", "succeeded", "complete", "completed", "true"}
+FAIL_STATUS_VALUES = {"fail", "failed", "invalid", "error", "blocked", "false"}
+VALIDATOR_RESULT_KEYS = {
+    "pass",
+    "passed",
+    "ok",
+    "valid",
+    "success",
+    "succeeded",
+    "semantic_progress",
+    "result",
+    "status",
+    "validates",
+}
+VALIDATOR_CHILD_KEYS = {
+    "checks",
+    "sub_checks",
+    "sub_results",
+    "subresults",
+    "results",
+    "validators",
+    "validations",
+    "assertions",
+    "items",
+    "embedded_results",
+}
+POPULATION_COUNT_KEYS = {
+    "population_count",
+    "declared_population_count",
+    "target_count",
+    "expected_count",
+    "total_count",
+    "candidate_count",
+    "declared_count",
+}
+INSPECTED_COUNT_KEYS = {
+    "checked_count",
+    "validated_count",
+    "inspected_count",
+    "reviewed_count",
+    "actual_count",
+    "covered_count",
+    "processed_count",
+}
+DETECTION_TERMS_RE = re.compile(
+    r"(validator|validation|oracle|metric|gate|contract|check|dashboard|lineage|gap[-_ ]?report|"
+    r"coverage[-_ ]?report|instrumentation|measurement)",
+    re.IGNORECASE,
+)
+CORRECTION_TERMS_RE = re.compile(
+    r"(producer|transform|prompt|resolver|resolution|extract|extraction|generate|generation|"
+    r"repair|fix|implementation|run|primary[-_ ]?output|source[-_ ]?backed)",
+    re.IGNORECASE,
+)
+
+__all__ = [name for name in globals() if not name.startswith("__")]
