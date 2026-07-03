@@ -15,6 +15,7 @@
 - adapter나 caller가 verifier contract를 요구하는 measurable acceptance는 live verifier가 pass해야 완전하다. required verifier의 `not_evaluated`는 pass가 아니며, full close 대신 verifier follow-up, explicit descope, terminal blocker, user escalation 중 하나로 보존한다.
 - acceptance가 참조하는 gate의 required hook 부재, `pass_with_unobserved_axes`, generation-dependent count key, below-policy residual value per cycle cost는 pass/advance/close 근거가 아니다. hook supply, axis supply, effective key/terminal-outcome fallback, residual descope plus next rung, terminal blocker, user escalation 중 하나로 보존한다.
 - 구조 진전은 어댑터가 `structure_metrics.global_*` 전역 불변량을 제공하면 per-scope 감소가 아니라 global high-water 이동으로 판정한다.
+- `audit-cycle-loopback/scripts/anti_loop_gate_provider.py`와 `orchestrate-task-cycle/scripts/detect_progress_loop.py`는 기존 호출 호환 shim이고, 실제 구현은 각각 `anti_loop_provider/`, `progress_loop_detection/` 패키지 안의 모듈로 분리되어 있다.
 
 ### Mermaid Flowchart 1: 전체 task cycle orchestration
 
@@ -41,7 +42,7 @@ flowchart TD
   Running{"run status = running?"}
   Monitor["$monitor-running-execution<br/>PID/log/heartbeat/stop command 추적"]
   Quality["$review-cycle-output-quality<br/>단일 read-only xhigh 출력 품질 리뷰<br/>zero mapped goal axes -> pass_with_unobserved_axes"]
-  Loopback["$audit-cycle-loopback<br/>semantic_progress, same-family loop, adapter metrics,<br/>3-state gates, verifier contract, count-key hygiene,<br/>goal-axis completeness, residual cost ratio"]
+  Loopback["$audit-cycle-loopback<br/>semantic_progress, same-family loop, adapter metrics,<br/>3-state gates, verifier contract, count-key hygiene,<br/>goal-axis completeness, residual cost ratio,<br/>anti_loop_provider packet + root-cause ledger"]
   ValSetBuild["$build-validation-set-with-agents build/consume<br/>validation assets 또는 oracle 결과 산출"]
   SchemaPreDerive["$manage-schema-contracts pre-derive<br/>schema/contract 영향과 stale contract 확인"]
   Visible["$record-visible-increment<br/>보이는 변화 기록; not_validation_evidence=true"]
@@ -143,9 +144,10 @@ flowchart TD
   Terminal["terminal_blocker / user_escalation<br/>sealed family와 missing input 기록"]
   DeriveIndex["$manage-task-state-index scan + audit"]
 
-  LoopInputs["run + quality review + output-delta artifacts"]
-  Loopback["$audit-cycle-loopback"]
-  LoopGate["anti_loop_progress_gate<br/>effective_allowed_dispositions,<br/>adapter_wiring_defect, adapter_mandate,<br/>cumulative_goal_distance_stalled,<br/>hypothesis_exhausted,<br/>acceptance_unreachable, unverifiable_acceptance_contract,<br/>pass_with_unobserved_axes, count_key_hygiene,<br/>residual value/cycle cost, metric_verifier_not_evaluated,<br/>structure_global_invariant_metrics"]
+  LoopInputs["run + quality review + output-delta artifacts<br/>failure autopsy, runner validation, gate states"]
+  ProgressDetect["detect_progress_loop.py<br/>progress_loop_detection analyzer<br/>evidence -> gates/findings/terminal packet"]
+  Loopback["$audit-cycle-loopback<br/>anti_loop_gate_provider.py legacy shim<br/>-> anti_loop_provider.api/evaluator"]
+  LoopGate["anti_loop_progress_gate<br/>effective_allowed_dispositions, allowed_task_kinds,<br/>adapter_wiring_defect, adapter_mandate,<br/>cumulative_goal_distance_stalled,<br/>failure_surface_stage_gate, verification_source_separation,<br/>root_cause_hypothesis_gate, hypothesis_exhausted,<br/>acceptance_unreachable, unverifiable_acceptance_contract,<br/>pass_with_unobserved_axes, count_key_hygiene,<br/>residual value/cycle cost, metric_verifier_not_evaluated,<br/>structure_global_invariant_metrics"]
   VerifierDebt{"required verifier<br/>not_evaluated?"}
   VerifierRoute["derive constraint<br/>verifier hook/metric correction/descope/<br/>terminal blocker/user escalation"]
   GlobalInvariant{"structure global invariant<br/>metrics present?"}
@@ -157,7 +159,7 @@ flowchart TD
   Trigger --> ExplicitDoctor
   ExplicitDoctor -- yes --> DoctorRead --> TaskDoctor --> DoctorArchive --> DoctorWrite --> DoctorIndex --> DoctorCommit
   ExplicitDoctor -- no --> NormalDerive
-  LoopInputs --> Loopback --> LoopGate --> VerifierDebt
+  LoopInputs --> ProgressDetect --> Loopback --> LoopGate --> VerifierDebt
   VerifierDebt -- yes --> VerifierRoute --> NormalDerive
   VerifierDebt -- no --> GlobalInvariant
   GlobalInvariant -- no --> NormalDerive
@@ -195,7 +197,7 @@ flowchart TD
   Run["$run-task-code-and-log"]
   Execute["정해진 command 실행<br/>validation_profile 준수"]
   Failure{"실패 또는 gate unsatisfiable?"}
-  Autopsy["safe_failure_autopsy.py<br/>scalar diagnostics, self_inflicted_gate_defect 분류"]
+  Autopsy["safe_failure_autopsy.py<br/>execution stage ladder 정규화,<br/>safe scalar diagnostics,<br/>gate selfcheck -> self_inflicted_gate_defect"]
   Log["$record-agent-work-log<br/>.agent_log + run evidence"]
   Running{"long-running authorized?"}
   Monitor["$monitor-running-execution<br/>PID/log/heartbeat/status"]
@@ -284,6 +286,39 @@ flowchart TD
   RunNeed -- no --> EvidenceNeed
   EvidenceNeed -- yes --> Cache --> Output
   EvidenceNeed -- no --> Output
+```
+
+### Mermaid Flowchart 7: anti-loop and progress detection internals
+
+```mermaid
+flowchart TD
+  Inputs["inputs<br/>registry, artifact paths, changed files,<br/>runner validation, output delta,<br/>failure autopsies, gate states"]
+
+  LoopbackCLI["anti_loop_gate_provider.py<br/>legacy CLI/API shim"]
+  LoopbackAPI["anti_loop_provider/api.py<br/>export bridge + runtime cache sync"]
+  LoopbackEval["anti_loop_provider/evaluator.py<br/>LoopbackEvaluator / evaluate"]
+  AdapterLayer["adapters.py + domain.py + quality.py<br/>domain adapter, quality vector,<br/>facet/root-family normalization"]
+  LoopGates["gates + acceptance + verification + blockers<br/>coverage/substance, verifier status,<br/>failure surface stage, source separation,<br/>adapter and chain stalls"]
+  RootCause["root_cause.py + root_cause_runtime.py<br/>hypotheses, repo-owned actionability,<br/>exhaustion and untried repair"]
+  LoopRegistry["registry.py<br/>anti-loop registry, root-cause ledger,<br/>sealed blocker families"]
+  LoopPacket["packet.py + assembly.py + outcome.py<br/>anti_loop_progress_gate packet<br/>effective dispositions + allowed task kinds"]
+
+  DetectCLI["detect_progress_loop.py<br/>legacy CLI shim"]
+  DetectAnalyzer["progress_loop_detection/cli.py + analysis.py<br/>ProgressLoopAnalyzer"]
+  DetectEvidence["evidence.py + fingerprints.py + normalizers.py<br/>structured evidence, observed output class,<br/>root axis/key, feature symbol"]
+  DetectGates["output_delta_gate.py + input_delta_gate.py + validator_gate.py<br/>declared vs observed delta,<br/>supplied input delta, validator integrity"]
+  DetectTerminal["analysis_gates.py + terminal.py + provider.py<br/>safety-only streak, metadata-only loops,<br/>terminal quiescence/escalation,<br/>provider reattempt gates"]
+  DetectRegistry["progress_loop_detection/registry.py<br/>feature symbol registry + terminal history"]
+  DetectPacket["analysis_result.py<br/>loop-breaker packet"]
+
+  Derive["$derive-improvement-task<br/>next task / terminal blocker / user escalation constraints"]
+
+  Inputs --> LoopbackCLI --> LoopbackAPI --> LoopbackEval
+  LoopbackEval --> AdapterLayer --> LoopGates --> LoopPacket
+  LoopbackEval --> RootCause --> LoopRegistry --> LoopPacket
+  LoopPacket --> Derive
+
+  Inputs --> DetectCLI --> DetectAnalyzer --> DetectEvidence --> DetectGates --> DetectTerminal --> DetectRegistry --> DetectPacket --> Derive
 ```
 
 ## 순수 텍스트 Flowchart
@@ -388,11 +423,12 @@ flowchart TD
         |                                              v
         |                                +---------------------------------------+
         |                                | $audit-cycle-loopback                 |
+        |                                | anti_loop_provider package packet      |
         |                                | semantic_progress / anti-loop gates    |
         |                                | pass/fail/not_evaluated gate meaning  |
         |                                | verifier debt + count-key hygiene      |
-        |                                | goal-axis completeness + residual cost |
-        |                                | global invariant keys                  |
+        |                                | failure stage + root-cause ledger      |
+        |                                | goal-axis/residual/global invariant    |
         |                                +---------------------------------------+
         |                                              |
         |                                              v
@@ -621,13 +657,23 @@ External advice side path:
 Anti-loop and efficiency inputs into derive:
 
 +-------------------------------+      +----------------------------------------+
-| run + quality + output-delta  | ---> | $audit-cycle-loopback                  |
-+-------------------------------+      | semantic_progress, root family,        |
+| run + quality + output-delta  | ---> | detect_progress_loop.py                |
+| failure autopsy + gate states |      | progress_loop_detection package       |
++-------------------------------+      | evidence/fingerprint/root feature     |
+                                       | output/input/validator gates          |
+                                       | terminal quiescence/escalation packet |
+                                       +----------------------------------------+
+                                                     |
+                                                     v
+                                       +----------------------------------------+
+                                       | $audit-cycle-loopback                  |
+                                       | anti_loop_provider package            |
+                                       | semantic_progress, root family,        |
                                        | adapter metrics, effective dispositions|
                                        | evaluation_status pass/fail/not_eval   |
-                                       | target_required_verifier + goal_axis   |
-                                       | count-key hygiene + residual cost      |
-                                       | global_*                               |
+                                       | failure_surface_stage_gate             |
+                                       | root-cause ledger + sealed families    |
+                                       | verifier, count-key, residual, global  |
                                        +----------------------------------------+
                                                      |
                                                      v
@@ -725,8 +771,9 @@ Anti-loop and efficiency inputs into derive:
           v                                          v
 +-------------------------------+        +---------------------------------------+
 | safe_failure_autopsy.py       |        | keep normal run evidence              |
-| scalar diagnostics only       |        +---------------------------------------+
-| self_inflicted_gate_defect    |                         |
+| execution stage ladder        |        +---------------------------------------+
+| safe scalar diagnostics only  |                         |
+| gate selfcheck defect class   |                         |
 +-------------------------------+                         |
           |                                                |
           +--------------------------+---------------------+
@@ -881,6 +928,63 @@ Anti-loop and efficiency inputs into derive:
 +-------------------------------+      +----------------------------------------+
 ```
 
+### Text Flowchart 7: anti-loop/progress detection 내부 구조
+
+```text
++----------------------------------------+
+| inputs                                 |
+| registry/artifact paths/changed files  |
+| runner validation/output delta         |
+| failure autopsy/gate state JSON        |
++----------------------------------------+
+          |                                      |
+          v                                      v
++----------------------------------+   +----------------------------------+
+| anti_loop_gate_provider.py       |   | detect_progress_loop.py          |
+| legacy CLI/API shim              |   | legacy CLI shim                  |
++----------------------------------+   +----------------------------------+
+          |                                      |
+          v                                      v
++----------------------------------+   +----------------------------------+
+| anti_loop_provider/api.py        |   | progress_loop_detection/cli.py   |
+| export bridge/runtime caches     |   | argparse/constant registry check |
++----------------------------------+   +----------------------------------+
+          |                                      |
+          v                                      v
++----------------------------------+   +----------------------------------+
+| evaluator.py                     |   | analysis.py                      |
+| LoopbackEvaluator/evaluate       |   | ProgressLoopAnalyzer mixins      |
++----------------------------------+   +----------------------------------+
+          |                                      |
+          v                                      v
++----------------------------------+   +----------------------------------+
+| adapters/domain/quality          |   | evidence/fingerprints/normalizers|
+| quality vectors, root families   |   | evidence items, root axis/key    |
++----------------------------------+   +----------------------------------+
+          |                                      |
+          v                                      v
++----------------------------------+   +----------------------------------+
+| gates/acceptance/verification    |   | output/input/validator gates     |
+| blockers/chain/root_cause        |   | terminal/provider gates          |
+| failure surface stage gate       |   | quiescence/escalation            |
++----------------------------------+   +----------------------------------+
+          |                                      |
+          v                                      v
++----------------------------------+   +----------------------------------+
+| registry/root-cause ledger       |   | progress symbol registry         |
+| sealed blocker families          |   | loop-breaker result packet       |
++----------------------------------+   +----------------------------------+
+          |                                      |
+          +-------------------+------------------+
+                              |
+                              v
+                 +-----------------------------+
+                 | derive-improvement-task     |
+                 | task/terminal/escalation    |
+                 | constraints                 |
+                 +-----------------------------+
+```
+
 ### 스킬별 빠른 참조
 
 ```text
@@ -954,7 +1058,7 @@ build-validation-set-with-agents
   task/evidence -> plan/build/refresh/consume/block -> .validation assets and result packet
 
 run-task-code-and-log
-  requested command -> execute/profile scope -> failure autopsy if needed -> .agent_log and run evidence
+  requested command -> execute/profile scope -> safe_failure_autopsy with stage ladder/scalar diagnostics if needed -> .agent_log and run evidence
 
 monitor-running-execution
   running run evidence -> heartbeat/status check -> running/completed/stale/missing_details/not_running
@@ -963,7 +1067,7 @@ review-cycle-output-quality
   output artifacts -> one read-only qualitative reviewer -> quality/output-delta/no-overclaim/goal-axis packet
 
 audit-cycle-loopback
-  run/review/output-delta/adapter -> 3-state anti-loop gates, target_required_verifier, count-key hygiene, goal-axis completeness, residual cost, global invariant high-water -> registry/root-cause ledger -> derive constraints
+  run/review/output-delta/failure-autopsy/adapter -> anti_loop_provider evaluator -> 3-state gates, failure surface stage, root-cause ledger, target_required_verifier, count-key hygiene, goal-axis completeness, residual cost, global invariant high-water -> derive constraints
 
 validate-task-completion
   evidence bundle -> completion gates -> required verifier/hook pass + observed goal axes + count-key hygiene + residual cost ratio + structure global effect -> validation_verdict + progress_verdict -> validation report
@@ -988,4 +1092,13 @@ repo-change-commit
 
 render-cycle-dashboard
   cycle ledger -> Korean dashboard with canonical tokens and blockers
+
+anti_loop_gate_provider.py / anti_loop_provider/
+  legacy entrypoint -> api export bridge -> evaluator -> adapters/domain/quality -> gates/root_cause/registry -> anti_loop_progress_gate packet
+
+detect_progress_loop.py / progress_loop_detection/
+  legacy entrypoint -> CLI -> ProgressLoopAnalyzer -> evidence/fingerprints/normalizers -> output/input/validator gates -> terminal quiescence/escalation -> loop-breaker packet
+
+safe_failure_autopsy.py
+  logs/adapters -> execution_stage_ladder + post_failure_diagnostics + gate_selfcheck -> failure class, next_failure_stage, safe scalar diagnostics
 ```
