@@ -1,0 +1,871 @@
+{
+  "coverage": "all_public_uppercase_constants",
+  "entries": [
+    {
+      "category": "regex_text_parsing",
+      "consumers": [
+        "evidence"
+      ],
+      "expected": {
+        "flags": [
+          "IGNORECASE"
+        ],
+        "kind": "regex",
+        "pattern": "(?:blocker|blocking finding|남은 blocker)\\s*[:|-]\\s*(.+)"
+      },
+      "kind": "regex",
+      "name": "BLOCKER_RE",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "regex_text_parsing",
+      "consumers": [
+        "evidence"
+      ],
+      "expected": {
+        "flags": [
+          "IGNORECASE"
+        ],
+        "kind": "regex",
+        "pattern": "\\b(?:build|validate|run|preflight)-[A-Za-z0-9_.:-]*[-_]v\\d+[A-Za-z0-9_.:-]*(?:contract|handoff|packet|gate|preflight|check|locator|resolution|recovery)?[A-Za-z0-9_.:-]*"
+      },
+      "kind": "regex",
+      "name": "COMMAND_SURFACE_RE",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "loop_threshold",
+      "consumers": [
+        "analysis_findings",
+        "analysis_result"
+      ],
+      "expected": 2,
+      "kind": "int",
+      "name": "CONSOLIDATION_STREAK_CAP",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "regex_text_parsing",
+      "consumers": [
+        "evidence"
+      ],
+      "expected": {
+        "flags": [
+          "IGNORECASE"
+        ],
+        "kind": "regex",
+        "pattern": "(producer|transform|prompt|resolver|resolution|extract|extraction|generate|generation|repair|fix|implementation|run|primary[-_ ]?output|source[-_ ]?backed)"
+      },
+      "kind": "regex",
+      "name": "CORRECTION_TERMS_RE",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "loop_threshold",
+      "consumers": [
+        "analysis_gates",
+        "analysis_roots"
+      ],
+      "expected": 2,
+      "kind": "int",
+      "name": "DETECTION_ONLY_STREAK_CAP",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "regex_text_parsing",
+      "consumers": [
+        "evidence"
+      ],
+      "expected": {
+        "flags": [
+          "IGNORECASE"
+        ],
+        "kind": "regex",
+        "pattern": "(validator|validation|oracle|metric|gate|contract|check|dashboard|lineage|gap[-_ ]?report|coverage[-_ ]?report|instrumentation|measurement)"
+      },
+      "kind": "regex",
+      "name": "DETECTION_TERMS_RE",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "disposition_policy",
+      "consumers": [
+        "dispositions"
+      ],
+      "expected": {
+        "items": [
+          "consolidation",
+          "goal_productive",
+          "terminal_blocked",
+          "user_escalation"
+        ],
+        "kind": "set"
+      },
+      "kind": "set",
+      "name": "DISPOSITION_UNIVERSE",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "kg_output_identity",
+      "consumers": [
+        "fingerprints"
+      ],
+      "expected": {
+        "items": [
+          "source",
+          "source_id",
+          "from",
+          "target",
+          "target_id",
+          "to",
+          "type",
+          "relation",
+          "predicate"
+        ],
+        "kind": "tuple"
+      },
+      "kind": "tuple",
+      "name": "EDGE_ENDPOINT_KEYS",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "kg_output_identity",
+      "consumers": [
+        "fingerprints"
+      ],
+      "expected": {
+        "items": [
+          "id",
+          "edge_id",
+          "relation_id"
+        ],
+        "kind": "tuple"
+      },
+      "kind": "tuple",
+      "name": "EDGE_ID_KEYS",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "regex_text_parsing",
+      "consumers": [
+        "values"
+      ],
+      "expected": {
+        "flags": [
+          "IGNORECASE"
+        ],
+        "kind": "regex",
+        "pattern": "([_.:/|-])(?:v\\d+|ver\\d+|version\\d+|facet|variant|case|mode|phase|stage|vocab|pov|timing|typing|schema|contract|gate|metric|oracle|validator|lineage|coverage|preflight|handoff|packet|dashboard|report|field|scalar|check|review|surface)$"
+      },
+      "kind": "regex",
+      "name": "FACET_SUFFIX_RE",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "regex_text_parsing",
+      "consumers": [
+        "analysis_evidence"
+      ],
+      "expected": {
+        "flags": [
+          "IGNORECASE"
+        ],
+        "kind": "regex",
+        "pattern": "\\bfailure_class\\s*[=:]\\s*([A-Za-z0-9_.:-]+)\\b"
+      },
+      "kind": "regex",
+      "name": "FAILURE_CLASS_RE",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "validator_integrity",
+      "consumers": [
+        "values"
+      ],
+      "expected": {
+        "items": [
+          "blocked",
+          "error",
+          "fail",
+          "failed",
+          "false",
+          "invalid"
+        ],
+        "kind": "set"
+      },
+      "kind": "set",
+      "name": "FAIL_STATUS_VALUES",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "regex_text_parsing",
+      "consumers": [
+        "evidence"
+      ],
+      "expected": {
+        "flags": [
+          "IGNORECASE"
+        ],
+        "kind": "regex",
+        "pattern": "(?:new_input_kind|required_new_input_kind|input kind|input_kind)\\s*[:=]\\s*([A-Za-z0-9_.:-]+)"
+      },
+      "kind": "regex",
+      "name": "INPUT_KIND_RE",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "input_artifact_contract",
+      "consumers": [
+        "fingerprints"
+      ],
+      "expected": {
+        "items": [
+          "hash_summary.json",
+          "input_manifest.json"
+        ],
+        "kind": "set"
+      },
+      "kind": "set",
+      "name": "INPUT_MANIFEST_NAMES",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "input_artifact_contract",
+      "consumers": [
+        "fingerprints"
+      ],
+      "expected": {
+        "items": [
+          "hash_summary_path",
+          "hash_summary_paths",
+          "input_artifact_paths",
+          "input_manifest_path",
+          "input_manifest_paths",
+          "manifest_path",
+          "source_manifest_path",
+          "supplied_input_artifact_paths"
+        ],
+        "kind": "set"
+      },
+      "kind": "set",
+      "name": "INPUT_PATH_FIELD_NAMES",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "validator_integrity",
+      "consumers": [
+        "validator_gate"
+      ],
+      "expected": {
+        "items": [
+          "actual_count",
+          "checked_count",
+          "covered_count",
+          "inspected_count",
+          "processed_count",
+          "reviewed_count",
+          "validated_count"
+        ],
+        "kind": "set"
+      },
+      "kind": "set",
+      "name": "INSPECTED_COUNT_KEYS",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "regex_text_parsing",
+      "consumers": [
+        "evidence"
+      ],
+      "expected": {
+        "flags": [],
+        "kind": "regex",
+        "pattern": "(\\.issue/[^\\s)>\\]]+|issue-[0-9A-Za-z_.-]+|#[0-9]+)"
+      },
+      "kind": "regex",
+      "name": "ISSUE_RE",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "kg_output_identity",
+      "consumers": [
+        "fingerprints"
+      ],
+      "expected": {
+        "items": [
+          "kg_edges.jsonl",
+          "kg_nodes.jsonl"
+        ],
+        "kind": "set"
+      },
+      "kind": "set",
+      "name": "KG_NODE_EDGE_FILES",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "regex_text_parsing",
+      "consumers": [
+        "provider"
+      ],
+      "expected": {
+        "items": {
+          "empty": {
+            "items": [
+              "structured_output"
+            ],
+            "kind": "set"
+          },
+          "incomplete": {
+            "items": [
+              "structured_output",
+              "window_reduce"
+            ],
+            "kind": "set"
+          },
+          "malformed": {
+            "items": [
+              "structured_output"
+            ],
+            "kind": "set"
+          },
+          "parse": {
+            "items": [
+              "structured_output"
+            ],
+            "kind": "set"
+          },
+          "parse_error": {
+            "items": [
+              "structured_output"
+            ],
+            "kind": "set"
+          },
+          "parsing": {
+            "items": [
+              "structured_output"
+            ],
+            "kind": "set"
+          },
+          "rate_limit": {
+            "items": [
+              "backoff_retry>=3",
+              "model_fallback"
+            ],
+            "kind": "set"
+          },
+          "timeout": {
+            "items": [
+              "backoff_retry>=3",
+              "model_fallback",
+              "timeout_budget_increase",
+              "window_reduce"
+            ],
+            "kind": "set"
+          },
+          "transient": {
+            "items": [
+              "backoff_retry>=3",
+              "model_fallback",
+              "timeout_budget_increase",
+              "window_reduce"
+            ],
+            "kind": "set"
+          }
+        },
+        "kind": "dict"
+      },
+      "kind": "dict",
+      "name": "MITIGATION_REQUIREMENTS",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "kg_output_identity",
+      "consumers": [
+        "fingerprints"
+      ],
+      "expected": {
+        "items": [
+          "id",
+          "node_id",
+          "entity_id",
+          "canonical_id"
+        ],
+        "kind": "tuple"
+      },
+      "kind": "tuple",
+      "name": "NODE_ID_KEYS",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "validator_integrity",
+      "consumers": [
+        "values"
+      ],
+      "expected": {
+        "items": [
+          "complete",
+          "completed",
+          "ok",
+          "pass",
+          "passed",
+          "succeeded",
+          "success",
+          "true",
+          "valid"
+        ],
+        "kind": "set"
+      },
+      "kind": "set",
+      "name": "PASS_STATUS_VALUES",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "artifact_path_contract",
+      "consumers": [
+        "fingerprints",
+        "io_utils"
+      ],
+      "expected": {
+        "items": [
+          "artifact_path",
+          "artifact_paths",
+          "artifacts",
+          "changed_files",
+          "command_log_paths",
+          "evidence_path",
+          "evidence_paths",
+          "generated_artifacts",
+          "input_artifact_paths",
+          "input_manifest_path",
+          "input_manifest_paths",
+          "output_artifact_paths",
+          "output_layer_path",
+          "output_layer_paths",
+          "processed_candidate_dir",
+          "processed_output_dir",
+          "processed_output_path",
+          "run_artifact_dir",
+          "task_local_artifacts_dir"
+        ],
+        "kind": "set"
+      },
+      "kind": "set",
+      "name": "PATH_FIELD_NAMES",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "provider_retry_policy",
+      "consumers": [
+        "provider"
+      ],
+      "expected": {
+        "items": [
+          "auth",
+          "forbidden",
+          "invalid_request",
+          "permanent",
+          "policy"
+        ],
+        "kind": "set"
+      },
+      "kind": "set",
+      "name": "PERMANENT_PROVIDER_FAILURE_CLASSES",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "validator_integrity",
+      "consumers": [
+        "validator_gate"
+      ],
+      "expected": {
+        "items": [
+          "candidate_count",
+          "declared_count",
+          "declared_population_count",
+          "expected_count",
+          "population_count",
+          "target_count",
+          "total_count"
+        ],
+        "kind": "set"
+      },
+      "kind": "set",
+      "name": "POPULATION_COUNT_KEYS",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "regex_text_parsing",
+      "consumers": [
+        "evidence"
+      ],
+      "expected": {
+        "flags": [
+          "IGNORECASE"
+        ],
+        "kind": "regex",
+        "pattern": "progress[_ -]?verdict\\s*[:|-]\\s*(advanced|safety_only|no_progress|regressed)"
+      },
+      "kind": "regex",
+      "name": "PROGRESS_RE",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "regex_text_parsing",
+      "consumers": [
+        "analysis_evidence"
+      ],
+      "expected": {
+        "flags": [
+          "IGNORECASE"
+        ],
+        "kind": "regex",
+        "pattern": "\\bprovider_request_count\\s*[=:]\\s*([0-9]+)\\b"
+      },
+      "kind": "regex",
+      "name": "PROVIDER_REQUEST_COUNT_RE",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "quality_delta",
+      "consumers": [
+        "dispatch_gate",
+        "output_delta_gate"
+      ],
+      "expected": {
+        "items": [
+          "event_named_ratio",
+          "proper_noun_character_ratio",
+          "coreference_resolved_ratio",
+          "causal_edge_count",
+          "windows_covered"
+        ],
+        "kind": "tuple"
+      },
+      "kind": "tuple",
+      "name": "QUALITY_DELTA_KEYS",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "regex_text_parsing",
+      "consumers": [
+        "analysis_gates",
+        "cli",
+        "registry"
+      ],
+      "expected": ".task/dedup_symbol_registry.jsonl",
+      "kind": "str",
+      "name": "REGISTRY_REL_PATH",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "semantic_pattern_catalog",
+      "consumers": [
+        "normalizers"
+      ],
+      "expected": {
+        "items": [
+          {
+            "items": [
+              "source_to_llm_output_execution",
+              "openai|provider|credential|dispatch|llm|api|source[-_ ]?backed|provider[-_ ]?neutral.*(?:kg|validation[-_ ]?set|oracle|quality)"
+            ],
+            "kind": "tuple"
+          },
+          {
+            "items": [
+              "validation_oracle_quality",
+              "validation[-_ ]?set|oracle|split|leakage|holdout|quality[-_ ]?review"
+            ],
+            "kind": "tuple"
+          },
+          {
+            "items": [
+              "kg_evidence_anchor",
+              "\\bkg\\b|knowledge[-_ ]?graph|evidence[-_ ]?anchor|preimage|source[-_ ]?locator|same[-_ ]?preimage"
+            ],
+            "kind": "tuple"
+          },
+          {
+            "items": [
+              "task_state_lifecycle",
+              "task[-_ ]?state|index|candidate|task[_-]?miss|past[_-]?task|ledger|sealed"
+            ],
+            "kind": "tuple"
+          },
+          {
+            "items": [
+              "claim_rights_commitment",
+              "claim|rights|policy|license|zkp|commitment"
+            ],
+            "kind": "tuple"
+          }
+        ],
+        "kind": "tuple"
+      },
+      "kind": "tuple",
+      "name": "ROOT_AXIS_PATTERNS",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "disposition_policy",
+      "consumers": [
+        "dispositions"
+      ],
+      "expected": {
+        "items": [
+          "terminal_blocked",
+          "user_escalation"
+        ],
+        "kind": "set"
+      },
+      "kind": "set",
+      "name": "SAFETY_VALVES",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "semantic_pattern_catalog",
+      "consumers": [
+        "normalizers"
+      ],
+      "expected": {
+        "items": [
+          {
+            "items": [
+              "hash_reconcile",
+              "hash|digest|checksum|reconcile|rename|renam"
+            ],
+            "kind": "tuple"
+          },
+          {
+            "items": [
+              "evidence_anchor",
+              "evidence[-_ ]?anchor|anchor|source[-_ ]?backed|source[-_ ]?evidence"
+            ],
+            "kind": "tuple"
+          },
+          {
+            "items": [
+              "provider_terminal",
+              "provider|runtime|dispatch|live[-_ ]?provider|api|external[-_ ]?service|provider[-_ ]?terminal|runtime[-_ ]?terminal"
+            ],
+            "kind": "tuple"
+          },
+          {
+            "items": [
+              "task_state_digest",
+              "task[-_ ]?state|index|candidate|task[_-]?miss|past[_-]?task|ledger"
+            ],
+            "kind": "tuple"
+          },
+          {
+            "items": [
+              "oom_rebuild",
+              "oom|memory|rebuild|cache"
+            ],
+            "kind": "tuple"
+          },
+          {
+            "items": [
+              "validation_set",
+              "validation[-_ ]?set|oracle|split|leakage|holdout|gold"
+            ],
+            "kind": "tuple"
+          },
+          {
+            "items": [
+              "quality_review",
+              "quality|review|semantic[-_ ]?quality|reviewable[-_ ]?output"
+            ],
+            "kind": "tuple"
+          },
+          {
+            "items": [
+              "kg_core",
+              "\\bkg\\b|knowledge[-_ ]?graph|graph|entity|relation"
+            ],
+            "kind": "tuple"
+          },
+          {
+            "items": [
+              "claim_rights",
+              "claim|rights|policy|license|zkp|commitment"
+            ],
+            "kind": "tuple"
+          }
+        ],
+        "kind": "tuple"
+      },
+      "kind": "tuple",
+      "name": "SEMANTIC_AXIS_PATTERNS",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "regex_text_parsing",
+      "consumers": [
+        "normalizers",
+        "values"
+      ],
+      "expected": {
+        "flags": [
+          "IGNORECASE"
+        ],
+        "kind": "regex",
+        "pattern": "[^a-z0-9가-힣_.:/#-]+"
+      },
+      "kind": "regex",
+      "name": "SIGNATURE_TOKEN_RE",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "workflow_feature_symbol",
+      "consumers": [
+        "fingerprints"
+      ],
+      "expected": {
+        "items": [
+          "chunk_id",
+          "chunk_ids",
+          "document_id",
+          "document_ids",
+          "edge_id",
+          "edge_ids",
+          "evidence_id",
+          "evidence_ids",
+          "node_id",
+          "node_ids",
+          "preimage_id",
+          "preimage_ids",
+          "row_id",
+          "row_ids",
+          "source_window_id",
+          "source_window_ids",
+          "target_id",
+          "target_ids",
+          "target_unit_id",
+          "target_unit_ids",
+          "work_id",
+          "work_ids"
+        ],
+        "kind": "set"
+      },
+      "kind": "set",
+      "name": "TARGET_UNIT_KEYS",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "loop_threshold",
+      "consumers": [
+        "analysis",
+        "cli"
+      ],
+      "expected": 2,
+      "kind": "int",
+      "name": "TERMINAL_ESCALATION_STREAK_DEFAULT",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "loop_threshold",
+      "consumers": [
+        "analysis",
+        "cli"
+      ],
+      "expected": 2,
+      "kind": "int",
+      "name": "TERMINAL_QUIESCENCE_STREAK_DEFAULT",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "provider_retry_policy",
+      "consumers": [
+        "provider"
+      ],
+      "expected": {
+        "items": [
+          "empty",
+          "incomplete",
+          "malformed",
+          "parse",
+          "parse_error",
+          "parsing",
+          "rate_limit",
+          "timeout",
+          "transient"
+        ],
+        "kind": "set"
+      },
+      "kind": "set",
+      "name": "TRANSIENT_PROVIDER_FAILURE_CLASSES",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "validator_integrity",
+      "consumers": [
+        "validator_gate"
+      ],
+      "expected": {
+        "items": [
+          "assertions",
+          "checks",
+          "embedded_results",
+          "items",
+          "results",
+          "sub_checks",
+          "sub_results",
+          "subresults",
+          "validations",
+          "validators"
+        ],
+        "kind": "set"
+      },
+      "kind": "set",
+      "name": "VALIDATOR_CHILD_KEYS",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "regex_text_parsing",
+      "consumers": [
+        "values"
+      ],
+      "expected": {
+        "items": [
+          "ok",
+          "pass",
+          "passed",
+          "result",
+          "semantic_progress",
+          "status",
+          "succeeded",
+          "success",
+          "valid",
+          "validates"
+        ],
+        "kind": "set"
+      },
+      "kind": "set",
+      "name": "VALIDATOR_RESULT_KEYS",
+      "source_module": "constants.py"
+    },
+    {
+      "category": "regex_text_parsing",
+      "consumers": [
+        "normalizers",
+        "values"
+      ],
+      "expected": {
+        "flags": [
+          "IGNORECASE"
+        ],
+        "kind": "regex",
+        "pattern": "(?:(?:20\\d{2}[-_.]?\\d{2}[-_.]?\\d{2}(?:[-_.]?\\d{2}[-_.]?\\d{2}[-_.]?\\d{2})?)|(?:\\b\\d{8,14}\\b)|(?:\\b[0-9a-f]{7,40}\\b)|(?:\\bcycle[-_.]?[0-9a-z_.-]+\\b)|(?:\\brun[-_.]?[0-9a-z_.-]+\\b)|(?:\\btask[-_.]?\\d+[0-9a-z_.-]*\\b)|(?:\\bafter[-_.][a-z0-9_.-]+\\b)|(?:[-_.]?v\\d+\\b))"
+      },
+      "kind": "regex",
+      "name": "VOLATILE_SIGNATURE_RE",
+      "source_module": "constants.py"
+    }
+  ],
+  "package": "progress_loop_detection",
+  "purpose": "Auditable registry for constants, regexes, thresholds, path-field catalogs, and gate policy sets used by the refactored progress-loop detector.",
+  "registry_kind": "progress_loop_detection_constant_registry",
+  "schema_version": 1,
+  "source_module": "constants.py"
+}
