@@ -14,7 +14,9 @@
 - 완료 판정은 `$validate-task-completion`이 담당하며, 실행 성공/로그/대시보드/인덱스만으로 완료를 선언하지 않는다.
 - adapter나 caller가 verifier contract를 요구하는 measurable acceptance는 live verifier가 pass해야 완전하다. required verifier의 `not_evaluated`는 pass가 아니며, full close 대신 verifier follow-up, explicit descope, terminal blocker, user escalation 중 하나로 보존한다.
 - acceptance가 참조하는 gate의 required hook 부재, `pass_with_unobserved_axes`, generation-dependent count key, below-policy residual value per cycle cost는 pass/advance/close 근거가 아니다. hook supply, axis supply, effective key/terminal-outcome fallback, residual descope plus next rung, terminal blocker, user escalation 중 하나로 보존한다.
+- acceptance scenario coverage, full body-free `command_argv`, actionable blocker relation, stochastic feasibility는 해당 증거가 등장한 cycle에서 completion/advance 소비 전에 gate로 재확인한다. `scenario_uncovered`, `acceptance_inversion`, `command_provenance_missing`, repeated `blocker_opacity`, `predetermined_unreachable`, `floor_edge_envelope`는 같은 결함 재시도가 아니라 scenario/argv/blocker/contract repair, descope, terminal blocker, user escalation 중 하나로 보존한다.
 - 구조 진전은 어댑터가 `structure_metrics.global_*` 전역 불변량을 제공하면 per-scope 감소가 아니라 global high-water 이동으로 판정한다.
+- 장기 실행은 새 canonical phase가 아니라 `step: run`의 분기이다. `event_kind: long_run_launch|long_run_monitor|long_run_harvest|long_run_finalize`와 `long_run_role: launch|monitor|harvest|finalize`를 기록하며, `running`과 `completed_pending_validation`은 성공이 아니라 남은 harvest/validation의 증거이다.
 - `audit-cycle-loopback/scripts/anti_loop_gate_provider.py`와 `orchestrate-task-cycle/scripts/detect_progress_loop.py`는 기존 호출 호환 shim이고, 실제 구현은 각각 `anti_loop_provider/`, `progress_loop_detection/` 패키지 안의 모듈로 분리되어 있다.
 
 ### Mermaid Flowchart 1: 전체 task cycle orchestration
@@ -22,10 +24,10 @@
 ```mermaid
 flowchart TD
   Start([사용자 요청 또는 cycle 시작])
-  Context["context 수집<br/>README, task.md, .agent_goal, .task, .issue, .schema"]
+  Context["context 수집<br/>README, task.md, .agent_goal, .task, .issue, .schema, .contract, .validation"]
   LedgerInit["$maintain-cycle-ledger<br/>cycle-id, stage.jsonl, current_stage.json, packets/ 초기화"]
   Authority["$manage-agent-authority<br/>권한/외부 호출/검증 우선순위 정책 요약"]
-  Acceptance["$normalize-acceptance-and-demo<br/>acceptance, non-goals, demo, validation commands 정규화<br/>measurable -> verifier contract when mapped<br/>required gate hook absent -> unverifiable_acceptance_contract"]
+  Acceptance["$normalize-acceptance-and-demo<br/>acceptance, non-goals, demo, validation commands 정규화<br/>measurable -> verifier contract when mapped<br/>scenario coverage + required gate hook completeness"]
   AdapterScan["repo-local skill adapter scan<br/>code_convention_contract, domain adapter, output-delta hook,<br/>target_required_verifier, goal_axis_map,<br/>count-key collapse, structure_metrics.global_* 탐색"]
   RoutePlan["route_plan<br/>task.md 존재 여부와 cycle 경로 결정"]
 
@@ -38,21 +40,21 @@ flowchart TD
   Governance["$task-md-agent-governance<br/>task.md 구현, worker 위임, repo audit, task_miss 기록"]
   ResultContract1["$validate-subskill-result-contract<br/>governance/result fields 검사"]
   CodeStructure["orchestrate scripts/code_structure_audit.py<br/>구조/컨벤션/semantic modularity audit packet"]
-  Run["$run-task-code-and-log<br/>명령 실행, 실패 autopsy, observed_producer_claim downgrade, .agent_log 기록"]
+  Run["$run-task-code-and-log<br/>명령 실행, full command_argv, 실패 autopsy,<br/>observed_producer_claim downgrade, .agent_log 기록<br/>long_run_launch 가능"]
   Running{"run status = running?"}
-  Monitor["$monitor-running-execution<br/>PID/log/heartbeat/stop command 추적"]
+  Monitor["$monitor-running-execution<br/>canonical step=run + event_kind long_run_*<br/>PID/log/heartbeat/stop command, expected artifacts,<br/>remaining_validation 추적"]
   Quality["$review-cycle-output-quality<br/>단일 read-only xhigh 출력 품질 리뷰<br/>zero mapped goal axes -> pass_with_unobserved_axes"]
-  Loopback["$audit-cycle-loopback<br/>semantic_progress, same-family loop, adapter metrics,<br/>3-state gates, verifier contract, count-key hygiene,<br/>goal-axis completeness, residual cost ratio,<br/>anti_loop_provider packet + root-cause ledger"]
+  Loopback["$audit-cycle-loopback<br/>semantic_progress, same-family loop, adapter metrics,<br/>3-state gates, verifier contract, count-key hygiene,<br/>goal-axis completeness, residual cost ratio,<br/>scenario/argv/blocker/stochastic findings,<br/>anti_loop_provider packet + root-cause ledger"]
   ValSetBuild["$build-validation-set-with-agents build/consume<br/>validation assets 또는 oracle 결과 산출"]
   SchemaPreDerive["$manage-schema-contracts pre-derive<br/>schema/contract 영향과 stale contract 확인"]
   Visible["$record-visible-increment<br/>보이는 변화 기록; not_validation_evidence=true"]
   GapAnalysis["repo_skill_gap_analysis<br/>adapter/skill gap 또는 skill-creator 후보"]
   Profile["$profile-cycle-efficiency<br/>중복 로그, metadata-only 반복, command surface budget 감지"]
-  Slice["$optimize-task-slice<br/>state_transition, batch, evidence_supply, verifier_completion, consolidation 등 advisory"]
+  Slice["$optimize-task-slice<br/>state_transition, batch, evidence_supply, verifier_completion,<br/>scenario_supply, command_provenance_repair,<br/>blocker_contract_repair, consolidation 등 advisory"]
   DeriveNext["$derive-improvement-task<br/>다음 task.md 또는 task_pack/terminal blocker 도출"]
   SchemaPost["$manage-schema-contracts post-derive<br/>새 task/schema/contract 링크 정리"]
   Index["$manage-task-state-index<br/>scan, link, audit; task/candidate/miss/log/schema/issue IDs"]
-  Validate["$validate-task-completion<br/>complete / partial / failed + progress_verdict<br/>required verifier pass + structure global effect 확인"]
+  Validate["$validate-task-completion<br/>complete / partial / failed + progress_verdict<br/>required verifier pass + structure global effect 확인<br/>long-run pending, scenario, command provenance,<br/>blocker actionability, stochastic feasibility gate"]
   Issue["$manage-implementation-issues<br/>issue open/update/resolve, .issue mirror, GitHub fallback"]
   Commit["$repo-change-commit<br/>coherent implementation/checkpoint commit"]
   Dashboard["$render-cycle-dashboard<br/>한국어 dashboard.md"]
@@ -144,29 +146,36 @@ flowchart TD
   Terminal["terminal_blocker / user_escalation<br/>sealed family와 missing input 기록"]
   DeriveIndex["$manage-task-state-index scan + audit"]
 
-  LoopInputs["run + quality review + output-delta artifacts<br/>failure autopsy, runner validation, gate states"]
+  LoopInputs["run + quality review + output-delta artifacts<br/>failure autopsy, runner validation, gate states,<br/>long-run history, scenario/argv/blocker/stochastic fields"]
   ProgressDetect["detect_progress_loop.py<br/>progress_loop_detection analyzer<br/>evidence -> gates/findings/terminal packet"]
   Loopback["$audit-cycle-loopback<br/>anti_loop_gate_provider.py legacy shim<br/>-> anti_loop_provider.api/evaluator"]
-  LoopGate["anti_loop_progress_gate<br/>effective_allowed_dispositions, allowed_task_kinds,<br/>adapter_wiring_defect, adapter_mandate,<br/>cumulative_goal_distance_stalled,<br/>failure_surface_stage_gate, verification_source_separation,<br/>root_cause_hypothesis_gate, hypothesis_exhausted,<br/>acceptance_unreachable, unverifiable_acceptance_contract,<br/>pass_with_unobserved_axes, count_key_hygiene,<br/>residual value/cycle cost, metric_verifier_not_evaluated,<br/>structure_global_invariant_metrics"]
+  LoopGate["anti_loop_progress_gate<br/>effective_allowed_dispositions, allowed_task_kinds,<br/>adapter_wiring_defect, adapter_mandate,<br/>cumulative_goal_distance_stalled,<br/>failure_surface_stage_gate, verification_source_separation,<br/>root_cause_hypothesis_gate, hypothesis_exhausted,<br/>acceptance_unreachable, unverifiable_acceptance_contract,<br/>pass_with_unobserved_axes, count_key_hygiene,<br/>scenario_uncovered, acceptance_inversion,<br/>command_provenance_missing, blocker_opacity,<br/>predetermined_unreachable, floor_edge_envelope,<br/>residual value/cycle cost, metric_verifier_not_evaluated,<br/>structure_global_invariant_metrics"]
+  LongRunDebt{"active long_run_branch<br/>pending final output?"}
+  LongRunRoute["derive constraint<br/>monitor/harvest/finalize same run_id<br/>or terminal/user escalation"]
   VerifierDebt{"required verifier<br/>not_evaluated?"}
   VerifierRoute["derive constraint<br/>verifier hook/metric correction/descope/<br/>terminal blocker/user escalation"]
+  EvidenceDebt{"scenario/argv/blocker/stochastic<br/>repair required?"}
+  EvidenceRoute["derive constraint<br/>scenario_supply / command_provenance_repair /<br/>blocker_contract_repair / contract revision"]
   GlobalInvariant{"structure global invariant<br/>metrics present?"}
   GlobalMoved{"global high-water<br/>moved?"}
   GlobalRoute["global invariant present + local-only reduction<br/>cannot consume global structure target"]
-  Slice["$optimize-task-slice<br/>state_transition/batch/evidence/verifier_completion/consolidation advisory"]
+  Slice["$optimize-task-slice<br/>state_transition/batch/evidence/verifier_completion/<br/>scenario_supply/command_provenance_repair/consolidation advisory"]
   Profile["$profile-cycle-efficiency<br/>sprawl, duplicate evidence, safety_only loops"]
 
   Trigger --> ExplicitDoctor
   ExplicitDoctor -- yes --> DoctorRead --> TaskDoctor --> DoctorArchive --> DoctorWrite --> DoctorIndex --> DoctorCommit
   ExplicitDoctor -- no --> NormalDerive
-  LoopInputs --> ProgressDetect --> Loopback --> LoopGate --> VerifierDebt
+  LoopInputs --> ProgressDetect --> Loopback --> LoopGate --> LongRunDebt
+  LongRunDebt -- yes --> LongRunRoute --> NormalDerive
+  LongRunDebt -- no --> VerifierDebt
   VerifierDebt -- yes --> VerifierRoute --> NormalDerive
-  VerifierDebt -- no --> GlobalInvariant
-  GlobalInvariant -- no --> NormalDerive
+  VerifierDebt -- no --> EvidenceDebt
+  EvidenceDebt -- yes --> EvidenceRoute --> NormalDerive
+  EvidenceDebt -- no --> GlobalInvariant
+  GlobalInvariant -- no --> Slice
   GlobalInvariant -- yes --> GlobalMoved
   GlobalMoved -- no --> GlobalRoute --> NormalDerive
-  GlobalMoved -- yes --> NormalDerive
-  LoopGate --> Slice --> NormalDerive
+  GlobalMoved -- yes --> Slice --> NormalDerive
   Profile --> NormalDerive
   NormalDerive --> Inputs --> Alignment --> MissAgents --> CandidateScan --> PackScan --> IssueFit --> ImproveAgents --> Synthesis --> Decision
   Decision -- standalone task --> ArchivePast --> WriteTask --> Candidates --> DeriveIndex
@@ -179,7 +188,7 @@ flowchart TD
 ```mermaid
 flowchart TD
   Task([active task.md])
-  Acceptance["$normalize-acceptance-and-demo<br/>acceptance packet<br/>envelope + acceptance_verifier_contract<br/>required hook completeness"]
+  Acceptance["$normalize-acceptance-and-demo<br/>acceptance packet<br/>envelope + acceptance_verifier_contract<br/>scenario coverage + required hook completeness"]
   ValScope["$plan-validation-scope<br/>changed surfaces -> current_only/affected_chain/full_chain"]
   EnvNeed{"Python/dependency constrained?"}
   FindEnv["$find-local-python-envs<br/>local env inventory, ranked run commands"]
@@ -195,15 +204,15 @@ flowchart TD
   Inspect["$inspect-repo-with-agents<br/>3-6 read-only code/schema/authority/generalization audit"]
   TaskMiss[".task/task_miss report<br/>miss/resolved/deleted cleanup evidence"]
   Run["$run-task-code-and-log"]
-  Execute["정해진 command 실행<br/>validation_profile 준수"]
+  Execute["정해진 command 실행<br/>validation_profile 준수<br/>full body-free command_argv 보존"]
   Failure{"실패 또는 gate unsatisfiable?"}
   Autopsy["safe_failure_autopsy.py<br/>execution stage ladder 정규화,<br/>safe scalar diagnostics,<br/>gate selfcheck -> self_inflicted_gate_defect"]
   Log["$record-agent-work-log<br/>.agent_log + run evidence"]
   Running{"long-running authorized?"}
-  Monitor["$monitor-running-execution<br/>PID/log/heartbeat/status"]
+  Monitor["$monitor-running-execution<br/>step=run long_run_* event<br/>run_id/owner_task_id/log/output/artifacts/status<br/>completed_pending_validation != success"]
   Quality["$review-cycle-output-quality<br/>single reviewer, output quality/delta/no-overclaim<br/>goal-axis completeness"]
   Completion["$validate-task-completion"]
-  Gates["gates: env, execution, repo audit, OOM if relevant,<br/>task_miss, issue, advice, schema, acceptance,<br/>required verifier/hook pass, goal axes,<br/>count-key hygiene, residual cost ratio,<br/>structure global invariant, behavior-change live evidence, ID"]
+  Gates["gates: env, execution, repo audit, OOM if relevant,<br/>task_miss, issue, advice, schema, acceptance,<br/>required verifier/hook pass, goal axes,<br/>scenario coverage, command provenance,<br/>blocker actionability, stochastic feasibility,<br/>count-key hygiene, residual cost ratio,<br/>structure global invariant, behavior-change live evidence, ID"]
   Verdict{"validation_verdict<br/>complete / partial / failed"}
   Progress{"progress_verdict<br/>advanced / safety_only / no_progress / regressed"}
 
@@ -231,7 +240,7 @@ flowchart TD
   Evidence([어떤 스킬이 artifact 생성])
   Cache["$manage-evidence-cache<br/>fingerprint -> reuse/fresh_required/stale/unsafe_to_reuse"]
   Log["$record-agent-work-log<br/>.agent_log/YYYY-MM-DD/*.md + index.jsonl"]
-  Ledger["$maintain-cycle-ledger<br/>stage.jsonl/current_stage.json/packets"]
+  Ledger["$maintain-cycle-ledger<br/>stage.jsonl/current_stage.json/packets<br/>long-run events remain step=run"]
   Contract["$validate-subskill-result-contract<br/>stage handoff required fields 검사"]
   Index["$manage-task-state-index<br/>task/log/run/audit/val/miss/issue/goal/adv/schema IDs"]
   Visible["$record-visible-increment<br/>visible delta, not_validation_evidence=true"]
@@ -268,7 +277,7 @@ flowchart TD
   RepoReviewNeed{"multi-agent repo audit/review 필요?"}
   RepoReview["$inspect-repo-with-agents<br/>3-6 perspectives, file/line findings"]
   RunNeed{"long-running execution 상태 확인?"}
-  Monitor["$monitor-running-execution<br/>running != success, heartbeat/status only"]
+  Monitor["$monitor-running-execution<br/>canonical step=run monitor event<br/>running/completed_pending_validation != success"]
   EvidenceNeed{"이전 evidence 재사용 가능성?"}
   Cache["$manage-evidence-cache<br/>reuse 후보만 제공; pass로 변환하지 않음"]
   Output([지원 결과를 caller packet 또는 사용자 보고로 반환])
@@ -292,13 +301,13 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-  Inputs["inputs<br/>registry, artifact paths, changed files,<br/>runner validation, output delta,<br/>failure autopsies, gate states"]
+  Inputs["inputs<br/>registry, artifact paths, changed files,<br/>runner validation, output delta,<br/>failure autopsies, gate states,<br/>scenario/command/blocker/stochastic fields,<br/>long-run event history"]
 
   LoopbackCLI["anti_loop_gate_provider.py<br/>legacy CLI/API shim"]
   LoopbackAPI["anti_loop_provider/api.py<br/>export bridge + runtime cache sync"]
   LoopbackEval["anti_loop_provider/evaluator.py<br/>LoopbackEvaluator / evaluate"]
   AdapterLayer["adapters.py + domain.py + quality.py<br/>domain adapter, quality vector,<br/>facet/root-family normalization"]
-  LoopGates["gates + acceptance + verification + blockers<br/>coverage/substance, verifier status,<br/>failure surface stage, source separation,<br/>adapter and chain stalls"]
+  LoopGates["gates + acceptance + verification + blockers<br/>coverage/substance, verifier status,<br/>scenario coverage, command provenance,<br/>blocker actionability, stochastic feasibility,<br/>failure surface stage, source separation,<br/>adapter and chain stalls"]
   RootCause["root_cause.py + root_cause_runtime.py<br/>hypotheses, repo-owned actionability,<br/>exhaustion and untried repair"]
   LoopRegistry["registry.py<br/>anti-loop registry, root-cause ledger,<br/>sealed blocker families"]
   LoopPacket["packet.py + assembly.py + outcome.py<br/>anti_loop_progress_gate packet<br/>effective dispositions + allowed task kinds"]
@@ -407,6 +416,7 @@ flowchart TD
 +----------------------------+     +---------------------------------------------+
 | $run-task-code-and-log     | --> | run result + .agent_log                    |
 | command execution          |     | success/running/partial/failed/not_run     |
+| full body-free argv        |     | long_run_launch may only create handoff    |
 +----------------------------+     +---------------------------------------------+
         |
         v
@@ -417,8 +427,9 @@ flowchart TD
         v                                          v
 +----------------------------+       +-------------------------------------------+
 | $monitor-running-execution |       | $review-cycle-output-quality              |
-| PID/log/heartbeat only     |       | single read-only quality reviewer          |
-| running != success         |       +-------------------------------------------+
+| step=run long_run_* event  |       | single read-only quality reviewer          |
+| PID/log/heartbeat/artifacts|       +-------------------------------------------+
+| running/pending != success |
 +----------------------------+                         |
         |                                              v
         |                                +---------------------------------------+
@@ -457,6 +468,8 @@ flowchart TD
 | $validate-task-completion  | --> | validation_verdict + progress_verdict      |
 | final completion gate      |     | complete/partial/failed + progress class   |
 |                             |     | required verifier pass before full close    |
+|                             |     | scenario/command/blocker/stochastic gates   |
+|                             |     | long-run pending blocks completion          |
 |                             |     | global structure target not consumed local  |
 +----------------------------+     +---------------------------------------------+
         |
@@ -704,7 +717,7 @@ Anti-loop and efficiency inputs into derive:
 | $normalize-acceptance         | ---> | acceptance packet                      |
 | criteria / non-goals / demo   |      | validation commands + envelope         |
 | measurable -> verifiable      |      | acceptance_verifier_contract           |
-|                               |      | when mapped                            |
+| scenario coverage             |      | required hook completeness             |
 +-------------------------------+      +----------------------------------------+
               |
               v
@@ -761,6 +774,8 @@ Anti-loop and efficiency inputs into derive:
 +-------------------------------+      +----------------------------------------+
 | $run-task-code-and-log        | ---> | run evidence + .agent_log             |
 | execute specified command     |      | status: success/running/partial/failed|
+| preserve full argv            |      | command_provenance_missing blocks     |
+|                               |      | baseline/reproduction/comparison      |
 +-------------------------------+      +----------------------------------------+
               |
               v
@@ -786,7 +801,8 @@ Anti-loop and efficiency inputs into derive:
           v                                          v
 +-------------------------------+        +---------------------------------------+
 | $monitor-running-execution    |        | $review-cycle-output-quality          |
-| PID/log/heartbeat; not success|        | single read-only reviewer             |
+| step=run long_run_* event     |        | single read-only reviewer             |
+| running/pending != success    |        |                                       |
 +-------------------------------+        +---------------------------------------+
           |                                                |
           +--------------------------+---------------------+
@@ -798,7 +814,7 @@ Anti-loop and efficiency inputs into derive:
 | env/run/repo/OOM/miss/issue/  |      | progress_verdict: advanced /          |
 | advice/schema/acceptance/ID   |      | safety_only / no_progress / regressed |
 | verifier/structure global     |      | not_evaluated verifier blocks         |
-|                               |      | complete                              |
+| scenario/argv/blocker/stoch   |      | complete; pending long-run blocks     |
 +-------------------------------+      +----------------------------------------+
 ```
 
@@ -844,7 +860,8 @@ Anti-loop and efficiency inputs into derive:
                     |                                      v                v
                     |                           +-------------------+  +------------------+
                     |                           | $monitor-running |  | evidence reuse ? |
-                    |                           | running != pass  |  +------------------+
+                    |                           | step=run event   |  +------------------+
+                    |                           | pending != pass  |
                     |                           +-------------------+    | yes        | no
                     |                                      |             v            v
                     |                                      |  +-------------------+ +---------+
@@ -879,6 +896,7 @@ Anti-loop and efficiency inputs into derive:
 +-------------------------------+      +----------------------------------------+
 | $maintain-cycle-ledger        | ---> | .task/cycle/<cycle-id>/stage.jsonl    |
 | append canonical stage event  |      | current_stage.json, packets/          |
+| long-run remains step=run     |      | event_kind long_run_* when applicable |
 +-------------------------------+      +----------------------------------------+
               |
               v
@@ -936,6 +954,8 @@ Anti-loop and efficiency inputs into derive:
 | registry/artifact paths/changed files  |
 | runner validation/output delta         |
 | failure autopsy/gate state JSON        |
+| scenario/argv/blocker/stochastic JSON  |
+| long-run event history                 |
 +----------------------------------------+
           |                                      |
           v                                      v
@@ -965,8 +985,9 @@ Anti-loop and efficiency inputs into derive:
           v                                      v
 +----------------------------------+   +----------------------------------+
 | gates/acceptance/verification    |   | output/input/validator gates     |
-| blockers/chain/root_cause        |   | terminal/provider gates          |
-| failure surface stage gate       |   | quiescence/escalation            |
+| scenario/argv/blocker/stochastic |   | terminal/provider gates          |
+| blockers/chain/root_cause        |   | quiescence/escalation            |
+| failure surface stage gate       |   | completion repair constraints    |
 +----------------------------------+   +----------------------------------+
           |                                      |
           v                                      v
@@ -989,13 +1010,13 @@ Anti-loop and efficiency inputs into derive:
 
 ```text
 orchestrate-task-cycle
-  context -> ledger -> authority -> acceptance/verifier contracts -> adapter scan -> validation planning -> governance -> run -> review -> loopback -> derive -> index -> validate -> issue -> commit -> dashboard/report -> closeout
+  context -> ledger -> authority -> acceptance/verifier/scenario contracts -> adapter scan -> validation planning -> governance -> run or long-run branch -> review/loopback or monitor -> derive/index -> validate gates -> issue -> commit -> dashboard/report -> closeout
 
 maintain-cycle-ledger
   cycle init -> stage append -> packet link -> dashboard/final_report render support
 
 validate-subskill-result-contract
-  subskill result -> required field check -> warn/block -> ledger event -> downstream warnings
+  subskill result -> required fields including long-run detail, command_argv, scenario/blocker/stochastic gates -> warn/block -> ledger event -> downstream warnings
 
 manage-agent-goal
   user goal/conventions -> preserve/merge -> final_goal.md + conventions.md
@@ -1022,13 +1043,13 @@ manage-external-advice
   raw advice -> normalize active advice -> in-place workflow revisions without GT upgrade -> audit stale/dead/degenerate claims -> apply/defer/reject -> adv-* links
 
 derive-improvement-task
-  context + agents + gates -> respect allowed dispositions, verifier debt, count-key hygiene, goal-axis completeness, residual cost, global invariant keys -> one next task/task_pack/terminal blocker -> archive old task -> write task.md -> index
+  context + agents + gates -> respect allowed dispositions, verifier debt, long-run pending state, scenario/argv/blocker/stochastic repair, count-key hygiene, goal-axis completeness, residual cost, global invariant keys -> one next task/task_pack/terminal blocker -> archive old task -> write task.md -> index
 
 task-doctor
   explicit doctor instruction -> read rules/task/advice -> archive old task -> rewrite task/task_pack while preserving verifier/hook/axis/cost/global residuals -> reconcile schema/index/issue -> optional commit
 
 optimize-task-slice
-  blockers/candidates/loop signals -> classify next slice including verifier_completion, hook_supply, axis_supply, cost_disproportionate_residual -> advisory packet for derive
+  blockers/candidates/loop signals -> classify next slice including verifier_completion, hook_supply, axis_supply, scenario_supply, command_provenance_repair, blocker_contract_repair, cost_disproportionate_residual -> advisory packet for derive
 
 profile-cycle-efficiency
   ledger/logs/validation/issues -> detect repeated low-value cycles/sprawl and supply residual value-per-cycle-cost denominator -> recommended action for derive/report
@@ -1052,25 +1073,25 @@ plan-validation-scope
   changed surfaces -> current_only/affected_chain/full_chain -> validation manifest
 
 normalize-acceptance-and-demo
-  task context -> acceptance/non-goals/demo/validation packet -> envelope/verifier/hook contract and residual cost fields -> governance/validation scope
+  task context -> acceptance/non-goals/demo/validation packet -> envelope/verifier/scenario/hook contract and residual cost fields -> governance/validation scope
 
 build-validation-set-with-agents
   task/evidence -> plan/build/refresh/consume/block -> .validation assets and result packet
 
 run-task-code-and-log
-  requested command -> execute/profile scope -> safe_failure_autopsy with stage ladder/scalar diagnostics if needed -> .agent_log and run evidence
+  requested command -> execute/profile scope -> full body-free command_argv or command_provenance_missing -> safe_failure_autopsy if needed -> .agent_log and run evidence, including long_run_launch handoff when authorized
 
 monitor-running-execution
-  running run evidence -> heartbeat/status check -> running/completed/stale/missing_details/not_running
+  running run evidence -> heartbeat/status/artifact check -> step=run long_run_monitor event -> running/completed_pending_validation/stale/missing_details/not_running without success promotion
 
 review-cycle-output-quality
   output artifacts -> one read-only qualitative reviewer -> quality/output-delta/no-overclaim/goal-axis packet
 
 audit-cycle-loopback
-  run/review/output-delta/failure-autopsy/adapter -> anti_loop_provider evaluator -> 3-state gates, failure surface stage, root-cause ledger, target_required_verifier, count-key hygiene, goal-axis completeness, residual cost, global invariant high-water -> derive constraints
+  run/review/output-delta/failure-autopsy/adapter -> anti_loop_provider evaluator -> 3-state gates, failure surface stage, root-cause ledger, target_required_verifier, scenario/argv/blocker/stochastic findings, count-key hygiene, goal-axis completeness, residual cost, global invariant high-water -> derive constraints
 
 validate-task-completion
-  evidence bundle -> completion gates -> required verifier/hook pass + observed goal axes + count-key hygiene + residual cost ratio + structure global effect -> validation_verdict + progress_verdict -> validation report
+  evidence bundle -> completion gates -> required verifier/hook pass + observed goal axes + scenario coverage + command provenance + blocker actionability + stochastic feasibility + long-run pending check + count-key hygiene + residual cost ratio + structure global effect -> validation_verdict + progress_verdict -> validation report
 
 manage-evidence-cache
   fingerprints -> reuse/fresh_required/stale/unsafe_to_reuse -> owning validator decides
