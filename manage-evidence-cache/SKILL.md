@@ -14,6 +14,7 @@ Use `/home/swfool/.codex/skills/orchestrate-task-cycle/scripts/evidence_cache.py
 ## Workflow
 
 1. Build a fingerprint from command, input paths, environment summary, schema/contract files, dependency files, and relevant artifact hashes.
+   - Include abstract Part L cache inputs when supplied: production/current lane ids, upstream contract version or measurement run id, gating-axis producer status, quota mode, required scale and throughput evidence, metric consumed-input classes, and surface-field class maps. Hash or summarize these values; do not store raw source bodies or secrets.
 2. Query `.task/evidence_cache/index.jsonl`.
 3. Classify the candidate:
    - `reuse`: all fingerprints match and prior result is not failed.
@@ -25,5 +26,6 @@ Use `/home/swfool/.codex/skills/orchestrate-task-cycle/scripts/evidence_cache.py
 ## Guardrails
 
 - Do not convert `reuse` into `passed`.
+- Do not return `reuse` for current-lane capability, adoption, comparison, high-water, or close evidence when lane identity, upstream contract, measurement run id, metric basis input class, or surface-field class-map fingerprints differ. Return `stale` or `fresh_required`.
 - Preserve failed rerun records; do not overwrite them with successful summaries.
 - Treat secrets and raw sensitive data as non-cacheable; hash paths/content metadata instead.

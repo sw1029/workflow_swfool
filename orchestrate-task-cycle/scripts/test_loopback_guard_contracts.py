@@ -509,6 +509,160 @@ def test_registered_adapter_load_failure_routes_wiring_defect() -> None:
     )
 
 
+def hook_demand_args(root: Path, cycle_id: str, *, domain_adapter: Path | None = None) -> argparse.Namespace:
+    return argparse.Namespace(
+        root=str(root),
+        cycle_id=cycle_id,
+        task_id="task-hook-demand",
+        artifact_family="primary_output",
+        semantic_signature="same_root",
+        root_key="same_root",
+        domain_adapter=str(domain_adapter) if domain_adapter else None,
+        provider_request_count=0,
+        artifact_path=[],
+        artifact_paths_json=None,
+        changed_file=[],
+        changed_files_json=None,
+        gate_state_json=[],
+        recent_progress_json=None,
+        runner_validation_json=None,
+        output_delta_json=json.dumps({"changed_vs_previous": False, "semantic_progress": False}),
+        failure_autopsy_json=[],
+        substance_metrics_json=None,
+        corrective_resolution_json=None,
+        facet_root_map_json=None,
+        acceptance_reachability_json=json.dumps({"target": "abstract_target"}),
+        metric_validity_json=None,
+        root_cause_hypotheses_json=None,
+        hypothesized_root_cause=None,
+        root_cause_repair_attempted=False,
+        root_cause_repair_task_id=None,
+        root_cause_actionable=False,
+        untried_promotion_budget=2,
+        measurement_check_id=[],
+        measurement_check_ids_json=None,
+        measurement_frontier=[],
+        measurement_streak_cap=1,
+        detection_only_streak_cap=2,
+        adapter_mandate_streak_cap=3,
+        cumulative_chain_streak_cap=3,
+        instrumentation_trigger_threshold=2,
+        envelope_thaw_streak_cap=2,
+        blocker_signature="same_root",
+        blocker_rung=None,
+        max_forward_mutations=3,
+        consolidation_streak_cap=2,
+        registry_path=".task/anti_loop/family_progress_registry.jsonl",
+        root_cause_ledger_path=".task/anti_loop/root_cause_ledger.jsonl",
+        threshold=3,
+        epsilon=1e-9,
+        max_rows_per_family=200,
+        max_root_cause_rows_per_family=200,
+        write_registry=False,
+        output=None,
+    )
+
+
+def write_hook_demand_adapter(path: Path) -> None:
+    path.write_text(
+        "\n".join(
+            [
+                "def quality_vector(**kwargs):",
+                "    return {'quality_vector': {'event_named_ratio': 1, 'proper_noun_character_ratio': 1, 'coreference_resolved_ratio': 1, 'causal_edge_count': 1, 'windows_covered': 1, 'current_output_fingerprint': 'fp-hook-demand'}}",
+                "",
+                "def substance_metrics(**kwargs):",
+                "    return {'substance_metrics': {'primary_output_rows': 1}}",
+                "",
+                "def facet_root_map(**kwargs):",
+                "    return {'same_root': 'same_root'}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_hook_demand_no_adapter_is_noop() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        anti_loop_gate_provider._DOMAIN_ADAPTER_MODULE = None
+        packet, _, _ = anti_loop_gate_provider.evaluate(hook_demand_args(root, "cycle-hook-noop"))
+
+    assert "adapter_hook_demand" not in packet
+    assert "hook_supply_required" not in packet
+    assert "demanded_hooks" not in packet
+    assert not any(
+        finding.get("code") in {"adapter_hook_demand", "hook_supply_required"}
+        for finding in packet.get("findings", [])
+        if isinstance(finding, dict)
+    )
+
+
+def test_hook_demand_single_skip_warns_without_supply_required() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        adapter = root / "domain_adapter.py"
+        write_hook_demand_adapter(adapter)
+        anti_loop_gate_provider._DOMAIN_ADAPTER_MODULE = None
+        packet, _, _ = anti_loop_gate_provider.evaluate(
+            hook_demand_args(root, "cycle-hook-one", domain_adapter=adapter)
+        )
+
+    demand = packet["adapter_hook_demand"]
+    assert demand == [
+        {
+            "hook_id": "target_required_verifier",
+            "skip_count": 1,
+            "decision_relevant_skip_count": 1,
+            "affected_gate_ids": ["acceptance_reachability_gate"],
+            "first_skip_cycle_id": "cycle-hook-one",
+            "last_skip_cycle_id": "cycle-hook-one",
+        }
+    ]
+    assert packet["adapter_mandate_gate"]["status"] == "warn"
+    assert packet["hook_supply_required"] is False
+    assert packet["demanded_hooks"] == []
+    assert any(
+        finding.get("code") == "adapter_hook_demand"
+        for finding in packet.get("findings", [])
+        if isinstance(finding, dict)
+    )
+
+
+def test_hook_demand_two_decision_relevant_skips_emit_supply_required() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        registry = root / ".task" / "anti_loop" / "family_progress_registry.jsonl"
+        adapter = root / "domain_adapter.py"
+        write_hook_demand_adapter(adapter)
+
+        anti_loop_gate_provider._DOMAIN_ADAPTER_MODULE = None
+        _, rows, should_write = anti_loop_gate_provider.evaluate(
+            hook_demand_args(root, "cycle-hook-one", domain_adapter=adapter)
+        )
+        assert should_write is True
+        anti_loop_gate_provider.write_registry(registry, rows)
+
+        anti_loop_gate_provider._DOMAIN_ADAPTER_MODULE = None
+        packet, _, _ = anti_loop_gate_provider.evaluate(
+            hook_demand_args(root, "cycle-hook-two", domain_adapter=adapter)
+        )
+
+    demand = packet["adapter_hook_demand"]
+    assert demand[0]["hook_id"] == "target_required_verifier"
+    assert demand[0]["skip_count"] == 2
+    assert demand[0]["decision_relevant_skip_count"] == 2
+    assert demand[0]["first_skip_cycle_id"] == "cycle-hook-one"
+    assert demand[0]["last_skip_cycle_id"] == "cycle-hook-two"
+    assert packet["hook_supply_required"] is True
+    assert packet["demanded_hooks"] == ["target_required_verifier"]
+    assert any(
+        finding.get("code") == "hook_supply_required"
+        for finding in packet.get("findings", [])
+        if isinstance(finding, dict)
+    )
+
+
 def test_cumulative_chain_overrides_untried_veto_after_quality_stall() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -1533,6 +1687,9 @@ def main() -> int:
     test_terminal_outcome_family_fallback_groups_mutating_blockers()
     test_adapter_mandate_blocks_missing_adapter_stall_chain()
     test_registered_adapter_load_failure_routes_wiring_defect()
+    test_hook_demand_no_adapter_is_noop()
+    test_hook_demand_single_skip_warns_without_supply_required()
+    test_hook_demand_two_decision_relevant_skips_emit_supply_required()
     test_cumulative_chain_overrides_untried_veto_after_quality_stall()
     test_chain_stall_forces_actionable_ladder_task_kind()
     test_repo_owned_source_provenance_rejects_nonactionable_self_report()

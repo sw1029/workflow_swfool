@@ -347,6 +347,26 @@ def non_empty(value: Any) -> bool:
     return True
 
 
+def nonzero_scalar(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return False
+        try:
+            return float(stripped) != 0
+        except ValueError:
+            return stripped.lower() in {"true", "fail", "failed", "block", "blocked"}
+    if isinstance(value, dict):
+        return any(nonzero_scalar(item) for item in value.values())
+    if isinstance(value, list):
+        return any(nonzero_scalar(item) for item in value)
+    return False
+
+
 def number_value(value: Any) -> int | None:
     if isinstance(value, bool):
         return int(value)
@@ -696,6 +716,98 @@ REPORT_KEY_REPAIR_TASK_KINDS = {
     "schema_single_source_repair",
     "user_escalation",
     "terminal_blocked",
+}
+CURRENT_LANE_TASK_KINDS = {
+    "current_lane_rerun",
+    "current_lane_revalidation",
+    "fresh_current_lane_run",
+    "lane_revalidation",
+    "revalidation",
+    "residual_descope",
+    "descope_with_residual",
+    "user_escalation",
+    "terminal_blocked",
+    "terminal_blocker",
+}
+DECISION_FRESHNESS_TASK_KINDS = {
+    "fresh_current_lane_measurement",
+    "fresh_measurement",
+    "measurement_rerun",
+    "rerun_with_current_contract",
+    "no_impact_proof",
+    "upstream_contract_no_impact_proof",
+    "decision_metadata_revision",
+    "residual_descope",
+    "descope_with_residual",
+    "user_escalation",
+    "terminal_blocked",
+    "terminal_blocker",
+}
+PRODUCER_SUPPLY_TASK_KINDS = {
+    "producer_supply",
+    "producer_path_supply",
+    "production_code_path_supply",
+    "gating_axis_producer_supply",
+    "producer_repair",
+    "field_producer_repair",
+    "gating_axis_repair",
+    "residual_descope",
+    "descope_with_residual",
+    "user_escalation",
+    "terminal_blocked",
+    "terminal_blocker",
+}
+PORTFOLIO_QUOTA_TASK_KINDS = {
+    "producer_supply",
+    "producer_repair",
+    "envelope_expansion",
+    "envelope_thaw_item",
+    "long_run_launch",
+    "long_run_monitor",
+    "long_run_harvest",
+    "long_run_finalize",
+    "throughput_improvement",
+    "residual_descope",
+    "descope_with_residual",
+    "user_escalation",
+    "terminal_blocked",
+    "terminal_blocker",
+}
+CYCLE_REACHABILITY_TASK_KINDS = {
+    "long_run_launch",
+    "long_run_monitor",
+    "long_run_harvest",
+    "long_run_finalize",
+    "throughput_improvement",
+    "residual_descope",
+    "descope_with_residual",
+    "user_escalation",
+    "terminal_blocked",
+    "terminal_blocker",
+}
+METRIC_BASIS_TASK_KINDS = {
+    "basis_compatible_measurement",
+    "metric_basis_repair",
+    "basis_contract_repair",
+    "basis_downgrade_contract",
+    "contract_basis_revision",
+    "residual_descope",
+    "descope_with_residual",
+    "user_escalation",
+    "terminal_blocked",
+    "terminal_blocker",
+}
+SURFACE_FIELD_TASK_KINDS = {
+    "surface_field_repair",
+    "field_class_repair",
+    "producer_field_repair",
+    "producer_repair",
+    "qualitative_review_repair",
+    "residual_descope",
+    "descope_with_residual",
+    "user_escalation",
+    "terminal_blocked",
+    "terminal_blocker",
 }
 
 
@@ -1700,6 +1812,172 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                 "block" if mode == "block" else "warn",
                 "derive_report_key_divergence_unhandled",
                 "`derive` must route report_key_divergence to report/schema/sync repair, terminal state, or user escalation before consuming that report.",
+                {"selected_task_kind": selected_kind or None},
+            )
+        pass_on_stale_lane = boolish(
+            first_present(
+                result,
+                [
+                    "pass_on_stale_lane",
+                    "lane_identity_gate.pass_on_stale_lane",
+                    "anti_loop_progress_gate.pass_on_stale_lane",
+                    "anti_loop_progress_gate.lane_identity_gate.pass_on_stale_lane",
+                    "result.anti_loop_progress_gate.pass_on_stale_lane",
+                    "result.lane_identity_gate.pass_on_stale_lane",
+                ],
+            )
+        )
+        decision_metadata_revision = boolish(
+            first_present(
+                result,
+                [
+                    "decision_metadata_revision",
+                    "stale_measurement_artifact",
+                    "decision_freshness_gate.decision_metadata_revision",
+                    "decision_freshness_gate.stale_measurement_artifact",
+                    "anti_loop_progress_gate.decision_metadata_revision",
+                    "anti_loop_progress_gate.stale_measurement_artifact",
+                    "result.decision_freshness_gate.decision_metadata_revision",
+                ],
+            )
+        )
+        axis_starved_by_missing_producer = boolish(
+            first_present(
+                result,
+                [
+                    "axis_starved_by_missing_producer",
+                    "gating_axis_producer_gate.axis_starved_by_missing_producer",
+                    "anti_loop_progress_gate.axis_starved_by_missing_producer",
+                    "anti_loop_progress_gate.gating_axis_producer_gate.axis_starved_by_missing_producer",
+                    "result.gating_axis_producer_gate.axis_starved_by_missing_producer",
+                ],
+            )
+        )
+        portfolio_quota_exceeded = boolish(
+            first_present(
+                result,
+                [
+                    "portfolio_quota_exceeded",
+                    "portfolio_quota_gate.portfolio_quota_exceeded",
+                    "anti_loop_progress_gate.portfolio_quota_exceeded",
+                    "anti_loop_progress_gate.portfolio_quota_gate.portfolio_quota_exceeded",
+                    "result.portfolio_quota_gate.portfolio_quota_exceeded",
+                ],
+            )
+        )
+        portfolio_quota_mode = str(
+            first_present(
+                result,
+                [
+                    "portfolio_quota_mode",
+                    "portfolio_quota_gate.portfolio_quota_mode",
+                    "portfolio_quota_gate.mode",
+                    "anti_loop_progress_gate.portfolio_quota_mode",
+                    "anti_loop_progress_gate.portfolio_quota_gate.mode",
+                    "result.portfolio_quota_gate.portfolio_quota_mode",
+                ],
+            )
+            or ""
+        ).lower()
+        portfolio_quota_restrictive = portfolio_quota_mode in {"restrict", "restricted", "block", "blocking"}
+        unreachable_within_cycle = boolish(
+            first_present(
+                result,
+                [
+                    "unreachable_within_cycle",
+                    "cycle_reachability_gate.unreachable_within_cycle",
+                    "acceptance_reachability_gate.unreachable_within_cycle",
+                    "anti_loop_progress_gate.unreachable_within_cycle",
+                    "anti_loop_progress_gate.cycle_reachability_gate.unreachable_within_cycle",
+                    "result.cycle_reachability_gate.unreachable_within_cycle",
+                ],
+            )
+        )
+        basis_overclaim = boolish(
+            first_present(
+                result,
+                [
+                    "basis_overclaim",
+                    "metric_basis_gate.basis_overclaim",
+                    "anti_loop_progress_gate.basis_overclaim",
+                    "anti_loop_progress_gate.metric_basis_gate.basis_overclaim",
+                    "result.metric_basis_gate.basis_overclaim",
+                ],
+            )
+        )
+        surface_field_defect_matrix = first_present(
+            result,
+            [
+                "surface_field_defect_matrix",
+                "surface_field_review_gate.surface_field_defect_matrix",
+                "qualitative_review_packet.surface_field_defect_matrix",
+                "anti_loop_progress_gate.surface_field_defect_matrix",
+                "result.surface_field_review_gate.surface_field_defect_matrix",
+            ],
+        )
+        surface_field_defects = nonzero_scalar(surface_field_defect_matrix)
+        if pass_on_stale_lane and not terminal_selected and selected_kind not in CURRENT_LANE_TASK_KINDS:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_pass_on_stale_lane_unhandled",
+                "`derive` must route pass_on_stale_lane to current-lane rerun/revalidation, residual descope, terminal state, or user escalation before consuming the pass.",
+                {"selected_task_kind": selected_kind or None},
+            )
+        if decision_metadata_revision and not terminal_selected and selected_kind not in DECISION_FRESHNESS_TASK_KINDS:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_decision_metadata_revision_unhandled",
+                "`derive` must route stale decision updates to fresh current-lane measurement, no-impact proof, residual descope, terminal state, or user escalation.",
+                {"selected_task_kind": selected_kind or None},
+            )
+        if axis_starved_by_missing_producer and not terminal_selected and selected_kind not in PRODUCER_SUPPLY_TASK_KINDS:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_axis_starved_by_missing_producer_unhandled",
+                "`derive` must route a producer-starved gating axis to producer-supply work before another verifier, guard, report, or metadata task can count as progress.",
+                {"selected_task_kind": selected_kind or None},
+            )
+        if portfolio_quota_exceeded and portfolio_quota_restrictive and not terminal_selected and selected_kind not in PORTFOLIO_QUOTA_TASK_KINDS:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_portfolio_quota_restriction_unhandled",
+                "`derive` must honor restrictive portfolio_quota_exceeded by selecting producer, envelope, long-run, descope, terminal, or escalation work.",
+                {"selected_task_kind": selected_kind or None},
+            )
+        elif portfolio_quota_exceeded and not portfolio_quota_restrictive:
+            add(
+                findings,
+                "warn",
+                "derive_portfolio_quota_warn_only",
+                "`portfolio_quota_exceeded` is warn-only unless the adapter supplies restrict mode; preserve it without restricting selection.",
+                {"portfolio_quota_mode": portfolio_quota_mode or None},
+            )
+        if unreachable_within_cycle and not terminal_selected and selected_kind not in CYCLE_REACHABILITY_TASK_KINDS:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_unreachable_within_cycle_unhandled",
+                "`derive` must route unreachable_within_cycle to long-run launch/monitor/harvest, throughput improvement, descope, terminal state, or user escalation.",
+                {"selected_task_kind": selected_kind or None},
+            )
+        if basis_overclaim and not terminal_selected and selected_kind not in METRIC_BASIS_TASK_KINDS:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_basis_overclaim_unhandled",
+                "`derive` must route basis_overclaim to basis-compatible measurement, metric-basis repair, downgrade-aware contract work, residual descope, terminal state, or user escalation.",
+                {"selected_task_kind": selected_kind or None},
+            )
+        if surface_field_defects and not terminal_selected and selected_kind not in SURFACE_FIELD_TASK_KINDS:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_surface_field_defects_unhandled",
+                "`derive` must route nonzero surface_field_defect_matrix to producer/field repair, residual descope, terminal state, or user escalation before consuming the review pass.",
                 {"selected_task_kind": selected_kind or None},
             )
         terminal_stage_contradiction = boolish(
@@ -3858,6 +4136,200 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                 ],
             )
         )
+        pass_on_stale_lane = boolish(
+            first_present(
+                result,
+                [
+                    "pass_on_stale_lane",
+                    "lane_identity_gate.pass_on_stale_lane",
+                    "anti_loop_progress_gate.pass_on_stale_lane",
+                    "result.lane_identity_gate.pass_on_stale_lane",
+                ],
+            )
+        )
+        lane_identity_missing = boolish(
+            first_present(
+                result,
+                [
+                    "lane_identity_missing",
+                    "lane_identity_gate.lane_identity_missing",
+                    "anti_loop_progress_gate.lane_identity_missing",
+                    "result.lane_identity_gate.lane_identity_missing",
+                ],
+            )
+        )
+        current_lane_revalidated = non_empty(
+            first_present(
+                result,
+                [
+                    "current_lane_revalidated",
+                    "current_lane_rerun_complete",
+                    "lane_identity_gate.current_lane_revalidated",
+                    "result.lane_identity_gate.current_lane_revalidated",
+                ],
+            )
+        )
+        decision_metadata_revision = boolish(
+            first_present(
+                result,
+                [
+                    "decision_metadata_revision",
+                    "stale_measurement_artifact",
+                    "decision_freshness_gate.decision_metadata_revision",
+                    "decision_freshness_gate.stale_measurement_artifact",
+                    "anti_loop_progress_gate.decision_metadata_revision",
+                    "result.decision_freshness_gate.decision_metadata_revision",
+                ],
+            )
+        )
+        fresh_measurement_present = non_empty(
+            first_present(
+                result,
+                [
+                    "fresh_current_lane_run_id",
+                    "fresh_measurement_run_id",
+                    "measurement_run_id",
+                    "decision_freshness_gate.fresh_current_lane_run_id",
+                    "decision_freshness_gate.no_impact_proof",
+                    "upstream_contract_no_impact_proof",
+                    "result.decision_freshness_gate.fresh_current_lane_run_id",
+                ],
+            )
+        )
+        axis_starved_by_missing_producer = boolish(
+            first_present(
+                result,
+                [
+                    "axis_starved_by_missing_producer",
+                    "gating_axis_producer_gate.axis_starved_by_missing_producer",
+                    "anti_loop_progress_gate.axis_starved_by_missing_producer",
+                    "result.gating_axis_producer_gate.axis_starved_by_missing_producer",
+                ],
+            )
+        )
+        producer_supply_complete = non_empty(
+            first_present(
+                result,
+                [
+                    "producer_supply_complete",
+                    "producer_path_fired",
+                    "gating_axis_producer_gate.producer_supply_complete",
+                    "result.gating_axis_producer_gate.producer_supply_complete",
+                ],
+            )
+        )
+        portfolio_quota_exceeded = boolish(
+            first_present(
+                result,
+                [
+                    "portfolio_quota_exceeded",
+                    "portfolio_quota_gate.portfolio_quota_exceeded",
+                    "anti_loop_progress_gate.portfolio_quota_exceeded",
+                    "result.portfolio_quota_gate.portfolio_quota_exceeded",
+                ],
+            )
+        )
+        portfolio_quota_mode = str(
+            first_present(
+                result,
+                [
+                    "portfolio_quota_mode",
+                    "portfolio_quota_gate.portfolio_quota_mode",
+                    "portfolio_quota_gate.mode",
+                    "anti_loop_progress_gate.portfolio_quota_mode",
+                    "result.portfolio_quota_gate.portfolio_quota_mode",
+                ],
+            )
+            or ""
+        ).lower()
+        portfolio_quota_restrictive = portfolio_quota_mode in {"restrict", "restricted", "block", "blocking"}
+        unreachable_within_cycle = boolish(
+            first_present(
+                result,
+                [
+                    "unreachable_within_cycle",
+                    "cycle_reachability_gate.unreachable_within_cycle",
+                    "acceptance_reachability_gate.unreachable_within_cycle",
+                    "anti_loop_progress_gate.unreachable_within_cycle",
+                    "result.cycle_reachability_gate.unreachable_within_cycle",
+                ],
+            )
+        )
+        harvest_validated = non_empty(
+            first_present(
+                result,
+                [
+                    "long_run_harvest_validated",
+                    "harvest_validation_complete",
+                    "cycle_reachability_gate.harvest_validation_complete",
+                    "throughput_improved",
+                    "cycle_reachability_gate.throughput_improved",
+                    "result.cycle_reachability_gate.harvest_validation_complete",
+                ],
+            )
+        )
+        basis_overclaim = boolish(
+            first_present(
+                result,
+                [
+                    "basis_overclaim",
+                    "metric_basis_gate.basis_overclaim",
+                    "anti_loop_progress_gate.basis_overclaim",
+                    "result.metric_basis_gate.basis_overclaim",
+                ],
+            )
+        )
+        basis_compatible_inputs = non_empty(
+            first_present(
+                result,
+                [
+                    "basis_compatible_inputs_present",
+                    "basis_overclaim_resolved",
+                    "metric_basis_gate.basis_compatible_inputs_present",
+                    "metric_basis_gate.basis_overclaim_resolved",
+                    "result.metric_basis_gate.basis_compatible_inputs_present",
+                ],
+            )
+        )
+        surface_field_defect_matrix = first_present(
+            result,
+            [
+                "surface_field_defect_matrix",
+                "surface_field_review_gate.surface_field_defect_matrix",
+                "qualitative_review_packet.surface_field_defect_matrix",
+                "result.surface_field_review_gate.surface_field_defect_matrix",
+            ],
+        )
+        surface_field_defects = nonzero_scalar(surface_field_defect_matrix)
+        field_class_map_missing = boolish(
+            first_present(
+                result,
+                [
+                    "field_class_map_missing",
+                    "surface_field_review_gate.field_class_map_missing",
+                    "qualitative_review_packet.field_class_map_missing",
+                    "result.surface_field_review_gate.field_class_map_missing",
+                ],
+            )
+        )
+        surface_field_repaired = non_empty(
+            first_present(
+                result,
+                [
+                    "surface_field_repair_complete",
+                    "field_class_repair_complete",
+                    "surface_field_review_gate.surface_field_repair_complete",
+                    "result.surface_field_review_gate.surface_field_repair_complete",
+                ],
+            )
+        )
+        if lane_identity_missing:
+            add(
+                findings,
+                "warn",
+                "lane_identity_missing",
+                "`lane_identity_missing` is fail-quiet warning evidence; do not invent lane-key components in the result contract.",
+            )
         if acceptance_diluted and validation_verdict in {"complete", "passed", "pass"}:
             add(
                 findings,
@@ -4023,6 +4495,112 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                 "block" if mode == "block" else "warn",
                 "validate_advanced_with_resolution_downgrade",
                 "`validate` cannot report advanced progress from a downgraded evidence resolution unless the downgrade is explicitly provisional, restored, or contract-revised.",
+            )
+        if pass_on_stale_lane and validation_verdict in {"complete", "passed", "pass"} and not (explicit_descope or current_lane_revalidated):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_pass_on_stale_lane_complete",
+                "`validate` cannot complete current-lane capability, adoption, comparison, close, or next-rung work from pass_on_stale_lane without current-lane rerun/revalidation or residual descope.",
+            )
+        if pass_on_stale_lane and progress_verdict == "advanced" and not (explicit_descope or current_lane_revalidated):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_advanced_from_stale_lane_pass",
+                "`validate` cannot report advanced progress from a pass that belongs to a stale production lane.",
+            )
+        if decision_metadata_revision and validation_verdict in {"complete", "passed", "pass"} and not (explicit_descope or fresh_measurement_present):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_decision_metadata_revision_complete",
+                "`validate` cannot complete measurement, adoption, or high-water work from decision_metadata_revision without a fresh current-lane run id or no-impact proof.",
+            )
+        if decision_metadata_revision and progress_verdict == "advanced" and not fresh_measurement_present:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_advanced_from_decision_metadata_revision",
+                "`validate` cannot report advanced progress from relabeling stale measurement artifacts after upstream contract changes.",
+            )
+        if axis_starved_by_missing_producer and validation_verdict in {"complete", "passed", "pass"} and not (explicit_descope or producer_supply_complete):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_axis_starved_by_missing_producer_complete",
+                "`validate` cannot complete another verifier, guard, report, or metadata item for a producer-starved gating axis before producer supply fires.",
+            )
+        if axis_starved_by_missing_producer and progress_verdict == "advanced" and not producer_supply_complete:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_advanced_with_producer_starved_axis",
+                "`validate` cannot report advanced progress while the gating axis remains starved by a missing producer path.",
+            )
+        if portfolio_quota_exceeded and portfolio_quota_restrictive and progress_verdict == "advanced":
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_advanced_during_portfolio_quota_restriction",
+                "`validate` cannot report advanced progress for verifier-like work while restrictive portfolio_quota_exceeded is unresolved; require producer/envelope/long-run/descope/terminal/escalation evidence.",
+            )
+        elif portfolio_quota_exceeded and not portfolio_quota_restrictive:
+            add(
+                findings,
+                "warn",
+                "portfolio_quota_warn_only",
+                "`portfolio_quota_exceeded` is warn-only unless the adapter supplies restrict mode.",
+                {"portfolio_quota_mode": portfolio_quota_mode or None},
+            )
+        if unreachable_within_cycle and validation_verdict in {"complete", "passed", "pass"} and not (explicit_descope or harvest_validated):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_unreachable_within_cycle_complete",
+                "`validate` cannot complete the original scale acceptance from small smoke, launch-only, or heartbeat evidence when unreachable_within_cycle=true; require harvest validation, throughput improvement, descope, terminal blocker, or escalation.",
+            )
+        if unreachable_within_cycle and progress_verdict == "advanced" and not harvest_validated:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_advanced_with_unreachable_within_cycle",
+                "`validate` cannot report advanced progress from repeating cycle-bound smoke evidence for a cycle-unreachable target.",
+            )
+        if basis_overclaim and validation_verdict in {"complete", "passed", "pass"} and not (explicit_descope or basis_compatible_inputs):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_basis_overclaim_complete",
+                "`validate` cannot complete independently verified metric progress from basis_overclaim; downgrade to actual_basis_class or provide basis-compatible inputs.",
+            )
+        if basis_overclaim and progress_verdict == "advanced" and not basis_compatible_inputs:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_advanced_from_basis_overclaim",
+                "`validate` cannot report advanced progress from a metric whose claimed basis is not derivable from consumed inputs.",
+            )
+        if field_class_map_missing:
+            add(
+                findings,
+                "warn",
+                "field_class_map_missing",
+                "`field_class_map_missing` is fail-quiet warning evidence; preserve existing review semantics and do not invent domain field classes.",
+            )
+        if surface_field_defects and validation_verdict in {"complete", "passed", "pass"} and not (explicit_descope or surface_field_repaired):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_surface_field_defects_complete",
+                "`validate` cannot consume qualitative review as pass for affected producer-written field classes while surface_field_defect_matrix has nonzero defects.",
+            )
+        if surface_field_defects and progress_verdict == "advanced" and not surface_field_repaired:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_advanced_with_surface_field_defects",
+                "`validate` cannot report advanced qualitative-review progress while nonzero surface-field defects remain unresolved.",
             )
         scenario_uncovered = boolish(
             first_present(

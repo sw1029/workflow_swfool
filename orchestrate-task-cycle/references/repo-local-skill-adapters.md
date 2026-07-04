@@ -100,6 +100,17 @@ Loopback, run, normalization, validation, and report-profile adapters may expose
 - `resolution_downgrade_fields(**context) -> list|dict`: required versus observed evidence-resolution classes and any `surrogate_resolution_basis`. The adapter may identify id/set/intersection/row-level requirements, but the generic workflow only consumes abstract resolution labels.
 - `report_key_integrity_fields(**context) -> list|dict`: duplicate terminal report-key paths and scalar values when a single report contains divergent duplicates. Matching duplicate keys are schema debt; divergent values block pass/close/adoption/baseline/comparison consumption.
 
+Loopback, run, normalization, validation, review, derive, and profile adapters may expose Part L fields as compact data:
+
+- `production_lane_identity(artifact_paths, **context) -> dict`: opaque lane identity for artifacts being validated or reviewed. The adapter owns the lane key components; generic workflow skills compare only opaque key equality.
+- `current_decision_lane(**context) -> dict`: opaque lane identity for the artifact/output lane currently under capability, adoption, baseline, comparison, or next-rung decision.
+- Decision freshness metadata: `upstream_contract_changed_since_measurement`, `measurement_run_id`, `measurement_artifact_created_at`, `required_new_run_id`, and `decision_metadata_revision` when decision/adoption/reclassification work may otherwise reuse stale artifacts.
+- `gating_axis_producer_map(**context) -> dict`: gating axis id to producer source paths or globs. The workflow consumes only path-presence/execution status and `axis_starved_by_missing_producer`; axis meaning stays adapter-owned.
+- `portfolio_quota(**context) -> dict`: recent-window size, verifier/guard/report/metadata versus producer/envelope/long-run classification, threshold ratio, and whether the quota is restrict or warn-only. Missing hooks use default warn-only evidence.
+- `throughput_evidence(**context) -> dict`: observed cycle throughput, unit, run id, and confidence interval. `acceptance_scale(target, **context) -> dict`: required target scale and matching unit. Together they support `unreachable_within_cycle`.
+- `metric_basis_inputs(metric_id, **context) -> dict`: claimed basis class, consumed input classes, derivability, and downgraded actual basis class for metric provenance overclaim checks.
+- `surface_field_classes(artifact_family, **context) -> dict`: producer-written surface string field classes and locator interpretation rules for qualitative review. Review results should report scalar field-class by defect-class counts and avoid excerpts unless authority permits them.
+
 These hooks are optional and fail quiet when absent unless a measurable acceptance or caller contract explicitly requires them. When present, they revise existing pass/progress/repair/counting semantics; they do not authorize new phases, reports, automatic retries, or repo-specific rules in global workflow skills.
 
 If a repository also registers a loopback domain adapter, pass its declared path/status to `$audit-cycle-loopback`. A registered adapter that does not load is an `adapter_wiring_defect` or adapter load correction task, not evidence that no adapter exists. Keep this distinction in `repo_skill_gap_packet` so `$derive-improvement-task` does not schedule duplicate adapter creation.
@@ -165,13 +176,20 @@ Build `repo_skill_gap_packet` before derivation when current-cycle evidence show
 - missing or stale `code_convention_contract` when governance, code-structure audit, loopback, derive, or validation repeatedly needs repo-specific naming, reuse, dependency, depth, fan-out, or structure high-water rules;
 - repeated mechanical shard, duplicate-helper, global-rebinding, dependency-direction, or reuse-layer ambiguity that generic workflow checks can only report warn-only;
 - repeated local-scope structure improvement that does not move adapter-owned global invariants;
+- repeated verifier pass, adoption, comparison, or next-rung claim where the validated artifact lane does not match the current decision lane;
+- repeated decision-update work that reclassifies stale artifacts after an upstream production contract changed instead of producing a fresh measurement run;
+- repeated zero or failed gating axis where the producer path that should populate that axis is missing or unexercised;
+- repeated over-quota verifier/guard/report/metadata work compared with producer/envelope/long-run work;
+- repeated cycle-unreachable scale targets where long-run launch/monitor/harvest routing, throughput improvement, explicit descope, terminal blocker, or escalation is not selected;
+- repeated metric basis overclaim where the claimed evidence class is not derivable from consumed inputs;
+- repeated qualitative review pass that checks only a subset of producer-written surface string field classes while locator-backed field classes are available;
 - adapter validation failure;
 - task_miss caused by missing repo-specific procedure;
 - a known 2-5 task sequence that would otherwise reload long domain context.
 
 The packet should include recommended adapter name, scope, target path, expected resources (`references`, `scripts`, `assets`), future consuming phases, and whether derive should create, update, defer, or reject adapter work.
 
-For convention, Part F, Part G, Part H, Part I, and Part K adapter gaps, include the missing contract fields abstractly, such as `reuse_roots`, `semantic_naming_rules`, `dependency_layers`, `max_tree_depth`, `max_dir_fan_out`, `max_file_loc`, `forbidden_name_patterns`, `structure_metrics`, `global_invariants`, `target_required_verifier`, `high_water_axes`, `verifier_source_paths`, `evidence_provenance`, `verification_input_paths`, `self_grounded`, `primary_metric`, `residual_gap_policy`, `facet_root_map`, `root_dominant_parameter_key`, `execution_stage_ladder`, `terminal_classification_stage_map`, `instrumentation_trigger_threshold`, `instrumentation_field_map`, `run_disposition`, `runtime_config_echo`, `envelope_thaw_item`, required gate-hook status, `goal_axis_map`, `quality_vector` axes, `cycle_fixed_cost`, `marginal_value_per_cycle_cost`, `execution_starvation` ranking fields, `designated_baseline`, `comparison_parity_axes`, `required_output_classes`, `resolution_downgrade_fields`, and `report_key_integrity_fields`. Do not put project-specific values into the generic orchestrator skill.
+For convention, Part F, Part G, Part H, Part I, Part K, and Part L adapter gaps, include the missing contract fields abstractly, such as `reuse_roots`, `semantic_naming_rules`, `dependency_layers`, `max_tree_depth`, `max_dir_fan_out`, `max_file_loc`, `forbidden_name_patterns`, `structure_metrics`, `global_invariants`, `target_required_verifier`, `high_water_axes`, `verifier_source_paths`, `evidence_provenance`, `verification_input_paths`, `self_grounded`, `primary_metric`, `residual_gap_policy`, `facet_root_map`, `root_dominant_parameter_key`, `execution_stage_ladder`, `terminal_classification_stage_map`, `instrumentation_trigger_threshold`, `instrumentation_field_map`, `run_disposition`, `runtime_config_echo`, `envelope_thaw_item`, required gate-hook status, `goal_axis_map`, `quality_vector` axes, `cycle_fixed_cost`, `marginal_value_per_cycle_cost`, `execution_starvation` ranking fields, `designated_baseline`, `comparison_parity_axes`, `required_output_classes`, `resolution_downgrade_fields`, `report_key_integrity_fields`, `production_lane_identity`, `current_decision_lane`, `gating_axis_producer_map`, `portfolio_quota`, `throughput_evidence`, `acceptance_scale`, `metric_basis_inputs`, and `surface_field_classes`. Do not put project-specific values into the generic orchestrator skill.
 
 Promote an adapter task only when reusable value is concrete. For one-off instructions, use `.agent_advice`, task acceptance criteria, or normal schema/contract notes instead.
 

@@ -162,6 +162,19 @@ def apply_disposition_and_findings(ns: dict[str, Any]) -> dict[str, Any]:
                 "evidence": row["adapter_mandate_gate"],
             }
         )
+    if row.get("adapter_hook_demand"):
+        findings.append(
+            {
+                "severity": "warn",
+                "code": "hook_supply_required" if bool_value(row.get("hook_supply_required")) else "adapter_hook_demand",
+                "message": "one or more adapter hooks were skipped fail-quiet; demand is ledgered for derive routing but does not by itself hard-stop this packet.",
+                "evidence": {
+                    "adapter_hook_demand": row.get("adapter_hook_demand"),
+                    "hook_supply_required": bool_value(row.get("hook_supply_required")),
+                    "demanded_hooks": row.get("demanded_hooks") or [],
+                },
+            }
+        )
     if bool_value(row.get("cumulative_goal_distance_stalled")) and not row["adapter_mandate_required"]:
         findings.append(
             {

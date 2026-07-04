@@ -16,6 +16,7 @@ This reference defines optional long-range task packs for `$orchestrate-task-cyc
 - [Part I Workflow Gates](#part-i-workflow-gates)
 - [Part J Workflow Gates](#part-j-workflow-gates)
 - [Part K Workflow Gates](#part-k-workflow-gates)
+- [Part L Workflow Gates](#part-l-workflow-gates)
 
 ## Core Invariant
 
@@ -146,6 +147,51 @@ The JSON is authoritative. The Markdown render is for scanability and must use t
       "report_key_integrity_contract": {
         "report_key_divergence": false,
         "duplicate_key_paths": []
+      },
+      "lane_identity_contract": {
+        "production_lane_identity": null,
+        "current_decision_lane": null,
+        "lane_identity_missing": false,
+        "pass_on_stale_lane": false,
+        "current_lane_residual_required": false
+      },
+      "decision_freshness_contract": {
+        "upstream_contract_changed_since_measurement": false,
+        "measurement_run_id": null,
+        "required_new_run_id": false,
+        "stale_measurement_artifact": false,
+        "decision_metadata_revision": false
+      },
+      "gating_axis_producer_contract": {
+        "axis_starved_by_missing_producer": false,
+        "gating_axis_id": null,
+        "producer_supply_required": false,
+        "producer_path_status": "not_evaluated"
+      },
+      "portfolio_quota_contract": {
+        "portfolio_quota_exceeded": false,
+        "portfolio_quota_mode": "warn",
+        "recent_verifier_like_count": null,
+        "recent_producer_like_count": null
+      },
+      "cycle_reachability_contract": {
+        "acceptance_scale": null,
+        "throughput_evidence": null,
+        "unreachable_within_cycle": false,
+        "long_run_launch_required": false,
+        "harvest_validation_required": false
+      },
+      "metric_basis_contract": {
+        "basis_overclaim": false,
+        "claimed_basis_class": null,
+        "actual_basis_class": null,
+        "basis_downgraded_fields": []
+      },
+      "surface_field_review_contract": {
+        "surface_field_classes": [],
+        "field_class_map_missing": false,
+        "surface_field_defect_matrix": {},
+        "surface_field_review_status": "not_evaluated"
       },
       "guard_stacking_contract": {
         "change_set_kind": "implementation",
@@ -331,6 +377,20 @@ If the item result has `independently_verified_fields`, require `verification_in
 
 If the item result or acceptance evidence has `envelope_thaw_item_required=true`, do not mark the item `consumed` without `envelope_thaw_item`, thaw condition/schedule, explicit residual descope, terminal blocker, or user escalation.
 
+If the item result has `pass_on_stale_lane=true`, do not mark current-lane capability, adoption, comparison-winner, or next-rung work consumed. Preserve current-lane rerun, explicit residual scope, terminal blocker, or user escalation.
+
+If the item result has `decision_metadata_revision=true` or `stale_measurement_artifact=true`, consume it only as metadata/governance work. Measurement, adoption, or comparison items need a fresh current-lane run id unless the packet proves the upstream production-contract change cannot affect the measured axis.
+
+If the item result has `axis_starved_by_missing_producer=true`, do not mark another verifier/guard/report item for that gating axis consumed as progress. Promote producer-supply work, descope, terminal blocker, or user escalation before verifier-like work resumes.
+
+If the item result has restrictive `portfolio_quota_exceeded=true`, do not promote another verifier/guard/report/metadata item until the quota recovers or the pack records producer/envelope/long-run, descope, terminal blocker, or escalation.
+
+If the item result has `unreachable_within_cycle=true`, do not mark a small smoke or cycle-bound rerun consumed as progress. Promote long-run launch with monitor/harvest plan, throughput improvement, explicit residual descope, terminal blocker, or user escalation.
+
+If the item result has `basis_overclaim=true`, consume the affected metric only at the downgraded actual basis class. It cannot support independent high-water/progress until basis-compatible input evidence exists.
+
+If the item result has nonzero `surface_field_defect_matrix` counts, preserve producer-supply or field-repair residual work unless authority, residual descope, terminal blocker, or user escalation says those fields are out of scope.
+
 ## Pack Transactions
 
 `$derive-improvement-task` owns the decision. `scripts/task_pack_queue.py` owns deterministic queue mutation when available. Prefer:
@@ -390,6 +450,13 @@ When an active pack exists, `$derive-improvement-task` should consider the next 
 - any `adoption_axis_contract.majority_vote_adoption=true` without axis classification, failed `gating` axis, or `measured_but_disqualified=true` is converted into axis-classification/gating repair, candidate rejection, or preserved measured-but-disqualified evidence before adoption;
 - any `resolution_downgrade_contract.resolution_downgrade=true` is converted into resolution restoration, contract revision, or residual high-resolution scope before consumption;
 - any `report_key_integrity_contract.report_key_divergence=true` is converted into report/schema/sync repair before consuming the report;
+- any `lane_identity_contract.pass_on_stale_lane=true` is converted into current-lane rerun, explicit residual scope, terminal blocker, or escalation before consuming capability/adoption/comparison evidence;
+- any `decision_freshness_contract.decision_metadata_revision=true` or `stale_measurement_artifact=true` is converted into fresh measurement or explicit no-impact proof before consuming measurement/adoption/comparison work;
+- any `gating_axis_producer_contract.axis_starved_by_missing_producer=true` is converted into producer-supply work before another verifier/guard/report for the same axis;
+- any restrictive `portfolio_quota_contract.portfolio_quota_exceeded=true` is converted into producer, envelope, long-run, descope, terminal, or escalation work before another verifier-like item;
+- any `cycle_reachability_contract.unreachable_within_cycle=true` is converted into long-run launch with monitor/harvest, throughput improvement, descope, terminal, or escalation before another small cycle-bound run;
+- any `metric_basis_contract.basis_overclaim=true` is converted into basis-compatible measurement, downgrade-aware residual scope, or contract revision before independent progress consumption;
+- any nonzero `surface_field_review_contract.surface_field_defect_matrix` is converted into producer/field repair, residual scope, terminal blocker, or escalation before review pass consumption;
 - any `guard_stacking_contract.verifier_surface_hardening=true` beyond the detection-only cap is converted into execution work, explicit descope with residual scope, terminal blocker, or escalation before another guard/report/verifier item;
 - any `verification_source_contract` with missing/overlapping verification inputs is promoted as source-separation repair or consumed as attested only, not as independent high-water proof;
 - any `envelope_thaw_contract.envelope_thaw_item_required=true` is promoted as thaw/relax/descope/terminal/escalation before another frozen-envelope-internal repair;
@@ -546,3 +613,15 @@ Task packs must preserve expectation/comparison lineage without adding project-s
 - Adoption axis semantics: adoption axes are `gating` or `tradable` before measurement. Failed gating axes block adoption regardless of tradable wins; the candidate remains `measured_but_disqualified`.
 - Resolution downgrade: high-resolution contracts such as id/set/intersection evidence cannot be consumed from lower-resolution count/ratio/ordinal surrogates unless the contract is revised or residual high-resolution scope remains open.
 - Report key integrity: duplicate terminal keys with divergent values inside one report set `report_key_divergence` and block pass/close/adoption/baseline/comparison consumption until repaired. Matching duplicate terminal keys remain warn-only schema debt and do not consume or block the item by themselves.
+
+## Part L Workflow Gates
+
+Task packs must preserve lane lineage and premise-supply contracts without adding project-specific logic to this generic contract:
+
+- Lane identity: verifier/review/metric passes must record the artifact lane they inspected when supplied. A pass on a lane different from `current_decision_lane` is `pass_on_stale_lane` and cannot consume current-lane capability, adoption, comparison-winner, or next-rung items.
+- Decision freshness: decision-update items after upstream production-contract changes require a fresh measurement run id for the current lane. Relabeling stale artifacts is `decision_metadata_revision` and remains metadata/governance work.
+- Gating-axis producer supply: if a gating axis is starved because the producer path is missing or unexercised, producer-supply work outranks another verifier/guard/report item. Verifier-like work over that axis collapses under verifier-surface hardening until producer supply fires.
+- Portfolio quota: when an adapter-supplied quota restricts overrepresented verifier/guard/report/metadata work, the next item must be producer, envelope, long-run, descope-with-residual, terminal blocker, or user escalation until the ratio recovers. Missing quota hooks are warn-only.
+- Cycle reachability: when required scale is unreachable within a cycle, use a long-run launch item with monitor/harvest validation, a throughput-improvement item with measured C increase, explicit descope, terminal blocker, or user escalation. Do not keep promoting small smoke reruns as progress.
+- Metric basis: metrics whose claimed basis is not derivable from consumed inputs must carry `basis_overclaim` and downgraded actual basis fields. They cannot support independent high-water/progress consumption until basis-compatible evidence exists.
+- Surface field review: locator-backed qualitative review should cover every adapter-supplied producer-written surface string field class and record scalar defect counts by field class and defect class. Missing `surface_field_classes` fails quiet; nonzero counts preserve producer/field repair or residual scope.

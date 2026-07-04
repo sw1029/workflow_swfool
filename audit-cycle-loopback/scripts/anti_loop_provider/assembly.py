@@ -175,4 +175,9 @@ def build_base_packet(ns: dict[str, Any]) -> dict[str, Any]:
         "not_ready": True,
         "updated_at": now_iso(),
     }
+    if isinstance(adapter_gate.get("adapter_hook_demand"), list):
+        row["adapter_hook_demand"] = adapter_gate.get("adapter_hook_demand") or []
+        row["hook_demand_threshold"] = adapter_gate.get("hook_demand_threshold")
+        row["hook_supply_required"] = bool_value(adapter_gate.get("hook_supply_required"))
+        row["demanded_hooks"] = adapter_gate.get("demanded_hooks") or []
     return row

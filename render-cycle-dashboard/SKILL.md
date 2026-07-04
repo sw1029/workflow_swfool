@@ -16,6 +16,7 @@ Use `/home/swfool/.codex/skills/orchestrate-task-cycle/scripts/render_cycle_dash
 1. Load `.task/cycle/<cycle-id>/stage.jsonl` and `current_stage.json`.
 2. Include phase status, task IDs, validation/progress verdicts, blockers, changed files, evidence paths, and commit result.
 3. Highlight blocked, running, partial, skipped, or malformed/noncanonical stages with reasons.
+   - When ledger events include Part L fields, show unresolved stale-lane pass, stale decision measurement, producer-starved gating axis, restrictive quota, cycle-unreachable target, basis overclaim, and surface-field defect evidence under blockers or progress-axis notes. Preserve field names exactly; keep lane keys and source/body details out of the dashboard unless already present in redacted packet paths.
 4. Write `.task/cycle/<cycle-id>/dashboard.md` in Korean, preserving canonical step/status tokens, paths, IDs, commands, and hashes in their original language.
 5. Link the dashboard from the ledger under `dashboard`.
 
@@ -24,4 +25,5 @@ Use `/home/swfool/.codex/skills/orchestrate-task-cycle/scripts/render_cycle_dash
 - Do not hide failed, partial, skipped, or running stages.
 - Do not present malformed or `unknown` ledger events as normal canonical stages; show them in a separate malformed-events section.
 - Do not infer missing verdicts from current `task.md`.
+- Do not hide Part L unresolved fields behind a generic "workflow complete" note. The dashboard is not a validation verdict, but it must not make stale-lane, stale-measurement, producer-starvation, cycle-reachability, basis, or surface-field defects look consumed.
 - Keep `.agent_advice` separate from `.agent_goal` GT in summaries.

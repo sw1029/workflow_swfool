@@ -36,9 +36,11 @@ Use this skill to turn an active `task.md` into a concise acceptance packet that
 16. For adoption decisions based on multiple axes, preserve `adoption_axis_classification` before measurement. Use adapter/caller `required_output_classes(**context) -> list` or equivalent goal truth mapping to identify `gating` axes; all other comparable axes may be `tradable`. If classification is missing, set `majority_vote_adoption=true` and force `provisional_adoption` rather than final adoption.
 17. When any `gating` axis fails, set `measured_but_disqualified` for the candidate and block final adoption regardless of tradable-axis wins. Keep the measured artifact as evidence; do not delete or silently downgrade it.
 18. When an acceptance criterion requires high-resolution evidence such as element ids, row ids, item sets, or set intersections, record `required_evidence_resolution`. If caller evidence already shows a lower-resolution count/ratio/ordinal surrogate was used, preserve `observed_evidence_resolution`, `resolution_downgrade=true`, and `surrogate_resolution_basis`; do not normalize the surrogate as full-resolution proof.
-19. Mark unclear, missing, or unverifiable criteria as blockers or assumptions rather than silently widening scope.
-20. Save the normalized packet under `.task/cycle/<cycle-id>/packets/acceptance.md` when a cycle ledger exists.
-21. Pass the packet to `$task-md-agent-governance`, `$plan-validation-scope`, and `$build-validation-set-with-agents` when `acceptance_scenarios` or comparison/adoption validation fixtures are needed.
+19. When a task is a decision, adoption, baseline, comparison, or reclassification update, preserve whether upstream production contracts changed since the consumed measurement. If caller/adapter evidence shows a relevant upstream change and no fresh current-lane run id exists, set `required_new_run_id=true`, `stale_measurement_artifact=true`, and `decision_metadata_revision=true`; if the task claims old artifacts remain valid, require a packet reason that the upstream change cannot affect the measured axis.
+20. When a measurable target has adapter/caller scale and throughput evidence, preserve `acceptance_scale`, `throughput_evidence`, `required_scale`, `observed_cycle_throughput`, and `cycle_execution_cap`. If required scale exceeds observed throughput times the cycle cap, set `unreachable_within_cycle=true`; require downstream selection to use long-run launch with monitor/harvest plan, throughput improvement, explicit residual descope, terminal blocker, or user escalation rather than lowering the target.
+21. Mark unclear, missing, or unverifiable criteria as blockers or assumptions rather than silently widening scope.
+22. Save the normalized packet under `.task/cycle/<cycle-id>/packets/acceptance.md` when a cycle ledger exists.
+23. Pass the packet to `$task-md-agent-governance`, `$plan-validation-scope`, and `$build-validation-set-with-agents` when `acceptance_scenarios` or comparison/adoption validation fixtures are needed.
 
 ## Guardrails
 
@@ -60,3 +62,5 @@ Use this skill to turn an active `task.md` into a concise acceptance packet that
 - Do not finalize comparison/adoption acceptance when required parity axes are missing or `unknown`; record `parity_unverified`.
 - Do not reduce a failed required output class to a tradable regression axis. Preserve `gating` classification through validation.
 - Do not treat lower-resolution surrogate evidence as satisfying an id/set/intersection contract unless the task explicitly descopes the resolution and leaves residual scope.
+- Do not normalize a decision-update task that reuses stale artifacts after upstream production-contract changes as measurement progress. Preserve `decision_metadata_revision` and require a fresh run id or no-impact proof.
+- Do not leave a cycle-unreachable scale target as generic `indeterminate` when both required scale and throughput evidence are available. Preserve `unreachable_within_cycle` and the long-run/throughput/descope/terminal/escalation routing options.

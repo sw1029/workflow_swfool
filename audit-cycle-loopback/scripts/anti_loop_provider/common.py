@@ -34,6 +34,7 @@ UNTRIED_PROMOTION_BUDGET_DEFAULT = 2
 ADAPTER_MANDATE_STREAK_CAP_DEFAULT = 3
 CUMULATIVE_CHAIN_STREAK_CAP_DEFAULT = 3
 INSTRUMENTATION_TRIGGER_THRESHOLD_DEFAULT = 2
+HOOK_DEMAND_THRESHOLD_DEFAULT = 2
 ENVELOPE_THAW_STREAK_CAP_DEFAULT = 2
 ROOT_CAUSE_LEDGER_MAX_ROWS_PER_FAMILY_DEFAULT = 200
 ROOT_STEERING_DOC_NAMES = {"task_advice.md", "skill_advice.md", "task_doctor_steering.md"}
@@ -100,6 +101,10 @@ IDEMPOTENT_REPLAY_KEYS = (
     "adapter_mandate_required",
     "adapter_missing_streak",
     "adapter_contract_unmet",
+    "adapter_hook_demand",
+    "hook_demand_threshold",
+    "hook_supply_required",
+    "demanded_hooks",
     "cumulative_goal_distance_gate",
     "cumulative_goal_distance_scope_key",
     "cumulative_goal_distance_stall_streak",

@@ -46,6 +46,92 @@ def write_registry(path: Path, rows: list[dict[str, Any]]) -> None:
     text = "".join(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n" for row in rows)
     path.write_text(text, encoding="utf-8")
 
+def normalize_hook_id(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return re.sub(r"[^A-Za-z0-9_.:-]+", "_", text)[:128]
+
+def hook_demand_threshold_from_value(value: Any, default: int = HOOK_DEMAND_THRESHOLD_DEFAULT) -> int:
+    if isinstance(value, dict):
+        for key in ("hook_demand_threshold", "threshold", "value", "default"):
+            parsed = int(float_value(value.get(key)) or 0)
+            if parsed > 0:
+                return parsed
+        return max(1, int(default or HOOK_DEMAND_THRESHOLD_DEFAULT))
+    parsed = int(float_value(value) or 0)
+    return max(1, parsed or int(default or HOOK_DEMAND_THRESHOLD_DEFAULT))
+
+def latest_adapter_hook_demand(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    for row in reversed(rows):
+        raw = row.get("adapter_hook_demand")
+        if not isinstance(raw, list):
+            continue
+        ledger: dict[str, dict[str, Any]] = {}
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            hook_id = normalize_hook_id(item.get("hook_id"))
+            if not hook_id:
+                continue
+            affected_gate_ids = sorted(
+                {
+                    normalize_hook_id(gate_id)
+                    for gate_id in list_values(item.get("affected_gate_ids"))
+                    if normalize_hook_id(gate_id)
+                }
+            )
+            ledger[hook_id] = {
+                "hook_id": hook_id,
+                "skip_count": max(0, int(float_value(item.get("skip_count")) or 0)),
+                "decision_relevant_skip_count": max(
+                    0,
+                    int(float_value(item.get("decision_relevant_skip_count")) or 0),
+                ),
+                "affected_gate_ids": affected_gate_ids,
+                "first_skip_cycle_id": item.get("first_skip_cycle_id"),
+                "last_skip_cycle_id": item.get("last_skip_cycle_id"),
+            }
+        return ledger
+    return {}
+
+def merge_adapter_hook_demand(
+    rows: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+    cycle_id: str,
+) -> list[dict[str, Any]]:
+    ledger = latest_adapter_hook_demand(rows)
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        hook_id = normalize_hook_id(event.get("hook_id"))
+        if not hook_id:
+            continue
+        record = ledger.setdefault(
+            hook_id,
+            {
+                "hook_id": hook_id,
+                "skip_count": 0,
+                "decision_relevant_skip_count": 0,
+                "affected_gate_ids": [],
+                "first_skip_cycle_id": cycle_id,
+                "last_skip_cycle_id": cycle_id,
+            },
+        )
+        record["skip_count"] = max(0, int(float_value(record.get("skip_count")) or 0)) + 1
+        if bool_value(event.get("decision_relevant_skip")):
+            record["decision_relevant_skip_count"] = (
+                max(0, int(float_value(record.get("decision_relevant_skip_count")) or 0)) + 1
+            )
+        affected = set(list_values(record.get("affected_gate_ids")))
+        gate_id = normalize_hook_id(event.get("affected_gate_id"))
+        if gate_id:
+            affected.add(gate_id)
+        record["affected_gate_ids"] = sorted(affected)
+        record["first_skip_cycle_id"] = record.get("first_skip_cycle_id") or cycle_id
+        record["last_skip_cycle_id"] = cycle_id
+    return [ledger[key] for key in sorted(ledger)]
+
 def compact_root_cause_ledger(rows: list[dict[str, Any]], max_rows_per_family: int) -> list[dict[str, Any]]:
     buckets: dict[str, list[dict[str, Any]]] = {}
     for row in rows:

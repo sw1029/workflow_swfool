@@ -53,6 +53,7 @@ Ask the reviewer to cover only dimensions relevant to the produced artifact:
 - `acceptance_encoding`: when reviewing directive-derived reports, preserve visible `acceptance.quantifiers` and `evidence_kind`; do not treat report-only evidence as satisfying a live-run criterion.
 - `verifier_surface_hardening`: when the reviewed artifact is another verifier, guard, consistency check, or report over the same target artifact without a fresh run id, report it as guard/report-only hardening rather than primary-output progress.
 - `run_disposition`: when reviewing run outputs, distinguish `candidate_degraded` quality-miss evidence from `candidate_written` output and `failed_closed` unsafe discard.
+- `surface_field_review`: when artifacts have source locators and the caller or adapter supplies `surface_field_classes`, sample the adapter-owned number of records and compare every producer-written surface string field class against the located source. Record scalar counts by field class and defect class; do not store excerpts unless authority explicitly permits them. If the field map is absent, report `field_class_map_missing` and fail quiet to existing review semantics.
 - `output_delta`: when the caller supplies an output-delta contract packet, call the contract helper on produced artifact paths and report whether the repository-defined primary output layer actually changed.
 - `validator_disagreement`: when the caller supplies strict runner validation plus output-delta evidence, compare their `semantic_progress` values. If runner validation says true while output-delta says false, report a block-level disagreement and use the output-delta value as authoritative for progress accounting.
 - `coverage_quality_reconciliation`: when the caller supplies both loopback and output-delta G-COV evidence, report a block-level disagreement if `coverage_quality_delta_reconciliation_gate.status=block`; do not let the favorable G-COV source override inspected output quality.
@@ -79,7 +80,7 @@ Return a JSON-compatible summary and, when durable evidence is required, write a
   "qualitative_findings": [
     {
       "severity": "high|medium|low|info",
-      "dimension": "artifact_presence|format_contract|content_coverage|semantic_quality|semantic_readiness|substance_delta|vacuous_corrective|degenerate_surface_language|coverage_sufficiency|goal_axis_completeness|evidence_traceability|user_visible_quality|no_overclaim|blocker_direction",
+      "dimension": "artifact_presence|format_contract|content_coverage|semantic_quality|semantic_readiness|substance_delta|vacuous_corrective|degenerate_surface_language|coverage_sufficiency|goal_axis_completeness|surface_field_review|evidence_traceability|user_visible_quality|no_overclaim|blocker_direction",
       "summary": "concise finding",
       "evidence_refs": ["path:line, artifact id, hash, span ref, or log id"]
     }
@@ -135,6 +136,14 @@ Return a JSON-compatible summary and, when durable evidence is required, write a
     "fresh_run_id_present": false
   },
   "run_disposition": "failed_closed|candidate_degraded|candidate_written|not_applicable",
+  "surface_field_review_gate": {
+    "surface_field_review_status": "pass|fail|not_evaluated",
+    "surface_field_classes": [],
+    "field_class_map_missing": false,
+    "review_sample_count": 0,
+    "surface_field_defect_matrix": {},
+    "excerpt_policy": "counts_only|authority_allows_excerpts|not_applicable"
+  },
   "pass_with_unobserved_axes": false,
   "authoritative_semantic_progress": false,
   "blocker_taxonomy_delta": ["quality_blocker|output_artifact_blocker|kg_core_blocker|claim_readiness_blocker|workflow_lifecycle_blocker|task_state_blocker"],
@@ -165,6 +174,7 @@ Use `review_status` as the owning skill result status. When the orchestration le
 - When an artifact satisfies a `live_run` criterion only through a derived artifact, code contract, or report, set `acceptance_diluted=true` and cap review-backed progress for that criterion.
 - When the reviewed change is guard/verifier/report-only hardening over the same target artifact and no fresh run id exists, set `verifier_surface_hardening=true`; do not describe it as primary-output progress.
 - When the run disposition is `candidate_degraded`, preserve it as quality-miss evidence and do not call it acceptable/canonical output unless independent verification evidence is supplied for the consumed axes.
+- When `surface_field_classes` is supplied, cover every listed producer-written surface string field class, not only summaries or the most visible field. Set `surface_field_review_status=fail` when scalar defects are nonzero, preserve `surface_field_defect_matrix`, and recommend producer/field repair, residual descope, terminal blocker, or user escalation as appropriate. Missing field class maps are `field_class_map_missing=true` and fail quiet.
 - When `surface_quality_suspected=true`, `semantic_ready=false`, `placeholder_event_found=true`, or `surface_entity_suspected=true` affects the primary output, set `progress_cap: governance_only` unless strict changed-and-semantic output-delta evidence independently proves primary-output progress.
 - When pronoun-only, particle-attached, common-noun, placeholder, or repeated-generic labels affect primary entities/events, set `surface_quality_suspected=true`, set `surface_entity_suspected=true`, add both codes when applicable, and cap progress at `governance_only` unless strict changed-and-semantic output-delta evidence proves otherwise.
 - When `windows_covered` is below the task/rung requirement, add `coverage_insufficient` to `quality_blocker_codes` and recommend full-window, multi-window, or multi-work extraction rather than another measurement surface.

@@ -19,10 +19,12 @@ When a task pack or blocker family has no fresh run id for the recent-cycle wind
 
 1. Load cycle ledger events, `.task/index.jsonl`, validation artifacts, run logs, task misses, and active issues when available.
 2. Detect repeated `safety_only`, metadata-only, no-live/fail-closed-only cycles, duplicate evidence artifacts, missing `unchanged_ref` for duplicate artifacts, repeated blockers, stale output-delta absence, `vacuous_untried_streak`, `hypothesis_exhausted`, `forward_mutation_vacuous` signals, run-directory growth, processed-candidate growth, versioned command-family growth, pack/family windows with zero fresh run ids, and full-chain runs without an escalation reason.
+   - When Part L packet fields are present, preserve verifier/report/metadata versus producer/envelope/long-run counts as portfolio evidence; if an adapter supplied restrictive quota evidence, pass it through unchanged rather than recomputing thresholds here.
 3. When `detect_progress_loop.py` emits `feature_symbol_gate`, treat repeated no-delta feature symbols and terminal-history matches as efficiency debt that must route to consolidation, goal-productive work, terminal blocking, or user escalation.
 4. When run-directory, processed-candidate, version-family, or command-surface sprawl exceeds budget, register consolidation candidates as `governance_only`; do not describe sprawl accounting as primary-output progress.
 5. Report recommended action: `continue`, `batch_micro_contracts`, `supply_evidence_path`, `bounded_preflight`, `resume_primary_output`, `root_cause_repair_or_stop_with_blocker`, `narrow_scope`, `register_consolidation_candidate`, or `stop_with_blocker`.
 6. When available, expose abstract cost fields such as `cycle_fixed_cost`, `stage_count`, `validation_command_count`, `artifact_count`, `unchanged_ref_count`, `duration_seconds`, `repeated_micro_contract_count`, and a compact `cycle_cost_basis`. Also expose `execution_starvation`, `recent_cycle_run_id_count`, `execution_starvation_window`, and `execution_candidate_priority_boost` when the recent window has zero fresh run ids. Do not encode project-specific metric thresholds in this skill.
+   - Include Part L routing evidence only as compact scalar/id fields: `portfolio_quota_exceeded`, `portfolio_quota_mode`, `unreachable_within_cycle`, `observed_cycle_throughput`, `required_scale`, and `cycle_execution_cap` when supplied.
 7. Pass the profile into `$derive-improvement-task`, `$normalize-acceptance-and-demo`, and final reporting.
 
 ## Guardrails
@@ -39,3 +41,4 @@ When a task pack or blocker family has no fresh run id for the recent-cycle wind
 - Do not count identical repeated packet artifacts as fresh fixed cost when the ledger supplies `unchanged_refs`; use `max(1, event_count - unchanged_ref_count)` as the conservative denominator basis.
 - Do not ignore duplicate artifact paths without `unchanged_ref`; report `unchanged_ref_missing_for_duplicate_artifacts` so `$maintain-cycle-ledger` can stop reserializing identical content.
 - Do not leave recent-cycle zero-run starvation as a warning-only note. Pass `execution_starvation` to `$derive-improvement-task` so execution-producing candidates can be ranked ahead of another guard/report/contract cycle.
+- Do not compute project-specific portfolio thresholds, scale units, or throughput limits in this skill. Preserve adapter-supplied Part L quota/reachability evidence for derive instead.

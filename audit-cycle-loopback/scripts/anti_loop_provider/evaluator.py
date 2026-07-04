@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .common import *
+from .registry import hook_demand_threshold_from_value, merge_adapter_hook_demand, normalize_hook_id
 
 def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
     root = Path(args.root).resolve()
@@ -36,6 +37,26 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
         loaded_path=domain_adapter_path,
         load_error=domain_adapter_error,
     )
+    hook_demand_events: list[dict[str, Any]] = []
+
+    def record_adapter_hook_demand(hook_id: str, affected_gate_id: str, *, decision_relevant_skip: bool) -> None:
+        if domain_adapter is None or hasattr(domain_adapter, hook_id):
+            return
+        hook_demand_events.append(
+            {
+                "hook_id": hook_id,
+                "affected_gate_id": affected_gate_id,
+                "decision_relevant_skip": bool(decision_relevant_skip),
+            }
+        )
+
+    def adapter_hook_value_supplied(value: Any) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, (dict, list, tuple, set, str)):
+            return bool(value)
+        return True
+
     quality, evidence_paths, insufficient_reason = (
         ({}, [], domain_adapter_error)
         if domain_adapter_error
@@ -374,6 +395,12 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
     )
     if target_required_verifier_value is not None:
         acceptance_value = merge_acceptance_verifier_contract(acceptance_value, target_required_verifier_value)
+    if acceptance_target_from_value(acceptance_value) is not None:
+        record_adapter_hook_demand(
+            "target_required_verifier",
+            "acceptance_reachability_gate",
+            decision_relevant_skip=True,
+        )
     reachability_gate = acceptance_reachability_gate(acceptance_value)
     if bool_value(reachability_gate.get("constrains_disposition")):
         gate_inputs.append({"name": "acceptance_reachability_gate", **reachability_gate})
@@ -428,6 +455,12 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
     )
     measurement_progress = bool_value(measurement_details["measurement_progress"])
     measurement_streak_value = int(measurement_details["measurement_streak"])
+    if measurement_progress:
+        record_adapter_hook_demand(
+            "metric_validity_self_check",
+            "oracle_metric_validity_gate",
+            decision_relevant_skip=True,
+        )
     measurement_progress_allowed = (
         measurement_progress
         and measurement_streak_value <= args.measurement_streak_cap
@@ -522,6 +555,13 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
         bool_value(coverage_gate.get("quality_delta_pass"))
         or bool_value(substance_gate.get("substance_delta_pass"))
     )
+    if current_no_goal_distance_delta:
+        if insufficient_reason == "domain_adapter_quality_vector_missing":
+            record_adapter_hook_demand("quality_vector", "adapter_mandate_gate", decision_relevant_skip=True)
+        if facet_root_map_missing:
+            record_adapter_hook_demand("facet_root_map", "adapter_mandate_gate", decision_relevant_skip=True)
+        if not numeric_vector(current_substance):
+            record_adapter_hook_demand("substance_metrics", "adapter_mandate_gate", decision_relevant_skip=True)
     partial_progress_value, partial_progress_error = call_adapter(
         domain_adapter,
         "partial_progress_axes",
@@ -541,13 +581,57 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
         substance_gate=substance_gate,
         quality=quality,
     )
+    hook_threshold_value, hook_threshold_error = call_adapter(
+        domain_adapter,
+        "hook_demand_threshold",
+        root=root,
+        artifact_paths=[rel_path(root, path) for path in paths],
+        quality_vector=quality,
+        output_delta=output_delta,
+        runner_validation=runner_validation,
+        family_key=family_key,
+        root_key=current_root_key,
+        root_family_key=current_root_family_key,
+    )
+    hook_demand_threshold = hook_demand_threshold_from_value(
+        hook_threshold_value,
+        HOOK_DEMAND_THRESHOLD_DEFAULT,
+    )
+    adapter_hook_demand = merge_adapter_hook_demand(registry_rows, hook_demand_events, args.cycle_id)
+    supplied_adapter_hooks = set()
+    if numeric_vector(quality):
+        supplied_adapter_hooks.add("quality_vector")
+    if facet_root_map:
+        supplied_adapter_hooks.add("facet_root_map")
+    if numeric_vector(current_substance):
+        supplied_adapter_hooks.add("substance_metrics")
+    if adapter_hook_value_supplied(target_required_verifier_value):
+        supplied_adapter_hooks.add("target_required_verifier")
+    if adapter_hook_value_supplied(metric_validity_value):
+        supplied_adapter_hooks.add("metric_validity_self_check")
+    if adapter_hook_value_supplied(evidence_provenance_value):
+        supplied_adapter_hooks.add("evidence_provenance")
+    if adapter_hook_value_supplied(partial_progress_value):
+        supplied_adapter_hooks.add("partial_progress_axes")
+    if domain_adapter is None:
+        adapter_hook_demand = []
+    elif supplied_adapter_hooks:
+        adapter_hook_demand = [
+            record
+            for record in adapter_hook_demand
+            if normalize_hook_id(record.get("hook_id")) not in supplied_adapter_hooks
+        ]
     adapter_gate = adapter_mandate_gate(
         registry_rows,
         artifact_family=args.artifact_family,
         contract_unmet=adapter_contract_unmet,
         current_no_delta=current_no_goal_distance_delta,
         cap=getattr(args, "adapter_mandate_streak_cap", ADAPTER_MANDATE_STREAK_CAP_DEFAULT),
+        adapter_hook_demand=adapter_hook_demand,
+        hook_demand_threshold=hook_demand_threshold,
     )
+    if hook_threshold_error:
+        adapter_gate["hook_demand_threshold_error"] = hook_threshold_error
     if bool_value(adapter_load_gate.get("adapter_wiring_defect")):
         adapter_gate["adapter_mandate_required"] = False
         adapter_gate["status"] = "ok"
@@ -780,4 +864,3 @@ class LoopbackEvaluator:
 
 def evaluate(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
     return LoopbackEvaluator().evaluate(args)
-

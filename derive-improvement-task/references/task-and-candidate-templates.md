@@ -87,10 +87,18 @@ Environment section rules:
 - When loopback reports generation-dependent count-key material, include the effective adapter-collapsed count key or terminal-outcome family fallback. Do not use task/advice/pack/cycle/run/date/hash/version labels as family novelty or stall reset.
 - When loopback reports failure-surface or same-input Part H blockers, include `failure_surface_stage`, `terminal_classification_stage_contradiction`, and/or `same_input_contract_violation` evidence and select classification/input-contract repair, instrumentation supply, terminal blocker, or user escalation rather than ordinary repair.
 - When loopback reports `instrumentation_supply_required`, include instrumentation supply acceptance or a concrete observability rationale proving success/failure is already measurable without new instrumentation.
+- When loopback reports `hook_supply_required`, use `selected_task_kind: adapter_hook_batch_supply` when `demanded_hooks` has two or more entries. Supply all `demanded_hooks` in one task item, and consume the item only after a fresh packet shows each supplied hook fired at least once with a non-empty scalar or adapter-owned non-empty value; code existence alone is not acceptance.
 - When independently verified evidence lacks disjoint `verification_input_paths`, include source-separation repair or treat the fields as attested; do not claim high-water or `goal_productive` from them.
 - When frozen-envelope reachability reports `envelope_thaw_item_required`, include `envelope_thaw_item` with thaw condition/schedule, constraint relaxation, explicit residual descope, terminal blocker, or user escalation.
 - When metric movement is producer-attested, include `evidence_provenance_gate`, `producer_attested_fields`, and `attested_only_movement` evidence and require independent verification before claiming high-water movement or `goal_productive`.
 - When a residual measurable gap is below adapter policy, include `residual_gap_ratio`, `residual_gap_policy`, `marginal_repair`, cycle-cost fields when supplied, and either explicit descope-with-residual plus the next capability rung or higher marginal-value-per-cycle-cost evidence.
+- When a verifier/review/metric pass is on a stale lane, include `production_lane_identity`, `current_decision_lane`, `pass_on_stale_lane`, and current-lane rerun/residual requirements; do not consume it as current-lane progress.
+- When a decision/adoption/reclassification update reused stale artifacts after upstream production-contract changes, include `decision_metadata_revision`, `stale_measurement_artifact`, and a fresh run or no-impact proof requirement.
+- When a gating axis is starved by missing producer supply, include `axis_starved_by_missing_producer`, the abstract gating axis id, and producer-supply requirement before another verifier/report item.
+- When portfolio quota evidence restricts verifier-like work, include `portfolio_quota_exceeded`, quota mode, and the allowed producer/envelope/long-run/descope/terminal/escalation path.
+- When a target is unreachable within the cycle, include `acceptance_scale`, `throughput_evidence`, `unreachable_within_cycle`, and long-run launch/monitor/harvest, throughput improvement, descope, terminal, or escalation acceptance.
+- When a metric basis is overclaimed, include `basis_overclaim`, `actual_basis_class`, and basis-compatible measurement or downgrade-aware residual requirements.
+- When qualitative review found surface field defects, include `surface_field_defect_matrix`, affected field classes, and producer/field repair or residual handling.
 
 ## Candidate Task Template
 
@@ -151,6 +159,53 @@ Store unapplied candidates under `.task/candidate_task/YYYYMMDD-HHMMSS-<slug>.md
 - Instrumentation Supply:
 - Verification Source Separation:
 - Envelope Thaw:
+
+## Part L Gates
+
+- Lane Identity:
+- Decision Freshness:
+- Gating-Axis Producer:
+- Portfolio Quota:
+- Cycle Reachability:
+- Metric Basis:
+- Surface Field Review:
+```
+
+`adapter_hook_batch_supply` candidate variant:
+
+Use this candidate variant when G-ADAPTER emits `hook_supply_required=true` and `demanded_hooks` contains two or more opaque hook ids.
+
+```markdown
+# Candidate Task
+
+- Status: candidate | blocked | deferred
+- Source: anti_loop_progress_gate
+- Candidate Class: state_transition
+- Expected Progress: advanced | safety_only
+- Progress Kind: goal_productive | governance_only
+- Selected Task Kind: adapter_hook_batch_supply
+- Demanded Hooks: [<opaque-hook-id>, <opaque-hook-id>]
+- Hook Demand Threshold: <hook_demand_threshold>
+- Evidence: <loopback packet path or registry row reference>
+
+## Candidate Objective
+
+Supply all demanded adapter hooks in one batch without adding repo-specific hook semantics to the generic skill body.
+
+## Potential Requirements
+
+- Implement the demanded opaque hooks in the repository-owned adapter or repair adapter loading if the hooks are registered but unreachable.
+- Keep hook meanings, paths, thresholds, and metric semantics adapter-owned.
+
+## Acceptance Criteria
+
+- A fresh loopback packet records each demanded hook firing at least once with a non-empty scalar or adapter-owned non-empty value.
+- The fresh packet no longer emits `hook_supply_required=true` for those demanded hooks, or records an explicit observability-without-hook rationale.
+- Code presence alone does not consume the candidate; this follows the I1 instrumentation exercise principle.
+
+## Validation Idea
+
+- Run the loopback provider on the relevant artifact family and cite the fresh packet fields `adapter_hook_demand`, `hook_supply_required`, and `demanded_hooks`.
 ```
 
 ## Task Pack JSON Template
@@ -193,6 +248,33 @@ Store task packs under `.task/task_pack/pack-YYYYMMDD-HHMMSS-<slug>.json`. The J
         "quality_vector_axes": [],
         "unobserved_goal_axes": [],
         "pass_with_unobserved_axes": false
+      },
+      "lane_identity_contract": {
+        "production_lane_identity": null,
+        "current_decision_lane": null,
+        "pass_on_stale_lane": false
+      },
+      "decision_freshness_contract": {
+        "required_new_run_id": false,
+        "stale_measurement_artifact": false,
+        "decision_metadata_revision": false
+      },
+      "gating_axis_producer_contract": {
+        "axis_starved_by_missing_producer": false,
+        "producer_supply_required": false
+      },
+      "cycle_reachability_contract": {
+        "unreachable_within_cycle": false,
+        "long_run_launch_required": false,
+        "harvest_validation_required": false
+      },
+      "metric_basis_contract": {
+        "basis_overclaim": false,
+        "actual_basis_class": null
+      },
+      "surface_field_review_contract": {
+        "surface_field_defect_matrix": {},
+        "field_class_map_missing": false
       },
       "positive_input_delta_required": false,
       "required_new_input_kinds": [],
@@ -250,11 +332,13 @@ Pack rules:
 - Preserve adapter-owned `acceptance_envelope_contract` when it exists. If the planned item envelope is below the floor, keep the original target open and represent the item as envelope expansion, explicit descope with residual scope, terminal blocker, or user escalation rather than a weakened acceptance target.
 - Preserve adapter-owned `acceptance_verifier_contract` when it exists. If the required verifier is `not_evaluated`, keep verifier work or residual target scope open; do not consume the target under an unverified acceptance criterion.
 - Preserve acceptance-required gate-hook status when it exists. If a required hook is absent, fail-quiet, or `not_evaluated`, keep hook-supply work or residual target scope open; do not consume the target under fail-quiet.
+- Preserve `adapter_hook_demand`, `hook_supply_required`, and `demanded_hooks` when supplied. If two or more hooks are demanded, batch them as one `adapter_hook_batch_supply` item rather than serializing one hook per cycle.
 - Preserve goal-axis completeness fields when supplied. If `pass_with_unobserved_axes=true`, keep adapter axis-supply work, residual target scope, terminal blocker, or user escalation open.
 - Preserve count-key hygiene fields when supplied. Generation-dependent raw keys are trace-only; use `effective_count_key_expected` or terminal-outcome fallback for repeated-family decisions.
 - Preserve Part F fields when present. `pass_with_coupled_verifier` is not a passing verifier, `attested_only_movement` is not high-water progress, and `marginal_repair` for a below-threshold residual gap should stay behind explicit descope plus the next capability rung unless higher marginal value is recorded.
 - Preserve Part G residual cost fields when present. If cycle-cost evidence is supplied, same-gap repair must justify marginal value per cycle cost; otherwise keep denominator `1` legacy behavior.
 - Preserve Part H fields when present. Terminal-classification/stage contradictions and same-input mismatches cannot close or count work; repeated diagnostics unavailable must force instrumentation or explicit observability; independently verified fields need disjoint verification inputs or become attested; frozen-envelope unreachable acceptance needs `envelope_thaw_item`, residual/descope, terminal blocker, or user escalation.
+- Preserve Part L fields when present. Stale-lane passes cannot consume current-lane work; stale decision measurements need fresh runs or no-impact proof; producer-starved gating axes need producer supply before more verifier-like work; restrictive portfolio quota changes task ordering; cycle-unreachable targets need long-run/throughput/descope/terminal/escalation; basis-overclaimed metrics are downgraded; surface-field defect matrices preserve producer/field repair or residual scope.
 - Use `terminal_blocked` when no viable item remains and no supplied input delta, authority change, or external-state change exists. Include `semantic_signature`, `root_cause_attempted_for_family`, authorized-alternative-path status, provider re-attempt status, and dual-track attempt evidence when a hard loop gate applies, so later derivation can seal the family rather than only the current target surface.
 - Refresh the Markdown render with `$orchestrate-task-cycle/scripts/task_pack_queue.py --root . render --language <language>` after any JSON edit.
 

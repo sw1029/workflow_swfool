@@ -119,6 +119,13 @@ When `task.md`, a caller packet, or active workflow evidence references `.agent_
    - When adoption evidence lacks `adoption_axis_classification` or reports `majority_vote_adoption=true`, do not complete final adoption unless a later packet classifies axes and proves all `gating` axes passed. A failed `gating` axis or `measured_but_disqualified=true` blocks adoption regardless of tradable-axis wins; preserve the candidate as measured evidence only.
    - When evidence reports `resolution_downgrade=true`, do not complete a task whose acceptance required the higher resolution unless the task explicitly revised the contract, restored the resolution, or preserved residual high-resolution scope. A first downgrade can be warning/provisional evidence; repeated downgrade for the same contract should route follow-up repair.
    - When evidence reports `report_key_divergence=true`, return `partial` or `failed` for any pass/close/adoption/baseline/comparison/high-water claim that consumes that report. Divergent duplicate keys in one report are blocking until the report is repaired or a single source with matching values is declared.
+   - When evidence reports `pass_on_stale_lane=true`, return `partial` or `failed` for any current-lane capability, adoption, comparison-winner, baseline, next-rung, close, or progress claim that consumes that pass. Preserve current-lane rerun/revalidation, residual descope, terminal blocker, or user escalation.
+   - When evidence reports `decision_metadata_revision=true` or `stale_measurement_artifact=true`, do not classify the task as measurement progress, adoption consumption, or high-water movement unless a fresh current-lane run id or no-impact proof exists. Preserve residual fresh measurement or terminal/user escalation.
+   - When evidence reports `axis_starved_by_missing_producer=true`, do not complete another verifier/guard/report item for that gating axis as `advanced` or `goal_productive`. Require producer-supply evidence, residual descope, terminal blocker, or user escalation.
+   - When evidence reports restrictive `portfolio_quota_exceeded=true`, do not validate another verifier-like item as goal-productive unless the selected work is producer, envelope, long-run, descope, terminal, escalation, or the quota recovered.
+   - When evidence reports `unreachable_within_cycle=true`, do not complete the original scale acceptance from a small smoke, launch-only handoff, or heartbeat. Require long-run harvest validation, throughput improvement evidence, explicit descope with residual scope, terminal blocker, or user escalation.
+   - When evidence reports `basis_overclaim=true`, downgrade affected metrics to `actual_basis_class`; do not use them for independently verified high-water, completion, or `advanced` progress until basis-compatible input evidence exists.
+   - When qualitative review reports nonzero `surface_field_defect_matrix`, do not consume the review as pass for affected field classes unless producer/field repair, explicit residual descope, terminal blocker, or user escalation resolves the defects.
    - If the item inherited a measurable target and actual achievement is below the original target, set `acceptance_diluted=true`, return `partial`, and preserve or require an open residual follow-up. Do not mark the original directive applied or the pack item consumed.
    - Accept a narrower result only when there is an explicit descope decision with reason plus residual item/link. A weak item label such as `pilot`, `plan`, or `slice` is not descope evidence.
    - If a provided `code_convention_contract` applies and governance/code-structure audit reports an unresolved contract-backed violation, return `partial` or `failed` according to severity. If the contract is absent, record the convention gap as warn-only and preserve a repo-local adapter/convention-contract follow-up when repeated.
@@ -249,6 +256,20 @@ Include a `Resolution downgrade` gate whenever `required_evidence_resolution`, `
 
 Include a `Report key integrity` gate whenever `report_key_divergence`, duplicate terminal key paths, or single-report key/value divergence fields are present.
 
+Include a `Lane identity` gate whenever `production_lane_identity`, `current_decision_lane`, `lane_identity_missing`, or `pass_on_stale_lane` fields are present.
+
+Include a `Decision freshness` gate whenever `decision_metadata_revision`, `stale_measurement_artifact`, `measurement_run_id`, or `upstream_contract_changed_since_measurement` fields are present.
+
+Include a `Gating-axis producer` gate whenever `axis_starved_by_missing_producer`, `producer_supply_required`, `gating_axis_id`, or `producer_path_status` fields are present.
+
+Include a `Portfolio quota` gate whenever `portfolio_quota_exceeded`, `portfolio_quota_mode`, verifier-like counts, or producer-like counts are present.
+
+Include a `Cycle reachability` gate whenever `unreachable_within_cycle`, `acceptance_scale`, `throughput_evidence`, `long_run_launch_required`, or `harvest_validation_required` fields are present.
+
+Include a `Metric basis` gate whenever `basis_overclaim`, `claimed_basis_class`, `consumed_input_classes`, `actual_basis_class`, or `basis_downgraded_fields` fields are present.
+
+Include a `Surface field review` gate whenever `surface_field_classes`, `field_class_map_missing`, `surface_field_defect_matrix`, or `surface_field_review_status` fields are present.
+
 Include an `Acceptance encoding` gate whenever `acceptance.quantifiers`, `evidence_kind`, `item_created_at`, `required_new_run_id`, `satisfying_run_id`, or `acceptance_diluted` fields are present.
 
 Include a `Verifier-surface hardening` gate whenever `verifier_surface_hardening`, `target_artifact_paths`, `change_set_kind`, or `guard_stacking_cap_reached` fields are present.
@@ -330,6 +351,13 @@ Include a `Behavior-change live evidence` gate whenever the task changes runtime
 - Do not complete adoption from majority vote when required output/gating axes are unclassified or failed.
 - Do not complete a high-resolution evidence contract from a lower-resolution surrogate unless the contract was explicitly revised and residual scope is tracked.
 - Do not complete or advance from a report that has divergent duplicate terminal keys.
+- Do not complete or advance current-lane capability, adoption, comparison-winner, or next-rung work from `pass_on_stale_lane`.
+- Do not complete measurement/adoption work from `decision_metadata_revision` or stale measurement artifacts without a fresh run id or no-impact proof.
+- Do not complete another verifier-like item as goal-productive for a gating axis starved by missing producer supply.
+- Do not ignore restrictive portfolio quota evidence when classifying verifier/guard/report/metadata work as progress.
+- Do not complete a cycle-unreachable scale target from smoke, launch, startup, or heartbeat evidence without harvest validation, throughput improvement, residual descope, terminal blocker, or escalation.
+- Do not complete or advance from basis-overclaimed metrics as independently verified evidence.
+- Do not consume qualitative review pass for affected field classes when the surface field defect matrix has unresolved nonzero counts.
 - Do not complete frozen-envelope-unreachable acceptance without `envelope_thaw_item`, thaw condition/schedule, explicit residual/descope, terminal blocker, or user escalation.
 - Do not complete another same-gap residual repair as goal-productive when value per cycle cost is below adapter policy and no higher value case is recorded.
 - Do not complete behavior-preserving refactor work from module creation or green tests alone when the objective required structural reduction.

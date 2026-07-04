@@ -14,6 +14,7 @@ Use this reference when recent task-cycle evidence shows safe but stationary wor
 - [Part I In-Place Revision Contract](#part-i-in-place-revision-contract)
 - [Part J In-Place Revision Contract](#part-j-in-place-revision-contract)
 - [Part K In-Place Revision Contract](#part-k-in-place-revision-contract)
+- [Part L In-Place Revision Contract](#part-l-in-place-revision-contract)
 - [G1 Disposition Intersection Gate](#g1-disposition-intersection-gate)
 - [G0 Pre-Cycle Regression Guard](#g0-pre-cycle-regression-guard)
 - [G0-SAT Gate Satisfiability Precheck](#g0-sat-gate-satisfiability-precheck)
@@ -87,6 +88,7 @@ Gate logic must stay domain-agnostic. A repository may supply a domain adapter t
 - `execution_stage_ladder(**context)`: optional H1/H2 ordered execution stages, optionally with `terminal_classification_stage_map`. Loopback combines this with `last_successful_stage` from failure autopsy to derive `failure_surface_stage`.
 - `terminal_classification_stage_map(**context)`: optional mapping of terminal classifications to allowed failure stages. A contradiction makes the terminal classification invalid for counting or close.
 - `instrumentation_trigger_threshold(**context)`: optional H3 threshold for repeated `diagnostics_unavailable` on the same failure surface. Missing hook defaults to `2`.
+- `hook_demand_threshold(**context)`: optional G-ADAPTER demand threshold for `adapter_hook_demand` `decision_relevant_skip_count`. Missing hook defaults to `2` and remains fail-quiet.
 - Verification source metadata in `evidence_provenance(...)` or a dedicated hook: `verification_input_paths`, `verified_artifact_paths`, and `self_grounded` axes for H4 independent-source separation.
 - `instrumentation_field_map(...)`: optional I1 map of supplied diagnostic/instrumentation fields and domain-owned non-empty criteria. Missing hooks fail quiet unless the task-pack item or caller packet explicitly marks the work as instrumentation supply.
 - `run_disposition(safety_violations, quality_vector, **context)`: optional I4 disposition classifier returning `failed_closed`, `candidate_degraded`, or `candidate_written`. Safety contracts and quality axes remain adapter-owned.
@@ -98,6 +100,14 @@ Gate logic must stay domain-agnostic. A repository may supply a domain adapter t
 - `comparison_parity_axes(**context)`: optional K2 helper returning adapter-owned parity axes and per-axis status `controlled`, `measured`, or `unknown` for comparison/adoption tasks.
 - `required_output_classes(**context)`: optional K3 helper returning required output classes or scalar predicates used to classify adoption axes as `gating`; axis definitions and thresholds stay adapter-owned.
 - `resolution_downgrade_fields(**context)`: optional K4 helper mapping report fields that declare lower-resolution surrogate evidence for a higher-resolution contract. Missing hooks fail quiet and only caller-supplied downgrade fields are preserved.
+- `production_lane_identity(artifact_paths, **context)`: optional L1 helper returning an opaque lane identity for validated artifacts, such as producer/contract/config lineage keys. Component definitions stay adapter-owned.
+- `current_decision_lane(**context)`: optional L1 helper returning the opaque lane identity currently under adoption, capability, baseline, or next-rung decision.
+- `gating_axis_producer_map(**context)`: optional L3 helper mapping gating axis IDs to producer source paths or globs that should supply that axis. Missing hooks fail quiet.
+- `portfolio_quota(**context)`: optional L4 helper returning the recent-window size, verifier/report/metadata versus producer/envelope/long-run classification, and threshold ratio. Missing hooks are warn-only with default `N=6` and `3:1`.
+- `throughput_evidence(**context)`: optional L5 helper returning observed cycle throughput, unit, run id, and confidence interval for scale reachability.
+- `acceptance_scale(target, **context)`: optional L5 helper returning required acceptance scale and unit for the target.
+- `metric_basis_inputs(metric_id, **context)`: optional L6 helper returning claimed basis class, consumed input classes, and whether the claim is derivable from those inputs.
+- `surface_field_classes(artifact_family, **context)`: optional L7 helper returning producer-written surface string field classes and locator interpretation rules for qualitative review.
 
 If the adapter is absent or omits a required vector, promotion must fail closed for the affected gate while packet production continues. If the adapter is registered by path or declaration but `adapter_loaded!=true`, set `adapter_wiring_defect=true`, route as `self_inflicted_gate_defect`, and select wiring/load correction instead of creating a new adapter. Do not hardcode project module paths, metric names, lexicon paths, or artifact filenames in the generic workflow skill body.
 
@@ -190,6 +200,20 @@ These rules revise existing promotion, comparison, adoption, loopback, and resul
 - K5 report key integrity: when one report contains duplicate terminal keys with divergent values, preserve `report_key_divergence`. Result-contract and validation consumers block pass/close/adoption/baseline/comparison use of the report until it is repaired or a single source with matching values is declared. Matching duplicate terminal keys are warn-only schema debt.
 
 Keep baseline discovery, parity axes, required output classes, evidence-resolution schemas, and duplicate-key policy in adapters, caller packets, or project-owned contracts. Generic skills consume abstract fields only.
+
+## Part L In-Place Revision Contract
+
+These rules revise existing validation consumption, decision refresh, derive selection, reachability, metric provenance, and qualitative-review procedure. They do not add a new phase, detector, report, authority grant, automatic retry, or repo-specific rule.
+
+- L1 current-lane validation binding: when a capability or quality verifier pass is consumed as task, pack, capability, adoption, or next-rung evidence, bind the verified artifact to `production_lane_identity(...)` and compare it with `current_decision_lane(...)`. If they differ, set `pass_on_stale_lane=true`. The pass can prove that the historical artifact or introduced contract worked, but it cannot prove the current lane's capability, support adoption, or unlock the next rung until current-lane rerun/residual evidence exists. Missing lane hooks fail quiet and emit `lane_identity_missing` only.
+- L2 fresh measurement for decision updates: when adoption, disqualification, baseline, or comparison decisions are updated after upstream production contracts changed, require a fresh measurement run for the current lane. If the task only relabels or reclassifies stale artifacts, set `decision_metadata_revision=true`; count it as metadata/governance, not measurement progress or pack consumption. Existing `required_new_run_id` and K parity/baseline fields carry the run requirement; no new run phase is created.
+- L3 gating-axis producer starvation: when a gating axis remains zero or unmet, use `gating_axis_producer_map(...)` to classify whether the producer path that should create that axis is absent or unexercised. Set `axis_starved_by_missing_producer=true` when source/execution evidence is missing. Derive must prefer producer-supply work above another verifier/guard/report for that axis, and verifier/guard/report additions over the same starved axis collapse under verifier-surface hardening until producer supply fires.
+- L4 verifier:producer portfolio quota: when recent consumed work exceeds the adapter-owned verifier/guard/report/metadata to producer/envelope/long-run ratio, set `portfolio_quota_exceeded=true`. If the adapter explicitly supplies a quota, restrict next selection to producer, envelope, long-run, descope-with-residual, terminal blocker, or user escalation until the ratio recovers. Without the hook, record warn-only default quota evidence and do not restrict selection.
+- L5 cycle-scale reachability: when `acceptance_scale(...)` and `throughput_evidence(...)` prove the target scale cannot be reached within the cycle cap, set `unreachable_within_cycle=true` instead of `indeterminate`. Derive may select only long-run launch with monitor/harvest plan, throughput improvement with measured C increase, explicit descope-with-residual, terminal blocker, or user escalation. A small smoke repeat is not goal-productive in this state.
+- L6 metric basis derivability: when a metric claims a basis/provenance class, compare the claim with `metric_basis_inputs(...)`. If the claim is not derivable from consumed inputs, set `basis_overclaim=true`, downgrade the metric to the actual input class, and exclude it from high-water/progress consumption under F2. The metric value may remain trace evidence; honest downgrade is not a regression.
+- L7 surface-field review coverage: when a reviewed artifact family has source locators and `surface_field_classes(...)`, qualitative review samples the adapter-owned record count and compares every producer-written surface string field class, not only summaries. Record only scalar field-class by defect-class counts unless authority allows excerpts. Nonzero counts feed loopback root-family classification and producer-supply derivation; missing hooks fail quiet with `field_class_map_missing`.
+
+Keep lane key components, upstream contract versioning, gating-axis definitions, producer path maps, quota thresholds, scale units, metric basis classes, surface field classes, locators, and excerpt policy in repository adapters or authority/project contracts. Generic skills compare opaque keys, enums, booleans, counts, and safe scalar fields only.
 
 ## G1 Disposition Intersection Gate
 
@@ -339,6 +363,10 @@ When `facet_root_map_missing=true`, `substance_delta_gate.status=missing`, or `q
 
 The next goal-productive task must register or strengthen the repository domain adapter. Do not count another domain-specific micro-repair as goal-productive until the adapter supplies the missing collapse/substance/quality contract or the cycle terminal/user-escalates with the exact adapter blocker.
 
+Separate from the existing Tier-0 mandate condition, G-ADAPTER also reads `adapter_hook_demand`. If any opaque hook id reaches `hook_demand_threshold` on `decision_relevant_skip_count`, emit `hook_supply_required=true` and `demanded_hooks`. If `demanded_hooks` has two or more entries, the recommended task kind is `adapter_hook_batch_supply`; supplying hooks one cycle at a time preserves the fail-quiet blind spot and wastes cycles on separate adapter edits. This is an input expansion of the single G-ADAPTER gate, not a second gate or second truth source. If both `adapter_mandate_required` and `hook_supply_required` are active, the mandate precedes hook supply routing.
+
+Define `tier0_hook_set` only by reference as the hook set already mandated by G-ADAPTER plus adapter load status. Do not enumerate new hook names here. Tier-1+ hooks are every other hook and may be supplied only through `adapter_hook_demand`; hooks defined before demand are more likely to be misdefined for the real blocker.
+
 If the repository has registered an adapter but the loopback packet reports `adapter_loaded!=true`, emit `adapter_wiring_defect=true` and `recommended_disposition=self_inflicted_gate_defect`. That state is local, in-scope, and actionable because the workflow failed to inject or load its own registered adapter. The next goal-productive task kind is `adapter_wiring_fix` or `adapter_load_fix`; do not misroute it as `adapter_mandate_required` or a new-adapter task.
 
 If G-ADAPTER fires, it precedes G-CHAIN. This prevents adapter absence from being mistaken for a domain terminal state when the real missing prerequisite is the workflow's own adapter contract.
@@ -487,7 +515,7 @@ The producer must compute `anti_loop_progress_gate` from raw artifact content an
 - `previous_accepted_baseline`, `coverage_quality_delta_reconciliation_gate`, `substance_delta_gate`, `vacuous_corrective_gate`, `facet_root_map_applied`, `advice_freshness_gate`, and `structure_metrics_gate`
 - `repo_owned_source_roots_status`, `partial_progress_axes_gate`, and provenance-hardened root-cause actionability fields when supplied by the adapter
 - `terminal_outcome_changed`, `observed_delta_class`, `forward_mutation_vacuous`, `root_cause_ledger_path`, `root_cause_unverified_hypotheses`, `root_cause_duplicate_hypotheses`, `untried_actionable_root_cause_exists`, `untried_root_cause_hypotheses`, `untried_promotion_budget`, `vacuous_untried_streak`, and `hypothesis_exhausted` when applicable
-- `adapter_mandate_required`, `adapter_missing_streak`, `adapter_contract_unmet`, `adapter_loaded`, `adapter_wiring_defect`, `cumulative_goal_distance_stalled`, `cumulative_goal_distance_stall_streak`, `forced_selected_task_options`, `untried_veto_overridden_by_chain_stall`, `acceptance_unreachable_under_frozen_config`, `relaxation_or_escalation_required`, and `oracle_metric_validity_gate` when applicable
+- `adapter_mandate_required`, `adapter_missing_streak`, `adapter_contract_unmet`, `adapter_hook_demand`, `hook_supply_required`, `demanded_hooks`, `hook_demand_threshold`, `adapter_loaded`, `adapter_wiring_defect`, `cumulative_goal_distance_stalled`, `cumulative_goal_distance_stall_streak`, `forced_selected_task_options`, `untried_veto_overridden_by_chain_stall`, `acceptance_unreachable_under_frozen_config`, `relaxation_or_escalation_required`, and `oracle_metric_validity_gate` when applicable
 - `evidence_provenance_gate`, `independently_verified_fields`, `producer_attested_fields`, `attested_only_movement`, `primary_metric_gate`, `primary_metric_stalled`, `primary_metric_zero_movement_streak`, `c4_user_escalation_backstop_required`, `coupled_verifier_gate`, `pass_with_coupled_verifier`, and `changed_verifier_source_paths` when applicable
 - `evaluation_status` on required gate packets, `acceptance_verifier_not_evaluated`, `unverifiable_acceptance_contract`, `metric_verifier_not_evaluated`, `structure_high_water_key_scope`, and `structure_global_invariant_metrics` when applicable
 - count-key hygiene fields when available, such as `legacy_family_key`, `raw_root_family_key`, `terminal_outcome_family_key`, `terminal_outcome_family_fallback_applied`, and any adapter-supplied dominant parameter that makes counting generation-independent
@@ -513,6 +541,7 @@ Use the packet as a derive gate:
 - `substance_delta_gate.substance_delta_pass=false` blocks measurement promotion unless strict changed-and-semantic primary-output evidence exists.
 - `blocker_mutation_kind=forward_mutation` blocks rung promotion unless `terminal_outcome_changed=true`; set `forward_mutation_vacuous=true` when the ladder moved but observed domain output did not.
 - `adapter_mandate_required=true` forces adapter registration/strengthening before another domain repair can count as `goal_productive`.
+- `hook_supply_required=true` means `adapter_hook_demand` reached `hook_demand_threshold` for `decision_relevant_skip_count`. Derive must supply the `demanded_hooks`, record why the target is observable without those hooks, descope/terminal-block, or user-escalate. This warning/selection signal is not a hard-stop and does not change G-ADAPTER mandate priority.
 - `adapter_wiring_defect=true` forces adapter wiring/load correction as `self_inflicted_gate_defect`; it is not adapter absence.
 - `cumulative_goal_distance_stalled=true` restricts the next disposition to `terminal_blocked` or `user_escalation` unless G-ADAPTER is active or `chain_stall_forced_retarget_gate` exposes an actionable forced task kind.
 - `untried_actionable_root_cause_exists=true` invalidates terminal blocking and forces derive to select the untried root-cause repair only when `hypothesis_exhausted=false`, `untried_veto_overridden_by_chain_stall=false`, and the hypothesis is actionability-verified.

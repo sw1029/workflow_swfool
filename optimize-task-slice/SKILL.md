@@ -30,6 +30,12 @@ Use this skill as an advisory pre-derive classifier. It helps prevent repeated t
    - `diagnostic_instrumentation`: supply scalar diagnostics for a repeated `diagnostics_unavailable` failure surface, unless the task records why existing evidence already observes success/failure.
    - `verification_source_repair`: supply disjoint verification inputs or downgrade affected independent fields to attested when verification inputs are missing or overlap verified artifacts.
    - `envelope_thaw_item`: reserve thaw condition/schedule, constraint relaxation, residual descope, terminal blocker, or user escalation for unreachable acceptance under a frozen envelope.
+   - `current_lane_revalidation`: rerun or revalidate the current decision lane when a pass belongs to a stale production lane.
+   - `fresh_decision_measurement`: rerun measurement or prove no-impact when a decision update only relabels artifacts from before an upstream contract change.
+   - `producer_supply`: implement or fire the producer path for a starved gating axis before more verifier/report work.
+   - `long_run_or_throughput`: launch/monitor/harvest a long run or improve throughput when target scale is unreachable inside one cycle.
+   - `metric_basis_repair`: supply basis-compatible inputs or downgrade a metric contract when claimed basis is not derivable.
+   - `surface_field_repair`: repair producer-written surface field classes or preserve residual scope after qualitative field defects.
    - `descope_with_residual`: preserve explicit partial acceptance plus residual scope when residual gap marginal value is below the adapter policy threshold.
    - `cost_disproportionate_residual`: preserve residual scope or move to the next rung when residual-gap value per cycle cost is below policy.
    - `stop_with_blocker`
@@ -50,11 +56,12 @@ Use this skill as an advisory pre-derive classifier. It helps prevent repeated t
 16. When anti-loop evidence includes `instrumentation_supply_required=true`, classify the slice as `diagnostic_instrumentation` unless the candidate includes a concrete observability rationale proving success/failure is already measurable without new instrumentation.
 17. When validation or loopback evidence includes non-disjoint independent verification (`independent_source_separation_status=missing|overlap|blocked` or `independently_verified_downgraded_fields`), classify the slice as `verification_source_repair`, attested-only consumption with residual scope, or `stop_with_blocker`; do not recommend high-water consumption.
 18. When acceptance evidence includes `envelope_thaw_item_required=true`, classify the slice as `envelope_thaw_item`, constraint relaxation, descope-with-residual, terminal blocker, or user escalation; do not recommend another frozen-envelope-internal repair as progress.
-19. When recommending a structure class, include `recommended_task_kind` using the same stable value (`semantic_consolidation`, `reuse_extraction`, or `coupling_reduction`) so `$derive-improvement-task` can compare it with gate-constrained `allowed_task_kinds`.
-20. When recommending a structure class, include `structure_slice_basis` with the triggering evidence: code-structure audit packet fields, `structure_metrics_gate`, convention violation, task_miss, active advice, or repo-local adapter gap.
-21. When `structure_metrics_gate.structure_high_water_key_scope=global_invariant`, state whether the proposed slice can move the global invariant. If not, classify it as local/governance-only or require residual global scope.
-22. Preserve original measurable structure targets. Do not let `semantic_consolidation`, `reuse_extraction`, or `coupling_reduction` shrink a directive into a pilot unless a residual item remains open.
-23. Pass the advisory packet to `$derive-improvement-task`.
+19. When Part L evidence is present, classify the slice as one of the matching advisory kinds above: current-lane revalidation for `pass_on_stale_lane`, fresh decision measurement or no-impact proof for `decision_metadata_revision`, producer supply for `axis_starved_by_missing_producer`, producer/envelope/long-run/descope/terminal/escalation for restrictive `portfolio_quota_exceeded`, long-run/throughput/descope/terminal/escalation for `unreachable_within_cycle`, metric-basis repair for `basis_overclaim`, or surface-field repair/residual for nonzero `surface_field_defect_matrix`.
+20. When recommending a structure class, include `recommended_task_kind` using the same stable value (`semantic_consolidation`, `reuse_extraction`, or `coupling_reduction`) so `$derive-improvement-task` can compare it with gate-constrained `allowed_task_kinds`.
+21. When recommending a structure class, include `structure_slice_basis` with the triggering evidence: code-structure audit packet fields, `structure_metrics_gate`, convention violation, task_miss, active advice, or repo-local adapter gap.
+22. When `structure_metrics_gate.structure_high_water_key_scope=global_invariant`, state whether the proposed slice can move the global invariant. If not, classify it as local/governance-only or require residual global scope.
+23. Preserve original measurable structure targets. Do not let `semantic_consolidation`, `reuse_extraction`, or `coupling_reduction` shrink a directive into a pilot unless a residual item remains open.
+24. Pass the advisory packet to `$derive-improvement-task`.
 
 ## Guardrails
 
@@ -77,6 +84,7 @@ Use this skill as an advisory pre-derive classifier. It helps prevent repeated t
 - Do not omit instrumentation supply from the advisory option set when `instrumentation_supply_required=true`, unless you include the existing-observability rationale.
 - Do not treat zero-disagreement independent verification as clean when the verification inputs are missing or overlap verified artifacts.
 - Do not bury an `envelope_thaw_item` requirement inside a generic scope or micro-repair recommendation.
+- Do not recommend verifier, guard, report, metadata-only, or small-smoke work as the next slice when Part L evidence requires current-lane rerun, fresh measurement, producer supply, restrictive quota routing, long-run/throughput routing, metric-basis repair, or surface-field repair.
 - Do not recommend structure work as goal-productive solely because it creates more files or modules. Require a credible path to lower coupling, remove mechanical shards, reduce duplication, improve reuse ratio, reduce LOC/depth/fan-out pressure, or unblock a named task transition.
 - Do not recommend local structure churn as global progress when the adapter keyed structure high-water to global invariants and those invariants are flat.
 - Do not invent project-specific naming, depth, fan-out, kernel, or dependency rules. Consume the repo-owned `code_convention_contract` or mark the structure recommendation warn-only.

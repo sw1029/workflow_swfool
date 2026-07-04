@@ -24,6 +24,7 @@ Capture:
 - Execution `run_disposition`: `failed_closed`, `candidate_degraded`, or `candidate_written`, with safety violations, quality-vector scalars, degradation reasons, and verification flags when available.
 - Producer self-reported progress or completion fields only as `observed_producer_claim`, never as authoritative progress evidence.
 - Part K report/comparison fields when artifacts declare them: `expectation_anchor`, `designated_baseline`, `expectation_anchor_missing`, `expectation_lineage_stale`, `parity_axes`, `parity_axis_status`, `parity_unverified`, `adoption_axis_classification`, `required_output_classes`, `majority_vote_adoption`, `provisional_adoption`, `measured_but_disqualified`, `required_evidence_resolution`, `observed_evidence_resolution`, `resolution_downgrade`, `surrogate_resolution_basis`, `report_key_divergence`, and duplicate report-key path/value pairs.
+- Part L run/report/metric fields when artifacts declare them: `production_lane_identity`, `current_decision_lane`, `lane_identity_missing`, `pass_on_stale_lane`, `measurement_run_id`, `upstream_contract_changed_since_measurement`, `stale_measurement_artifact`, `decision_metadata_revision`, `metric_basis_inputs`, `claimed_basis_class`, `consumed_input_classes`, `basis_overclaim`, `actual_basis_class`, and `basis_downgraded_fields`.
 
 ## Log Field Mapping
 
@@ -55,6 +56,7 @@ Capture:
 - `run_disposition`; preserve `candidate_degraded` as quality-miss evidence and `failed_closed` as unsafe discarded output.
 - `observed_producer_claim` and scalar `split_brain_progress_claim` warning details when a producer self-report conflicts with adapter or strict output-delta evidence supplied by the caller.
 - Part K warnings such as stale expectation anchors, parity-unverified comparison/adoption, measured-but-disqualified candidates, resolution downgrade, and report-key divergence when observed.
+- Part L warnings such as stale-lane passes, stale measurement artifacts, decision metadata revisions, and basis overclaim when observed.
 
 `shortcomings`:
 
@@ -67,6 +69,7 @@ Capture:
 - A command with missing argv was not treated as reproducible baseline, when applicable.
 - A state-name-only blocker was logged as opaque rather than actionable, when applicable.
 - Any stale expectation, parity gap, gating-axis failure, resolution downgrade, or report-key divergence was logged as routing evidence and not promoted as success, when applicable.
+- Any stale-lane pass, stale decision measurement, or basis overclaim was logged as routing evidence and not promoted as success, when applicable.
 
 ## Status Rules
 
@@ -117,6 +120,16 @@ When a run/report declares expectation or comparison lineage, record only safe s
 - `report_key_divergence`, duplicate key paths, and duplicate scalar values.
 
 Do not log raw report bodies, source text, provider payloads, or generated content while preserving these fields. Do not infer adoption, completion, baseline promotion, or high-water movement from these fields inside the execution skill.
+
+## Part L Lane And Basis Fields
+
+When a run/report/metric declares lane lineage or metric-basis evidence, record only safe scalar/id fields:
+
+- `production_lane_identity`, `current_decision_lane`, `lane_identity_missing`, and `pass_on_stale_lane`.
+- `measurement_run_id`, `upstream_contract_changed_since_measurement`, `stale_measurement_artifact`, and `decision_metadata_revision`.
+- `metric_basis_inputs`, `claimed_basis_class`, `consumed_input_classes`, `basis_overclaim`, `actual_basis_class`, and `basis_downgraded_fields`.
+
+Do not log lane-key component definitions, raw source text, prompt/provider bodies, or metric input bodies while preserving these fields. Do not infer current-lane adoption, fresh measurement progress, or independently verified high-water movement from these fields inside the execution skill.
 
 ## Redaction Rules
 

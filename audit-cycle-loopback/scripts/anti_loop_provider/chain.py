@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .common import *
+from .registry import normalize_hook_id
 
 def row_vector_delta_passed(row: dict[str, Any]) -> bool:
     coverage_gate = row.get("coverage_quality_delta_gate")
@@ -65,20 +66,44 @@ def adapter_mandate_gate(
     contract_unmet: list[str],
     current_no_delta: bool,
     cap: int,
+    adapter_hook_demand: list[dict[str, Any]] | None = None,
+    hook_demand_threshold: int = HOOK_DEMAND_THRESHOLD_DEFAULT,
 ) -> dict[str, Any]:
     streak = adapter_missing_streak(rows, artifact_family, contract_unmet, current_no_delta)
     required = bool(contract_unmet) and current_no_delta and streak >= max(1, cap)
-    return {
+    threshold = max(1, int(hook_demand_threshold or HOOK_DEMAND_THRESHOLD_DEFAULT))
+    demand_rows = [item for item in (adapter_hook_demand or []) if isinstance(item, dict)]
+    demanded_hooks = sorted(
+        normalize_hook_id(item.get("hook_id"))
+        for item in demand_rows
+        if normalize_hook_id(item.get("hook_id"))
+        and int(float_value(item.get("decision_relevant_skip_count")) or 0) >= threshold
+    )
+    hook_supply_required = bool(demanded_hooks)
+    result = {
         "gate": "G-ADAPTER",
         "adapter_mandate_required": required,
         "adapter_missing_streak": streak,
         "adapter_missing_streak_cap": max(1, cap),
         "adapter_contract_unmet": contract_unmet,
         "quality_high_water_unimproved": current_no_delta,
-        "status": "block" if required else ("warn" if contract_unmet else "ok"),
+        "status": "block" if required else ("warn" if contract_unmet or demand_rows else "ok"),
         "constrains_disposition": required,
         "allowed_dispositions": ["goal_productive", "terminal_blocked", "user_escalation"],
     }
+    if demand_rows:
+        result.update(
+            {
+                "adapter_hook_demand": demand_rows,
+                "hook_demand_threshold": threshold,
+                "hook_supply_required": hook_supply_required,
+                "demanded_hooks": demanded_hooks,
+            }
+        )
+    if len(demanded_hooks) >= 2:
+        result["recommended_task_kind"] = "adapter_hook_batch_supply"
+        result["allowed_task_kinds"] = ["adapter_hook_batch_supply"]
+    return result
 
 def adapter_wiring_gate(
     *,
