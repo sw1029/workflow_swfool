@@ -23,8 +23,11 @@ Use `/home/swfool/.codex/skills/orchestrate-task-cycle/scripts/cycle_ledger.py` 
    - When using `cycle_ledger.py`, rely on its normalization of incoming stage `success` or `succeeded` to `complete`.
    - When appending from a raw subskill result JSON, either require a top-level canonical `step` in that JSON or pass `--step <canonical-step>` explicitly. The result contract can warn about ledger-envelope readiness, but the append call owns the final event envelope.
    - Preserve task-pack routing fields when present: `selected_task_source`, `task_pack_id`, `task_pack_path`, `task_pack_status`, `task_pack_item_id`, `promoted_item_id`, and `completed_item_id`.
+   - Preserve evidence-lifecycle and Part J contract fields when present: `instrumentation_exercise_gate`, `instrumentation_first_fire_gate`, `acceptance_encoding_gate`, `acceptance_scenario_gate`, `verifier_surface_hardening_gate`, `run_disposition`, `candidate_degraded`, `runtime_config_echo`, `config_overrides`, `command_argv`, `command_provenance_missing`, `blocker_actionability_gate`, `blocker_opacity`, `stochastic_feasibility_gate`, `execution_starvation`, and `recent_cycle_run_id_count`.
+   - Preserve Part K contract fields when present: `expectation_anchor`, `designated_baseline`, `expectation_anchor_missing`, `expectation_lineage_stale`, `parity_axes`, `parity_axis_status`, `parity_unverified`, `adoption_axis_classification`, `required_output_classes`, `majority_vote_adoption`, `provisional_adoption`, `measured_but_disqualified`, `required_evidence_resolution`, `observed_evidence_resolution`, `resolution_downgrade`, `surrogate_resolution_basis`, `report_key_divergence`, and duplicate report-key path/value evidence.
 4. Save generated subskill packets under `packets/*.md` or `packets/*.json` and link them from the relevant event.
 5. When an event links an artifact whose path and hash are identical to a previous ledger artifact, use `artifact_refs[].unchanged_ref: {path, sha256}` and `unchanged_refs` instead of reserializing the same packet content in the ledger body. The deterministic writer computes this automatically for existing files.
+   - For live-run command provenance, record the full redacted `command_argv` in the run packet once. Later ledger events should point to the packet path/hash with `unchanged_ref` rather than duplicating the argv body.
 6. Render `dashboard.md` in Korean and `final_report.md` from ledger/stage evidence near the end of the cycle. Treat dashboard/profile files as snapshots with an `event_count`; if closeout appends another ledger event after rendering, do not claim those files are post-closeout snapshots unless they were regenerated after that event.
 
 ## Guardrails
@@ -34,6 +37,9 @@ Use `/home/swfool/.codex/skills/orchestrate-task-cycle/scripts/cycle_ledger.py` 
 - Do not append a missing, empty, or noncanonical `step`; noncanonical steps require explicit malformed-event intent and must not appear as normal dashboard stages.
 - Do not rely on `$validate-subskill-result-contract` alone to supply a missing `step`; either fix the event JSON or overlay `--step` at append time.
 - Do not treat a `running` execution as `success`; record it as `running` with monitor and stop evidence.
+- Do not omit full redacted `command_argv` for live execution events when the run packet supplies it. If argv is missing, preserve `command_provenance_missing` so downstream consumers do not use the event as reproducible baseline evidence.
+- Do not collapse `instrumentation_first_fire` into ordinary success or goal progress. Record the first-fire event as its own evidence credit when supplied.
+- Do not drop Part K lineage fields during event append/rendering. Ledger snapshots may reference the packet by path/hash, but downstream consumers must still be able to recover stale expectation, parity, adoption, resolution, and report-key divergence evidence.
 - Do not overwrite existing stage history. Append a corrective event with a reason.
 - Do not reserialize identical packet bodies across cycle events when the path/hash are unchanged. Preserve `unchanged_ref(path+hash)` so cycle-efficiency profiling can distinguish fixed-cost work from repeated artifact payloads.
 - Do not edit repository source, tests, notebooks, runtime/build configuration, or other behavior-changing files from this skill.

@@ -33,6 +33,22 @@ Required fields:
 - `verification_source_separation_gate`: optional H4 packet proving `independently_verified_fields` have disjoint verification input paths or adapter `self_grounded` status.
 - `failure_surface_stage_gate`: optional H2 packet resolving `last_successful_stage`, `failure_surface_stage`, terminal classification stage consistency, and count-key extension.
 - `diagnostics_unavailable_gate`: optional H3 packet tracking repeated unavailable diagnostics and whether instrumentation supply is required.
+- `instrumentation_exercise_gate`: optional I1 packet tracking whether supplied instrumentation was exercised by a fresh run with non-empty scalar field evidence.
+- `instrumentation_first_fire_gate`: optional J5 packet tracking whether a fresh run first emitted non-empty supplied instrumentation fields and which workflow item receives the one allowed evidence credit.
+- `acceptance_encoding_gate`: optional I2 packet preserving measurable quantifiers, evidence kind, and dilution status.
+- `acceptance_scenario_gate`: optional J1 packet tracking scenario premise injection and expected terminal-state observation.
+- `command_provenance_gate`: optional J2 packet tracking full body-free argv recording and missing-provenance restrictions.
+- `blocker_actionability_gate`: optional J3 packet tracking violated relation, observed scalar values, expected relation, minimum input delta, and blocker opacity.
+- `stochastic_feasibility_gate`: optional J4 packet tracking observed outcome variance, exact-match impossibility, and floor-edge envelope slack.
+- `expectation_lineage_gate`: optional K1 packet tracking output-derived expectation anchor, designated baseline, missing anchor, and stale-anchor status.
+- `comparison_parity_gate`: optional K2 packet tracking comparison parity axes and per-axis status.
+- `adoption_axis_gate`: optional K3 packet tracking gating/tradable axis classification and disqualified measured candidates.
+- `resolution_downgrade_gate`: optional K4 packet tracking required versus observed evidence resolution and surrogate downgrade declarations.
+- `report_key_integrity_gate`: optional K5 passthrough packet tracking duplicate terminal report keys and divergence findings.
+- `verifier_surface_hardening_gate`: optional I3 packet collapsing guard/verifier/report-only changes over the same target artifact paths.
+- `run_disposition`: optional I4 execution disposition: `failed_closed`, `candidate_degraded`, or `candidate_written`.
+- `runtime_config_echo`: optional I5 safe scalar/enum runtime setting echo from failure autopsy.
+- `execution_starvation`: optional I6 profile/derive ranking signal for recent cycles with no fresh run ids.
 - `coupled_verifier_gate`: optional F1 packet that records verifier-source coupling for gates whose verifier code changed in the current change set.
 - `acceptance_reachability_gate`: G-REACH packet with abstract acceptance minimum, frozen envelope, reachability verdict, `evaluation_status: pass|fail|not_evaluated`, and relaxation/escalation requirement.
 - `acceptance_envelope_contract`: optional normalized acceptance packet field binding a measurable target to an adapter-owned minimum executable envelope.
@@ -75,6 +91,22 @@ The D1-D4 fields in this list revise existing acceptance, progress truth-source,
 - `execution_stage_ladder_status`, `execution_stage_ladder`, `last_successful_stage`, `failure_surface_stage`, `failure_surface_count_key`, `effective_count_key`, `failure_surface_stage_gate`, `terminal_classification_stage_contradiction`, and `terminal_classification_invalid_for_counting`: H1/H2 fields. They extend counting by observed failure surface and invalidate contradictory terminal classifications.
 - `same_input_contract_gate` and `same_input_contract_violation`: H2 fields. Same-condition comparisons with mismatched input sets are invalid for counting/close.
 - `diagnostics_unavailable`, `diagnostics_unavailable_streak`, `diagnostics_unavailable_gate`, and `instrumentation_supply_required`: H3 fields. Repeated unavailable diagnostics force instrumentation supply or an explicit observability rationale.
+- `instrumentation_exercise_required`, `instrumentation_exercised`, `instrumentation_exercise_gate`, `instrumentation_field_map`, `instrumentation_run_id`, `instrumentation_fields_nonempty`, and `derived_from_existing_artifacts`: I1 fields. Supplied instrumentation must be exercised by a fresh run before dependent measurement/adoption work consumes it.
+- `acceptance_encoding_gate`, `acceptance.quantifiers`, `evidence_kind`, `item_created_at`, `required_new_run_id`, `satisfying_run_id`, and `acceptance_diluted`: I2 fields. Live-run criteria require a post-item run id; derived substitution is partial/residual scope.
+- `verifier_surface_hardening_gate`, `verifier_surface_hardening`, `change_set_kind`, `target_artifact_paths`, `target_artifact_key`, `verifier_surface_hardening_streak`, and `guard_stacking_cap_reached`: I3 fields. Name-changing verifier/guard/report-only work over the same target collapses to one family.
+- `run_disposition`, `failed_closed`, `candidate_degraded`, `candidate_written`, `disposition_unclassified`, `safety_violations`, `degradation_reasons`, and `candidate_degraded_axes`: I4 fields. Quality-miss artifacts may be preserved without canonical promotion; unsafe artifacts fail closed.
+- `runtime_config_echo`, `config_origin`, `config_overrides`, and `code_default_override_self_inflicted_gate_candidate`: I5 fields. Store only scalar/enum settings and origins.
+- `execution_starvation`, `recent_cycle_run_id_count`, `execution_starvation_window`, and `execution_candidate_priority_boost`: I6 fields from profile/caller evidence.
+- `instrumentation_first_fire`, `first_fire_consumed_item_id`, `instrumentation_first_fire_gate`, and `first_fire_double_count_blocked`: J5 fields. First fire is one evidence credit and must not also satisfy goal progress or the instrumentation supply item.
+- `acceptance_scenario_gate`, `acceptance_scenarios`, `scenario_coverage`, `scenario_uncovered`, and `acceptance_inversion`: J1 fields. They prove or reject premise-class injection for scenario-shaped acceptance.
+- `command_argv`, `argv_redaction_policy`, `command_provenance_gate`, and `command_provenance_missing`: J2 fields. `command_argv` is body-free and redacted; missing provenance restricts baseline/reproduction use.
+- `blocker_actionability_gate`, `blocker_opacity`, `violated_relation`, `observed_values`, `expected_relation`, `minimum_input_delta`, abstract input-key names, and `authorization_contract_repair_candidate`: J3 fields. Opaque blockers are warning evidence until repeated for the same gate; multi-input authorization relations may become contract-repair candidates for a named single authorization input.
+- `stochastic_feasibility_gate`, `outcome_variance`, `predetermined_unreachable`, `floor_edge_envelope`, `slack`, and `variance_sample_count`: J4 fields. They route exact-match/floor-edge contracts to revision rather than retry.
+- `expectation_anchor`, `designated_baseline`, `expectation_anchor_missing`, `expectation_lineage_stale`, and `expectation_lineage_gate`: K1 fields. They bind output-derived scalar expectations to their source surface and current designated surface status.
+- `parity_axes`, `parity_axis_status`, `parity_unverified`, and `comparison_parity_gate`: K2 fields. They preserve controlled/measured/unknown parity axes for comparison/adoption decisions.
+- `adoption_axis_classification`, `required_output_classes`, `majority_vote_adoption`, `provisional_adoption`, `measured_but_disqualified`, and `adoption_axis_gate`: K3 fields. They distinguish gating axes from tradable axes before adoption consumption.
+- `required_evidence_resolution`, `observed_evidence_resolution`, `resolution_downgrade`, `surrogate_resolution_basis`, and `resolution_downgrade_gate`: K4 fields. They record lower-resolution surrogate evidence without treating it as full-resolution proof.
+- `report_key_divergence`, `duplicate_key_paths`, `duplicate_key_values`, and `report_key_integrity_gate`: K5 fields. They preserve single-report duplicate terminal key divergence for result-contract/validation blocking.
 - `coupled_verifier_gate`, `pass_with_coupled_verifier`, and `changed_verifier_source_paths`: F1 fields. A gate pass from a verifier source modified in the same change set is not an effective pass.
 - `c4_user_escalation_backstop_required`: boolean set only when C4/primary-metric stall has no actionable forced task option and the workflow must emit one user-escalation handoff instead of another same-family retry.
 - `acceptance_unreachable_under_frozen_config`, `acceptance_verifier_not_evaluated`, `unverifiable_acceptance_contract`, `relaxation_or_escalation_required`, `envelope_thaw_item_required`, `envelope_thaw_item`, `envelope_thaw_streak`, and `acceptance_reachability_gate`: G-REACH/E2/H5 fields. `unverifiable_acceptance_contract=true` means a measurable target requires a live verifier but that verifier is `not_evaluated`; `envelope_thaw_item_required=true` means frozen-envelope-unreachable acceptance needs thaw/relax/descope/escalation before ordinary repair continues.
@@ -164,6 +196,38 @@ Failure-surface stage rule: when `execution_stage_ladder` and `last_successful_s
 Same-input contract rule: if `same_input_contract_violation=true`, same-family comparison is invalid because the compared input sets/windows differ. Do not reset stalls, close, or seal from that comparison.
 
 Diagnostics instrumentation rule: if `instrumentation_supply_required=true`, derive must include/select instrumentation supply or record why success/failure is already observable without new instrumentation. Validation must not accept `advanced` progress while the requirement remains unresolved.
+
+Instrumentation exercise rule: if `instrumentation_exercise_required=true`, derive must include/select an `instrumentation_exercise` item before measurement/comparison/adoption work that depends on the supplied fields. A fresh run id with non-empty fields according to `instrumentation_field_map` is required; `derived_from_existing_artifacts=true` is insufficient.
+
+Acceptance encoding rule: live-run acceptance must preserve original quantifiers and require a post-item run id. If a derived artifact, code contract, or report-only matrix is used instead, set `acceptance_diluted=true`; validation must return partial and preserve residual scope.
+
+Guard-stacking rule: verifier, guard, or report-only change sets with no fresh run id and the same target artifact key are counted as `verifier_surface_hardening` regardless of verifier names. When `guard_stacking_cap_reached=true`, consumers must remove further guard/verifier/report addition from allowed dispositions.
+
+Run disposition rule: `candidate_degraded` is durable quality-miss evidence, not canonical success. Consumers may use only independently verified axes for baseline/comparison and must not let a degraded candidate replace a known-good baseline without separate promotion evidence. `failed_closed` means unsafe output was discarded.
+
+Runtime config echo rule: `runtime_config_echo` is safe scalar failure-autopsy evidence. `config_origin=code_default` overrides can route to self-inflicted gate/default repair when they explain the blocker.
+
+Execution starvation rule: `execution_starvation=true` does not force unsafe execution, but it raises execution-producing candidates above another guard/report/contract task in derive ranking unless safety, authority, or terminal constraints block execution.
+
+Scenario coverage rule: `scenario_uncovered=true` means no validation asset or live run satisfied a scenario premise. Consumers must route validation-set planning or fixture/live-run supply before close. `acceptance_inversion=true` means the observed or asserted state contradicts the expected terminal state for a premise-satisfying input; validation remains partial and derive routes code/contract repair even if tests are green.
+
+Command provenance rule: `command_provenance_missing=true` means the run lacks full body-free argv. Consumers must not use that run for baseline, A/B, comparison, or reproduction evidence. Redaction may mask values but must preserve argument names.
+
+Blocker actionability rule: `blocker_opacity=true` means a gate returned only a state/code without the violated relation, observed scalar values, expected relation, or minimum input delta. Consumers warn on first observation and feed blocker-contract repair after repeated opacity for the same gate. When the violation is an implicit relation across multiple caller inputs, preserve abstract input-key names and `authorization_contract_repair_candidate=true` if a named single authorization input would make the precondition discoverable.
+
+Stochastic feasibility rule: `predetermined_unreachable=true` and `floor_edge_envelope=true` are contract-revision findings. Retry does not satisfy the finding unless a new variance/slack packet proves the contract became feasible.
+
+First-fire rule: `instrumentation_first_fire=true` is a positive evidence delta even when the run disposition is failed or degraded. It may be credited to one workflow item only and cannot also prove goal progress or consume the instrumentation supply item.
+
+Expectation lineage rule: `expectation_lineage_stale=true` means an output-derived scalar expectation points to a superseded anchor. Consumers must rebaseline against `designated_baseline`, explicitly descope, terminal-block, or user-escalate before dependent live execution. `expectation_anchor_missing=true` is warn-only but cannot be lineage-verified expectation evidence.
+
+Comparison parity rule: `parity_unverified=true` or any `parity_axis_status=unknown` makes comparison/adoption provisional. Consumers must not finalize adoption, baseline promotion, or comparison-winner claims until parity axes are resolved or residual/terminal/escalation state is recorded.
+
+Adoption axis rule: failed `gating` axes and `measured_but_disqualified=true` block adoption regardless of tradable-axis wins. Majority-vote adoption without `adoption_axis_classification` is provisional only.
+
+Resolution downgrade rule: `resolution_downgrade=true` means a higher-resolution evidence contract was satisfied only by a surrogate. Consumers may preserve first occurrence as warning/provisional evidence; repeated same-contract downgrade should route resolution restoration or contract revision. Do not treat it as full-resolution proof.
+
+Report key integrity rule: `report_key_divergence=true` blocks pass/close/adoption/baseline/comparison/high-water consumption of that report. Matching duplicate keys are schema debt; divergent values are blocking because no consumer can know which copy is authoritative.
 
 Adapter mandate rule: `adapter_mandate_required=true` means adapter contract gaps have repeated for the same `artifact_family` with no quality/substance high-water improvement for the configured cap. Consumers must select adapter registration/strengthening as the next goal-productive task, or terminal/user-escalate with the exact missing adapter contract. If `adapter_wiring_defect=true`, do not use this rule for the same cycle; route the registered-but-unloaded adapter as self-inflicted wiring/load correction.
 

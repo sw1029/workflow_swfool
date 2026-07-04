@@ -30,6 +30,16 @@ Use `/home/swfool/.codex/skills/orchestrate-task-cycle/scripts/result_contract.p
 - `blockers` as an explicit list, using an empty list when no blockers remain.
 - `evidence_paths` for run, schema, index, validation, issue, commit, dashboard, and report stages.
 - For `qualitative_review`, require reviewer routing, reviewed artifacts, direct read scope, qualitative findings, direction recommendations, output-delta handoff fields, blocker taxonomy delta, no-overclaim flags, and evidence paths. Do not accept a main-coordinator substitute as the reviewer; when reviewer delegation is unavailable, require a blocked, partial, or not-applicable result with `reviewer_delegation_unavailable_reason`.
+- For `validation_set_plan` and `validation_set_build`, require scenario coverage fields when the acceptance packet supplied `acceptance_scenarios`: each scenario must be `covered`, `scenario_uncovered`, or blocked with a missing premise-satisfying input reason.
+- For `run`, require `command_argv` for live executions, or explicit `command_provenance_missing=true`. A summarized command string is not enough for baseline/reproduction eligibility.
+- For `run`, `validate`, or any gate/validator result that returns blockers, require actionable blocker fields when the result claims the blocker is actionable or resolved: violated relation, observed scalar values, expected relation, or minimum input delta. For multi-input relation failures, preserve abstract input-key names and any `authorization_contract_repair_candidate`. Otherwise preserve `blocker_opacity`.
+- For `loopback_audit`, preserve Part J findings as fail-closed routing evidence: uncovered or inverted acceptance scenarios, missing command provenance, repeated blocker opacity, stochastic exact/floor infeasibility, and first-fire credit ownership.
+- For `loopback_audit`, preserve Part K findings as routing evidence: stale expectation anchors, missing expectation anchors, parity-unverified comparisons, failed gating adoption axes, measured-but-disqualified candidates, resolution downgrades, and report-key divergence.
+- For `derive`, verify that active Part J findings constrain the selected task kind: scenario supply for `scenario_uncovered`, code/contract repair for `acceptance_inversion`, argv repair or rerun for `command_provenance_missing`, blocker-contract repair for repeated same-gate `blocker_opacity`, and contract revision/descope/escalation for `predetermined_unreachable` or `floor_edge_envelope`.
+- For `derive`, verify that active Part K findings constrain the selected task kind: expectation rebaseline or fail-close for `expectation_lineage_stale`; parity-axis resolution or provisional status for `parity_unverified`; axis-classification work for `majority_vote_adoption` without `adoption_axis_classification`; gating-axis repair, rejection, or measured-but-disqualified preservation for failed `gating` axes; resolution restoration or contract revision for repeated `resolution_downgrade`; and report/schema/sync repair for `report_key_divergence`.
+- For `validate`, reject `complete` when Part J gates are unresolved: uncovered/inverted scenarios, required command provenance missing, claimed-resolved opaque blockers, stochastic infeasible contracts without revision/descope/escalation, or double-counted `instrumentation_first_fire`.
+- For `validate`, reject `complete` or `advanced` when Part K gates are unresolved: stale expectation lineage without rebaseline/descope, final comparison/adoption with `parity_unverified`, majority-vote adoption without axis classification, failed gating axes or `measured_but_disqualified`, high-resolution contracts satisfied only by unresolved `resolution_downgrade`, or `report_key_divergence`.
+- For `validate` and `report`, reject pass/close consumption when `report_key_divergence=true` or when the deterministic scan finds the same terminal report key at multiple JSON paths with different values. Matching duplicate keys are schema debt and warn-only; divergent values are blocking because the consumer cannot know which copy is truth.
 - `commit_role`, `commit_status`, and `evidence_paths` for commit results.
 - `commit_hash` and `commit_subject` for created commits; `commit_skipped_reason` for skipped, blocked, or failed commits.
 - `task_pack_status`, `task_pack_path`, and `task_pack_item_id` or `promoted_item_id` when derivation or reporting promotes the next task from `.task/task_pack/`.
@@ -38,9 +48,20 @@ Use `/home/swfool/.codex/skills/orchestrate-task-cycle/scripts/result_contract.p
 - Dual-track terminal blocker evidence when `detect_progress_loop status=block` forces terminal state.
 - `consolidation_candidate_registered` or selected consolidation work when `command_surface_budget.consolidation_candidate_required=true`.
 - `tracked_artifacts` for `closeout_commit` results.
+- `acceptance_scenario_gate`, `command_provenance_gate`, `blocker_actionability_gate`, `stochastic_feasibility_gate`, and `instrumentation_first_fire_gate` for validation results when the corresponding source fields appeared earlier in the cycle.
+- `expectation_lineage_gate`, `comparison_parity_gate`, `adoption_axis_gate`, `resolution_downgrade_gate`, and `report_key_integrity_gate` for validation results when the corresponding Part K source fields appeared earlier in the cycle.
 
 ## Guardrails
 
 - Do not infer success from missing data.
 - Do not use this skill to override an owning skill verdict.
+- Do not let green tests satisfy a missing `acceptance_scenario_gate`.
+- Do not let summarized commands or `...` satisfy command provenance.
+- Do not treat opaque blockers as actionable contract evidence.
+- Do not let stochastic infeasibility findings be reported as ordinary retry blockers.
+- Do not let `instrumentation_first_fire` be counted twice in result contracts.
+- Do not let stale expectation anchors, parity-unverified comparisons, majority-vote adoption without axis classification, failed gating adoption axes, or resolution-downgraded surrogate proof be consumed as final pass/close evidence.
+- Do not let a report with divergent duplicate terminal keys support pass, close, adoption, baseline, comparison, or high-water movement.
+- Do not let the deterministic result-contract script be weaker than the SKILL.md contract; when Part J fields are present, it must emit at least warning-level findings for invalid stage transitions.
+- Do not let the deterministic result-contract script be weaker than the SKILL.md contract; when Part K fields are present, it must emit at least warning-level findings, and `report_key_divergence` must be blocking for pass/close targets.
 - Treat contract output as orchestration evidence only; it is not a replacement for validation or issue tracking.

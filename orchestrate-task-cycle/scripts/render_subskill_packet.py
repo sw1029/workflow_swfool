@@ -290,6 +290,7 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                     "existing `.validation/sets` registry or inventory",
                     ".task/task_miss and .issue validation gaps",
                     "source_class and no-overclaim policy",
+                    "normalized acceptance_scenarios when scenario-shaped acceptance exists",
                 ],
                 "required_outputs": [
                     "task_id",
@@ -300,6 +301,7 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                     "split_strategy",
                     "leakage_policy",
                     "label_visibility_policy",
+                    "scenario_coverage requirements, or scenario_uncovered with missing premise-satisfying input reason",
                     "evidence_paths",
                     "used_advice or advice disposition rationale when active advice is in scope",
                 ],
@@ -376,6 +378,9 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                     "evidence_paths",
                     "failure_autopsy for failed/nonzero execution when safe scalar extraction is possible",
                     "running details when execution_status is running",
+                    "full body-free command_argv for live execution, or command_provenance_missing=true",
+                    "blocker_actionability fields or blocker_opacity for gate/validator reason codes",
+                    "observed_producer_claim residual blockers as trace-only scenario review evidence when present",
                 ],
             }
         )
@@ -434,6 +439,8 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                     "artifact_family and semantic_signature",
                     ".task/anti_loop/family_progress_registry.jsonl when present",
                     "active non-GT external advice packet when relevant",
+                    "acceptance_scenarios, command_argv/provenance, blocker_actionability, stochastic variance, and instrumentation first-fire fields from prior packets when present",
+                    "Part K expectation lineage, parity/adoption, evidence-resolution, and report-key integrity fields from prior packets when present",
                 ],
                 "required_outputs": [
                     "task_id",
@@ -447,6 +454,8 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                     "recommended_disposition",
                     "hard_stop_required",
                     "evidence_class",
+                    "acceptance_scenario_gate, command_provenance_gate, blocker_actionability_gate, stochastic_feasibility_gate, and instrumentation_first_fire_gate when corresponding evidence is present",
+                    "expectation_lineage_gate, comparison_parity_gate, adoption_axis_gate, resolution_downgrade_gate, and report_key_integrity_gate when corresponding evidence is present",
                     "evidence_paths",
                 ],
             }
@@ -470,6 +479,7 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                     ".schema/.contract validation-set contracts when present",
                     "authority_policy and no-overclaim policy",
                     "active non-GT external advice disposition",
+                    "acceptance_scenarios from validation_set_plan or normalized acceptance when present",
                 ],
                 "required_outputs": [
                     "task_id",
@@ -485,6 +495,7 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                     "split_manifest_path",
                     "leakage_report_path",
                     "validation_set_root_path",
+                    "scenario_coverage, scenario_uncovered, and acceptance_inversion_candidate when scenario-shaped acceptance is in scope",
                     "evidence_paths",
                     "used_advice or advice disposition rationale when active advice is in scope",
                 ],
@@ -533,6 +544,8 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                     ".validation/sets and validation_set_build result when present",
                     "qualitative output review result and direction recommendations",
                     "anti-loop progress gate with changed_vs_previous, semantic_progress, same-family micro-hardening count, and recommended disposition",
+                    "Part J anti-loop findings: scenario_uncovered, acceptance_inversion, command_provenance_missing, repeated blocker_opacity, predetermined_unreachable, floor_edge_envelope, and instrumentation_first_fire",
+                    "Part K lineage/comparison findings: expectation_lineage_stale, parity_unverified, majority_vote_adoption without axis classification, measured_but_disqualified, repeated resolution_downgrade, and report_key_divergence",
                     "output_delta gate result with produced_domain_delta, metadata_only, and effective_progress_kind when available",
                     "progress loop detection result with blocker_signature, semantic_signature, goal_distance_gate, and progress_kind/governance_only evidence",
                     "task pack status/result and terminal blocker state when present",
@@ -550,6 +563,8 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                     "do not treat metadata-only or produced_domain_delta=false work as goal_productive; use effective_progress_kind from the output-delta gate",
                     "when the last two progress-bearing cycles are governance_only, select goal_productive work or record terminal_blocked",
                     "when the last two progress-bearing cycles are metadata_only, choose resume_primary_output, bounded source-backed run/preflight, root-cause repair, or terminal_blocked",
+                    "route Part J findings in place: scenario supply, code/contract repair, argv rerun/provenance repair, blocker-contract repair, stochastic contract revision/descope/escalation, or single first-fire credit ownership",
+                    "route Part K findings in place: expectation rebaseline, parity-axis resolution, adoption-axis repair/rejection, resolution restoration/contract revision, report repair, residual descope, terminal state, or user escalation",
                     "record terminal_blocked instead of deriving another narrowing task when zero viable candidates remain",
                     "do not derive another non-terminal task in a sealed semantic family without a new input kind, authority change, or external-state change",
                     "do not seal a blocker family unless root_cause_attempted_for_family is true or an explicit not-required rationale is recorded",
@@ -565,6 +580,8 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                     "output_delta_status and produced_domain_delta when an output-delta contract is available",
                     "root_cause_attempted_for_family when sealing or terminal-blocking a blocker family",
                     "semantic_signature for selected or terminal blocker family",
+                    "selected_task_kind that consumes any active Part J constraint",
+                    "selected_task_kind that consumes any active Part K constraint",
                     "task_pack_status when a pack exists",
                     "loop_breaker_disposition",
                     "evidence_paths",
@@ -627,8 +644,17 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                     "validation set artifact status and not_gold/quality_tier when relevant",
                     "task-state audit",
                     "advice application/rejection/defer status when task referenced advice",
+                    "Part J gates from validation-set, run, loopback, and derive packets when present",
+                    "Part K gates from acceptance, run, loopback, derive, report, and validation-set packets when present",
                 ],
-                "required_outputs": ["validation_verdict", "progress_verdict", "progress_axes", "validation report path"],
+                "required_outputs": [
+                    "validation_verdict",
+                    "progress_verdict",
+                    "progress_axes",
+                    "validation report path",
+                    "acceptance_scenario_gate, command_provenance_gate, blocker_actionability_gate, stochastic_feasibility_gate, and instrumentation_first_fire_gate when applicable",
+                    "expectation_lineage_gate, comparison_parity_gate, adoption_axis_gate, resolution_downgrade_gate, and report_key_integrity_gate when applicable",
+                ],
             }
         )
     elif target == "issue":

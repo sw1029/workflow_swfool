@@ -11,6 +11,9 @@ Use this reference when recent task-cycle evidence shows safe but stationary wor
 - [Part F In-Place Revision Contract](#part-f-in-place-revision-contract)
 - [Part G In-Place Revision Contract](#part-g-in-place-revision-contract)
 - [Part H In-Place Revision Contract](#part-h-in-place-revision-contract)
+- [Part I In-Place Revision Contract](#part-i-in-place-revision-contract)
+- [Part J In-Place Revision Contract](#part-j-in-place-revision-contract)
+- [Part K In-Place Revision Contract](#part-k-in-place-revision-contract)
 - [G1 Disposition Intersection Gate](#g1-disposition-intersection-gate)
 - [G0 Pre-Cycle Regression Guard](#g0-pre-cycle-regression-guard)
 - [G0-SAT Gate Satisfiability Precheck](#g0-sat-gate-satisfiability-precheck)
@@ -85,6 +88,16 @@ Gate logic must stay domain-agnostic. A repository may supply a domain adapter t
 - `terminal_classification_stage_map(**context)`: optional mapping of terminal classifications to allowed failure stages. A contradiction makes the terminal classification invalid for counting or close.
 - `instrumentation_trigger_threshold(**context)`: optional H3 threshold for repeated `diagnostics_unavailable` on the same failure surface. Missing hook defaults to `2`.
 - Verification source metadata in `evidence_provenance(...)` or a dedicated hook: `verification_input_paths`, `verified_artifact_paths`, and `self_grounded` axes for H4 independent-source separation.
+- `instrumentation_field_map(...)`: optional I1 map of supplied diagnostic/instrumentation fields and domain-owned non-empty criteria. Missing hooks fail quiet unless the task-pack item or caller packet explicitly marks the work as instrumentation supply.
+- `run_disposition(safety_violations, quality_vector, **context)`: optional I4 disposition classifier returning `failed_closed`, `candidate_degraded`, or `candidate_written`. Safety contracts and quality axes remain adapter-owned.
+- `runtime_config_echo(**context)`: optional I5 safe scalar/enum effective runtime configuration plus each field's `config_origin` and derived `config_overrides`.
+- `acceptance_scenarios(...)`: optional J1 helper returning scenario records with abstract `scenario_id`, scalar `premise_predicate`, and `expected_terminal_state`. Missing hooks fail quiet unless normalized acceptance already supplied scenarios.
+- `argv_redaction_policy(...)`: optional J2 helper that classifies argv values for redaction. Argument names must remain visible; secret, body, or hash-like values may be masked.
+- `outcome_variance(target, **context)`: optional J4 helper returning recent stochastic output dispersion and comparable slack fields. It may be folded into `min_envelope_for(...)` as `slack`; metric definitions and thresholds remain adapter-owned.
+- `designated_baseline(**context)`: optional K1 helper returning the current designated output surface id/path/version and supersede status for output-derived scalar expectations.
+- `comparison_parity_axes(**context)`: optional K2 helper returning adapter-owned parity axes and per-axis status `controlled`, `measured`, or `unknown` for comparison/adoption tasks.
+- `required_output_classes(**context)`: optional K3 helper returning required output classes or scalar predicates used to classify adoption axes as `gating`; axis definitions and thresholds stay adapter-owned.
+- `resolution_downgrade_fields(**context)`: optional K4 helper mapping report fields that declare lower-resolution surrogate evidence for a higher-resolution contract. Missing hooks fail quiet and only caller-supplied downgrade fields are preserved.
 
 If the adapter is absent or omits a required vector, promotion must fail closed for the affected gate while packet production continues. If the adapter is registered by path or declaration but `adapter_loaded!=true`, set `adapter_wiring_defect=true`, route as `self_inflicted_gate_defect`, and select wiring/load correction instead of creating a new adapter. Do not hardcode project module paths, metric names, lexicon paths, or artifact filenames in the generic workflow skill body.
 
@@ -140,6 +153,43 @@ These rules revise existing failure autopsy, loopback counting, evidence provena
 - H6 unchanged packet reference: ledger packets identical to a previous event by path and hash should use `unchanged_ref(path+hash)` rather than reserializing identical content. Profile uses `unchanged_ref_count` in the conservative fixed-cost denominator.
 
 Keep stage names, classification maps, diagnostics thresholds, verification-source definitions, self-grounded axes, envelope thaw policy, and any project-specific artifact paths in repository adapters or caller packets. Generic skills consume abstract fields only.
+
+## Part I In-Place Revision Contract
+
+These rules revise evidence lifecycle seams: production, preservation, exercise, and consumption. They do not add a new phase, detector, report, authority grant, automatic retry, or gate bypass.
+
+- I1 instrumentation exercise: when a task-pack item supplies instrumentation, diagnostics, or observation fields, consuming the supply item must create or preserve a follow-up `instrumentation_exercise` item requiring at least one fresh run id after the supply item with non-empty scalar evidence for the supplied fields. Existing artifact reinterpretation (`derived_from_existing_artifacts`) does not satisfy exercise. Measurement, comparison, adoption, or close items that depend on the supplied fields cannot become current until exercise is consumed or a concrete observability rationale proves success/failure is already measurable.
+- I2 acceptance encoding preservation: derive and normalization must copy measurable quantifiers and relation predicates from the original directive into `acceptance.quantifiers`, and tag each acceptance clause with `evidence_kind: live_run|derived_artifact|code_contract|report_only`. If the original criterion requires execution, only `live_run` with a new run id after item creation can satisfy it. Substituting derived artifacts or reports for a live-run criterion is `acceptance_diluted` and must remain `partial` with residual scope.
+- I3 guard-stacking family collapse: when the change set consists only of verifier, guard, or report-generator sources mapped by `verifier_source_paths(...)`, no new run id is cited, and the target artifact path set matches the previous cycle, count the cycle under `verifier_surface_hardening` plus the target artifact key regardless of verifier or guard names. At the detection-only cap, remove guard/verifier/report addition from effective dispositions and allow only execution work, explicit descope with residual scope, terminal blocking, or user escalation.
+- I4 execution disposition split: distinguish unsafe output from quality-miss output. Safety-contract violations are `failed_closed` and artifacts are discarded. Quality misses are `candidate_degraded`: persist safe scalar artifacts with row/axis verification flags and degradation reasons, but do not promote them as canonical baseline until independently verified axes permit consumption. Successful output remains `candidate_written`.
+- I5 runtime config echo: failed-run autopsy may include scalar/enum `runtime_config_echo`, `config_origin: cli|config_file|code_default|backend_default`, and derived `config_overrides`. A `code_default` override that plausibly caused the blocker is a Part A `self_inflicted_gate_defect` routing candidate. No raw bodies, prompts, credentials, secrets, or provider payloads may be stored.
+- I6 execution starvation ranking: `$profile-cycle-efficiency` may expose `execution_starvation=true` when a pack or family has no fresh run id for the configured recent-cycle window. Derive must rank execution-output candidates above another guard, contract, verifier, lineage, or report candidate while preserving safety, authority, and explicit terminal/user-escalation constraints.
+
+Keep instrumentation field names, non-empty criteria, quality axes, safety contracts, runtime setting names/defaults, and starvation window overrides in adapters or caller packets. Generic skills consume only abstract fields and safe scalars.
+
+## Part J In-Place Revision Contract
+
+These rules revise decision-contract symmetry and reproducibility. They do not add a new phase, detector, report, authority grant, automatic retry, or gate bypass.
+
+- J1 scenario injection: when acceptance states premise class -> expected terminal state, validation assets must inject at least one input satisfying the premise and assert the expected state. `scenario_uncovered=true` returns to validation-set planning. `acceptance_inversion=true` means the changed tests or implementation assert the opposite state, so validation remains `partial` and derive routes code/contract repair even if the suite is green.
+- J2 command provenance: every live execution run records full body-free `command_argv` once. Redaction may mask secret/body/hash-like values, but argument names and scalar nonsecret values must remain. `command_provenance_missing=true` disqualifies the run from baseline, A/B, comparison, and reproduction use while preserving other scalar evidence.
+- J3 actionable blocker: blocker reason codes carry the violated abstract relation, observed scalar values, expected relation, and when possible the minimum input delta. A state-name-only blocker is `blocker_opacity=true`; two observations for the same gate feed a blocker-contract repair candidate rather than an immediate hard block.
+- J4 stochastic feasibility: when `outcome_variance(...)` or equivalent caller evidence shows dispersion, exact achievement equality is `predetermined_unreachable`, and floor/envelope slack smaller than observed variance is `floor_edge_envelope`. Derive routes contract revision, interval/ratio/intersection criteria, envelope expansion, residual descope, terminal blocker, or user escalation instead of retry.
+- J5 first-fire credit: the first fresh run that emits non-empty supplied instrumentation fields records `instrumentation_first_fire=true`, even when its run disposition is failed or degraded. This is one positive evidence delta only; it cannot also consume the instrumentation supply item or prove goal progress.
+
+Keep scenario predicates, terminal states, argv redaction values, blocker relation details, stochastic variance calculations, and first-fire field criteria in adapters, caller packets, or project-owned contracts. Generic skills consume abstract fields only.
+
+## Part K In-Place Revision Contract
+
+These rules revise existing promotion, comparison, adoption, loopback, and result-contract decisions. They do not add a new phase, detector, report, authority grant, automatic retry, or gate bypass.
+
+- K1 expectation lineage: when acceptance includes an output-derived scalar expectation, task promotion binds it to `expectation_anchor`. If `designated_baseline(...)` or caller evidence shows the anchor is superseded, set `expectation_lineage_stale`; derive must rebaseline against the current designated surface or fail closed before live execution. Missing anchors are warning-level `expectation_anchor_missing`, not lineage-verified evidence.
+- K2 comparison parity: comparison/adoption tasks preserve `parity_axes` and each axis status `controlled`, `measured`, or `unknown`. `unknown` axes force `parity_unverified`; derive must route axis resolution, provisional comparison, explicit residual scope, terminal blocker, or user escalation before final adoption.
+- K3 adoption axis semantics: multiaxis adoption decisions classify each axis as `gating` or `tradable` before measurement, using adapter-owned `required_output_classes(...)` when available. Failed gating axes block adoption regardless of tradable-axis wins. The measured artifact remains `measured_but_disqualified` rather than discarded.
+- K4 resolution downgrade consumption: when a report declares that a higher-resolution contract was satisfied by a lower-resolution surrogate, loopback records `resolution_downgrade` and `surrogate_resolution_basis`. First occurrence is warning/provisional evidence; repeated same-contract downgrade feeds resolution restoration or contract revision to derive. Do not add a new detector; consume existing declaration fields.
+- K5 report key integrity: when one report contains duplicate terminal keys with divergent values, preserve `report_key_divergence`. Result-contract and validation consumers block pass/close/adoption/baseline/comparison use of the report until it is repaired or a single source with matching values is declared. Matching duplicate terminal keys are warn-only schema debt.
+
+Keep baseline discovery, parity axes, required output classes, evidence-resolution schemas, and duplicate-key policy in adapters, caller packets, or project-owned contracts. Generic skills consume abstract fields only.
 
 ## G1 Disposition Intersection Gate
 
@@ -443,6 +493,9 @@ The producer must compute `anti_loop_progress_gate` from raw artifact content an
 - count-key hygiene fields when available, such as `legacy_family_key`, `raw_root_family_key`, `terminal_outcome_family_key`, `terminal_outcome_family_fallback_applied`, and any adapter-supplied dominant parameter that makes counting generation-independent
 - goal-axis completeness fields when supplied by review/caller packets, such as `goal_axis_map`, `unobserved_goal_axes`, and `pass_with_unobserved_axes`
 - residual-gap cost-ratio fields when supplied by normalize/derive/profile packets, such as `cycle_fixed_cost`, `alternative_cycle_cost`, `marginal_value_per_cycle_cost`, and `residual_gap_cost_policy`
+- Part I evidence-lifecycle fields when supplied, such as `instrumentation_exercise_required`, `instrumentation_exercised`, `instrumentation_field_map`, `derived_from_existing_artifacts`, `acceptance.quantifiers`, `evidence_kind`, `verifier_surface_hardening`, `target_artifact_paths`, `change_set_kind`, `run_disposition`, `candidate_degraded`, `runtime_config_echo`, `config_overrides`, and `execution_starvation`
+- Part J decision-contract fields when supplied, such as `acceptance_scenario_gate`, `scenario_uncovered`, `acceptance_inversion`, `command_provenance_missing`, `blocker_opacity`, `outcome_variance`, `predetermined_unreachable`, `floor_edge_envelope`, `instrumentation_first_fire`, and `first_fire_consumed_item_id`
+- Part K lineage/comparison fields when supplied, such as `expectation_anchor`, `designated_baseline`, `expectation_anchor_missing`, `expectation_lineage_stale`, `parity_axes`, `parity_axis_status`, `parity_unverified`, `adoption_axis_classification`, `required_output_classes`, `majority_vote_adoption`, `provisional_adoption`, `measured_but_disqualified`, `required_evidence_resolution`, `observed_evidence_resolution`, `resolution_downgrade`, `surrogate_resolution_basis`, `report_key_divergence`, and duplicate report-key path/value evidence
 - `recommended_disposition`, `hard_stop_required`, `evidence_class`, and evidence paths
 
 The repository adapter or shared module must fail closed on noisy quality inputs. If confidence is low, artifacts are missing/malformed, adapter output is missing, or domain interpretation is uncertain, emit `evidence_class: insufficient_evidence`, `recommended_disposition: conservative_hold`, and `hard_stop_required: true`. Legacy repository quality modules may remain as compatibility fallbacks, but new domain-specific metrics, paths, lexicons, and thresholds belong behind the adapter interface.
@@ -476,6 +529,23 @@ Use the packet as a derive gate:
 - `partial_progress_axes_gate.status=warn` is advisory only: it recommends decomposing all-or-nothing gates when partial axes exist but high-water remains flat. It must not add a new blocker.
 - `structure_metrics_gate.refactor_effect_required=true` with `structure_high_water_moved=false` means a refactor may be useful but cannot be completed as structural goal progress without residual work or explicit descope. File-count growth, mechanical splitting, token avoidance, or producer self-reports must not be treated as an improved structure axis.
 - `structure_high_water_key_scope=global_invariant` means per-scope local improvement cannot reset global structure stall or satisfy global structure acceptance unless `global_structure_high_water_moved=true` or equivalent global invariant movement is present.
+- `instrumentation_exercise_required=true` means supplied instrumentation has not yet been exercised by a fresh run with non-empty scalar fields. Derive must insert/select the exercise item before dependent measurement/adoption work unless an observability rationale proves the fields are unnecessary.
+- `acceptance_encoding_gate.acceptance_diluted=true` means measurable quantifiers or `evidence_kind=live_run` did not survive task encoding. Consumers must return `partial`, preserve the original criterion, and keep residual scope open.
+- `verifier_surface_hardening=true` means this cycle is guard/verifier/report-only hardening over the same target artifact without a fresh run id. Count it under the collapsed hardening family and stop adding more guard surfaces once the detection-only cap is reached.
+- `run_disposition=candidate_degraded` is preserved quality-miss evidence, not canonical success. It may feed later comparison only for axes that satisfy provenance and source-separation requirements.
+- `runtime_config_echo.config_overrides` from `code_default` is self-inflicted-gate evidence when it explains a local execution cap or incompatible default.
+- `execution_starvation=true` is a ranking input: prefer execution-producing work over another guard/report/contract task unless safety, authority, or terminal conditions block execution.
+- `scenario_uncovered=true` forces validation-set planning or fixture/live-run supply before close.
+- `acceptance_inversion=true` forces code/contract repair and keeps the cycle partial even when current tests pass.
+- `command_provenance_missing=true` blocks baseline/comparison/reproduction claims from the run.
+- repeated `blocker_opacity=true` for the same gate feeds a blocker-contract repair candidate.
+- `predetermined_unreachable=true` or `floor_edge_envelope=true` means stochastic contract revision outranks retry.
+- `instrumentation_first_fire=true` contributes one evidence credit but must not be double-counted as goal progress or instrumentation-supply consumption.
+- `expectation_lineage_stale=true` forces expectation rebaseline or fail-closed task selection before dependent live execution.
+- `parity_unverified=true` or unknown parity axes prevent final adoption/baseline/comparison-winner consumption until axis resolution, provisional residual scope, terminal blocker, or user escalation is recorded.
+- failed `gating` adoption axes or `measured_but_disqualified=true` prevent adoption of that candidate while preserving it as measured evidence.
+- `resolution_downgrade=true` means surrogate evidence cannot satisfy the original high-resolution contract without restoration, contract revision, or residual high-resolution scope; repeated same-contract downgrade should feed derive repair.
+- `report_key_divergence=true` blocks pass/close/adoption/baseline/comparison/high-water consumption of the divergent report. Matching duplicate terminal keys do not block consumption but should remain warn-only schema debt.
 
 ## A1 Measurement Progress Exemption
 

@@ -90,6 +90,16 @@ This contract defines `.agent_advice/` artifacts. Advice is direction evidence, 
 - verification_source_separation: <verification_input_paths disjointness/self_grounded rule, or none>
 - frozen_envelope_thaw: <envelope_thaw_item requirement and thaw-condition/schedule rule, or none>
 - ledger_unchanged_ref_policy: <unchanged_ref path+hash recording rule, or none>
+- acceptance_scenario_contract: <scenario premise -> expected state injection rule, or none>
+- command_provenance_policy: <full argv recording and redaction rule, or none>
+- blocker_actionability_contract: <violated relation, observed values, expected relation/minimum delta requirement, or none>
+- stochastic_acceptance_policy: <variance-aware exact-match/floor-edge rule, or none>
+- instrumentation_first_fire_credit: <first-fire evidence credit and no-double-counting rule, or none>
+- expectation_lineage_contract: <output-derived expectation anchor, designated baseline check, stale-anchor rebaseline/fail-close rule, or none>
+- comparison_parity_contract: <parity axes and controlled/measured/unknown classification rule, or none>
+- adoption_axis_contract: <gating/tradable axis classification and measured-but-disqualified rule, or none>
+- resolution_downgrade_contract: <required versus observed evidence resolution and surrogate downgrade routing rule, or none>
+- report_key_integrity_contract: <duplicate terminal key divergence and single-source report rule, or none>
 
 ## Design Integration
 
@@ -126,7 +136,7 @@ Record advice in `.agent_advice/index.jsonl` and `$manage-task-state-index`:
 - freshness fields: `advice_metrics_stale`, `declared_output_fingerprints`, `current_output_fingerprint`, `freshness_reason`
 - root-cause freshness fields: `re_advised_dead_hypothesis`, `dead_hypothesis_claims`, `root_cause_ledger_path`
 - measurable target fields: `directive_id`, `metric`, `comparator`, `target`, `acceptance_text`, `residual_policy`
-- workflow revision fields: `in_place_revisions`, `additive_new_surfaces`, `exclusions`, `count_key_hygiene`, `required_gate_hooks`, `goal_axis_completeness`, `residual_gap_cost_policy`, `failure_autopsy_contract`, `failure_surface_count_key`, `instrumentation_supply_rule`, `verification_source_separation`, `frozen_envelope_thaw`, `ledger_unchanged_ref_policy`
+- workflow revision fields: `in_place_revisions`, `additive_new_surfaces`, `exclusions`, `count_key_hygiene`, `required_gate_hooks`, `goal_axis_completeness`, `residual_gap_cost_policy`, `failure_autopsy_contract`, `failure_surface_count_key`, `instrumentation_supply_rule`, `verification_source_separation`, `frozen_envelope_thaw`, `ledger_unchanged_ref_policy`, `acceptance_scenario_contract`, `command_provenance_policy`, `blocker_actionability_contract`, `stochastic_acceptance_policy`, `instrumentation_first_fire_credit`, `expectation_lineage_contract`, `comparison_parity_contract`, `adoption_axis_contract`, `resolution_downgrade_contract`, `report_key_integrity_contract`
 - useful links: `advice_for`, `incorporated_into`, `applied_by`, `rejected_by`, `superseded_by`, `conflicts_with_goal`, `conflicts_with_authority`
 
 ## Audit Freshness Gate
@@ -157,3 +167,5 @@ If `re_advised_dead_hypothesis` is `true`, downstream workflows must not use tha
 If advice includes measurable targets, downstream `$task-doctor` and `$derive-improvement-task` must carry them into task-pack `scope_fidelity` or `task.md` acceptance. Do not mark the advice applied merely because a narrowed pilot/plan/slice was completed; either the original target is met, or explicit descope with residual scope is recorded.
 
 If advice includes workflow contract revisions, downstream workflows must keep them as non-GT in-place decision revisions unless the advice explicitly requests an additive surface and that surface is compatible with higher-priority instructions. For Part G/H-style advice, preserve abstract contracts without repo-specific names or thresholds: generation-dependent count keys are trace-only; acceptance-required gate hooks are `not_evaluated` when absent; review pass requires mapped axes for active measurable goals when `goal_axis_map` is available; residual-gap repair is compared by value per cycle cost when cycle-efficiency evidence exists; failure autopsy needs `last_successful_stage` plus scalar diagnostics or `diagnostics_unavailable`; loopback counting uses the failure-surface key when available; repeated unavailable diagnostics forces instrumentation supply or a concrete observability rationale; independently verified evidence requires disjoint `verification_input_paths` unless the axis is `self_grounded`; frozen unreachable envelopes require an `envelope_thaw_item`; and duplicate ledger packets should be referenced by `unchanged_ref(path+hash)`.
+
+For Part K-style advice, preserve expectation/comparison lineage as abstract contracts only. Output-derived scalar expectations need `expectation_anchor` and current `designated_baseline` comparison before promotion; comparison/adoption tasks need `parity_axes` and `adoption_axis_classification`; `unknown` parity axes keep decisions `parity_unverified`; failed `gating` axes make candidates `measured_but_disqualified`; lower-resolution surrogate evidence is `resolution_downgrade`; and divergent duplicate report keys are `report_key_divergence`. Concrete surface discovery, axis definitions, thresholds, model/backend labels, report schemas, and metric names remain adapter or project-contract owned.

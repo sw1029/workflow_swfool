@@ -49,6 +49,10 @@ Ask the reviewer to cover only dimensions relevant to the produced artifact:
 - `coverage_sufficiency`: whether `windows_covered` or equivalent source-window coverage satisfies the current task/rung; partial windows should cap progress when the rung requires full-window or multi-work coverage.
 - `goal_axis_completeness`: when the caller or repository adapter supplies `goal_axis_map`, verify that every active measurable goal has at least one mapped `quality_vector` axis. Do not invent axes; report `pass_with_unobserved_axes=true` for goals whose mapped axis set is empty.
 - `verification_source_separation`: when reviewing an independent verification artifact, report the verification input paths and verified artifact paths if observable. Treat zero disagreements as quality evidence only when those inputs are disjoint from the verified artifacts, unless the caller/adapter marks the axis `self_grounded`.
+- `instrumentation_exercise`: when artifacts claim newly supplied diagnostics or instrumentation, report whether a fresh run id after the supply item recorded non-empty scalar fields, or whether the evidence is only `derived_from_existing_artifacts`.
+- `acceptance_encoding`: when reviewing directive-derived reports, preserve visible `acceptance.quantifiers` and `evidence_kind`; do not treat report-only evidence as satisfying a live-run criterion.
+- `verifier_surface_hardening`: when the reviewed artifact is another verifier, guard, consistency check, or report over the same target artifact without a fresh run id, report it as guard/report-only hardening rather than primary-output progress.
+- `run_disposition`: when reviewing run outputs, distinguish `candidate_degraded` quality-miss evidence from `candidate_written` output and `failed_closed` unsafe discard.
 - `output_delta`: when the caller supplies an output-delta contract packet, call the contract helper on produced artifact paths and report whether the repository-defined primary output layer actually changed.
 - `validator_disagreement`: when the caller supplies strict runner validation plus output-delta evidence, compare their `semantic_progress` values. If runner validation says true while output-delta says false, report a block-level disagreement and use the output-delta value as authoritative for progress accounting.
 - `coverage_quality_reconciliation`: when the caller supplies both loopback and output-delta G-COV evidence, report a block-level disagreement if `coverage_quality_delta_reconciliation_gate.status=block`; do not let the favorable G-COV source override inspected output quality.
@@ -114,6 +118,23 @@ Return a JSON-compatible summary and, when durable evidence is required, write a
     "self_grounded_axes": [],
     "independently_verified_downgraded_fields": []
   },
+  "instrumentation_exercise_gate": {
+    "instrumentation_exercise_required": false,
+    "instrumentation_exercised": false,
+    "instrumentation_run_id": null,
+    "derived_from_existing_artifacts": false
+  },
+  "acceptance_encoding_gate": {
+    "quantifiers_preserved": true,
+    "evidence_kind": "live_run|derived_artifact|code_contract|report_only|not_applicable",
+    "acceptance_diluted": false
+  },
+  "verifier_surface_hardening_gate": {
+    "verifier_surface_hardening": false,
+    "target_artifact_paths": [],
+    "fresh_run_id_present": false
+  },
+  "run_disposition": "failed_closed|candidate_degraded|candidate_written|not_applicable",
   "pass_with_unobserved_axes": false,
   "authoritative_semantic_progress": false,
   "blocker_taxonomy_delta": ["quality_blocker|output_artifact_blocker|kg_core_blocker|claim_readiness_blocker|workflow_lifecycle_blocker|task_state_blocker"],
@@ -140,6 +161,10 @@ Use `review_status` as the owning skill result status. When the orchestration le
 - When `goal_axis_map` is supplied and any active measurable goal has zero mapped axes, set `goal_axis_completeness_gate.evaluation_status=fail`, set `pass_with_unobserved_axes=true`, cite the unobserved goals, and cap review-backed progress for those goals. Recommend adapter axis supply, explicit residual scope, terminal blocker, or user escalation; do not let the review's overall pass wording consume the affected target.
 - When `goal_axis_map` is absent, set `goal_axis_completeness_gate.evaluation_status=not_evaluated` or omit the gate. Missing optional axis mapping is fail-quiet unless acceptance/caller packets require it.
 - When reviewing an artifact that claims independent verification, preserve `verification_input_paths`, `verified_artifact_paths`, and `self_grounded_axes` if they are present. If inputs are missing or overlap the verified artifacts, set `independent_source_separation_status=missing|overlap`, move affected fields into `independently_verified_downgraded_fields`, and do not treat zero disagreements as independently verified progress.
+- When supplied instrumentation has not been exercised by a fresh run id with non-empty scalar fields, set `instrumentation_exercise_required=true` and do not treat the corresponding measurement/report as progress. Existing artifact reinterpretation is `derived_from_existing_artifacts`, not exercise.
+- When an artifact satisfies a `live_run` criterion only through a derived artifact, code contract, or report, set `acceptance_diluted=true` and cap review-backed progress for that criterion.
+- When the reviewed change is guard/verifier/report-only hardening over the same target artifact and no fresh run id exists, set `verifier_surface_hardening=true`; do not describe it as primary-output progress.
+- When the run disposition is `candidate_degraded`, preserve it as quality-miss evidence and do not call it acceptable/canonical output unless independent verification evidence is supplied for the consumed axes.
 - When `surface_quality_suspected=true`, `semantic_ready=false`, `placeholder_event_found=true`, or `surface_entity_suspected=true` affects the primary output, set `progress_cap: governance_only` unless strict changed-and-semantic output-delta evidence independently proves primary-output progress.
 - When pronoun-only, particle-attached, common-noun, placeholder, or repeated-generic labels affect primary entities/events, set `surface_quality_suspected=true`, set `surface_entity_suspected=true`, add both codes when applicable, and cap progress at `governance_only` unless strict changed-and-semantic output-delta evidence proves otherwise.
 - When `windows_covered` is below the task/rung requirement, add `coverage_insufficient` to `quality_blocker_codes` and recommend full-window, multi-window, or multi-work extraction rather than another measurement surface.

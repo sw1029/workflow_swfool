@@ -34,17 +34,17 @@ Use these ownership rules:
 | --- | --- | --- | --- |
 | Authority policy | `$manage-agent-authority` | Governance, derive, validation, report | Policy source, effective permissions, external/API posture, strictness, escalation posture. |
 | Active advice packet | `$manage-external-advice` or orchestrator context | Governance, validation-set, review, derive, validation, report, commit | Advice ID/path, summary, actionable directives, application gates, raw-direct-reference requirement, disposition or explicit non-use rationale. |
-| Acceptance packet | `$normalize-acceptance-and-demo` | Governance, validation-scope, run planning, loopback, derive, validation | Acceptance criteria, non-goals, demo surfaces, validation commands, forbidden shortcuts, optional `acceptance_envelope_contract` from adapter `min_envelope_for`, optional `acceptance_verifier_contract` from adapter target-to-verifier mapping, required gate-hook completeness for gates named by measurable acceptance, frozen-envelope reachability and `envelope_thaw_item`/`envelope_thaw_item_required` when supplied, and residual-gap value/cycle-cost comparison inputs when supplied. |
+| Acceptance packet | `$normalize-acceptance-and-demo` | Governance, validation-scope, run planning, validation-set, loopback, derive, validation | Acceptance criteria, non-goals, demo surfaces, validation commands, forbidden shortcuts, preserved `acceptance.quantifiers`, `evidence_kind`, `item_created_at`, and `required_new_run_id` for measurable criteria, scenario contracts (`acceptance_scenarios` with premise predicates and expected terminal states), optional `acceptance_envelope_contract` from adapter `min_envelope_for`, optional `acceptance_verifier_contract` from adapter target-to-verifier mapping, required gate-hook completeness for gates named by measurable acceptance, frozen-envelope reachability and `envelope_thaw_item`/`envelope_thaw_item_required` when supplied, residual-gap value/cycle-cost comparison inputs when supplied, and Part K fields for output-derived expectations, comparison parity axes, adoption-axis classification, evidence resolution requirements, and provisional/disqualified adoption state when applicable. |
 | Repo adapter packet | Orchestrator scan or `scripts/render_adapter_packet.py` | Validation-set, governance, run, review, loopback, schema, derive, validation | Adapter ID/path/status, consumed phase packet, loaded references, optional `code_convention_contract`, non-GT/authority limits, validation status. |
-| Validation-set packet | `$build-validation-set-with-agents` | Governance, schema, derive, index, validation, report | Need/status, quality tier, `not_gold`, item/label/oracle counts, source-class distribution, oracle/split/leakage/root paths, blocked/candidate-only reasons. |
+| Validation-set packet | `$build-validation-set-with-agents` | Governance, schema, derive, index, validation, report | Need/status, quality tier, `not_gold`, item/label/oracle counts, source-class distribution, oracle/split/leakage/root paths, scenario coverage fields (`acceptance_scenario_id`, `premise_satisfied`, `expected_terminal_state`, `observed_terminal_state`), blocked/candidate-only reasons. |
 | Governance result | `$task-md-agent-governance` | Result contract, ledger, code audit, run, schema, validation | Task ID, changed files, task_miss, used GT/advice, implementation summary, validation profile, blockers. |
 | Code-structure audit packet | `scripts/code_structure_audit.py` | Run, derive, validation, issue, report | Scanned changed files, oversize files, responsibility clusters, semantic structure metrics/findings, convention conformance, moduleization requirement, split plan, semantic-refactor plan, exemptions, evidence paths. |
-| Run result | `$run-task-code-and-log` | Review, loopback, validation-set, schema, derive, index, validation, issue, report | Status, command, exit code, output/artifact paths, running metadata, log path, shortcomings, `failure_autopsy` including stage ladder, `last_successful_stage`, `failure_surface_stage`, scalar diagnostics or `diagnostics_unavailable`, `gate_satisfiability`, scalar `gate_selfcheck`, and any producer progress labels only as `observed_producer_claim`. |
-| Qualitative review packet | `$review-cycle-output-quality` | Loopback, validation-set, schema, derive, validation, report | `review_agent_count`, reviewed artifacts, quality verdict, findings, progress cap, output-delta fields, goal-axis completeness fields, no-overclaim flags, evidence paths. |
-| Anti-loop progress gate | `$audit-cycle-loopback` | Derive, validation, dashboard, report | Family/root keys, semantic signature, progress booleans, terminal outcome fields, generation-independent count-key fields, failure-surface stage gate, same-input contract gate, diagnostics-unavailable/instrumentation gate, verification source separation gate, frozen-envelope thaw gate, quality vector, effective dispositions, hard-stop state, findings, evidence paths. |
+| Run result | `$run-task-code-and-log` | Review, loopback, validation-set, schema, derive, index, validation, issue, report | Status, command, full body-free `command_argv` or `command_provenance_missing`, exit code, output/artifact paths, running metadata, log path, shortcomings, `failure_autopsy` including stage ladder, `last_successful_stage`, `failure_surface_stage`, scalar diagnostics or `diagnostics_unavailable`, `runtime_config_echo` and `config_overrides` when available, `run_disposition` (`failed_closed`, `candidate_degraded`, `candidate_written`), `gate_satisfiability`, scalar `gate_selfcheck`, actionable blocker fields when a gate returns a reason code, Part K report/comparison fields declared by artifacts, and any producer progress labels only as `observed_producer_claim`. |
+| Qualitative review packet | `$review-cycle-output-quality` | Loopback, validation-set, schema, derive, validation, report | `review_agent_count`, reviewed artifacts, quality verdict, findings, progress cap, output-delta fields, goal-axis completeness fields, instrumentation-exercise/acceptance-encoding/report-only hardening observations when relevant, no-overclaim flags, evidence paths. |
+| Anti-loop progress gate | `$audit-cycle-loopback` | Derive, validation, dashboard, report | Family/root keys, semantic signature, progress booleans, terminal outcome fields, generation-independent count-key fields, failure-surface stage gate, same-input contract gate, diagnostics-unavailable/instrumentation supply and exercise gates, instrumentation first-fire credit, acceptance encoding gate, verifier-surface hardening gate, run disposition, runtime config echo, stochastic feasibility findings, verification source separation gate, frozen-envelope thaw gate, Part K expectation/parity/adoption/resolution/report-key lineage fields, quality vector, effective dispositions, hard-stop state, findings, evidence paths. |
 | Loop-breaker packet | `scripts/detect_progress_loop.py` plus orchestrator synthesis | Derive, task-pack, validation, report | Blocker/root/semantic signatures, root-axis counts, terminal quiescence/escalation gates, supplied-input delta, provider retry, command surface, sealed family, zero-candidate state. |
-| Task-pack packet | `scripts/task_pack_queue.py` and `$derive-improvement-task` | Derive, index, validation, report, commit | Pack ID/path/status, current item, mutation plan, Markdown render, terminal blocker state, selected disposition, and `scope_fidelity` for measurable directive-derived items. |
-| Validation result | `$validate-task-completion` | Issue, commit, dashboard, report | `validation_verdict`, `progress_verdict`, `progress_axes`, blockers, evidence paths, advice disposition, task-pack preservation, `acceptance_provenance_gate`, `acceptance_verifier_gate`, `failure_surface_stage_gate`, `diagnostics_unavailable_gate`, `verification_source_separation_gate`, `envelope_thaw` fields, `goal_axis_completeness_gate`, `residual_gap_marginality_gate`, `structure_metrics_gate`, and behavior-change live evidence gate when applicable. |
+| Task-pack packet | `scripts/task_pack_queue.py` and `$derive-improvement-task` | Derive, index, validation, report, commit | Pack ID/path/status, current item, mutation plan, Markdown render, terminal blocker state, selected disposition, `scope_fidelity` for measurable directive-derived items, `acceptance.quantifiers`, `evidence_kind`, instrumentation supply/exercise ordering fields, and Part K expectation/parity/adoption/resolution/report-key contracts when applicable. |
+| Validation result | `$validate-task-completion` | Issue, commit, dashboard, report | `validation_verdict`, `progress_verdict`, `progress_axes`, blockers, evidence paths, advice disposition, task-pack preservation, `acceptance_provenance_gate`, `acceptance_scenario_gate`, `acceptance_verifier_gate`, `acceptance_encoding_gate`, `instrumentation_exercise_gate`, `failure_surface_stage_gate`, `diagnostics_unavailable_gate`, `verification_source_separation_gate`, `envelope_thaw` fields, `goal_axis_completeness_gate`, `verifier_surface_hardening_gate`, `run_disposition_gate`, `runtime_config_echo_gate`, `command_provenance_gate`, `blocker_actionability_gate`, `stochastic_feasibility_gate`, `expectation_lineage_gate`, `comparison_parity_gate`, `adoption_axis_gate`, `resolution_downgrade_gate`, `report_key_integrity_gate`, `instrumentation_first_fire_gate`, `execution_starvation_gate`, `residual_gap_marginality_gate`, `structure_metrics_gate`, and behavior-change live evidence gate when applicable. |
 | Issue packet | `$manage-implementation-issues` | Commit, dashboard, report | Created/updated/closed issue IDs, blocker links, resolution evidence, skipped reason. |
 | Commit packet | `$repo-change-commit` | Dashboard, report, closeout | `commit_role`, created/skipped/blocked status, commit hash/subject when created, skipped reason when not. |
 
@@ -94,10 +94,15 @@ When execution fails with a nonzero exit, traceback, runtime exception, or provi
 - `post_failure_scalar_diagnostics`
 - `diagnostics_unavailable`
 - `diagnostics_unavailable_reason`
+- `runtime_config_echo`
+- `config_origin`
+- `config_overrides`
 
 Do not persist raw prompts, provider bodies, generated bodies, stdout/stderr bodies, source bodies, credentials, tokens, or secrets in the autopsy packet.
 
 When an execution stage ladder is available, `last_successful_stage` and `failure_surface_stage` are required for downstream H2 counting. If safe post-failure scalar/enum diagnostics cannot be collected, the packet must say `diagnostics_unavailable=true`; no-body and redaction policy still allows scalar diagnostics such as stage, enum status, count, HTTP code, and exception class.
+
+When runtime config echo is available, keep only scalar/enum effective settings, each field's `config_origin`, and derived `config_overrides`. A `code_default` override is routing evidence for self-inflicted gate/default repair when it explains the blocker; it is not completion evidence.
 
 ### Qualitative Review
 
@@ -123,6 +128,9 @@ Consumers must preserve:
 - count-key hygiene fields: `legacy_family_key`, `raw_root_family_key`, `terminal_outcome_key`, `terminal_outcome_family_key`, `terminal_outcome_family_fallback_applied`, `root_dominant_parameter_key`, and any `generation_dependent_count_key`/trace-only finding supplied by loopback
 - failure-surface fields: `execution_stage_ladder_status`, `execution_stage_ladder`, `last_successful_stage`, `failure_surface_stage`, `failure_surface_count_key`, `failure_surface_stage_gate`, `terminal_classification_stage_contradiction`, `terminal_classification_invalid_for_counting`, `same_input_contract_gate`, and `same_input_contract_violation`
 - diagnostics/instrumentation fields: `diagnostics_unavailable`, `diagnostics_unavailable_streak`, `diagnostics_unavailable_gate`, and `instrumentation_supply_required`
+- evidence lifecycle fields: `instrumentation_exercise_required`, `instrumentation_exercised`, `instrumentation_field_map`, `derived_from_existing_artifacts`, `acceptance.quantifiers`, `evidence_kind`, `acceptance_diluted`, `verifier_surface_hardening`, `guard_stacking_cap_reached`, `target_artifact_paths`, `run_disposition`, `candidate_degraded`, `runtime_config_echo`, `config_overrides`, and `execution_starvation`
+- Part J fields: `acceptance_scenarios`, `scenario_coverage`, `scenario_uncovered`, `acceptance_inversion`, `command_argv` or `command_provenance_missing`, `blocker_actionability_gate`, repeated `blocker_opacity`, `instrumentation_first_fire`, `first_fire_consumed_item_id`, `outcome_variance`, `predetermined_unreachable`, and `floor_edge_envelope`
+- Part K fields: `expectation_anchor`, `designated_baseline`, `expectation_anchor_missing`, `expectation_lineage_stale`, `parity_axes`, `parity_axis_status`, `parity_unverified`, `adoption_axis_classification`, `required_output_classes`, `majority_vote_adoption`, `provisional_adoption`, `measured_but_disqualified`, `required_evidence_resolution`, `observed_evidence_resolution`, `resolution_downgrade`, `surrogate_resolution_basis`, `report_key_divergence`, and duplicate report-key path/value evidence
 - verification source fields: `verification_source_separation_gate`, `verification_input_paths`, `verified_artifact_paths`, `independent_source_separation_status`, and `independently_verified_downgraded_fields`
 - envelope thaw fields: `envelope_thaw_item_required`, `envelope_thaw_item`, `thaw_condition`, `thaw_schedule`, and `envelope_thaw_streak`
 - goal-axis completeness fields: `goal_axis_map`, `unobserved_goal_axes`, `pass_with_unobserved_axes`, and `goal_axis_completeness_gate` when review or the adapter supplies them
@@ -141,6 +149,8 @@ Generic fields:
 - `scope_fidelity.directive_id`: stable source directive identifier.
 - `scope_fidelity.original_target`: abstract measurable target. Project-specific metric definitions and thresholds belong in the advice packet, task pack, repository adapter, or project-owned contracts.
 - `scope_fidelity.item_acceptance`: acceptance copied from or traceable to the original target.
+- `scope_fidelity.acceptance.quantifiers`: original counts, rates, run counts, row counts, disjointness predicates, or other measurable relation predicates copied without reinterpretation.
+- `scope_fidelity.acceptance.evidence_kind`: `live_run`, `derived_artifact`, `code_contract`, or `report_only`; a live-run requirement needs a satisfying run id after item creation.
 - `scope_fidelity.narrowed`, `narrow_reason`, and `residual_item_id`: explicit descope record and open residual scope.
 - `acceptance_provenance_gate.target_met`: validation result comparing actual achievement to the original target.
 - `acceptance_provenance_gate.acceptance_diluted`: true when the item was closed against a weaker target.
@@ -148,7 +158,46 @@ Generic fields:
 
 Consumers must not mark a measurable item consumed, applied, or complete when `acceptance_diluted=true`. A narrowed item may be useful progress, but it remains `partial` unless the original target is met or the residual target stays open under an explicit descope decision.
 
+Consumers must not satisfy `evidence_kind=live_run` with a derived artifact, code contract, or report-only matrix. If a live-run criterion cannot be executed, preserve residual scope, explicit descope, terminal blocker, or user escalation.
+
 When adapter `residual_gap_policy` is available, consumers should preserve residual-gap fields supplied by normalize/derive such as `residual_gap_ratio`, `residual_gap_policy`, `marginal_repair`, and `descope_with_residual`. A residual gap below the adapter threshold should default to explicit descope with residual scope plus the next capability-ladder rung rather than another same-gap repair.
+
+### Acceptance Scenario Coverage
+
+When normalized acceptance contains a scenario contract of the form premise class -> expected terminal state, the validation-set plan must require at least one fixture or live run whose scalar inputs satisfy the premise. The completion gate consumes only two facts: whether the premise was actually injected, and whether the observed terminal state equals the expected state.
+
+Generic fields:
+
+- `acceptance_scenarios`: list of `{scenario_id, premise_predicate, expected_terminal_state}`.
+- `scenario_coverage`: list of `{scenario_id, evidence_path, premise_satisfied, observed_terminal_state}`.
+- `scenario_uncovered`: true when no evidence item satisfies the premise.
+- `acceptance_inversion`: true when evidence or changed tests assert the opposite terminal state for a premise-satisfying input.
+
+Green tests, high test count, or verifier pass rate do not override this gate. `scenario_uncovered` routes back to validation-set planning; `acceptance_inversion` fixes the verdict at `partial` and routes implementation/code contract repair.
+
+### Command Provenance And Blocker Actionability
+
+Live execution packets must preserve the full argv once in body-free form. Redaction may mask values, but it must not remove argument names. If only a summarized command, `...`, or missing flags are recorded, set `command_provenance_missing=true`; the run may still be evidence for other facts but cannot be a baseline, A/B, comparison, or reproduction source.
+
+Gate and validator blockers should be actionable. A blocker reason code should carry the violated abstract relation, observed scalar values, expected relation, and, when possible, a minimum input delta. If only a state name is returned, set `blocker_opacity=true`. Repeated opacity for the same gate is a derive candidate for blocker-contract repair; it is warn-only until the repeated condition exists.
+
+### Stochastic Feasibility And First-Fire Credit
+
+When adapter or caller evidence reports `outcome_variance` for a stochastic producer, exact equality contracts and envelope/floor slack smaller than observed variance are contract feasibility problems. Use `predetermined_unreachable` for exact-match contracts and `floor_edge_envelope` for too-small slack. Derive should route to interval/ratio/intersection criteria, envelope expansion, explicit residual descope, terminal blocker, or user escalation rather than another retry.
+
+When a run first produces non-empty scalar evidence for supplied instrumentation, record `instrumentation_first_fire=true`. This credit is a positive evidence delta even when the run is failed or degraded, but it may consume only one workflow item and cannot also satisfy goal progress or the original instrumentation-supply item.
+
+### Expectation And Comparison Lineage
+
+Output-derived scalar expectations must carry `expectation_anchor` and, when supplied, current `designated_baseline`. If the anchor surface is superseded, set `expectation_lineage_stale`; derive must rebaseline or fail closed before live execution. Missing anchors are warning-level through `expectation_anchor_missing`, but consumers must not describe the expectation as lineage verified.
+
+Comparison or adoption tasks must carry `parity_axes` with each axis classified as `controlled`, `measured`, or `unknown`. `unknown` axes force `parity_unverified` and make final adoption/baseline promotion invalid until resolved, explicitly provisional, terminal-blocked, or escalated. Axis definitions and echo/equality checks are adapter-owned.
+
+Adoption axes must be classified before measurement as `gating` or `tradable`, using adapter/caller `required_output_classes` or equivalent goal-contract evidence. A failed gating axis makes the candidate `measured_but_disqualified` and blocks final adoption regardless of tradable-axis wins. Missing classification makes majority-vote adoption only provisional.
+
+When a contract requires id, row, element-set, or intersection evidence but the implementation reports a count, ratio, ordinal, or other lower-resolution surrogate, preserve `resolution_downgrade` and `surrogate_resolution_basis`. First occurrence is provisional/warn evidence; repeated same-contract downgrade should route resolution restoration or contract revision.
+
+When one report contains the same terminal key at multiple JSON paths with divergent values, set `report_key_divergence=true`. Result contracts and validation must block pass/close/adoption/baseline/comparison consumption of that report until the report is repaired or a single source with matching values is declared. Matching duplicate terminal keys are warn-only schema debt.
 
 ### Acceptance Envelope And Verifier
 
@@ -212,7 +261,7 @@ Helper scripts provide decision-support evidence. They do not replace owning ski
 | `cycle_ledger.py` | `init`, `append`, `render`, `current`; stage JSON or explicit `--step` | `.task/cycle/<cycle-id>/stage.jsonl`, `current_stage.json`, packets, dashboard support | Dashboard, report, transition checks |
 | `render_subskill_packet.py` | `--target <phase>`, context/stage evidence | Markdown or JSON packet with routing, required inputs/outputs, GT/advice separation | Every owning subskill |
 | `validate_cycle_transition.py` | `--transition <name>`, context/status evidence | Transition `pass|warn|block` findings | Orchestrator before major phases |
-| `result_contract.py` | `--target <target>`, `--mode warn|block`, result JSON | Contract findings and ledger-envelope readiness | Orchestrator before advancing stages |
+| `result_contract.py` | `--target <target>`, `--mode warn|block`, result JSON | Contract findings, ledger-envelope readiness, Part J transition warnings for scenario coverage, argv provenance, blocker actionability, stochastic feasibility, and first-fire credit ownership, plus Part K warnings/blocks for stale expectations, parity/adoption routing, resolution downgrade, report-key divergence, and warn-only matching duplicate report-key schema debt | Orchestrator before advancing stages |
 | `code_structure_audit.py` | `--root`, changed-file list or input JSON, optional `--convention-json` | Scalar audit packet with size, responsibility, semantic structure, and convention-conformance fields; no source bodies; no patches | Run, derive, validation, report |
 | `detect_gt_constraint_conflict.py` | `--root`, task/GT/behavior evidence | GT/task conflict packet | Derive |
 | `detect_progress_loop.py` | `--root`, optional registry writes | Loop-breaker packet, feature-symbol gate, terminal gates, sealed-family evidence | Derive, task-pack, validation, report |
@@ -220,13 +269,24 @@ Helper scripts provide decision-support evidence. They do not replace owning ski
 | `task_pack_queue.py` | `status`, `validate`, `render`, `next`, `apply-mutation`, `mark-consumed` | `.task/task_pack/*.json` canonical queue and Markdown render when mutating through derive-approved plan; validates `scope_fidelity` and measurable acceptance provenance when present | Derive, index, validation, report |
 | `visible_increment.py` | Completed evidence and cycle ID | `.task/delta/<cycle-id>-visible-delta.{md,json}` with `not_validation_evidence: true` | Report only; not validation |
 | `render_cycle_dashboard.py` | Cycle ledger evidence | Korean `dashboard.md` snapshot | Report, closeout |
-| `profile_cycle_efficiency.py` | Cycle ledger evidence | Efficiency profile snapshot | Report |
+| `profile_cycle_efficiency.py` | Cycle ledger evidence | Efficiency profile snapshot with cycle-cost and `execution_starvation` fields when applicable | Derive, report |
 | `monitor_running_execution.py` | Running process/log metadata | Running-state verification without success promotion | Validation, report |
 | `assemble_cycle_report.py` | Context, validation, progress, commit JSON | Korean report draft/check in required field order | Final report |
 
 ## Fail-Closed Consumer Rules
 
 - Treat missing or malformed packet evidence as `conservative_hold`, `not_applicable`, `partial`, or `blocked`; never silently upgrade it to success.
+- Treat acceptance scenarios as uncovered unless a fixture or live run actually satisfies the premise predicate. Green tests that never inject the premise are not scenario coverage.
+- Treat `acceptance_inversion=true` as a code/contract repair condition and keep completion `partial` even when the current test suite is green.
+- Treat `command_provenance_missing=true` as disqualifying for baseline, A/B, comparison, and reproduction evidence, while preserving the run for other scalar facts.
+- Treat `blocker_opacity=true` as warn-only until repeated for the same gate; repeated opacity is a repair candidate for the gate/blocker contract.
+- Treat `predetermined_unreachable` and `floor_edge_envelope` as contract-revision findings, not retry findings.
+- Treat `instrumentation_first_fire=true` as one evidence credit only. Do not double-count it as goal progress and instrumentation-supply consumption.
+- Treat `expectation_lineage_stale=true` as blocking live-execution promotion that depends on the stale scalar until rebaseline, explicit residual descope, terminal blocker, or user escalation.
+- Treat `parity_unverified=true` and unknown parity axes as incompatible with final adoption, baseline promotion, or comparison-winner claims.
+- Treat failed `gating` adoption axes and `measured_but_disqualified=true` as blocking adoption of that candidate while preserving the artifact as measured evidence.
+- Treat `resolution_downgrade=true` as lower-resolution evidence only; do not consume it as high-resolution proof without contract revision or residual high-resolution scope.
+- Treat `report_key_divergence=true` as a blocking report-integrity defect for pass/close/adoption/baseline/comparison/high-water claims.
 - Enforce `effective_allowed_dispositions` as an intersection already computed by gates. Do not union individual gate dispositions.
 - Enforce gate-constrained `allowed_task_kinds` inside `disposition_intersection_basis`; do not accept unrelated tasks merely because their disposition label is `goal_productive`.
 - Treat `adapter_wiring_defect=true` as a self-inflicted workflow wiring/load bug. Do not downgrade it to adapter absence, adapter mandate, environment failure, or terminal blocker without a wiring/load correction attempt or user escalation.
@@ -242,6 +302,12 @@ Helper scripts provide decision-support evidence. They do not replace owning ski
 - Treat terminal-classification/failure-surface contradictions as invalid for counting or close. Do not close or seal a family from a terminal classification whose allowed stage map excludes the observed `failure_surface_stage`.
 - Treat same-condition input-set mismatch as invalid for same-family comparison. Do not reset stalls or close a family across mismatched windows/input sets.
 - Treat repeated `diagnostics_unavailable` as an instrumentation-supply trigger. Do not advance another hypothesis repair unless instrumentation lands or a concrete observability rationale proves success/failure is already measurable.
+- Treat supplied-but-unexercised instrumentation as unresolved. Do not advance dependent measurement, adoption, baseline, or close work unless a fresh run id exercised the supplied fields or a concrete observability rationale removes the dependency.
+- Treat `evidence_kind=live_run` as requiring a run id after item creation. Derived artifacts, code contracts, and reports are not substitutes without explicit descope and residual scope.
+- Treat same-target verifier/guard/report-only changes past the hardening cap as no-progress for `goal_productive`; require fresh execution-output evidence, explicit descope, terminal blocker, or user escalation.
+- Treat `candidate_degraded` as preserved quality-miss evidence, not canonical success or baseline replacement. Only independently verified axes may be consumed later.
+- Treat `runtime_config_echo` as failure/root-cause routing evidence only, and route plausible `code_default` overrides to self-inflicted default repair rather than opaque retry.
+- Treat `execution_starvation=true` as a derive ranking input favoring execution-producing work over another guard/report/contract task unless safety, authority, or terminal constraints block execution.
 - Treat non-disjoint or missing verification inputs as an automatic downgrade from `independently_verified` to attested unless the adapter marks the axis `self_grounded`.
 - Treat frozen-envelope unreachable acceptance as requiring `envelope_thaw_item`, constraint relaxation, explicit residual/descope, terminal blocker, or user escalation before ordinary repair can count.
 - Treat below-policy residual-gap value per cycle cost as marginal repair; do not select or validate another same-gap repair as `goal_productive` without a higher value case.

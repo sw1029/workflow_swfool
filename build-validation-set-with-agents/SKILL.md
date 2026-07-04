@@ -21,6 +21,10 @@ Use `consume` mode when an existing validation set should be run against current
 
 Use `blocked_or_candidate_only` when admissible source evidence is absent. Preserve the blocker explicitly instead of promoting fixture, synthetic, or metadata-only records into sampled-real or gold evidence.
 
+When normalized acceptance provides `acceptance_scenarios`, include scenario coverage in plan/build/consume modes. Each scenario needs at least one fixture or live run whose scalar inputs satisfy the premise predicate and whose oracle/assertion checks the expected terminal state. Do not count tests that never satisfy the premise as scenario coverage.
+
+When normalized acceptance or caller packets provide Part K lineage/comparison fields, plan or build reusable regression items for those contracts when the task asks for validation assets: stale `expectation_anchor` versus current `designated_baseline`, missing/unknown `parity_axes`, failed `gating` adoption axes, `majority_vote_adoption` without axis classification, `resolution_downgrade` from id/set/intersection evidence to a surrogate, and `report_key_divergence` inside one report. Keep fixture payloads scalar/id-only and leave domain axis definitions to adapters.
+
 ## Required Boundaries
 
 - Treat `.agent_goal/*.md` as goal truth only when actually used. Treat `.agent_advice/` as non-GT direction evidence and record disposition.
@@ -35,10 +39,12 @@ Use `blocked_or_candidate_only` when admissible source evidence is absent. Prese
 1. Load the task packet, authority policy, actual GT used, active advice packet, schema/contract summaries, task_miss/issue validation gaps, prior validation registry, and run/output evidence when available.
 2. Decide route: `not_applicable`, `plan`, `build`, `refresh`, `consume`, or `blocked_or_candidate_only`.
 3. In `plan` mode, write or return only public evaluation criteria: task family, failure taxonomy, source-class boundary, oracle feasibility, split policy, leakage policy, and label visibility policy.
-4. In `build` mode, sample source-linked candidate items, run independent labeler passes when semantic labels are needed, adjudicate disagreements, prefer deterministic/executable oracles, create splits, run leakage checks, and freeze a root hash.
-5. In `consume` mode, run existing deterministic oracles and report pass/fail counts by failure taxonomy, split, source class, and oracle type.
-6. Validate artifacts with `scripts/validate_validation_set.py`; if a root is produced, write it with `scripts/freeze_validation_set_root.py`.
-7. Return a compact result packet with required fields and no-overclaim flags.
+4. In `plan` mode, for every `acceptance_scenarios` record, state the required premise-satisfying input class, expected terminal state, and acceptable evidence source (`fixture` or `live_run`). If no admissible premise-satisfying input can be created, return `scenario_uncovered` and the missing condition.
+5. In `build` mode, sample source-linked candidate items, run independent labeler passes when semantic labels are needed, adjudicate disagreements, prefer deterministic/executable oracles, create splits, run leakage checks, and freeze a root hash. For scenario items, mark `premise_satisfied=true` only when the fixture/run inputs actually meet the predicate.
+6. In `consume` mode, run existing deterministic oracles and report pass/fail counts by failure taxonomy, split, source class, oracle type, and scenario coverage when applicable.
+7. In `plan`, `build`, or `consume` mode for Part K contracts, report whether each lineage/comparison fixture covers the intended contract class: expectation rebaseline, parity-axis coverage, gating-axis adoption rejection, resolution restoration, or duplicate-key divergence. Do not claim task completion from the fixture; hand the result to `$validate-task-completion`.
+8. Validate artifacts with `scripts/validate_validation_set.py`; if a root is produced, write it with `scripts/freeze_validation_set_root.py`.
+9. Return a compact result packet with required fields and no-overclaim flags.
 
 ## Result Packet
 
@@ -60,6 +66,14 @@ Return these fields when applicable:
 - `disagreement_report_path`
 - `validation_set_root_path`
 - `sealed_holdout_status`
+- `scenario_coverage`
+- `scenario_uncovered`
+- `acceptance_inversion_candidate`
+- `expectation_lineage_coverage`
+- `comparison_parity_coverage`
+- `adoption_gating_coverage`
+- `resolution_downgrade_coverage`
+- `report_key_divergence_coverage`
 - `no_overclaim_flags`
 - `forbidden_promotions`
 - `blockers`
@@ -68,6 +82,10 @@ Return these fields when applicable:
 - `used_advice` or `advice_handling_rationale`
 
 If `validation_set_status` is blocked, include `blocked_reason` and the exact missing source/authority/oracle condition. If `quality_tier` is `gold`, include human-reviewed or fully deterministic authoritative evidence.
+
+For scenario coverage, include `acceptance_scenario_id`, `premise_satisfied`, `expected_terminal_state`, `observed_terminal_state`, `evidence_path`, and `oracle_id`. If a changed or generated test asserts a non-expected terminal state for a premise-satisfying input, set `acceptance_inversion_candidate=true` for `$validate-task-completion`; do not hide it behind overall green status.
+
+If a producer artifact or `observed_producer_claim` reports a residual blocker that directly contradicts the scenario's expected terminal state, copy only the scalar blocker summary into the scenario item as `acceptance_inversion_candidate=true` plus evidence path. Do not treat the producer report as authoritative coverage; use it to force scenario review or code/contract repair.
 
 ## Resources
 

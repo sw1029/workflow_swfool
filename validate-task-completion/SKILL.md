@@ -53,7 +53,11 @@ When `task.md`, a caller packet, or active workflow evidence references `.agent_
    - If the task changes a runtime gate, router, validator, dispatch decision, or other judgment whose expected output changes, require fresh live before/after evidence that the changed path actually changed result, or record an explicit defer rationale and cap completion at `partial`.
    - If execution cannot be run, classify the execution gate as `missing` or `blocked` and explain why.
    - When execution failed, require the safe failure autopsy fields when available: `execution_stage_ladder_status`, `last_successful_stage`, `failure_surface_stage`, `post_failure_scalar_diagnostics`, and either safe scalar diagnostics or `diagnostics_unavailable=true`. Do not validate an opaque terminal classification when a stage ladder was available but omitted.
+   - When execution failed and a caller/adapter exposes runtime settings, preserve `runtime_config_echo`, `config_origin`, and `config_overrides`. Treat plausible `code_default` overrides as self-inflicted gate/default repair evidence, not as a terminal environment blocker.
+   - When execution evidence includes `run_disposition`, keep disposition separate from command status. `failed_closed` means unsafe output was discarded. `candidate_degraded` is preserved quality-miss evidence and cannot satisfy canonical baseline, completion, or `advanced` progress unless later independent verification explicitly permits the consumed axes.
    - Treat execution-log `observed_producer_claim` fields as producer self-report only. They may explain what the producer claimed, but they must not satisfy execution success, completion, progress, or goal-distance movement without adapter recomputation or strict changed-and-semantic output-delta evidence.
+   - Verify `command_argv` for live execution. If only a summarized command, `...`, or missing flags are logged, set `command_provenance_missing=true` and do not use that run for baseline, A/B, comparison, or reproduction claims.
+   - For gate/validator failures, verify blocker actionability. A blocker with only a state or reason code is `blocker_opacity`; warn on first occurrence and preserve repeated same-gate opacity as blocker-contract repair work.
 
 5. Run repository audit.
    - Use `$inspect-repo-with-agents` to audit requirement coverage, regressions, maintainability, tests, and generalization gaps.
@@ -94,21 +98,34 @@ When `task.md`, a caller packet, or active workflow evidence references `.agent_
    - When a normalized acceptance packet or loopback packet provides `acceptance_verifier_contract` or `unverifiable_acceptance_contract=true`, verify that each required live verifier evaluated to `pass`. If a required verifier is `not_evaluated`, classify the measurable acceptance as unmet or partial, preserve the verifier-hook follow-up or residual scope, and do not mark the source directive applied or consumed.
    - When a measurable acceptance target depends on a gate's required adapter hook, verify that the hook was supplied and evaluated. If the hook is missing, unloaded, fail-quiet, or `not_evaluated`, treat it as `unverifiable_acceptance_contract=true`; preserve hook-supply follow-up or residual scope and do not mark the source directive applied or consumed.
    - When a loopback packet provides `pass_with_coupled_verifier=true`, treat the affected verifier pass as not-pass for completion. Classify the measurable or verifier-backed acceptance as partial unless a later non-coupled revalidation or independent evidence recalculation is present.
+   - When normalized acceptance or validation-set evidence provides `acceptance_scenarios`, require scenario coverage: a premise-satisfying fixture or live run plus observed terminal state equal to the expected state. If no evidence satisfies the premise, set `scenario_uncovered=true` and return `partial`. If a premise-satisfying item observes or asserts the opposite state, set `acceptance_inversion=true`, return `partial`, and route code/contract repair regardless of green tests.
+   - When producer output or `observed_producer_claim` truthfully reports a residual blocker showing that a scenario premise cannot reach the expected terminal state, treat it as an `acceptance_inversion_candidate` for the acceptance-scenario gate. It is not completion evidence, but it is enough to block green-test close until scenario evidence resolves or confirms the inversion.
    - When a loopback packet provides `evidence_provenance_gate` or `attested_only_movement=true`, verify that claimed high-water movement and goal-progress evidence came from `independently_verified_fields`. Producer-attested scalar movement cannot satisfy acceptance, progress, or goal-distance movement by itself.
    - When a qualitative review packet provides `pass_with_unobserved_axes=true`, `goal_axis_completeness_gate.evaluation_status=fail`, or nonempty `unobserved_goal_axes`, do not consume that review as pass evidence for the affected measurable goals. Classify the relevant acceptance as partial unless adapter axis-supply work, explicit descope, terminal blocker, or user escalation is recorded.
    - When loopback or derive evidence shows generation-dependent count-key material, do not accept "new family" or "stall reset" claims based on raw task/advice/pack/cycle/run/date/hash/version labels. Validate against the effective root-family/dominant-parameter key or terminal-outcome family.
    - When loopback reports `failure_surface_stage_gate.terminal_classification_stage_contradiction=true`, `terminal_classification_invalid_for_counting=true`, or `same_input_contract_gate.same_input_contract_violation=true`, return `partial`/`failed` for any completion that depends on that classification or comparison. Contradictory terminal classification and same-input mismatch cannot support close, stall reset, or family seal.
    - When loopback reports `diagnostics_unavailable_gate.instrumentation_supply_required=true`, do not mark a hypothesis repair complete as progress unless instrumentation was supplied or the validation result records why success/failure is already observable without new instrumentation.
+   - When loopback, task-pack, or validation evidence reports `instrumentation_exercise_required=true`, do not mark dependent measurement, comparison, adoption, baseline, or close work complete unless a fresh run id after the instrumentation supply item recorded non-empty scalar fields per `instrumentation_field_map`, or a concrete observability rationale proves the supplied fields are unnecessary. `derived_from_existing_artifacts=true` is not exercise evidence.
+   - When acceptance encoding reports `evidence_kind=live_run`, require a satisfying run id created after `item_created_at` or task creation. If the evidence used is `derived_artifact`, `code_contract`, or `report_only`, set `acceptance_diluted=true`, return `partial`, and preserve residual live-run scope.
+   - When loopback reports `verifier_surface_hardening=true` and `guard_stacking_cap_reached=true`, do not accept another same-target guard/verifier/report task as `goal_productive` or `advanced`. Require execution-producing evidence, explicit descope with residual scope, terminal blocker, or user escalation.
+   - When profile evidence reports `execution_starvation=true`, treat another no-run guard/report/contract completion as `safety_only` or `no_progress` unless safety, authority, or terminal evidence proves execution was blocked.
    - When evidence provenance reports `independently_verified_fields`, require `verification_input_paths` that are disjoint from the verified artifacts unless the adapter marks the axis `self_grounded=true`. If `independent_source_separation_status=missing|overlap|blocked` or `independently_verified_downgraded_fields` is nonempty, treat affected fields as attested and do not use them for `complete` or `advanced`.
    - When reachability evidence reports `envelope_thaw_item_required=true`, do not complete frozen-envelope-unreachable acceptance without `envelope_thaw_item`, thaw condition/schedule, explicit descope with residual scope, terminal blocker, or user escalation.
    - When residual-gap evidence includes cycle-cost fields, verify that same-gap repair was selected because value per cycle cost outranked explicit descope-with-residual plus the next rung, or classify the remaining target as partial with residual scope.
+   - When stochastic output evidence reports `outcome_variance`, reject exact equality completion if `predetermined_unreachable=true`, and reject floor-edge envelope completion if `floor_edge_envelope=true`. Preserve contract revision, interval/ratio/intersection criteria, envelope expansion, residual descope, terminal blocker, or user escalation as follow-up.
+   - When run or loopback evidence reports `instrumentation_first_fire=true`, count it only as instrumentation evidence. It can make an instrumentation-exercise or evidence-supply task partial/advanced as appropriate, but it cannot also prove goal progress or consume the instrumentation supply item.
+   - When acceptance, task-pack, loopback, derive, or run evidence reports `expectation_lineage_stale=true`, do not complete the task from the stale expected scalar. Require rebaseline against the current `designated_baseline`, explicit residual/descope, terminal blocker, or user escalation. `expectation_anchor_missing=true` is warn-only, but it cannot support a lineage-verified expectation claim.
+   - When comparison/adoption evidence reports `parity_unverified=true`, missing `parity_axes`, or any parity axis status `unknown`, do not complete final adoption, baseline promotion, or comparison-winner work. Classify it as partial unless parity-axis resolution, explicit provisional status plus residual scope, terminal blocker, or user escalation is recorded.
+   - When adoption evidence lacks `adoption_axis_classification` or reports `majority_vote_adoption=true`, do not complete final adoption unless a later packet classifies axes and proves all `gating` axes passed. A failed `gating` axis or `measured_but_disqualified=true` blocks adoption regardless of tradable-axis wins; preserve the candidate as measured evidence only.
+   - When evidence reports `resolution_downgrade=true`, do not complete a task whose acceptance required the higher resolution unless the task explicitly revised the contract, restored the resolution, or preserved residual high-resolution scope. A first downgrade can be warning/provisional evidence; repeated downgrade for the same contract should route follow-up repair.
+   - When evidence reports `report_key_divergence=true`, return `partial` or `failed` for any pass/close/adoption/baseline/comparison/high-water claim that consumes that report. Divergent duplicate keys in one report are blocking until the report is repaired or a single source with matching values is declared.
    - If the item inherited a measurable target and actual achievement is below the original target, set `acceptance_diluted=true`, return `partial`, and preserve or require an open residual follow-up. Do not mark the original directive applied or the pack item consumed.
    - Accept a narrower result only when there is an explicit descope decision with reason plus residual item/link. A weak item label such as `pilot`, `plan`, or `slice` is not descope evidence.
    - If a provided `code_convention_contract` applies and governance/code-structure audit reports an unresolved contract-backed violation, return `partial` or `failed` according to severity. If the contract is absent, record the convention gap as warn-only and preserve a repo-local adapter/convention-contract follow-up when repeated.
    - For behavior-preserving refactor tasks, require adapter-supplied structure high-water movement, such as reduced entrypoint burden, reduced command/flat-file/function burden, reduced mechanical shard count, reduced duplicate definitions, reduced global coupling, improved reuse ratio, reduced depth/fan-out, or another project-owned structure metric. Treat adapter `structure_metrics` as the structure-progress truth source; producer-local structure reports, file-count growth, relocated helpers, token/pattern avoidance, or green tests alone are insufficient for `complete` when the refactor objective was structural reduction. If the adapter reports `structure_high_water_key_scope=global_invariant`, selected-scope improvement alone is insufficient unless the global invariant moved or explicit residual/descope evidence remains open.
    - If caller packets include `disposition_intersection_basis.allowed_task_kinds`, verify that any claimed `goal_productive` completion used a matching `selected_task_kind`; otherwise cap the verdict at `partial` and preserve the allowed correction as residual work.
    - If structure metrics worsen on a relevant axis, such as shard count up, duplicate count up, depth/fan-out beyond contract, reuse ratio down, or max LOC up against the task objective, cap the verdict at `partial` and preserve residual work unless the task explicitly scoped that regression out with evidence.
-   - Record `acceptance_provenance_gate`, `acceptance_verifier_gate`, `coupled_verifier_gate`, `evidence_provenance_gate`, `goal_axis_completeness_gate`, `count_key_hygiene_gate`, `residual_gap_marginality_gate`, `convention_conformance_gate`, `structure_metrics_gate`, and `execution_evidence_gate` fields in the validation result when applicable so `$orchestrate-task-cycle` result contracts can enforce them.
+   - Record `acceptance_provenance_gate`, `acceptance_scenario_gate`, `acceptance_verifier_gate`, `acceptance_encoding_gate`, `instrumentation_exercise_gate`, `instrumentation_first_fire_gate`, `coupled_verifier_gate`, `evidence_provenance_gate`, `goal_axis_completeness_gate`, `count_key_hygiene_gate`, `verifier_surface_hardening_gate`, `run_disposition_gate`, `runtime_config_echo_gate`, `command_provenance_gate`, `blocker_actionability_gate`, `stochastic_feasibility_gate`, `expectation_lineage_gate`, `comparison_parity_gate`, `adoption_axis_gate`, `resolution_downgrade_gate`, `report_key_integrity_gate`, `execution_starvation_gate`, `residual_gap_marginality_gate`, `convention_conformance_gate`, `structure_metrics_gate`, and `execution_evidence_gate` fields in the validation result when applicable so `$orchestrate-task-cycle` result contracts can enforce them.
 
 11. Decide the verdict.
    - Use [completion-gates.md](references/completion-gates.md) for the gate matrix.
@@ -122,9 +139,23 @@ When `task.md`, a caller packet, or active workflow evidence references `.agent_
    - If the task's family novelty, stall reset, or seal decision relies on generation-dependent raw keys, `complete` is invalid for that workflow claim unless the effective count key preserves the same family or records an explicit override with user-supplied input/authority/external-state change.
    - If terminal classification contradicts the observed failure surface stage, or the same-condition input set differs, `complete` is invalid for any close/counting claim based on that terminal classification.
    - If instrumentation supply is still required after repeated `diagnostics_unavailable`, `advanced` progress is invalid unless instrumentation landed or a concrete observability rationale is recorded.
+   - If instrumentation exercise is still required for supplied fields, `complete` and `advanced` are invalid for dependent measurement/adoption work unless a fresh run id exercised those fields or an observability rationale explicitly removes the dependency.
+   - If a scenario-shaped acceptance criterion lacks a premise-satisfying fixture/live run, `complete` is invalid for that criterion. If premise-satisfying evidence asserts the opposite terminal state, `complete` is invalid and the verdict remains `partial` with code/contract repair.
+   - If a `live_run` acceptance criterion was satisfied only by derived artifacts, code contracts, or report-only evidence, `complete` is invalid and `advanced` is invalid for that criterion.
+   - If guard-stacking collapse reached its cap, another same-target verifier/guard/report task cannot be `advanced` without fresh execution-output evidence.
+   - If the only new output is `candidate_degraded`, `advanced` is invalid unless independently verified axes prove a valid blocker-state transition and no canonical promotion is claimed.
    - If independently verified evidence lacks disjoint verification inputs, `complete`/`advanced` is invalid for the affected metric unless the axis is adapter-marked `self_grounded`.
    - If a frozen envelope makes acceptance unreachable and no `envelope_thaw_item` or explicit residual/descope path is recorded, `complete` is invalid.
    - If a residual gap is below value-per-cycle-cost policy and the task consumes another same-gap repair without higher value evidence, `complete` is invalid for that measurable target.
+   - If live-run command provenance is missing, `complete` may still be possible only for tasks that do not rely on reproducibility, baseline, A/B, or comparison evidence. Otherwise cap at `partial`.
+   - If blocker opacity repeats for the same gate and the task claims the blocker is actionable or resolved, `complete` is invalid without blocker-contract repair evidence.
+   - If stochastic feasibility findings show the acceptance contract is predetermined unreachable or floor-edge, `complete` is invalid until the contract is revised, explicitly descoped with residual scope, or escalated.
+   - If first-fire instrumentation credit is counted, ensure it is not double-counted as goal progress or instrumentation supply consumption.
+   - If `expectation_lineage_stale=true` and no rebaseline/descope/terminal path is recorded, `complete` is invalid for any criterion depending on that expectation.
+   - If `parity_unverified=true` or any required parity axis is `unknown`, `complete` is invalid for final adoption, baseline promotion, or comparison-winner claims.
+   - If a failed `gating` adoption axis or `measured_but_disqualified=true` is present, `complete` is invalid for adoption of that candidate.
+   - If `resolution_downgrade=true` and the task required the original high-resolution evidence, `complete` is invalid unless the contract was revised, resolution restored, or residual scope remains open.
+   - If `report_key_divergence=true`, `complete` is invalid for any claim consuming that report, and `advanced` is invalid when the claimed progress depends on the divergent value.
    - If convention conformance is applicable, `complete` also requires unresolved contract-backed code convention violations to be absent or intentionally deferred with open residual scope. Missing convention contract evidence is warn-only unless the task explicitly required contract creation/update.
    - `partial`: core work appears useful but one or more nonfatal gates are missing, unverified, degraded, or have follow-up risks.
    - `failed`: implementation is absent, required execution fails, audit finds blocking defects, severe task_miss remains open, or the task cannot be safely validated.
@@ -196,6 +227,38 @@ Include a `Failure surface stage` gate whenever `execution_stage_ladder`, `last_
 
 Include an `Instrumentation supply` gate whenever `diagnostics_unavailable`, `diagnostics_unavailable_streak`, or `instrumentation_supply_required` fields are present.
 
+Include an `Instrumentation exercise` gate whenever `instrumentation_exercise_required`, `instrumentation_exercised`, `instrumentation_field_map`, `instrumentation_run_id`, or `derived_from_existing_artifacts` fields are present.
+
+Include an `Instrumentation first fire` gate whenever `instrumentation_first_fire`, `first_fire_consumed_item_id`, or first-fire exercise evidence is present.
+
+Include an `Acceptance scenario` gate whenever `acceptance_scenarios`, `scenario_coverage`, `scenario_uncovered`, or `acceptance_inversion` fields are present.
+
+Include a `Command provenance` gate whenever live execution evidence is used for baseline, A/B, comparison, reproduction, or run-specific acceptance.
+
+Include a `Blocker actionability` gate whenever a gate/validator blocker reason code is used to route or close work.
+
+Include a `Stochastic feasibility` gate whenever `outcome_variance`, `predetermined_unreachable`, `floor_edge_envelope`, or comparable envelope `slack` fields are present.
+
+Include an `Expectation lineage` gate whenever `expectation_anchor`, `designated_baseline`, `expectation_anchor_missing`, or `expectation_lineage_stale` fields are present.
+
+Include a `Comparison parity` gate whenever `parity_axes`, `parity_axis_status`, or `parity_unverified` fields are present.
+
+Include an `Adoption axis` gate whenever `adoption_axis_classification`, `required_output_classes`, `majority_vote_adoption`, `provisional_adoption`, `measured_but_disqualified`, or gating/tradable axis fields are present.
+
+Include a `Resolution downgrade` gate whenever `required_evidence_resolution`, `observed_evidence_resolution`, `resolution_downgrade`, or `surrogate_resolution_basis` fields are present.
+
+Include a `Report key integrity` gate whenever `report_key_divergence`, duplicate terminal key paths, or single-report key/value divergence fields are present.
+
+Include an `Acceptance encoding` gate whenever `acceptance.quantifiers`, `evidence_kind`, `item_created_at`, `required_new_run_id`, `satisfying_run_id`, or `acceptance_diluted` fields are present.
+
+Include a `Verifier-surface hardening` gate whenever `verifier_surface_hardening`, `target_artifact_paths`, `change_set_kind`, or `guard_stacking_cap_reached` fields are present.
+
+Include a `Run disposition` gate whenever `run_disposition`, `failed_closed`, `candidate_degraded`, `candidate_written`, or `disposition_unclassified` fields are present.
+
+Include a `Runtime config echo` gate whenever `runtime_config_echo`, `config_origin`, or `config_overrides` fields are present.
+
+Include an `Execution starvation` gate whenever `execution_starvation` or `recent_cycle_run_id_count` fields are present.
+
 Include an `Envelope thaw` gate whenever `envelope_thaw_item_required`, `envelope_thaw_item`, thaw condition, or frozen-envelope reachability fields are present.
 
 Include a `Residual gap marginality` gate whenever `residual_gap_policy`, `marginal_repair`, `cycle_fixed_cost`, `marginal_value_per_cycle_cost`, or value/cost policy fields are present.
@@ -250,6 +313,23 @@ Include a `Behavior-change live evidence` gate whenever the task changes runtime
 - Do not complete workflow claims that reset counters or family novelty through generation-dependent task/advice/pack/cycle/run/date/hash/version keys.
 - Do not complete workflow claims from a terminal classification that contradicts the observed `failure_surface_stage`, or from same-family comparisons whose input sets do not match.
 - Do not advance progress while `instrumentation_supply_required=true` remains unresolved unless an explicit observability rationale proves success/failure is already measurable without new instrumentation.
+- Do not advance or complete dependent work while `instrumentation_exercise_required=true` remains unresolved. Existing artifact reinterpretation is not fresh exercise.
+- Do not complete scenario-shaped acceptance from tests that never satisfy the scenario premise. Do not treat green tests as evidence against `acceptance_inversion`.
+- Do not discard producer-reported residual blockers that contradict a scenario terminal state. Preserve them as `acceptance_inversion_candidate` or explicit scenario-gate review evidence, while still excluding producer self-report from progress truth.
+- Do not complete `evidence_kind=live_run` criteria from derived artifacts, code contracts, or reports; preserve the original quantifiers and residual live-run scope.
+- Do not advance same-target guard/verifier/report-only work past the verifier-surface hardening cap without fresh execution-output evidence.
+- Do not promote `candidate_degraded` artifacts as canonical baseline or completion evidence without independent verification for the consumed axes.
+- Do not treat `runtime_config_echo` by itself as completion evidence; use it only for failure/root-cause routing.
+- Do not ignore `execution_starvation` when classifying another no-run guard/report/contract task; cap progress conservatively unless execution was blocked by safety, authority, or terminal evidence.
+- Do not use a live run with missing full argv as reproduction, baseline, A/B, or comparison evidence.
+- Do not treat a state-name-only blocker as actionable evidence. Preserve `blocker_opacity` and require relation/observed/expected/minimum-delta fields for blocker-contract closure.
+- Do not retry exact-match or floor-edge stochastic contracts as if the next run could satisfy them when variance evidence says they are predetermined unreachable.
+- Do not double-count `instrumentation_first_fire` as both first-fire evidence and goal progress or instrumentation-supply consumption.
+- Do not complete or advance work from stale output-derived expectation anchors.
+- Do not complete final comparison/adoption work while parity axes are missing or unknown.
+- Do not complete adoption from majority vote when required output/gating axes are unclassified or failed.
+- Do not complete a high-resolution evidence contract from a lower-resolution surrogate unless the contract was explicitly revised and residual scope is tracked.
+- Do not complete or advance from a report that has divergent duplicate terminal keys.
 - Do not complete frozen-envelope-unreachable acceptance without `envelope_thaw_item`, thaw condition/schedule, explicit residual/descope, terminal blocker, or user escalation.
 - Do not complete another same-gap residual repair as goal-productive when value per cycle cost is below adapter policy and no higher value case is recorded.
 - Do not complete behavior-preserving refactor work from module creation or green tests alone when the objective required structural reduction.

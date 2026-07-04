@@ -369,6 +369,167 @@ def list_values(value: Any) -> list[str]:
     return []
 
 
+def recursive_key_present(value: Any, keys: set[str]) -> bool:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in keys and non_empty(item):
+                return True
+            if recursive_key_present(item, keys):
+                return True
+    if isinstance(value, list):
+        return any(recursive_key_present(item, keys) for item in value)
+    return False
+
+
+def command_summary_omitted(value: Any, command_context: bool = False) -> bool:
+    command_keys = {"command", "cmd", "command_line", "command_summary", "commands"}
+    if isinstance(value, dict):
+        for key, item in value.items():
+            next_context = command_context or key in command_keys or "command" in key
+            if command_summary_omitted(item, next_context):
+                return True
+    if isinstance(value, list):
+        return any(command_summary_omitted(item, command_context) for item in value)
+    if isinstance(value, str):
+        return command_context and "..." in value
+    return False
+
+
+REPORT_CONTEXT_KEYS = {
+    "report",
+    "quality_report",
+    "validation_report",
+    "result_report",
+    "report_payload",
+    "report_artifact",
+    "artifact_report",
+    "summary_report",
+}
+
+REPORT_DUPLICATE_KEY_EXCLUSIONS = {
+    "id",
+    "path",
+    "status",
+    "step",
+    "target",
+    "mode",
+    "severity",
+    "code",
+    "message",
+    "reason",
+    "created_at",
+    "updated_at",
+    "timestamp",
+    "evidence_path",
+    "evidence_paths",
+}
+
+
+def report_integrity_required(data: dict[str, Any]) -> bool:
+    return boolish(
+        first_present(
+            data,
+            [
+                "report_key_integrity_required",
+                "report_key_integrity_gate.required",
+                "report_key_integrity_gate.scan_duplicate_terminal_keys",
+                "result.report_key_integrity_gate.required",
+            ],
+        )
+    )
+
+
+def is_report_context_key(key: str) -> bool:
+    normalized = key.strip().lower()
+    return normalized in REPORT_CONTEXT_KEYS or normalized.endswith("_report")
+
+
+def collect_report_roots(value: Any, path: str = "$", key: str = "") -> list[tuple[str, Any]]:
+    roots: list[tuple[str, Any]] = []
+    if isinstance(value, dict):
+        if key and is_report_context_key(key):
+            roots.append((path, value))
+            return roots
+        for child_key, child in value.items():
+            child_path = f"{path}.{child_key}"
+            roots.extend(collect_report_roots(child, child_path, str(child_key)))
+    elif isinstance(value, list):
+        for idx, child in enumerate(value):
+            roots.extend(collect_report_roots(child, f"{path}[{idx}]", key))
+    return roots
+
+
+def collect_terminal_key_values(value: Any, path: str = "$") -> dict[str, list[tuple[str, str, Any]]]:
+    values: dict[str, list[tuple[str, str, Any]]] = {}
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_path = f"{path}.{key}"
+            if isinstance(child, (dict, list)):
+                child_values = collect_terminal_key_values(child, child_path)
+                for child_key, child_entries in child_values.items():
+                    values.setdefault(child_key, []).extend(child_entries)
+                continue
+            key_text = str(key)
+            if key_text.lower() in REPORT_DUPLICATE_KEY_EXCLUSIONS:
+                continue
+            try:
+                encoded = json.dumps(child, sort_keys=True, ensure_ascii=False)
+            except TypeError:
+                encoded = repr(child)
+            values.setdefault(key_text, []).append((child_path, encoded, child))
+    elif isinstance(value, list):
+        for idx, child in enumerate(value):
+            child_values = collect_terminal_key_values(child, f"{path}[{idx}]")
+            for child_key, child_entries in child_values.items():
+                values.setdefault(child_key, []).extend(child_entries)
+    return values
+
+
+def report_key_divergences(data: dict[str, Any]) -> list[dict[str, Any]]:
+    roots = collect_report_roots(data)
+    if report_integrity_required(data) and not roots:
+        roots = [("$", data)]
+    divergences: list[dict[str, Any]] = []
+    for root_path, root in roots:
+        terminal_values = collect_terminal_key_values(root, root_path)
+        for key, entries in terminal_values.items():
+            unique_values = {encoded for _, encoded, _ in entries}
+            if len(entries) < 2 or len(unique_values) <= 1:
+                continue
+            divergences.append(
+                {
+                    "root_path": root_path,
+                    "terminal_key": key,
+                    "paths": [path for path, _, _ in entries],
+                    "values": [value for _, _, value in entries],
+                }
+            )
+    return divergences
+
+
+def report_key_duplicate_matches(data: dict[str, Any]) -> list[dict[str, Any]]:
+    roots = collect_report_roots(data)
+    if report_integrity_required(data) and not roots:
+        roots = [("$", data)]
+    duplicates: list[dict[str, Any]] = []
+    for root_path, root in roots:
+        terminal_values = collect_terminal_key_values(root, root_path)
+        for key, entries in terminal_values.items():
+            unique_values = {encoded for _, encoded, _ in entries}
+            if len(entries) < 2 or len(unique_values) != 1:
+                continue
+            duplicates.append(
+                {
+                    "root_path": root_path,
+                    "terminal_key": key,
+                    "paths": [path for path, _, _ in entries],
+                    "value": entries[0][2],
+                    "duplicate_count": len(entries),
+                }
+            )
+    return duplicates
+
+
 def normalize_task_kind(value: Any) -> str:
     return "".join(
         ch if ch.isalnum() or ch == "_" else "_"
@@ -432,6 +593,86 @@ CLASSIFICATION_REPAIR_TASK_KINDS = {
 }
 
 ENVELOPE_THAW_TASK_KINDS = {"envelope_thaw_item", "constraint_relaxation", "verifier_contract_supply"}
+SCENARIO_SUPPLY_TASK_KINDS = {
+    "validation_set_plan",
+    "validation_set_build",
+    "scenario_fixture_supply",
+    "fixture_supply",
+    "live_run_supply",
+    "acceptance_scenario_supply",
+    "test_scenario_supply",
+}
+SCENARIO_REPAIR_TASK_KINDS = {
+    "acceptance_inversion_repair",
+    "code_contract_repair",
+    "implementation_contract_repair",
+    "acceptance_contract_repair",
+    "test_contract_repair",
+}
+COMMAND_PROVENANCE_TASK_KINDS = {
+    "command_provenance_repair",
+    "rerun_with_full_argv",
+    "run_reproduction_repair",
+    "execution_log_repair",
+}
+BLOCKER_CONTRACT_REPAIR_TASK_KINDS = {
+    "blocker_contract_repair",
+    "gate_contract_repair",
+    "gate_blocker_repair",
+    "authorization_contract_repair",
+}
+STOCHASTIC_CONTRACT_TASK_KINDS = {
+    "stochastic_contract_revision",
+    "acceptance_contract_revision",
+    "envelope_expansion",
+    "residual_descope",
+    "user_escalation",
+    "terminal_blocked",
+}
+EXPECTATION_REBASELINE_TASK_KINDS = {
+    "expectation_rebaseline",
+    "expectation_anchor_supply",
+    "expectation_lineage_repair",
+    "baseline_rebind",
+    "residual_descope",
+    "user_escalation",
+    "terminal_blocked",
+}
+PARITY_AXIS_TASK_KINDS = {
+    "parity_axis_resolution",
+    "comparison_parity_repair",
+    "provisional_comparison",
+    "residual_descope",
+    "user_escalation",
+    "terminal_blocked",
+}
+ADOPTION_AXIS_TASK_KINDS = {
+    "adoption_axis_classification",
+    "gating_axis_repair",
+    "adoption_contract_revision",
+    "measured_but_disqualified_preservation",
+    "candidate_rejection",
+    "residual_descope",
+    "user_escalation",
+    "terminal_blocked",
+}
+RESOLUTION_REPAIR_TASK_KINDS = {
+    "resolution_restoration",
+    "evidence_resolution_repair",
+    "contract_resolution_revision",
+    "acceptance_contract_revision",
+    "residual_descope",
+    "user_escalation",
+    "terminal_blocked",
+}
+REPORT_KEY_REPAIR_TASK_KINDS = {
+    "report_key_repair",
+    "report_schema_repair",
+    "report_sync_repair",
+    "schema_single_source_repair",
+    "user_escalation",
+    "terminal_blocked",
+}
 
 
 def forced_task_kind(result: dict[str, Any]) -> str:
@@ -606,6 +847,37 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                 {"required": ["used_advice", "advice_deferred_reason|advice_rejected_reason|advice_not_applicable_reason|advice_handling_rationale"]},
             )
 
+    explicit_report_key_divergence = boolish(
+        first_present(
+            result,
+            [
+                "report_key_divergence",
+                "report_key_integrity_gate.report_key_divergence",
+                "validation.report_key_integrity_gate.report_key_divergence",
+                "result.report_key_integrity_gate.report_key_divergence",
+            ],
+        )
+    )
+    auto_report_key_divergences = report_key_divergences(result)
+    auto_report_key_duplicate_matches = report_key_duplicate_matches(result)
+    if explicit_report_key_divergence or auto_report_key_divergences:
+        report_key_severity = "block" if mode == "block" or target in {"validate", "report"} else "warn"
+        add(
+            findings,
+            report_key_severity,
+            "report_key_divergence",
+            "`report_key_divergence` means one report contains duplicate terminal keys with divergent values; pass/close/adoption/baseline/comparison consumption is invalid until the report is repaired.",
+            {"auto_detected": auto_report_key_divergences[:20], "explicit_report_key_divergence": explicit_report_key_divergence},
+        )
+    if auto_report_key_duplicate_matches:
+        add(
+            findings,
+            "warn",
+            "report_key_duplicate_schema_debt",
+            "Matching duplicate terminal report keys are schema debt; consumption may continue, but the report should be normalized to one authoritative copy.",
+            {"auto_detected": auto_report_key_duplicate_matches[:20]},
+        )
+
     if target == "code_structure_audit":
         audit_status = str(value_for(result, "audit_status") or value_for(result, "status") or "").lower()
         if audit_status and audit_status not in {"pass", "warn", "refactor_required", "blocked", "not_applicable"}:
@@ -666,6 +938,153 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
         missing_running = [field for field in RUNNING_FIELDS if not has_value(result, field)]
         for field in missing_running:
             add(findings, "block", "running_detail_missing", f"`running` execution requires `{field}`.", {"field": field})
+    if target == "run":
+        live_execution = boolish(
+            first_present(
+                result,
+                [
+                    "live_execution",
+                    "live_execution_required",
+                    "live_run",
+                    "run.live_execution",
+                    "run.live_execution_required",
+                ],
+            )
+        )
+        if not live_execution:
+            live_execution = execution_status not in {"", "not_applicable", "skipped", "blocked_no_execution", "no_execution"}
+        command_argv = first_present(
+            result,
+            [
+                "command_argv",
+                "run.command_argv",
+                "execution.command_argv",
+                "command_provenance_gate.command_argv",
+                "result.command_argv",
+            ],
+        )
+        command_provenance_missing = boolish(
+            first_present(
+                result,
+                [
+                    "command_provenance_missing",
+                    "command_provenance_gate.command_provenance_missing",
+                    "run.command_provenance_missing",
+                    "result.command_provenance_gate.command_provenance_missing",
+                ],
+            )
+        )
+        if live_execution and not non_empty(command_argv) and not command_provenance_missing:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "run_command_argv_or_missing_flag_required",
+                "`run` must preserve full body-free command_argv for live execution, or explicitly set command_provenance_missing=true.",
+            )
+        if live_execution and command_summary_omitted(result) and not command_provenance_missing:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "run_command_summary_ellipsis_without_missing_provenance",
+                "`run` command evidence contains an ellipsis or summarized command; set command_provenance_missing=true unless full argv is also preserved.",
+            )
+        blocker_reason_present = recursive_key_present(
+            first_present(result, ["blockers", "blocking_findings", "run.blockers", "result.blockers"]) or result,
+            {"reason_code", "blocker_reason_code", "blocker_reason"},
+        )
+        actionable_present = recursive_key_present(
+            result,
+            {"blocker_actionability", "violated_relation", "observed_values", "expected_relation", "minimum_input_delta"},
+        )
+        blocker_opacity = boolish(
+            first_present(
+                result,
+                [
+                    "blocker_opacity",
+                    "blocker_actionability_gate.blocker_opacity",
+                    "run.blocker_opacity",
+                    "result.blocker_actionability_gate.blocker_opacity",
+                ],
+            )
+        )
+        if blocker_reason_present and not actionable_present and not blocker_opacity:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "run_blocker_reason_without_actionability_or_opacity",
+                "`run` blocker reason codes must include violated relation, observed scalar values, expected relation, or minimum input delta; otherwise preserve blocker_opacity=true.",
+            )
+    if target in {"validation_set_plan", "validation_set_build"}:
+        acceptance_scenarios = first_present(
+            result,
+            [
+                "acceptance_scenarios",
+                "acceptance_scenario_contract.acceptance_scenarios",
+                "validation_set.acceptance_scenarios",
+                "result.acceptance_scenarios",
+            ],
+        )
+        scenario_required = boolish(
+            first_present(
+                result,
+                [
+                    "acceptance_scenario_required",
+                    "acceptance_scenario_gate.required",
+                    "scenario_coverage_required",
+                    "result.acceptance_scenario_gate.required",
+                ],
+            )
+        )
+        scenario_coverage = first_present(
+            result,
+            [
+                "scenario_coverage",
+                "acceptance_scenario_gate.scenario_coverage",
+                "validation_set.scenario_coverage",
+                "result.acceptance_scenario_gate.scenario_coverage",
+            ],
+        )
+        scenario_gate = first_present(
+            result,
+            [
+                "acceptance_scenario_gate",
+                "scenario_coverage_gate",
+                "result.acceptance_scenario_gate",
+            ],
+        )
+        scenario_uncovered = boolish(
+            first_present(
+                result,
+                [
+                    "scenario_uncovered",
+                    "acceptance_scenario_gate.scenario_uncovered",
+                    "result.acceptance_scenario_gate.scenario_uncovered",
+                ],
+            )
+        )
+        missing_premise_reason = first_present(
+            result,
+            [
+                "missing_premise_satisfying_input_reason",
+                "scenario_uncovered_reason",
+                "acceptance_scenario_gate.missing_premise_satisfying_input_reason",
+                "result.acceptance_scenario_gate.scenario_uncovered_reason",
+            ],
+        )
+        if (non_empty(acceptance_scenarios) or scenario_required) and not (non_empty(scenario_coverage) or scenario_uncovered or non_empty(scenario_gate)):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                f"{target}_scenario_coverage_missing",
+                f"`{target}` received scenario-shaped acceptance but did not record scenario coverage or scenario_uncovered.",
+            )
+        if scenario_uncovered and not non_empty(missing_premise_reason):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                f"{target}_scenario_uncovered_without_reason",
+                f"`{target}` scenario_uncovered=true requires the missing premise-satisfying input condition.",
+            )
     if target == "qualitative_review":
         review_agent_count = value_for(result, "review_agent_count")
         try:
@@ -933,6 +1352,290 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
         allowed_task_kinds = allowed_task_kinds_from_basis(disposition_basis)
         selected_kind = selected_task_kind_value(result)
         terminal_selected = selected_source == "terminal_blocked" or has_value(result, "terminal_blocker")
+        scenario_uncovered = boolish(
+            first_present(
+                result,
+                [
+                    "scenario_uncovered",
+                    "acceptance_scenario_gate.scenario_uncovered",
+                    "anti_loop_progress_gate.scenario_uncovered",
+                    "result.anti_loop_progress_gate.acceptance_scenario_gate.scenario_uncovered",
+                ],
+            )
+        )
+        acceptance_inversion = boolish(
+            first_present(
+                result,
+                [
+                    "acceptance_inversion",
+                    "acceptance_inversion_candidate",
+                    "acceptance_scenario_gate.acceptance_inversion",
+                    "anti_loop_progress_gate.acceptance_inversion",
+                    "result.anti_loop_progress_gate.acceptance_scenario_gate.acceptance_inversion",
+                ],
+            )
+        )
+        command_provenance_missing = boolish(
+            first_present(
+                result,
+                [
+                    "command_provenance_missing",
+                    "command_provenance_gate.command_provenance_missing",
+                    "anti_loop_progress_gate.command_provenance_missing",
+                    "result.anti_loop_progress_gate.command_provenance_gate.command_provenance_missing",
+                ],
+            )
+        )
+        repeated_blocker_opacity = boolish(
+            first_present(
+                result,
+                [
+                    "repeated_blocker_opacity",
+                    "blocker_opacity_repeated",
+                    "blocker_actionability_gate.repeated_blocker_opacity",
+                    "anti_loop_progress_gate.repeated_blocker_opacity",
+                    "result.anti_loop_progress_gate.blocker_actionability_gate.repeated_blocker_opacity",
+                ],
+            )
+        )
+        authorization_contract_repair_candidate = boolish(
+            first_present(
+                result,
+                [
+                    "authorization_contract_repair_candidate",
+                    "blocker_actionability_gate.authorization_contract_repair_candidate",
+                    "anti_loop_progress_gate.authorization_contract_repair_candidate",
+                    "result.anti_loop_progress_gate.blocker_actionability_gate.authorization_contract_repair_candidate",
+                ],
+            )
+        )
+        stochastic_contract_infeasible = boolish(
+            first_present(
+                result,
+                [
+                    "predetermined_unreachable",
+                    "floor_edge_envelope",
+                    "stochastic_feasibility_gate.predetermined_unreachable",
+                    "stochastic_feasibility_gate.floor_edge_envelope",
+                    "anti_loop_progress_gate.predetermined_unreachable",
+                    "anti_loop_progress_gate.floor_edge_envelope",
+                    "result.anti_loop_progress_gate.stochastic_feasibility_gate.predetermined_unreachable",
+                    "result.anti_loop_progress_gate.stochastic_feasibility_gate.floor_edge_envelope",
+                ],
+            )
+        )
+        if scenario_uncovered and not terminal_selected and selected_kind not in SCENARIO_SUPPLY_TASK_KINDS:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_scenario_uncovered_unhandled",
+                "`derive` must route scenario_uncovered to validation-set planning, fixture supply, live-run supply, terminal state, or user escalation.",
+                {"selected_task_kind": selected_kind or None},
+            )
+        if acceptance_inversion and not terminal_selected and selected_kind not in SCENARIO_REPAIR_TASK_KINDS:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_acceptance_inversion_unhandled",
+                "`derive` must route acceptance_inversion to code or acceptance/test contract repair, not another green-test confirmation task.",
+                {"selected_task_kind": selected_kind or None},
+            )
+        if command_provenance_missing and not terminal_selected and selected_kind not in COMMAND_PROVENANCE_TASK_KINDS:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_command_provenance_missing_unhandled",
+                "`derive` must repair or rerun missing command provenance before using that run for baseline, comparison, A/B, or reproduction evidence.",
+                {"selected_task_kind": selected_kind or None},
+            )
+        if (repeated_blocker_opacity or authorization_contract_repair_candidate) and not terminal_selected and selected_kind not in BLOCKER_CONTRACT_REPAIR_TASK_KINDS:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_repeated_blocker_opacity_unhandled",
+                "`derive` must route repeated same-gate blocker_opacity or hidden multi-input authorization contracts to blocker/gate contract repair or terminal/user escalation.",
+                {"selected_task_kind": selected_kind or None},
+            )
+        if stochastic_contract_infeasible and not terminal_selected and selected_kind not in STOCHASTIC_CONTRACT_TASK_KINDS:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_stochastic_contract_infeasible_unhandled",
+                "`derive` must route predetermined_unreachable or floor_edge_envelope to contract revision, envelope expansion, residual descope, terminal state, or user escalation rather than retry.",
+                {"selected_task_kind": selected_kind or None},
+            )
+        expectation_lineage_stale = boolish(
+            first_present(
+                result,
+                [
+                    "expectation_lineage_stale",
+                    "expectation_lineage_gate.expectation_lineage_stale",
+                    "anti_loop_progress_gate.expectation_lineage_stale",
+                    "result.anti_loop_progress_gate.expectation_lineage_gate.expectation_lineage_stale",
+                ],
+            )
+        )
+        expectation_anchor_missing = boolish(
+            first_present(
+                result,
+                [
+                    "expectation_anchor_missing",
+                    "expectation_lineage_gate.expectation_anchor_missing",
+                    "anti_loop_progress_gate.expectation_anchor_missing",
+                    "result.anti_loop_progress_gate.expectation_lineage_gate.expectation_anchor_missing",
+                ],
+            )
+        )
+        parity_unverified = boolish(
+            first_present(
+                result,
+                [
+                    "parity_unverified",
+                    "comparison_parity_gate.parity_unverified",
+                    "anti_loop_progress_gate.parity_unverified",
+                    "result.anti_loop_progress_gate.comparison_parity_gate.parity_unverified",
+                ],
+            )
+        )
+        unknown_parity_axes = boolish(
+            first_present(
+                result,
+                [
+                    "unknown_parity_axes",
+                    "comparison_parity_gate.unknown_parity_axes",
+                    "anti_loop_progress_gate.unknown_parity_axes",
+                    "result.anti_loop_progress_gate.comparison_parity_gate.unknown_parity_axes",
+                ],
+            )
+        )
+        majority_vote_adoption = boolish(
+            first_present(
+                result,
+                [
+                    "majority_vote_adoption",
+                    "adoption_axis_gate.majority_vote_adoption",
+                    "anti_loop_progress_gate.majority_vote_adoption",
+                    "result.anti_loop_progress_gate.adoption_axis_gate.majority_vote_adoption",
+                ],
+            )
+        )
+        adoption_axis_classification = first_present(
+            result,
+            [
+                "adoption_axis_classification",
+                "adoption_axis_gate.adoption_axis_classification",
+                "anti_loop_progress_gate.adoption_axis_classification",
+                "result.anti_loop_progress_gate.adoption_axis_gate.adoption_axis_classification",
+            ],
+        )
+        measured_but_disqualified = boolish(
+            first_present(
+                result,
+                [
+                    "measured_but_disqualified",
+                    "adoption_axis_gate.measured_but_disqualified",
+                    "anti_loop_progress_gate.measured_but_disqualified",
+                    "result.anti_loop_progress_gate.adoption_axis_gate.measured_but_disqualified",
+                ],
+            )
+        )
+        failed_gating_axis = boolish(
+            first_present(
+                result,
+                [
+                    "failed_gating_axis",
+                    "adoption_axis_gate.failed_gating_axis",
+                    "anti_loop_progress_gate.failed_gating_axis",
+                    "result.anti_loop_progress_gate.adoption_axis_gate.failed_gating_axis",
+                ],
+            )
+        )
+        resolution_downgrade = boolish(
+            first_present(
+                result,
+                [
+                    "resolution_downgrade",
+                    "resolution_downgrade_gate.resolution_downgrade",
+                    "anti_loop_progress_gate.resolution_downgrade",
+                    "result.anti_loop_progress_gate.resolution_downgrade_gate.resolution_downgrade",
+                ],
+            )
+        )
+        repeated_resolution_downgrade = boolish(
+            first_present(
+                result,
+                [
+                    "repeated_resolution_downgrade",
+                    "resolution_downgrade_gate.repeated_resolution_downgrade",
+                    "anti_loop_progress_gate.repeated_resolution_downgrade",
+                    "result.anti_loop_progress_gate.resolution_downgrade_gate.repeated_resolution_downgrade",
+                ],
+            )
+        )
+        if expectation_lineage_stale and not terminal_selected and selected_kind not in EXPECTATION_REBASELINE_TASK_KINDS:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_expectation_lineage_stale_unhandled",
+                "`derive` must route stale output-derived expectations to rebaseline, explicit residual descope, terminal state, or user escalation before dependent live execution.",
+                {"selected_task_kind": selected_kind or None},
+            )
+        if expectation_anchor_missing and not expectation_lineage_stale and progress_kind == "goal_productive" and selected_kind not in EXPECTATION_REBASELINE_TASK_KINDS:
+            add(
+                findings,
+                "warn",
+                "derive_expectation_anchor_missing_unhandled",
+                "`derive` selected goal_productive work with an output-derived expectation missing an anchor; ensure the task does not claim lineage-verified expectation evidence.",
+                {"selected_task_kind": selected_kind or None},
+            )
+        if (parity_unverified or unknown_parity_axes) and not terminal_selected and selected_kind not in PARITY_AXIS_TASK_KINDS:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_parity_unverified_unhandled",
+                "`derive` must route parity-unverified comparison/adoption to axis resolution, provisional comparison, residual descope, terminal state, or user escalation.",
+                {"selected_task_kind": selected_kind or None},
+            )
+        if majority_vote_adoption and not non_empty(adoption_axis_classification) and not terminal_selected and selected_kind not in ADOPTION_AXIS_TASK_KINDS:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_majority_vote_adoption_unhandled",
+                "`derive` must not finalize majority-vote adoption without gating/tradable axis classification.",
+                {"selected_task_kind": selected_kind or None},
+            )
+        if (measured_but_disqualified or failed_gating_axis) and not terminal_selected and selected_kind not in ADOPTION_AXIS_TASK_KINDS:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_gating_axis_failure_unhandled",
+                "`derive` must not promote a candidate with failed gating axes; preserve measured_but_disqualified evidence or route gating-axis repair/contract revision.",
+                {"selected_task_kind": selected_kind or None},
+            )
+        if repeated_resolution_downgrade and not terminal_selected and selected_kind not in RESOLUTION_REPAIR_TASK_KINDS:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_resolution_downgrade_unhandled",
+                "`derive` must route repeated same-contract resolution_downgrade to resolution restoration, contract revision, residual descope, terminal state, or user escalation.",
+                {"selected_task_kind": selected_kind or None},
+            )
+        if resolution_downgrade and not repeated_resolution_downgrade and progress_kind == "goal_productive":
+            add(
+                findings,
+                "warn",
+                "derive_resolution_downgrade_goal_productive",
+                "`derive` selected goal_productive work while evidence resolution is downgraded; keep the decision provisional or preserve residual high-resolution scope.",
+                {"selected_task_kind": selected_kind or None},
+            )
+        if (explicit_report_key_divergence or auto_report_key_divergences) and not terminal_selected and selected_kind not in REPORT_KEY_REPAIR_TASK_KINDS:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_report_key_divergence_unhandled",
+                "`derive` must route report_key_divergence to report/schema/sync repair, terminal state, or user escalation before consuming that report.",
+                {"selected_task_kind": selected_kind or None},
+            )
         terminal_stage_contradiction = boolish(
             first_present(
                 result,
@@ -2319,6 +3022,15 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
         )
         envelope_thaw_item_required = boolish(value_for(result, "envelope_thaw_item_required")) or boolish(deep_get(result, "acceptance_reachability_gate.envelope_thaw_item_required"))
         envelope_thaw_item = value_for(result, "envelope_thaw_item") or deep_get(result, "acceptance_reachability_gate.envelope_thaw_item")
+        scenario_uncovered = boolish(value_for(result, "scenario_uncovered")) or boolish(deep_get(result, "acceptance_scenario_gate.scenario_uncovered"))
+        acceptance_inversion = boolish(value_for(result, "acceptance_inversion")) or boolish(deep_get(result, "acceptance_scenario_gate.acceptance_inversion"))
+        command_provenance_missing = boolish(value_for(result, "command_provenance_missing")) or boolish(deep_get(result, "command_provenance_gate.command_provenance_missing"))
+        repeated_blocker_opacity = boolish(value_for(result, "repeated_blocker_opacity")) or boolish(deep_get(result, "blocker_actionability_gate.repeated_blocker_opacity"))
+        predetermined_unreachable = boolish(value_for(result, "predetermined_unreachable")) or boolish(deep_get(result, "stochastic_feasibility_gate.predetermined_unreachable"))
+        floor_edge_envelope = boolish(value_for(result, "floor_edge_envelope")) or boolish(deep_get(result, "stochastic_feasibility_gate.floor_edge_envelope"))
+        instrumentation_first_fire = boolish(value_for(result, "instrumentation_first_fire")) or boolish(deep_get(result, "instrumentation_first_fire_gate.instrumentation_first_fire"))
+        first_fire_consumed_item_id = value_for(result, "first_fire_consumed_item_id") or deep_get(result, "instrumentation_first_fire_gate.first_fire_consumed_item_id")
+        first_fire_double_counted = boolish(value_for(result, "first_fire_double_counted")) or boolish(deep_get(result, "instrumentation_first_fire_gate.first_fire_double_counted"))
         blocker_mutation = str(value_for(result, "blocker_mutation_kind") or "").lower()
         forward_mutation_progress = blocker_mutation == "forward_mutation"
         terminal_outcome_value = value_for(result, "terminal_outcome_changed")
@@ -2535,6 +3247,48 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                 "block" if mode == "block" else "warn",
                 "loopback_envelope_thaw_item_not_reserved",
                 "`loopback_audit` must reserve an envelope_thaw_item and hard-stop when acceptance is unreachable under a frozen envelope.",
+            )
+        if (scenario_uncovered or acceptance_inversion) and (disposition == "goal_productive" or not hard_stop):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_acceptance_scenario_not_fail_closed",
+                "`loopback_audit` must fail closed on uncovered or inverted acceptance scenarios until scenario supply or code/contract repair is selected.",
+            )
+        if command_provenance_missing and (disposition == "goal_productive" or measurement_progress_allowed):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_command_provenance_missing_counted",
+                "`loopback_audit` must not count a missing-argv live run as baseline, comparison, A/B, reproduction, or measurement-progress evidence.",
+            )
+        if repeated_blocker_opacity and disposition == "goal_productive":
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_repeated_blocker_opacity_goal_productive",
+                "`loopback_audit` must route repeated same-gate blocker_opacity to blocker-contract repair instead of ordinary goal_productive work.",
+            )
+        if (predetermined_unreachable or floor_edge_envelope) and (disposition == "goal_productive" or not hard_stop):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_stochastic_contract_infeasible_not_fail_closed",
+                "`loopback_audit` must treat exact-match and floor-edge stochastic findings as contract-revision blockers, not retryable goal_productive progress.",
+            )
+        if instrumentation_first_fire and not non_empty(first_fire_consumed_item_id):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_first_fire_without_consumed_item",
+                "`loopback_audit` must attach instrumentation_first_fire to exactly one consumed workflow item.",
+            )
+        if instrumentation_first_fire and first_fire_double_counted:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_first_fire_double_counted",
+                "`loopback_audit` must not double-count instrumentation_first_fire as both first-fire evidence and goal progress or instrumentation-supply consumption.",
             )
     if target == "validate":
         validation_verdict = str(value_for(result, "validation_verdict") or "").strip().lower()
@@ -2817,6 +3571,227 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                 ],
             )
         )
+        expectation_lineage_stale = boolish(
+            first_present(
+                result,
+                [
+                    "expectation_lineage_stale",
+                    "expectation_lineage_gate.expectation_lineage_stale",
+                    "anti_loop_progress_gate.expectation_lineage_stale",
+                    "result.expectation_lineage_gate.expectation_lineage_stale",
+                ],
+            )
+        )
+        expectation_anchor_missing = boolish(
+            first_present(
+                result,
+                [
+                    "expectation_anchor_missing",
+                    "expectation_lineage_gate.expectation_anchor_missing",
+                    "anti_loop_progress_gate.expectation_anchor_missing",
+                    "result.expectation_lineage_gate.expectation_anchor_missing",
+                ],
+            )
+        )
+        expectation_rebaselined = boolish(
+            first_present(
+                result,
+                [
+                    "expectation_rebaselined",
+                    "expectation_lineage_gate.expectation_rebaselined",
+                    "designated_baseline_recomputed",
+                    "result.expectation_lineage_gate.expectation_rebaselined",
+                ],
+            )
+        )
+        lineage_verified_expectation_claim = boolish(
+            first_present(
+                result,
+                [
+                    "lineage_verified_expectation_claim",
+                    "expectation_lineage_verified_claim",
+                    "baseline_lineage_claim",
+                    "comparison_lineage_claim",
+                    "expectation_lineage_gate.lineage_verified_expectation_claim",
+                ],
+            )
+        )
+        comparison_contract = boolish(
+            first_present(
+                result,
+                [
+                    "comparison_contract",
+                    "comparison_claim",
+                    "baseline_claim",
+                    "adoption_claim",
+                    "comparison_parity_gate.comparison_contract",
+                    "result.comparison_parity_gate.comparison_contract",
+                ],
+            )
+        )
+        parity_axis_status_value = first_present(
+            result,
+            [
+                "parity_axis_status",
+                "parity_axes_status",
+                "comparison_parity_gate.parity_axis_status",
+                "comparison_parity_gate.parity_axes",
+                "anti_loop_progress_gate.comparison_parity_gate.parity_axis_status",
+                "result.comparison_parity_gate.parity_axis_status",
+            ],
+        )
+        if isinstance(parity_axis_status_value, (dict, list)):
+            parity_axis_status_text = json.dumps(parity_axis_status_value, sort_keys=True, ensure_ascii=False).lower()
+        else:
+            parity_axis_status_text = str(parity_axis_status_value or "").lower()
+        parity_unverified = boolish(
+            first_present(
+                result,
+                [
+                    "parity_unverified",
+                    "comparison_parity_gate.parity_unverified",
+                    "anti_loop_progress_gate.parity_unverified",
+                    "result.comparison_parity_gate.parity_unverified",
+                ],
+            )
+        )
+        unknown_parity_axes = list_values(
+            first_present(
+                result,
+                [
+                    "unknown_parity_axes",
+                    "parity_unknown_axes",
+                    "comparison_parity_gate.unknown_parity_axes",
+                    "anti_loop_progress_gate.unknown_parity_axes",
+                    "result.comparison_parity_gate.unknown_parity_axes",
+                ],
+            )
+        ) or ("unknown" in parity_axis_status_text)
+        majority_vote_adoption = boolish(
+            first_present(
+                result,
+                [
+                    "majority_vote_adoption",
+                    "adoption_axis_gate.majority_vote_adoption",
+                    "comparison_parity_gate.majority_vote_adoption",
+                    "result.adoption_axis_gate.majority_vote_adoption",
+                ],
+            )
+        )
+        provisional_adoption = boolish(
+            first_present(
+                result,
+                [
+                    "provisional_adoption",
+                    "adoption_axis_gate.provisional_adoption",
+                    "comparison_parity_gate.provisional_adoption",
+                    "result.adoption_axis_gate.provisional_adoption",
+                ],
+            )
+        )
+        adoption_axis_classification = first_present(
+            result,
+            [
+                "adoption_axis_classification",
+                "adoption_axis_gate.adoption_axis_classification",
+                "comparison_parity_gate.adoption_axis_classification",
+                "result.adoption_axis_gate.adoption_axis_classification",
+            ],
+        )
+        measured_but_disqualified = boolish(
+            first_present(
+                result,
+                [
+                    "measured_but_disqualified",
+                    "adoption_axis_gate.measured_but_disqualified",
+                    "comparison_parity_gate.measured_but_disqualified",
+                    "anti_loop_progress_gate.measured_but_disqualified",
+                    "result.adoption_axis_gate.measured_but_disqualified",
+                ],
+            )
+        )
+        failed_gating_axis = boolish(
+            first_present(
+                result,
+                [
+                    "failed_gating_axis",
+                    "gating_axis_failed",
+                    "adoption_axis_gate.failed_gating_axis",
+                    "comparison_parity_gate.failed_gating_axis",
+                    "anti_loop_progress_gate.failed_gating_axis",
+                    "result.adoption_axis_gate.failed_gating_axis",
+                ],
+            )
+        )
+        required_resolution_value = first_present(
+            result,
+            [
+                "required_evidence_resolution",
+                "resolution_downgrade_gate.required_evidence_resolution",
+                "anti_loop_progress_gate.required_evidence_resolution",
+                "result.resolution_downgrade_gate.required_evidence_resolution",
+            ],
+        )
+        observed_resolution_value = first_present(
+            result,
+            [
+                "observed_evidence_resolution",
+                "resolution_downgrade_gate.observed_evidence_resolution",
+                "anti_loop_progress_gate.observed_evidence_resolution",
+                "result.resolution_downgrade_gate.observed_evidence_resolution",
+            ],
+        )
+        required_resolution = str(required_resolution_value or "").strip().lower()
+        observed_resolution = str(observed_resolution_value or "").strip().lower()
+        high_resolution_contract_required = boolish(
+            first_present(
+                result,
+                [
+                    "high_resolution_contract_required",
+                    "resolution_downgrade_gate.high_resolution_contract_required",
+                    "anti_loop_progress_gate.high_resolution_contract_required",
+                    "result.resolution_downgrade_gate.high_resolution_contract_required",
+                ],
+            )
+        ) or required_resolution in {"high", "full", "original", "direct", "terminal", "authoritative"}
+        resolution_downgrade = boolish(
+            first_present(
+                result,
+                [
+                    "resolution_downgrade",
+                    "resolution_downgrade_gate.resolution_downgrade",
+                    "anti_loop_progress_gate.resolution_downgrade",
+                    "result.resolution_downgrade_gate.resolution_downgrade",
+                ],
+            )
+        ) or (
+            high_resolution_contract_required
+            and observed_resolution
+            and observed_resolution not in {required_resolution, "high", "full", "original", "direct", "terminal", "authoritative"}
+        )
+        resolution_restored = boolish(
+            first_present(
+                result,
+                [
+                    "resolution_restored",
+                    "observed_evidence_resolution_restored",
+                    "resolution_downgrade_gate.resolution_restored",
+                    "result.resolution_downgrade_gate.resolution_restored",
+                ],
+            )
+        )
+        resolution_contract_revised = boolish(
+            first_present(
+                result,
+                [
+                    "resolution_contract_revised",
+                    "evidence_resolution_contract_revised",
+                    "required_evidence_resolution_revised",
+                    "resolution_downgrade_gate.contract_revised",
+                    "result.resolution_downgrade_gate.contract_revised",
+                ],
+            )
+        )
         if acceptance_diluted and validation_verdict in {"complete", "passed", "pass"}:
             add(
                 findings,
@@ -2924,6 +3899,251 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                 "block" if mode == "block" else "warn",
                 "validate_advanced_with_instrumentation_supply_required",
                 "`validate` cannot advance progress while repeated diagnostics_unavailable still requires instrumentation supply.",
+            )
+        if expectation_lineage_stale and validation_verdict in {"complete", "passed", "pass"} and not (explicit_descope or expectation_rebaselined):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_expectation_lineage_stale_complete",
+                "`validate` cannot complete output-derived expectation work while expectation_lineage_stale is unresolved; rebaseline, descope residual scope, or return partial.",
+            )
+        if expectation_anchor_missing and lineage_verified_expectation_claim and validation_verdict in {"complete", "passed", "pass"}:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_expectation_anchor_missing_lineage_claim",
+                "`validate` cannot claim lineage-verified expectation evidence when expectation_anchor_missing is true.",
+            )
+        if comparison_contract and (parity_unverified or unknown_parity_axes) and validation_verdict in {"complete", "passed", "pass"} and not (explicit_descope or provisional_adoption):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_comparison_parity_unverified_complete",
+                "`validate` cannot finalize baseline, comparison, or adoption work with parity_unverified or unknown parity axes.",
+                {"unknown_parity_axes": unknown_parity_axes if isinstance(unknown_parity_axes, list) else None},
+            )
+        if comparison_contract and (parity_unverified or unknown_parity_axes) and progress_verdict == "advanced" and not (explicit_descope or provisional_adoption):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_advanced_with_parity_unverified",
+                "`validate` cannot advance comparison or adoption progress until every required parity axis is controlled, measured, or explicitly provisional.",
+            )
+        if majority_vote_adoption and not non_empty(adoption_axis_classification) and validation_verdict in {"complete", "passed", "pass"} and not provisional_adoption:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_majority_vote_adoption_without_axis_classification",
+                "`validate` cannot finalize majority-vote adoption without adoption_axis_classification for gating and tradable axes.",
+            )
+        if (measured_but_disqualified or failed_gating_axis) and validation_verdict in {"complete", "passed", "pass"} and not explicit_descope:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_complete_with_failed_adoption_axis",
+                "`validate` cannot complete adoption when gating axes failed or measured evidence is disqualified; preserve measured_but_disqualified or route axis repair.",
+            )
+        if resolution_downgrade and high_resolution_contract_required and validation_verdict in {"complete", "passed", "pass"} and not (explicit_descope or resolution_restored or resolution_contract_revised):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_resolution_downgrade_complete",
+                "`validate` cannot complete a high-resolution evidence contract from downgraded or surrogate evidence without restoration, contract revision, or residual descope.",
+                {"required_evidence_resolution": required_resolution or None, "observed_evidence_resolution": observed_resolution or None},
+            )
+        if resolution_downgrade and progress_verdict == "advanced" and not (explicit_descope or resolution_restored or resolution_contract_revised):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_advanced_with_resolution_downgrade",
+                "`validate` cannot report advanced progress from a downgraded evidence resolution unless the downgrade is explicitly provisional, restored, or contract-revised.",
+            )
+        scenario_uncovered = boolish(
+            first_present(
+                result,
+                [
+                    "scenario_uncovered",
+                    "acceptance_scenario_gate.scenario_uncovered",
+                    "result.acceptance_scenario_gate.scenario_uncovered",
+                    "anti_loop_progress_gate.scenario_uncovered",
+                ],
+            )
+        )
+        acceptance_inversion = boolish(
+            first_present(
+                result,
+                [
+                    "acceptance_inversion",
+                    "acceptance_inversion_candidate",
+                    "acceptance_scenario_gate.acceptance_inversion",
+                    "result.acceptance_scenario_gate.acceptance_inversion",
+                    "anti_loop_progress_gate.acceptance_inversion",
+                ],
+            )
+        )
+        producer_residual_blocker = boolish(
+            first_present(
+                result,
+                [
+                    "producer_residual_blocker",
+                    "observed_producer_claim.residual_blocker",
+                    "observed_producer_claim.remaining_blocker",
+                    "acceptance_scenario_gate.producer_residual_blocker",
+                    "result.acceptance_scenario_gate.producer_residual_blocker",
+                ],
+            )
+        )
+        command_provenance_missing = boolish(
+            first_present(
+                result,
+                [
+                    "command_provenance_missing",
+                    "command_provenance_gate.command_provenance_missing",
+                    "result.command_provenance_gate.command_provenance_missing",
+                    "anti_loop_progress_gate.command_provenance_missing",
+                ],
+            )
+        )
+        command_provenance_required = boolish(
+            first_present(
+                result,
+                [
+                    "command_provenance_required",
+                    "command_provenance_gate.required",
+                    "baseline_claim",
+                    "comparison_claim",
+                    "ab_claim",
+                    "reproduction_claim",
+                    "result.command_provenance_gate.required",
+                ],
+            )
+        )
+        repeated_blocker_opacity = boolish(
+            first_present(
+                result,
+                [
+                    "repeated_blocker_opacity",
+                    "blocker_opacity_repeated",
+                    "blocker_actionability_gate.repeated_blocker_opacity",
+                    "result.blocker_actionability_gate.repeated_blocker_opacity",
+                    "anti_loop_progress_gate.repeated_blocker_opacity",
+                ],
+            )
+        )
+        blocker_claimed_resolved = boolish(
+            first_present(
+                result,
+                [
+                    "blocker_claimed_resolved",
+                    "blocker_actionability_gate.blocker_claimed_resolved",
+                    "blocker_actionability_gate.claimed_actionable",
+                    "result.blocker_actionability_gate.blocker_claimed_resolved",
+                ],
+            )
+        )
+        predetermined_unreachable = boolish(
+            first_present(
+                result,
+                [
+                    "predetermined_unreachable",
+                    "stochastic_feasibility_gate.predetermined_unreachable",
+                    "result.stochastic_feasibility_gate.predetermined_unreachable",
+                    "anti_loop_progress_gate.predetermined_unreachable",
+                ],
+            )
+        )
+        floor_edge_envelope = boolish(
+            first_present(
+                result,
+                [
+                    "floor_edge_envelope",
+                    "stochastic_feasibility_gate.floor_edge_envelope",
+                    "result.stochastic_feasibility_gate.floor_edge_envelope",
+                    "anti_loop_progress_gate.floor_edge_envelope",
+                ],
+            )
+        )
+        instrumentation_first_fire = boolish(
+            first_present(
+                result,
+                [
+                    "instrumentation_first_fire",
+                    "instrumentation_first_fire_gate.instrumentation_first_fire",
+                    "result.instrumentation_first_fire_gate.instrumentation_first_fire",
+                    "anti_loop_progress_gate.instrumentation_first_fire",
+                ],
+            )
+        )
+        first_fire_double_counted = boolish(
+            first_present(
+                result,
+                [
+                    "first_fire_double_counted",
+                    "first_fire_double_count_blocked",
+                    "instrumentation_first_fire_gate.first_fire_double_counted",
+                    "result.instrumentation_first_fire_gate.first_fire_double_counted",
+                ],
+            )
+        )
+        first_fire_goal_progress = boolish(
+            first_present(
+                result,
+                [
+                    "first_fire_claimed_goal_progress",
+                    "instrumentation_first_fire_gate.claimed_goal_progress",
+                    "instrumentation_first_fire_gate.instrumentation_supply_consumed",
+                    "result.instrumentation_first_fire_gate.claimed_goal_progress",
+                ],
+            )
+        )
+        if scenario_uncovered and validation_verdict in {"complete", "passed", "pass"}:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_complete_with_scenario_uncovered",
+                "`validate` cannot complete scenario-shaped acceptance without a premise-satisfying fixture or live run.",
+            )
+        if acceptance_inversion and validation_verdict in {"complete", "passed", "pass"}:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_complete_with_acceptance_inversion",
+                "`validate` cannot complete when premise-satisfying evidence asserts the opposite terminal state; keep the verdict partial and route code/contract repair.",
+            )
+        if producer_residual_blocker and validation_verdict in {"complete", "passed", "pass"} and not (scenario_uncovered or acceptance_inversion):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_complete_with_unresolved_producer_residual_blocker",
+                "`validate` cannot ignore a producer-reported residual blocker that contradicts an acceptance scenario; preserve it as acceptance_inversion_candidate or resolve the scenario gate.",
+            )
+        if command_provenance_missing and command_provenance_required and validation_verdict in {"complete", "passed", "pass"}:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_complete_with_missing_command_provenance",
+                "`validate` cannot complete baseline, comparison, A/B, reproduction, or run-specific acceptance from a live run with missing full argv.",
+            )
+        if repeated_blocker_opacity and blocker_claimed_resolved and validation_verdict in {"complete", "passed", "pass"}:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_complete_with_repeated_blocker_opacity",
+                "`validate` cannot close a claimed actionable/resolved blocker when the same gate still returns only opaque reason codes.",
+            )
+        if (predetermined_unreachable or floor_edge_envelope) and validation_verdict in {"complete", "passed", "pass"} and not explicit_descope:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_complete_with_stochastic_contract_infeasible",
+                "`validate` cannot complete exact-match or floor-edge stochastic contracts until the contract is revised, descoped with residual scope, or escalated.",
+            )
+        if instrumentation_first_fire and (first_fire_double_counted or first_fire_goal_progress):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_first_fire_double_counted",
+                "`validate` must count instrumentation_first_fire as one evidence credit only, not goal progress plus instrumentation-supply consumption.",
             )
         behavior_change_live_required = boolish(
             first_present(

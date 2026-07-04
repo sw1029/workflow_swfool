@@ -8,6 +8,8 @@ Capture:
 
 - Workspace/cwd used for the run.
 - Exact command line or code execution method.
+- Full body-free `command_argv`: preserve argument names and nonsecret scalar values; redact secrets, body text, and token/hash-like values. Use `command_provenance_missing=true` if full argv is unavailable.
+- Record full redacted argv once per live run packet. Downstream ledger events should cite the packet by path/hash or `unchanged_ref` instead of duplicating the argv body.
 - Runtime/interpreter/environment if relevant.
 - Input files, config files, arguments, and environment assumptions that affected the run.
 - Exit code or completion status.
@@ -16,7 +18,11 @@ Capture:
 - Produced artifacts, changed files, generated reports, or missing expected outputs.
 - Validation performed after execution.
 - Fail-closed gate prechecks and pre-execution gate self-checks when present, using scalar fields only.
+- Gate/validator blocker actionability when present: `violated_relation`, `observed_values`, `expected_relation`, `minimum_input_delta`, and abstract input-key names for multi-input relations; use `authorization_contract_repair_candidate=true` when a named single authorization input would make the precondition discoverable, and `blocker_opacity=true` for state-name-only reason codes.
+- Failed-run `runtime_config_echo`, `config_origin`, and `config_overrides` when a caller/adapter exposes safe scalar settings.
+- Execution `run_disposition`: `failed_closed`, `candidate_degraded`, or `candidate_written`, with safety violations, quality-vector scalars, degradation reasons, and verification flags when available.
 - Producer self-reported progress or completion fields only as `observed_producer_claim`, never as authoritative progress evidence.
+- Part K report/comparison fields when artifacts declare them: `expectation_anchor`, `designated_baseline`, `expectation_anchor_missing`, `expectation_lineage_stale`, `parity_axes`, `parity_axis_status`, `parity_unverified`, `adoption_axis_classification`, `required_output_classes`, `majority_vote_adoption`, `provisional_adoption`, `measured_but_disqualified`, `required_evidence_resolution`, `observed_evidence_resolution`, `resolution_downgrade`, `surrogate_resolution_basis`, `report_key_divergence`, and duplicate report-key path/value pairs.
 
 ## Log Field Mapping
 
@@ -29,6 +35,7 @@ Capture:
 `work_performed`:
 
 - Commands run in order.
+- Exact redacted argv for each live command, or `command_provenance_missing=true`.
 - Files inspected or created/changed.
 - Environment selection and notable runtime details.
 - Any safety redactions.
@@ -41,7 +48,12 @@ Capture:
 - Artifacts produced or expected artifacts missing.
 - Validation outcome.
 - `failure_autopsy.classification`, `failure_autopsy.alternative_evidence_source`, and `failure_autopsy.gate_selfcheck` when a failure was autopsied.
+- `command_provenance_missing` when argv was incomplete; note that the run is not valid reproduction/baseline evidence.
+- `blocker_actionability` or `blocker_opacity` for gate/validator failures with reason codes.
+- `failure_autopsy.runtime_config_echo`, `config_origin`, and `config_overrides` when available.
+- `run_disposition`; preserve `candidate_degraded` as quality-miss evidence and `failed_closed` as unsafe discarded output.
 - `observed_producer_claim` and scalar `split_brain_progress_claim` warning details when a producer self-report conflicts with adapter or strict output-delta evidence supplied by the caller.
+- Part K warnings such as stale expectation anchors, parity-unverified comparison/adoption, measured-but-disqualified candidates, resolution downgrade, and report-key divergence when observed.
 
 `shortcomings`:
 
@@ -49,6 +61,10 @@ Capture:
 - For `running` status: final completion and final validation still pending.
 - Sensitive details omitted from the log.
 - Producer progress labels were downgraded when present, and no close/progress verdict was inferred from them.
+- A `candidate_degraded` output was preserved but not promoted, when applicable.
+- A command with missing argv was not treated as reproducible baseline, when applicable.
+- A state-name-only blocker was logged as opaque rather than actionable, when applicable.
+- Any stale expectation, parity gap, gating-axis failure, resolution downgrade, or report-key divergence was logged as routing evidence and not promoted as success, when applicable.
 
 ## Status Rules
 
@@ -59,12 +75,27 @@ Capture:
 - `failed`: the specified command or code ran and failed.
 - `not_run`: execution did not happen because required code/method/input was missing or unsafe to infer.
 
+## Run Disposition Fields
+
+When a caller or adapter can classify output disposition, record:
+
+- `run_disposition`: `failed_closed`, `candidate_degraded`, or `candidate_written`.
+- `safety_violations`: safe scalar identifiers only.
+- `quality_vector`: safe scalar quality axes.
+- `degradation_reasons`: short scalar/enum reason codes for `candidate_degraded`.
+- `verification_flags`: per-axis or per-row scalar flags when available.
+- `disposition_unclassified`: warning when the classifier hook exists but required safety/quality scalars are missing.
+
+Discard unsafe `failed_closed` artifacts. Preserve `candidate_degraded` artifacts as measurement evidence, but do not describe them as canonical baseline, success, or completion.
+
 ## Gate Failure Fields
 
 For fail-closed or pre-execution gates, record only scalar-safe routing evidence:
 
 - `gate_satisfiability`: `gate_id`, `satisfiable`, `reason`, `evidence_source`, `alternative_evidence_source`, and `classification`.
 - `gate_selfcheck`: `gate_id`, `blocked_pre_exec`, `repo_owned_pre_exec_blocker`, `contradicting_evidence`, `trusted_evidence_source`, `prior_pass_observed`, `status`, and `classification`.
+- `blocker_actionability`: `gate_id`, `reason_code`, `violated_relation`, `observed_values`, `expected_relation`, and `minimum_input_delta` when a gate/validator returns a blocker.
+- `blocker_opacity`: true when only a state or reason code is available.
 - `classification: self_inflicted_gate_defect` only when repository-owned pre-execution blocker provenance is confirmed and the gate artifact has contradiction evidence, a trusted alternative evidence source, or a prior pass.
 - `status: warn_missing_repo_owned_confirmation` when contradiction evidence exists but repository-owned confirmation is absent.
 
@@ -72,8 +103,22 @@ For fail-closed or pre-execution gates, record only scalar-safe routing evidence
 
 When available, use adapter `producer_progress_claim_fields()` to identify producer-owned progress labels. If it is absent, treat conventional fields such as `progress_kind`, `effective_progress_kind`, `progress_verdict`, `goal_productive`, and `produced_domain_delta` as claims. Store the captured values under `observed_producer_claim`. Authoritative progress remains owned by adapter recomputation, loopback, output-delta, and completion validation.
 
+## Part K Lineage Fields
+
+When a run/report declares expectation or comparison lineage, record only safe scalar/id fields:
+
+- `expectation_anchor`, `designated_baseline`, `expectation_anchor_missing`, and `expectation_lineage_stale`.
+- `parity_axes`, `parity_axis_status`, and `parity_unverified`.
+- `adoption_axis_classification`, `required_output_classes`, `majority_vote_adoption`, `provisional_adoption`, and `measured_but_disqualified`.
+- `required_evidence_resolution`, `observed_evidence_resolution`, `resolution_downgrade`, and `surrogate_resolution_basis`.
+- `report_key_divergence`, duplicate key paths, and duplicate scalar values.
+
+Do not log raw report bodies, source text, provider payloads, or generated content while preserving these fields. Do not infer adoption, completion, baseline promotion, or high-water movement from these fields inside the execution skill.
+
 ## Redaction Rules
 
 - Replace secrets and tokens with `[REDACTED]`.
 - Summarize large outputs instead of embedding them.
 - Avoid raw dataset excerpts, private transcripts, and large copyrighted text.
+- Avoid raw runtime/provider payloads when recording `runtime_config_echo`; keep only scalar/enum effective settings and origins.
+- Redact argv values only as needed; do not remove the flag or argument name.

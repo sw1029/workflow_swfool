@@ -13,6 +13,9 @@ This reference defines optional long-range task packs for `$orchestrate-task-cyc
 - [Loop Breaker Fields](#loop-breaker-fields)
 - [Part G Workflow Gates](#part-g-workflow-gates)
 - [Part H Workflow Gates](#part-h-workflow-gates)
+- [Part I Workflow Gates](#part-i-workflow-gates)
+- [Part J Workflow Gates](#part-j-workflow-gates)
+- [Part K Workflow Gates](#part-k-workflow-gates)
 
 ## Core Invariant
 
@@ -63,6 +66,7 @@ The JSON is authoritative. The Markdown render is for scanability and must use t
       "blocker_signature_expected": "taxonomy|issue|surface|missing_input",
       "semantic_signature_expected": "stable-goal-axis-family",
       "progress_kind_expected": "goal_productive",
+      "item_kind": "implementation",
       "effective_count_key_expected": "adapter-root|dominant-parameter",
       "count_key_hygiene": {
         "generation_dependent_count_key": false,
@@ -83,7 +87,76 @@ The JSON is authoritative. The Markdown render is for scanability and must use t
       "diagnostics_contract": {
         "diagnostics_unavailable": false,
         "instrumentation_supply_required": false,
-        "existing_diagnostics_sufficient": false
+        "existing_diagnostics_sufficient": false,
+        "instrumentation_exercise_required": false,
+        "instrumentation_exercise_item_id": null,
+        "instrumentation_exercised": false,
+        "instrumentation_field_map": {},
+        "derived_from_existing_artifacts": false
+      },
+      "acceptance_encoding": {
+        "quantifiers": [],
+        "evidence_kind": "live_run",
+        "item_created_at": "ISO-8601",
+        "required_new_run_id": true
+      },
+      "acceptance_scenarios": [],
+      "command_provenance_contract": {
+        "command_argv_required": false,
+        "command_provenance_missing": false
+      },
+      "blocker_actionability_contract": {
+        "blocker_opacity": false,
+        "violated_relation_required": false
+      },
+      "stochastic_feasibility_contract": {
+        "outcome_variance": null,
+        "predetermined_unreachable": false,
+        "floor_edge_envelope": false
+      },
+      "instrumentation_first_fire_contract": {
+        "instrumentation_first_fire": false,
+        "first_fire_consumed_item_id": null
+      },
+      "expectation_lineage_contract": {
+        "expectation_anchor": null,
+        "designated_baseline": null,
+        "expectation_anchor_missing": false,
+        "expectation_lineage_stale": false
+      },
+      "comparison_parity_contract": {
+        "comparison_contract": false,
+        "parity_axes": [],
+        "parity_axis_status": {},
+        "parity_unverified": false
+      },
+      "adoption_axis_contract": {
+        "required_output_classes": [],
+        "adoption_axis_classification": {},
+        "majority_vote_adoption": false,
+        "provisional_adoption": false,
+        "measured_but_disqualified": false
+      },
+      "resolution_downgrade_contract": {
+        "required_evidence_resolution": null,
+        "observed_evidence_resolution": null,
+        "resolution_downgrade": false,
+        "surrogate_resolution_basis": null
+      },
+      "report_key_integrity_contract": {
+        "report_key_divergence": false,
+        "duplicate_key_paths": []
+      },
+      "guard_stacking_contract": {
+        "change_set_kind": "implementation",
+        "target_artifact_paths": [],
+        "verifier_surface_hardening": false
+      },
+      "run_disposition_contract": {
+        "allowed_dispositions": ["failed_closed", "candidate_degraded", "candidate_written"],
+        "run_disposition": null,
+        "candidate_degraded": false,
+        "canonical_promotion_allowed": null
       },
       "verification_source_contract": {
         "verification_input_paths": [],
@@ -112,6 +185,11 @@ The JSON is authoritative. The Markdown render is for scanability and must use t
           "directive_id": "adv-...#directive-r2",
           "original_target": {"metric": "abstract_metric", "comparator": ">=", "target": "original target"},
           "item_acceptance": ["Acceptance copied from or traceable to the original directive target."],
+          "acceptance": {
+            "quantifiers": ["original measurable quantities or relation predicates copied without reinterpretation"],
+            "evidence_kind": "live_run",
+            "required_new_run_id": true
+          },
           "narrowed": false,
           "narrow_reason": null,
           "residual_item_id": null,
@@ -183,6 +261,14 @@ Each record should include:
 - `directive_id`: stable advice/user/issue directive ID or path fragment.
 - `original_target`: the measurable target exactly enough for validation to compare actual achievement. Keep project-specific metric definitions in the repository adapter or project-owned contract, not in this generic workflow.
 - `item_acceptance`: the acceptance criteria copied from or traceable to `original_target`.
+- `acceptance.quantifiers`: original measurable counts, rates, run counts, row counts, disjointness predicates, or relation predicates copied without reinterpretation. If extraction is uncertain, preserve the original clause as a quoted string.
+- `acceptance.evidence_kind`: `live_run`, `derived_artifact`, `code_contract`, or `report_only`. If the original criterion requires execution, use `live_run` only and require a new run id after `item_created_at`.
+- `acceptance_scenarios`: optional scenario-shaped acceptance records with `scenario_id`, premise predicate summary, and expected terminal state. Scenario completion needs a premise-satisfying fixture/live run.
+- `expectation_lineage_contract`: optional Part K K1 fields for output-derived scalar expectations. If `expectation_anchor` is known, preserve it; if the current baseline is known, preserve `designated_baseline`; if the anchor is superseded, set `expectation_lineage_stale` and do not promote live execution until rebaseline or fail-close is planned.
+- `comparison_parity_contract`: optional Part K K2 fields for comparison/adoption items. Preserve `parity_axes` and per-axis status `controlled`, `measured`, or `unknown`; unknown axes set `parity_unverified`.
+- `adoption_axis_contract`: optional Part K K3 fields for adoption decisions. Preserve `required_output_classes`, axis classification `gating` or `tradable`, `majority_vote_adoption`, `provisional_adoption`, and `measured_but_disqualified`.
+- `resolution_downgrade_contract`: optional Part K K4 fields for required versus observed evidence resolution. Preserve `resolution_downgrade` and `surrogate_resolution_basis` when a high-resolution contract was satisfied only by surrogate evidence.
+- `report_key_integrity_contract`: optional Part K K5 fields for duplicate terminal keys inside a report. Divergent duplicate values block consumption.
 - `narrowed`: `true` only when the item intentionally covers less than the original target.
 - `narrow_reason`: required when `narrowed=true`.
 - `residual_item_id`: required when `narrowed=true`; it must point to another open pack item that preserves the remaining target.
@@ -209,6 +295,8 @@ If the item has a required verifier and `evaluation_status=not_evaluated`, do no
 
 If the item has an acceptance-required gate hook and `gate_hook_status` is `not_supplied`, `absent`, `fail_quiet`, or `not_evaluated`, do not mark the item `consumed`. Validation must report `partial` with `unverifiable_acceptance_contract`, preserve the missing hook as a concrete follow-up, and avoid treating fail-quiet as pass for that measurable target.
 
+If the item's `acceptance.evidence_kind=live_run`, do not mark the item consumed from `derived_artifact`, `code_contract`, or `report_only` evidence. A satisfying run must have a run id created after `item_created_at`. Derived substitution sets `acceptance_diluted=true`; validation must report `partial` and preserve the original live-run target.
+
 If the item result or loopback evidence has `pass_with_coupled_verifier=true`, do not mark the item `consumed` from that verifier pass. Require later non-coupled revalidation, independent evidence recalculation, explicit residual descope, or terminal/user escalation.
 
 If the item result or qualitative review has `pass_with_unobserved_axes=true`, do not mark the item `consumed` from that review pass. Insert or promote an axis-supply item, residual descope, terminal blocker, or escalation item before consuming the measurable target.
@@ -216,6 +304,28 @@ If the item result or qualitative review has `pass_with_unobserved_axes=true`, d
 If the item result or loopback evidence has `terminal_classification_stage_contradiction=true`, `terminal_classification_invalid_for_counting=true`, or `same_input_contract_violation=true`, do not mark the item `consumed` from terminal classification or same-condition comparison evidence. Insert classification-stage repair, same-input/input-contract repair, instrumentation supply, terminal blocker, or escalation before counting the family as closed or reset.
 
 If the item result or loopback evidence has `instrumentation_supply_required=true`, do not mark the item `consumed` unless the item supplied instrumentation for the affected failure surface or records a concrete `existing_diagnostics_sufficient` / `diagnostics_observable_without_new_instrumentation` rationale. A generic hypothesis repair does not satisfy this gate.
+
+If `item_kind=instrumentation_supply` is consumed without fresh exercise evidence, append or preserve a follow-up `item_kind=instrumentation_exercise` item. The exercise item must require one new run id after the supply item and non-empty scalar fields according to `instrumentation_field_map`. `derived_from_existing_artifacts=true` cannot satisfy exercise.
+
+If the item has `acceptance_scenarios`, do not mark it `consumed` until at least one evidence item satisfies each premise and observes the expected terminal state. If evidence observes the opposite state, set `acceptance_inversion=true` and keep the item open or route code/contract repair.
+
+If the item result has `command_provenance_missing=true`, do not mark comparison, baseline, A/B, or reproduction work consumed from that run.
+
+If the item result has repeated `blocker_opacity=true` for the same gate, do not mark blocker repair consumed until the blocker contract emits violated relation, observed values, expected relation, or minimum input delta.
+
+If the item result has `predetermined_unreachable=true` or `floor_edge_envelope=true`, do not mark retry work consumed as progress. Route contract revision, envelope expansion, explicit residual descope, terminal blocker, or escalation.
+
+If the item result has `instrumentation_first_fire=true`, assign the credit to one item only. Do not also consume the instrumentation supply item or goal-progress item with the same run.
+
+If the item result or acceptance has `expectation_lineage_stale=true`, do not mark the item consumed and do not promote dependent live execution until the expectation is rebaselined against `designated_baseline`, explicitly descoped with residual scope, terminal-blocked, or user-escalated. `expectation_anchor_missing=true` is warning-level but cannot support a lineage-verified expectation claim.
+
+If the item result has `parity_unverified=true`, missing `parity_axes`, or any parity axis status `unknown`, do not mark final adoption, baseline promotion, or comparison-winner work consumed. Preserve parity-axis resolution or provisional adoption before consumption.
+
+If the item result has `majority_vote_adoption=true` without `adoption_axis_classification`, or any `gating` axis failed, do not mark adoption consumed. Preserve axis-classification repair, gating-axis repair/contract revision, or `measured_but_disqualified` evidence.
+
+If the item result has `resolution_downgrade=true`, do not mark a high-resolution comparison/evidence contract consumed unless resolution is restored, the contract is explicitly revised, or residual high-resolution scope remains open.
+
+If the item result has `report_key_divergence=true`, do not mark any pass/close/adoption/baseline/comparison item consumed from that report.
 
 If the item result has `independently_verified_fields`, require `verification_input_paths` to be disjoint from `verified_artifact_paths` unless the adapter marks the affected axis `self_grounded`. If `independent_source_separation_status` is `missing`, `overlap`, or `blocked`, or `independently_verified_downgraded_fields` is non-empty, consume the evidence as attested only or preserve residual verification-source repair.
 
@@ -268,6 +378,19 @@ When an active pack exists, `$derive-improvement-task` should consider the next 
 - any below-threshold `residual_gap_policy` marginal repair is either deferred behind descope-with-residual plus the next rung, or explicitly justified by higher marginal value per cycle cost;
 - any `failure_surface_contract` contradiction, invalid terminal count key, or same-input mismatch is converted into classification/input-contract repair, instrumentation supply, terminal blocker, or escalation before ordinary repair;
 - any `diagnostics_contract.instrumentation_supply_required=true` is promoted as instrumentation supply unless the task records why success/failure is already observable without new instrumentation;
+- any `diagnostics_contract.instrumentation_exercise_required=true` is promoted as instrumentation exercise before measurement, comparison, or adoption work that depends on the supplied fields;
+- any `acceptance_scenarios` are promoted as scenario fixture/live-run coverage before close when not covered, or as code/contract repair when inverted;
+- any `acceptance_encoding.evidence_kind=live_run` preserves its quantifiers and requires a post-item run id before consumption;
+- any `command_provenance_contract.command_provenance_missing=true` is converted into full-argv rerun/provenance repair before comparison, baseline, A/B, or reproduction work consumes that run;
+- any repeated `blocker_actionability_contract.blocker_opacity=true` is converted into blocker-contract repair before another opaque recheck;
+- any `stochastic_feasibility_contract.predetermined_unreachable=true` or `floor_edge_envelope=true` is converted into contract revision/envelope/descope/escalation before retry;
+- any `instrumentation_first_fire_contract.instrumentation_first_fire=true` is assigned to exactly one evidence-credit path;
+- any `expectation_lineage_contract.expectation_lineage_stale=true` is converted into expectation rebaseline or fail-closed terminal/user-escalation before live execution depends on it;
+- any `comparison_parity_contract.parity_unverified=true`, missing parity axes, or unknown parity axis is converted into parity-axis resolution, provisional comparison, residual scope, terminal blocker, or escalation before final adoption;
+- any `adoption_axis_contract.majority_vote_adoption=true` without axis classification, failed `gating` axis, or `measured_but_disqualified=true` is converted into axis-classification/gating repair, candidate rejection, or preserved measured-but-disqualified evidence before adoption;
+- any `resolution_downgrade_contract.resolution_downgrade=true` is converted into resolution restoration, contract revision, or residual high-resolution scope before consumption;
+- any `report_key_integrity_contract.report_key_divergence=true` is converted into report/schema/sync repair before consuming the report;
+- any `guard_stacking_contract.verifier_surface_hardening=true` beyond the detection-only cap is converted into execution work, explicit descope with residual scope, terminal blocker, or escalation before another guard/report/verifier item;
 - any `verification_source_contract` with missing/overlapping verification inputs is promoted as source-separation repair or consumed as attested only, not as independent high-water proof;
 - any `envelope_thaw_contract.envelope_thaw_item_required=true` is promoted as thaw/relax/descope/terminal/escalation before another frozen-envelope-internal repair;
 - loop-breaker checks do not require insertion, reordering, or terminal blocking first.
@@ -392,3 +515,34 @@ Task packs must also preserve the Part H in-place workflow revisions as generic 
 - Verification source separation: `independently_verified` evidence is consumable only when verification inputs are disjoint from verified artifacts, except adapter-declared `self_grounded` axes. Missing or overlapping source paths downgrade the affected fields to attested evidence.
 - Frozen-envelope thaw: when acceptance is unreachable under a frozen envelope, reserve `envelope_thaw_item` with thaw condition/schedule, or route to constraint relaxation, explicit residual descope, terminal blocker, or user escalation.
 - Ledger fixed cost: when a pack mutation records repeated cycle artifacts, prefer `unchanged_ref(path+hash)` references for identical prior packets and keep full serialization for changed content only.
+
+## Part I Workflow Gates
+
+Task packs must preserve evidence lifecycle seams without adding project-specific logic to this generic contract:
+
+- Instrumentation exercise: `item_kind=instrumentation_supply` may consume on code/contract landing, but if it lacks fresh exercise evidence it must set `instrumentation_exercise_required=true` and insert or preserve an `instrumentation_exercise` item before dependent measurement/comparison/adoption items become current. Existing artifact reinterpretation does not exercise the supplied fields.
+- Acceptance encoding: measurable directive quantifiers and `evidence_kind` must survive pack encoding. Live-run criteria require a new run id after item creation; derived artifacts, code contracts, or report-only matrices cannot silently replace live-run evidence.
+- Guard-stacking collapse: guard/verifier/report-only items over the same target artifact paths and no new run id share one `verifier_surface_hardening` family regardless of verifier names. After the detection-only cap, do not create another guard item as the next progress step.
+- Run disposition: preserve `candidate_degraded` output as quality-miss evidence with verification flags and degradation reasons, but do not promote it as the canonical baseline unless independent verification permits the consumed axes. Discard only `failed_closed` unsafe output.
+- Runtime config echo: failed-run pack evidence may carry scalar `runtime_config_echo` and `config_overrides`; `code_default` overrides route to self-inflicted gate/root-cause repair when they explain the blocker.
+- Execution starvation: when profile evidence reports no fresh run id for the recent pack window, prioritize an execution-producing item over another guard/contract/report item unless safety, authority, or terminal state blocks execution.
+
+## Part J Workflow Gates
+
+Task packs must preserve decision-contract symmetry and reproducibility without adding project-specific logic to this generic contract:
+
+- Scenario injection: scenario-shaped acceptance needs premise-satisfying fixture or live-run evidence plus expected terminal-state observation. Green tests without premise injection do not consume the item; opposite-state observation is `acceptance_inversion`.
+- Command provenance: live-run items that will support baseline, A/B, comparison, reproduction, or run-specific acceptance require full body-free argv. `command_provenance_missing=true` blocks those consumption paths.
+- Blocker actionability: repeated opaque blockers must become blocker-contract repair items requiring violated relation, observed values, expected relation, or minimum input delta.
+- Stochastic feasibility: exact-match or floor-edge contracts with observed variance route to contract revision, envelope expansion, explicit residual descope, terminal blocker, or escalation before retry.
+- First-fire credit: the first run that emits supplied instrumentation fields earns one evidence credit only. It cannot also consume instrumentation supply or goal progress for the same run.
+
+## Part K Workflow Gates
+
+Task packs must preserve expectation/comparison lineage without adding project-specific logic to this generic contract:
+
+- Expectation lineage: output-derived scalar expectations require `expectation_anchor` when known and current `designated_baseline` comparison when supplied. A superseded anchor sets `expectation_lineage_stale` and blocks live-execution promotion until rebaseline, explicit residual descope, terminal blocker, or user escalation.
+- Comparison parity: comparison/adoption items require `parity_axes` with per-axis `controlled`, `measured`, or `unknown`. Unknown axes set `parity_unverified` and keep adoption provisional.
+- Adoption axis semantics: adoption axes are `gating` or `tradable` before measurement. Failed gating axes block adoption regardless of tradable wins; the candidate remains `measured_but_disqualified`.
+- Resolution downgrade: high-resolution contracts such as id/set/intersection evidence cannot be consumed from lower-resolution count/ratio/ordinal surrogates unless the contract is revised or residual high-resolution scope remains open.
+- Report key integrity: duplicate terminal keys with divergent values inside one report set `report_key_divergence` and block pass/close/adoption/baseline/comparison consumption until repaired. Matching duplicate terminal keys remain warn-only schema debt and do not consume or block the item by themselves.

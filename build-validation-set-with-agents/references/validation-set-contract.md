@@ -36,6 +36,12 @@ Recommended:
 
 - `cycle_id`
 - `failure_taxonomy`
+- `scenario_coverage`
+- `expectation_lineage_coverage`
+- `comparison_parity_coverage`
+- `adoption_gating_coverage`
+- `resolution_downgrade_coverage`
+- `report_key_divergence_coverage`
 - `no_overclaim_flags`
 - `forbidden_promotions`
 - `sealed_holdout_status`
@@ -62,8 +68,28 @@ Recommended:
 - `expected_output_ref`
 - `oracle_ids`
 - `no_overclaim_flags`
+- `acceptance_scenario_id`
+- `premise_satisfied`
+- `expected_terminal_state`
+- `observed_terminal_state`
+- `expectation_anchor`
+- `designated_baseline`
+- `expectation_lineage_stale`
+- `parity_axes`
+- `parity_axis_status`
+- `adoption_axis_classification`
+- `gating_axis_expected_pass`
+- `required_evidence_resolution`
+- `observed_evidence_resolution`
+- `report_key_divergence_expected`
 
 Do not store `raw_body`, `provider_body`, `full_text`, `source_text`, `document_body`, or equivalent raw content fields.
+
+Scenario items are coverage evidence only when `premise_satisfied=true` and an oracle or live-run result observes the expected terminal state. A fixture that does not satisfy the premise is not scenario coverage, even if its test passes.
+
+If a premise-satisfying item observes or asserts the opposite terminal state, set `acceptance_inversion_candidate=true` in the item or manifest so completion validation can route code/contract repair.
+
+Part K validation items should be scalar/id-only. For expectation lineage, use anchor ids and supersede/designated-baseline status rather than raw artifacts. For parity/adoption, use abstract axis names and statuses, not model/backend-specific values. For resolution downgrade, record required and observed resolution classes. For report key divergence, record duplicate JSON paths and scalar values only.
 
 ## Label Fields
 
