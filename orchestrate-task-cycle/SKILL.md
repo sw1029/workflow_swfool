@@ -61,6 +61,7 @@ Do not add README, changelog, quick-reference, or auxiliary process documents. P
 - Keep validation-set assets under `.validation/`; do not treat validation-set production as completion validation.
 - Distinguish `validation_verdict`, `progress_verdict`, `progress_kind`, and output-delta-derived `effective_progress_kind`.
 - Do not treat `running` execution as `success`, `passed`, or `complete` unless the task explicitly defines startup/heartbeat evidence as sufficient.
+- Keep long-running execution as a `run`-stage branch, not a new canonical phase. Use `event_kind: long_run_launch|long_run_monitor|long_run_harvest|long_run_finalize` and `long_run_role: launch|monitor|harvest|finalize` on `step: run` ledger events. A launch/handoff task may complete only the workflow handoff; it must preserve original live-run/domain acceptance as residual harvest validation, not consume it.
 - Report user-facing cycle updates, dashboards, and final reports in Korean while preserving commands, paths, IDs, hashes, schema names, and canonical status tokens exactly.
 
 ## Phase Flow
@@ -106,5 +107,6 @@ Preserve evidence and route remediation to the owning skill:
 - Governance blocker: stop before unsafe execution and keep task_miss/index evidence.
 - Execution failure: log through `$run-task-code-and-log`, collect scalar-safe failure autopsy when possible, index evidence, then validate as `partial` or `failed`.
 - Running execution: log monitor/stop details, index the active run, defer final-output-dependent derivation or completion claims.
+- Long-running branch: record `run_id`, owner task, launch cycle, body-free `command_argv`, workdir, output/log/checkpoint paths, heartbeat, monitor/stop commands, expected completion signal/artifacts, and remaining validation before leaving the process running. Defer qualitative review, loopback, completion validation, issue closure, and unrelated next-task derivation until a monitor/harvest event resolves the run or records a terminal/user-escalation blocker.
 - Review, validation-set, schema, issue, adapter, or Git failure: record the concrete blocker and continue only through safe downstream evidence-preserving steps.
 - ID audit high-severity findings: do not delete artifacts or report completion unless `$validate-task-completion` resolves or downgrades them.

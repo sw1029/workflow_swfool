@@ -15,12 +15,14 @@ Use `/home/swfool/.codex/skills/orchestrate-task-cycle/scripts/monitor_running_e
 
 1. Read the run result or ledger event that reported `running`.
 2. Verify that PID/session/job ID, log path, monitor command, stop command, startup/heartbeat evidence, and remaining validation are present.
-3. Check process/log heartbeat only when safe and local.
-4. Append a monitor event to the cycle ledger.
-5. Report `running`, `completed`, `stale`, `missing_details`, or `not_running`.
+3. For task-cycle long-running branches, also verify `run_id`, `owner_task_id`, `launch_cycle_id`, `output_dir`, expected completion signal/artifacts, and residual/harvest validation linkage when available.
+4. Check process, tmux session, log heartbeat, and expected completion artifacts only when safe and local.
+5. Append a monitor event to the cycle ledger as `step: run` with `event_kind: long_run_monitor`; do not create a noncanonical `monitor` phase.
+6. Report `running`, `completed_pending_validation`, `stale`, `missing_details`, or `not_running`.
 
 ## Guardrails
 
 - Do not kill a process unless the user or task explicitly requested it.
 - Do not mark completion unless final success criteria are met by evidence.
 - Do not proceed to final-output-dependent derivation or commits from `running` alone.
+- Do not treat `completed_pending_validation` as success; it only means harvest validation should consume the terminal artifacts.

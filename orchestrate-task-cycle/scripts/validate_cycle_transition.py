@@ -260,6 +260,26 @@ def stage_advice_handling_rationale(stage: dict[str, Any]) -> str | None:
     return None
 
 
+def long_run_events(stage: dict[str, Any]) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for candidate in stage_event_candidates(stage):
+        event_kind = str(candidate.get("event_kind") or "").lower()
+        role = str(candidate.get("long_run_role") or "").lower()
+        if truthy(candidate.get("long_run_branch")) or event_kind.startswith("long_run_") or role in {"launch", "monitor", "harvest", "finalize"}:
+            events.append(candidate)
+    return events
+
+
+def active_long_run_events(stage: dict[str, Any]) -> list[dict[str, Any]]:
+    active_statuses = {"launching", "running", "completed_pending_validation", "stale", "not_running"}
+    result: list[dict[str, Any]] = []
+    for event in long_run_events(stage):
+        status = str(event.get("execution_status") or event.get("source_status") or event.get("status") or "").lower()
+        if status in active_statuses:
+            result.append(event)
+    return result
+
+
 def stage_authority_policy(stage: dict[str, Any]) -> Any:
     for candidate in stage_event_candidates(stage):
         for key in ("authority_policy", "authority", "effective_authority_policy"):
@@ -1070,6 +1090,43 @@ def validate(context: dict[str, Any], stage: dict[str, Any], transition: str) ->
             add(findings, "block", "running_misclassified_success", "`running` execution was classified as success without explicit startup/heartbeat success criteria.")
         elif transition in {"pre_commit", "pre_report", "pre_closeout_commit"}:
             add(findings, "warn", "running_execution_incomplete", "`running` execution is in-progress evidence and normally supports only partial validation.")
+
+    pending_long_runs = active_long_run_events(stage)
+    if pending_long_runs:
+        pending_summary = [
+            {
+                "run_id": event.get("run_id"),
+                "task_id": event.get("task_id") or event.get("owner_task_id"),
+                "execution_status": event.get("execution_status") or event.get("source_status") or event.get("status"),
+                "event_kind": event.get("event_kind"),
+                "remaining_validation": event.get("remaining_validation"),
+            }
+            for event in pending_long_runs[-3:]
+        ]
+        final_output_dependent = {
+            "pre_qualitative_review",
+            "pre_loopback_audit",
+            "pre_validation_set_build",
+            "pre_schema_pre_derive",
+            "pre_derive",
+        }
+        if transition in final_output_dependent:
+            add(
+                findings,
+                "block",
+                "long_run_pending_final_output_phase",
+                "Pending long-running execution cannot advance to final-output-dependent review, loopback, validation-set build, schema refresh, or derive; record a partial handoff and resume through monitor/harvest.",
+                {"pending_long_runs": pending_summary},
+            )
+        if transition in {"pre_issue", "pre_commit", "pre_report", "pre_closeout_commit"}:
+            if validation_verdict in {"complete", "passed", "success"} or str(first_value(stage, "progress_verdict") or "").lower() == "advanced":
+                add(
+                    findings,
+                    "block",
+                    "long_run_pending_claimed_complete",
+                    "Pending long-running execution can support only partial/not_complete reporting until harvest validation consumes terminal artifacts.",
+                    {"pending_long_runs": pending_summary, "validation_verdict": validation_verdict or None},
+                )
 
     if transition == "pre_commit":
         if not validation_verdict:

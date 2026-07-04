@@ -13,6 +13,8 @@ The main value is traceability: what was intended, exactly how it was run, what 
 
 Long-term execution is allowed when the user, `task.md`, an issue-resolution request, or an orchestrating skill explicitly authorizes it. In that case, the skill may log a durable `running` result instead of waiting indefinitely, but only after capturing enough evidence to monitor, resume, or stop the process later.
 
+For long-running task-cycle branches, distinguish launch/handoff completion from domain completion. A launch task may complete only when it starts the authorized process and writes a durable handoff; it must not consume the original live-run acceptance until a later harvest/validation task observes terminal artifacts and required scalar evidence.
+
 When task-state IDs are available, link the run evidence and log entry through `$manage-task-state-index`. If no ID context exists, still run and log exactly as requested.
 
 ## Efficiency And Idempotency
@@ -95,6 +97,7 @@ When task-state IDs are available, link the run evidence and log entry through `
    - Include `blocker_actionability` or `blocker_opacity` for gate/validator failures with reason codes. Use scalar relation names and observed/expected values only; do not log raw bodies.
    - Include Part K execution/report fields when observed: expectation anchors and designated baseline ids, parity-axis statuses, adoption-axis classifications, resolution downgrade declarations, and report-key divergence path/value pairs. Treat them as routing evidence for downstream skills, not as success or failure by themselves except where the producing command already failed.
    - For `running` results, include PID/session/job identifiers, log and checkpoint paths, latest observed output or heartbeat, monitor and stop commands, expected completion signal, and remaining validation.
+   - For long-running task-cycle branches, include `long_run_branch=true`, `event_kind`, `long_run_role`, `run_id`, `owner_task_id`, `launch_cycle_id`, `workdir`, `output_dir`, `expected_completion_artifacts`, and any `residual_item_id` or `harvest_task_id`.
    - Use [execution-log-checklist.md](references/execution-log-checklist.md) when assembling the log fields.
 
 6. Update task-state IDs when possible.
@@ -154,6 +157,7 @@ python3 /home/swfool/.codex/skills/run-task-code-and-log/scripts/safe_failure_au
 - Do not log a run as successful when the command failed, timed out, was skipped, or was only partially verified.
 - Do not log a still-active long-term run as `success`; use `running` until completion or validation evidence exists.
 - Do not leave a process running unless long-term execution is authorized and durable PID/session, log, monitor, and stop details are captured.
+- Do not mark a long-run launch/handoff task as satisfying the original live-run or domain-output acceptance. Preserve that acceptance for harvest validation unless the task explicitly defines startup/heartbeat as the entire expected result.
 - Do not omit a failed command from the `.agent_log` record.
 - Do not summarize a live execution command with `...` or omit flags in durable evidence. Redact sensitive values, not argument names. If full argv is unavailable, mark `command_provenance_missing=true`.
 - Do not return a state-name-only gate blocker as actionable. Record `blocker_opacity=true` unless the log includes the violated relation, observed scalar values, expected relation, or minimum input delta.

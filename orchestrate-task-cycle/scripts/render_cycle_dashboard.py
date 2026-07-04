@@ -59,6 +59,16 @@ def unique(values: list[Any]) -> list[str]:
     return sorted({str(item) for item in values if item is not None and str(item) != ""})
 
 
+def long_run_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for event in events:
+        event_kind = str(event.get("event_kind") or "").lower()
+        role = str(event.get("long_run_role") or "").lower()
+        if event.get("long_run_branch") or event_kind.startswith("long_run_") or role in {"launch", "monitor", "harvest", "finalize"}:
+            result.append(event)
+    return result
+
+
 def render(events: list[dict[str, Any]], cycle_id: str) -> str:
     latest_by_step: dict[str, dict[str, Any]] = {}
     malformed_events: list[dict[str, Any]] = []
@@ -72,6 +82,7 @@ def render(events: list[dict[str, Any]], cycle_id: str) -> str:
     changed_files = unique([item for event in events for item in (event.get("changed_files") or [])])
     artifacts = unique([item for event in events for item in (event.get("artifacts") or [])])
     blockers = unique([item for event in events for item in (event.get("blockers") or [])])
+    long_runs = long_run_events(events)
     task_packs = unique(
         [event.get("task_pack_id") for event in events]
         + [event.get("task_pack_path") for event in events]
@@ -106,6 +117,15 @@ def render(events: list[dict[str, Any]], cycle_id: str) -> str:
             reason = event.get("reason") or ""
             step = event.get("step") or "missing_step"
             lines.append(f"- {step}: {event.get('status') or 'unknown'}" + (f" - {reason}" if reason else ""))
+    if long_runs:
+        lines.extend(["", "## 장기 실행 상태"])
+        for event in long_runs[-10:]:
+            status = event.get("execution_status") or event.get("source_status") or event.get("status") or "unknown"
+            run_id = event.get("run_id") or "unknown-run"
+            role = event.get("long_run_role") or event.get("event_kind") or "long_run"
+            remaining = event.get("remaining_validation") or ""
+            detail = f" - remaining_validation: {remaining}" if remaining else ""
+            lines.append(f"- {run_id}: {status} ({role}){detail}")
     for title, values in (("변경 파일", changed_files), ("아티팩트", artifacts), ("Task Pack", task_packs), ("Blocker Signature", blocker_signatures), ("블로커", blockers)):
         lines.extend(["", f"## {title}"])
         lines.extend([f"- {item}" for item in values] or ["- 없음"])

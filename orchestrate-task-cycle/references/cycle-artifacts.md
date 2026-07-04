@@ -85,6 +85,16 @@ Each stage event should include these fields when known:
 - `command_provenance_gate`
 - `command_argv`
 - `command_provenance_missing`
+- `long_run_branch`
+- `long_run_role`
+- `event_kind`
+- `run_id`
+- `owner_task_id`
+- `launch_cycle_id`
+- `output_dir`
+- `expected_completion_signal`
+- `expected_completion_artifacts`
+- `remaining_validation`
 - `blocker_actionability_gate`
 - `blocker_opacity`
 - `stochastic_feasibility_gate`
@@ -216,3 +226,11 @@ A `running` result is valid in-progress evidence only when it includes:
 - Remaining validation.
 
 Do not convert `running` into `success`, `passed`, or `complete` unless the task explicitly defines startup/heartbeat evidence as sufficient.
+
+For long-running branches, keep all lifecycle events on canonical `step: run` and distinguish them with:
+
+- `event_kind`: `long_run_launch`, `long_run_monitor`, `long_run_harvest`, or `long_run_finalize`.
+- `long_run_role`: `launch`, `monitor`, `harvest`, or `finalize`.
+- Required handoff fields: `run_id`, `owner_task_id`, `launch_cycle_id`, `command_argv`, `workdir`, `output_dir`, `log_path`, `startup_or_heartbeat_evidence`, `monitor_command`, `stop_command`, `remaining_validation`, `expected_completion_signal`, and `expected_completion_artifacts`.
+
+Use `completed_pending_validation` only when expected completion artifacts are present but harvest validation has not yet consumed them. It is not `success`, `passed`, `advanced`, or `complete_verified`.

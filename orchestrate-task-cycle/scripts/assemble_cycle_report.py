@@ -130,6 +130,27 @@ def all_events(context: dict[str, Any], stage: dict[str, Any]) -> list[dict[str,
     return deduped
 
 
+def long_run_events(context: dict[str, Any], stage: dict[str, Any]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for event in all_events(context, stage):
+        event_kind = str(event.get("event_kind") or "").lower()
+        role = str(event.get("long_run_role") or "").lower()
+        if event.get("long_run_branch") or event_kind.startswith("long_run_") or role in {"launch", "monitor", "harvest", "finalize"}:
+            result.append(event)
+    return result
+
+
+def long_run_status_lines(context: dict[str, Any], stage: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    for event in long_run_events(context, stage)[-10:]:
+        status = event.get("execution_status") or event.get("source_status") or event.get("status") or "unknown"
+        run_id = event.get("run_id") or "unknown-run"
+        role = event.get("long_run_role") or event.get("event_kind") or "long_run"
+        remaining = event.get("remaining_validation") or "not_recorded"
+        lines.append(f"{run_id}: {status} ({role}); remaining_validation={remaining}")
+    return lines
+
+
 def event_value(stage: dict[str, Any], field: str, preferred_steps: tuple[str, ...] = ()) -> Any:
     by_step: dict[str, dict[str, Any]] = {}
     for event in stage_events(stage):
@@ -318,7 +339,11 @@ def blockers(context: dict[str, Any], stage: dict[str, Any], validation: dict[st
         or event_value(stage, "blockers", ("report", "validate", "closeout_commit"))
     )
     if isinstance(explicit, list) and explicit:
-        return [str(item) for item in explicit if not is_resolved_blocker(str(item))]
+        rendered = [str(item) for item in explicit if not is_resolved_blocker(str(item))]
+        for line in long_run_status_lines(context, stage):
+            if any(status in line for status in ("running", "launching", "completed_pending_validation", "stale", "not_running")):
+                rendered.append(f"long_run_pending: {line}")
+        return rendered
     event_blockers: list[str] = []
     for event in all_events(context, stage):
         event_blockers.extend(list_value(event.get("blockers")))
@@ -343,6 +368,9 @@ def blockers(context: dict[str, Any], stage: dict[str, Any], validation: dict[st
     for finding in progress.get("findings") or []:
         if isinstance(finding, dict) and finding.get("severity") in {"warn", "block"}:
             found.append(f"progress_loop:{finding.get('code')}: {finding.get('message')}")
+    for line in long_run_status_lines(context, stage):
+        if any(status in line for status in ("running", "launching", "completed_pending_validation", "stale", "not_running")):
+            found.append(f"long_run_pending: {line}")
     return found[:8]
 
 
@@ -437,6 +465,9 @@ def assemble(
     extra: dict[str, Any] = {}
     if validation.get("report_path"):
         extra["validation_report_path"] = validation["report_path"]
+    long_run_lines = long_run_status_lines(context, stage)
+    if long_run_lines:
+        extra["long_running_execution"] = long_run_lines
     if commit:
         extra["implementation_commit"] = commit
     if closeout_commit:

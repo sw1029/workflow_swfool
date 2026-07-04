@@ -14,6 +14,7 @@ Capture:
 - Input files, config files, arguments, and environment assumptions that affected the run.
 - Exit code or completion status.
 - For authorized long-term runs: PID, session/job ID, log path, checkpoint path, latest heartbeat or output tail, monitor command, stop command, and next recommended check.
+- For task-cycle long-running branches: `long_run_branch=true`, `event_kind`, `long_run_role`, `run_id`, `owner_task_id`, `launch_cycle_id`, `workdir`, `output_dir`, `expected_completion_signal`, `expected_completion_artifacts`, `remaining_validation`, and residual/harvest task linkage when launch does not satisfy the original live-run target.
 - Short stdout/stderr summary, not full noisy output.
 - Produced artifacts, changed files, generated reports, or missing expected outputs.
 - Validation performed after execution.
@@ -59,6 +60,7 @@ Capture:
 
 - Missing code, missing inputs, ambiguous instructions, unsafe assumptions, command failure, timeout, skipped validation, unavailable dependencies, or unverified output.
 - For `running` status: final completion and final validation still pending.
+- For long-running launch/handoff status: original domain/live-run acceptance still pending unless startup/heartbeat is explicitly the whole expected result.
 - Sensitive details omitted from the log.
 - Producer progress labels were downgraded when present, and no close/progress verdict was inferred from them.
 - A `candidate_degraded` output was preserved but not promoted, when applicable.
@@ -70,6 +72,7 @@ Capture:
 
 - `success`: all requested execution steps completed and observed result matches the request.
 - `running`: an authorized long-term run started, remains active, and has durable PID/session, log, monitor, and stop evidence, but final outputs or validation are not complete yet.
+- `completed_pending_validation`: expected completion artifacts are present, but harvest validation has not yet consumed them; do not report success or completion from this status alone.
 - `partial`: some work completed, but verification, outputs, dependencies, or follow-up remain.
 - In `$orchestrate-task-cycle` ledgers, preserve this result status separately and record a completed `success` run stage as lifecycle `complete`.
 - `failed`: the specified command or code ran and failed.

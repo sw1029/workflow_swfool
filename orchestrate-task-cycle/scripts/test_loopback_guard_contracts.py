@@ -24,6 +24,8 @@ SKILLS_ROOT = ORCHESTRATE_ROOT.parent
 detect_progress_loop = load_module(ORCHESTRATE_ROOT / "scripts" / "detect_progress_loop.py")
 code_structure_audit = load_module(ORCHESTRATE_ROOT / "scripts" / "code_structure_audit.py")
 result_contract = load_module(ORCHESTRATE_ROOT / "scripts" / "result_contract.py")
+validate_cycle_transition = load_module(ORCHESTRATE_ROOT / "scripts" / "validate_cycle_transition.py")
+monitor_running_execution = load_module(ORCHESTRATE_ROOT / "scripts" / "monitor_running_execution.py")
 anti_loop_gate_provider = load_module(
     SKILLS_ROOT / "audit-cycle-loopback" / "scripts" / "anti_loop_gate_provider.py"
 )
@@ -1409,6 +1411,119 @@ def test_cycle_ledger_records_unchanged_ref_for_duplicate_artifact() -> None:
     assert second["current_stage"]["latest_event"]["unchanged_refs"][0]["sha256"] == first["event"]["artifact_refs"][0]["sha256"]
 
 
+def long_run_packet(**overrides: Any) -> dict[str, Any]:
+    packet = {
+        "step": "run",
+        "task_id": "task-long-run",
+        "execution_status": "running",
+        "long_run_branch": True,
+        "long_run_role": "monitor",
+        "event_kind": "long_run_monitor",
+        "run_id": "run-long-1",
+        "owner_task_id": "task-long-run",
+        "launch_cycle_id": "cycle-long-1",
+        "command_argv": ["python", "runner.py", "--output-dir", ".task/run/long"],
+        "workdir": ".",
+        "output_dir": ".task/run/long",
+        "log_path": ".task/run/long/run.log",
+        "startup_or_heartbeat_evidence": "heartbeat observed",
+        "monitor_command": "python monitor.py --run-json .task/run/long/run.json",
+        "stop_command": "tmux kill-session -t run-long-1",
+        "remaining_validation": "harvest terminal report and validate scalars",
+        "expected_completion_signal": "terminal_report.json exists",
+        "expected_completion_artifacts": [".task/run/long/terminal_report.json"],
+        "session_id": "tmux:run-long-1",
+        "evidence_paths": [".agent_log/run-long.md"],
+    }
+    packet.update(overrides)
+    return packet
+
+
+def test_result_contract_blocks_incomplete_long_run_branch() -> None:
+    packet = long_run_packet(run_id="", expected_completion_artifacts=[])
+
+    result = result_contract.validate("run", packet, "block")
+
+    codes = {finding.get("code") for finding in result["findings"]}
+    assert result["status"] == "block"
+    assert "long_run_detail_missing" in codes
+
+
+def test_result_contract_accepts_complete_long_run_running_packet() -> None:
+    result = result_contract.validate("run", long_run_packet(), "block")
+
+    codes = {finding.get("code") for finding in result["findings"]}
+    assert "long_run_detail_missing" not in codes
+    assert "running_detail_missing" not in codes
+
+
+def test_monitor_running_execution_detects_completed_pending_validation() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        log_path = root / "run.log"
+        done_path = root / "terminal_report.json"
+        log_path.write_text("heartbeat\n", encoding="utf-8")
+        done_path.write_text("{}", encoding="utf-8")
+        args = argparse.Namespace(
+            pid=None,
+            log_path=str(log_path),
+            monitor_command="monitor",
+            stop_command="stop",
+            heartbeat="heartbeat",
+            remaining_validation="validate terminal report",
+            run_id="run-long-1",
+            task_id="task-long-run",
+            launch_cycle_id="cycle-long-1",
+            long_run_branch=True,
+            long_run_role="monitor",
+            event_kind="long_run_monitor",
+            output_dir=str(root),
+            command_arg=["python", "runner.py", "--output-dir", str(root)],
+            workdir=str(root),
+            expected_completion_signal="terminal_report.json exists",
+            expected_completion_path=[str(done_path)],
+            tmux_session="run-long-1",
+            tmux_window=None,
+            tmux_pane=None,
+        )
+
+        result = monitor_running_execution.monitor({}, args)
+
+    assert result["status"] == "completed_pending_validation"
+    assert result["completion_artifacts"][0]["exists"] is True
+
+
+def test_validate_transition_blocks_pending_long_run_derive() -> None:
+    stage = {"events": [long_run_packet()]}
+
+    result = validate_cycle_transition.validate({}, stage, "pre_derive")
+
+    codes = {finding.get("code") for finding in result["findings"]}
+    assert result["status"] == "block"
+    assert "long_run_pending_final_output_phase" in codes
+
+
+def test_cycle_ledger_accepts_long_run_monitor_as_run_step() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        result = cycle_ledger.append_event(
+            root,
+            "cycle-long-1",
+            {
+                "step": "run",
+                "status": "partial",
+                "execution_status": "running",
+                "event_kind": "long_run_monitor",
+                "long_run_branch": True,
+                "long_run_role": "monitor",
+            },
+        )
+
+    assert result["event"]["step"] == "run"
+    assert result["event"]["event_kind"] == "long_run_monitor"
+    assert "noncanonical_step" not in result["event"]
+
+
 def main() -> int:
     test_task_pack_scope_fidelity_blocks_diluted_consumed_item()
     test_task_pack_scope_fidelity_allows_explicit_descope_with_open_residual()
@@ -1436,6 +1551,11 @@ def main() -> int:
     test_task_pack_blocks_independent_verified_without_source_separation()
     test_result_contract_blocks_part_h_misrouting()
     test_cycle_ledger_records_unchanged_ref_for_duplicate_artifact()
+    test_result_contract_blocks_incomplete_long_run_branch()
+    test_result_contract_accepts_complete_long_run_running_packet()
+    test_monitor_running_execution_detects_completed_pending_validation()
+    test_validate_transition_blocks_pending_long_run_derive()
+    test_cycle_ledger_accepts_long_run_monitor_as_run_step()
     print("loopback guard contract tests passed")
     return 0
 

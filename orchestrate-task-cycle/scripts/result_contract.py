@@ -140,6 +140,23 @@ COMMON_FIELDS = {
 }
 
 RUNNING_FIELDS = ["pid_or_session", "log_path", "startup_or_heartbeat_evidence", "monitor_command", "stop_command", "remaining_validation"]
+LONG_RUN_REQUIRED_FIELDS = [
+    "run_id",
+    "owner_task_id",
+    "launch_cycle_id",
+    "command_argv",
+    "workdir",
+    "output_dir",
+    "log_path",
+    "startup_or_heartbeat_evidence",
+    "monitor_command",
+    "stop_command",
+    "remaining_validation",
+    "expected_completion_signal",
+    "expected_completion_artifacts",
+]
+LONG_RUN_ROLES = {"launch", "monitor", "harvest", "finalize"}
+LONG_RUN_STATUSES = {"launching", "running", "completed_pending_validation", "stale", "not_running", "failed", "success"}
 ADVICE_REQUIRED_TARGETS = {"governance", "validation_set_plan", "qualitative_review", "validation_set_build", "derive", "validate"}
 PACK_DISPOSITIONS = {
     "create_pack",
@@ -222,7 +239,14 @@ def has_value(data: dict[str, Any], field: str) -> bool:
         "validation_set_id": ["validation_set_id", "vset_id", "validation_set.id"],
         "not_gold": ["not_gold", "validation_set.not_gold"],
         "progress_axes": ["progress_axes", "validation.progress_axes", "progress.axes"],
-        "pid_or_session": ["pid", "session_id", "job_id", "pid_or_session", "run.pid", "run.session_id"],
+        "pid_or_session": ["pid", "session_id", "job_id", "pid_or_session", "run.pid", "run.session_id", "run.job_id"],
+        "run_id": ["run_id", "run.run_id", "execution.run_id", "monitor_result.run_id"],
+        "owner_task_id": ["owner_task_id", "task_id", "run.owner_task_id", "monitor_result.owner_task_id"],
+        "launch_cycle_id": ["launch_cycle_id", "cycle_id", "run.launch_cycle_id", "monitor_result.launch_cycle_id"],
+        "workdir": ["workdir", "cwd", "working_directory", "run.workdir", "run.cwd"],
+        "output_dir": ["output_dir", "run.output_dir", "execution.output_dir", "monitor_result.output_dir"],
+        "expected_completion_signal": ["expected_completion_signal", "run.expected_completion_signal", "monitor_result.expected_completion_signal"],
+        "expected_completion_artifacts": ["expected_completion_artifacts", "expected_completion_paths", "run.expected_completion_artifacts", "monitor_result.expected_completion_artifacts"],
         "used_advice": ["used_advice", "external_advice", "advice", "packet.used_advice", "routing_packet.used_advice", "result.used_advice"],
         "reviewer_routing": ["reviewer_routing", "reviewer_route", "reviewer_reasoning", "quality_review.reviewer_routing", "qualitative_review.reviewer_routing"],
         "reviewed_artifacts": ["reviewed_artifacts", "reviewed_artifact_paths", "quality_review.reviewed_artifacts", "qualitative_review.reviewed_artifacts", "artifacts"],
@@ -939,6 +963,48 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
         for field in missing_running:
             add(findings, "block", "running_detail_missing", f"`running` execution requires `{field}`.", {"field": field})
     if target == "run":
+        long_run_branch = boolish(first_present(result, ["long_run_branch", "run.long_run_branch", "monitor_result.long_run_branch"]))
+        long_run_role = str(first_present(result, ["long_run_role", "run.long_run_role", "monitor_result.long_run_role"]) or "").lower()
+        event_kind = str(first_present(result, ["event_kind", "run.event_kind", "monitor_result.event_kind"]) or "").lower()
+        if long_run_branch:
+            missing_long_run = [field for field in LONG_RUN_REQUIRED_FIELDS if not has_value(result, field)]
+            for field in missing_long_run:
+                add(findings, "block", "long_run_detail_missing", f"`long_run_branch=true` requires `{field}`.", {"field": field})
+            if long_run_role not in LONG_RUN_ROLES:
+                add(
+                    findings,
+                    "block",
+                    "long_run_role_invalid",
+                    "`long_run_branch=true` requires long_run_role launch|monitor|harvest|finalize.",
+                    {"long_run_role": long_run_role or None},
+                )
+            if execution_status and execution_status not in LONG_RUN_STATUSES:
+                add(
+                    findings,
+                    "block",
+                    "long_run_execution_status_invalid",
+                    "`long_run_branch=true` execution_status must be launching, running, completed_pending_validation, stale, not_running, failed, or success.",
+                    {"execution_status": execution_status},
+                )
+            if event_kind and event_kind not in {"long_run_launch", "long_run_monitor", "long_run_harvest", "long_run_finalize"}:
+                add(
+                    findings,
+                    "warn",
+                    "long_run_event_kind_noncanonical",
+                    "Long-running run events should use event_kind long_run_launch|long_run_monitor|long_run_harvest|long_run_finalize while keeping step=run.",
+                    {"event_kind": event_kind},
+                )
+            if execution_status in {"running", "launching", "completed_pending_validation", "stale", "not_running"}:
+                validation_verdict = str(value_for(result, "validation_verdict") or "").lower()
+                progress_verdict = str(value_for(result, "progress_verdict") or "").lower()
+                if validation_verdict in {"complete", "passed", "success"} or progress_verdict == "advanced":
+                    add(
+                        findings,
+                        "block",
+                        "long_run_incomplete_claimed_complete",
+                        "Long-running launch/monitor/completed-pending-validation evidence cannot consume completion or advanced progress before harvest validation.",
+                        {"execution_status": execution_status, "validation_verdict": validation_verdict or None, "progress_verdict": progress_verdict or None},
+                    )
         live_execution = boolish(
             first_present(
                 result,
