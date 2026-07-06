@@ -36,6 +36,7 @@ For the canonical file layout and contract fields, read [contract-format.md](ref
 
 2. Identify contract surfaces.
    - Record shared data shapes, serialized files, JSON/JSONL/YAML/CSV fields, database tables, CLI flags, script inputs/outputs, public functions/classes, and module-level invariants.
+   - Record shared execution-context contracts when they affect consumers: harvest-gate anchor kind and scale assumptions, terminal disposition/quarantine semantics, reharvest availability, producer directives, validation predicates/floors/inclusion checks, and collection truncation/sample flags.
    - For each contract, identify target modules/scripts, owners or producing code paths, consuming code paths, validation commands, and known compatibility assumptions.
    - Compare each record against `.agent_goal/goal_schema_contract.md` minimum fields and mandatory application rules. Mark missing required data as `not_applicable` or `needs_review` with a reason; do not omit it silently.
    - Distinguish stable public contracts from internal implementation details.
@@ -56,6 +57,7 @@ For the canonical file layout and contract fields, read [contract-format.md](ref
 5. Check compatibility before and after changes.
    - Before implementation or task derivation, read `.agent_goal/goal_schema_contract.md`, `.schema/`, and `.contract/` to identify compatibility risks, stale contracts, and unmet goal-level requirements.
    - After code/task changes, update `.schema/` and, when applicable, `.contract/` for any changed inputs, outputs, invariants, target scripts/modules, or validation requirements.
+   - When a task changes a validation predicate or producer directive, record whether the pair is mutually satisfiable or mark `needs_review`/residual repair. When a task changes collection fields consumed as closed-world evidence, record the truncation/sample flag contract or full-collection requirement.
    - If a task batched several adjacent contract checks, refresh schema/contracts once for the combined durable interface change and list the covered subchecks or prerequisite artifacts.
    - If the code changed but contract impact is unclear, create a `needs_review` contract note under `.schema/contracts/` rather than inventing compatibility; include which `.agent_goal/goal_schema_contract.md` requirement could not yet be satisfied.
 
@@ -80,3 +82,4 @@ For the canonical file layout and contract fields, read [contract-format.md](ref
 - Do not treat `.agent_advice` as schema-contract GT. If advice affects contracts, cite it as non-GT evidence and mark conflicts with GT/authority/repo facts.
 - Do not write final goal schema-contract policy under `.schema/` or `.contract/`; final policy belongs at `.agent_goal/goal_schema_contract.md`.
 - Do not bump schema/contract versions only because a sequential no-live task number changed when the actual interface, producer, consumer, invariant, or validation requirement is unchanged.
+- Do not record validation predicates, producer directives, or closed-world collection consumers as compatible when current evidence shows `mutually_unsatisfiable_contract` or `sample_as_universe_misuse`; mark the contract gap instead of guessing a domain-specific fix.

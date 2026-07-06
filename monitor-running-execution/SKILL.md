@@ -17,9 +17,10 @@ Use `/home/swfool/.codex/skills/orchestrate-task-cycle/scripts/monitor_running_e
 2. Verify that PID/session/job ID, log path, monitor command, stop command, startup/heartbeat evidence, and remaining validation are present.
 3. For task-cycle long-running branches, also verify `run_id`, `owner_task_id`, `launch_cycle_id`, `output_dir`, expected completion signal/artifacts, and residual/harvest validation linkage when available.
 4. When the long run was launched because `unreachable_within_cycle=true`, verify that required scale, throughput evidence, cycle cap, residual original acceptance, and harvest validation plan remain linked. A launch or heartbeat does not consume the original domain acceptance.
-5. Check process, tmux session, log heartbeat, and expected completion artifacts only when safe and local.
-6. Append a monitor event to the cycle ledger as `step: run` with `event_kind: long_run_monitor`; do not create a noncanonical `monitor` phase.
-7. Report `running`, `completed_pending_validation`, `stale`, `missing_details`, or `not_running`.
+5. When the launch packet includes Part M fields, verify that launch-manifest anchors, target scale, `harvest_contract_preflight`, `harvest_risk_accepted`, terminal disposition policy, and reharvest linkage remain attached to the monitor or harvest handoff. Do not replace launch-time anchors with the current task, current lane, or monitor task context.
+6. Check process, tmux session, log heartbeat, and expected completion artifacts only when safe and local.
+7. Append a monitor event to the cycle ledger as `step: run` with `event_kind: long_run_monitor`; do not create a noncanonical `monitor` phase.
+8. Report `running`, `completed_pending_validation`, `stale`, `missing_details`, or `not_running`.
 
 ## Guardrails
 
@@ -28,3 +29,4 @@ Use `/home/swfool/.codex/skills/orchestrate-task-cycle/scripts/monitor_running_e
 - Do not proceed to final-output-dependent derivation or commits from `running` alone.
 - Do not treat `completed_pending_validation` as success; it only means harvest validation should consume the terminal artifacts.
 - Do not mark a cycle-unreachable target complete from long-run launch, startup, or heartbeat evidence. Preserve harvest validation, throughput/scale evidence, or explicit descope/terminal/escalation.
+- Do not let a monitor task switch silently invalidate or redefine terminal harvest expectations. Preserve launch-manifest anchors and any explicit `harvest_risk_accepted` decision.

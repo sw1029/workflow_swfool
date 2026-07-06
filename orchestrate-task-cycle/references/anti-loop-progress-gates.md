@@ -15,6 +15,7 @@ Use this reference when recent task-cycle evidence shows safe but stationary wor
 - [Part J In-Place Revision Contract](#part-j-in-place-revision-contract)
 - [Part K In-Place Revision Contract](#part-k-in-place-revision-contract)
 - [Part L In-Place Revision Contract](#part-l-in-place-revision-contract)
+- [Part M In-Place Revision Contract](#part-m-in-place-revision-contract)
 - [G1 Disposition Intersection Gate](#g1-disposition-intersection-gate)
 - [G0 Pre-Cycle Regression Guard](#g0-pre-cycle-regression-guard)
 - [G0-SAT Gate Satisfiability Precheck](#g0-sat-gate-satisfiability-precheck)
@@ -108,6 +109,11 @@ Gate logic must stay domain-agnostic. A repository may supply a domain adapter t
 - `acceptance_scale(target, **context)`: optional L5 helper returning required acceptance scale and unit for the target.
 - `metric_basis_inputs(metric_id, **context)`: optional L6 helper returning claimed basis class, consumed input classes, and whether the claim is derivable from those inputs.
 - `surface_field_classes(artifact_family, **context)`: optional L7 helper returning producer-written surface string field classes and locator interpretation rules for qualitative review.
+- `harvest_gate_inventory(**context)`: optional M1 helper returning non-degradable or degradable terminal harvest checks with opaque check IDs, anchor kinds, and consumed reference caps. Missing hook is `harvest_gate_unaudited` fail-quiet unless caller acceptance declares the preflight required.
+- `disposal_cost_policy(**context)`: optional M2 helper returning adapter-owned safe cost-scalar keys and high-cost threshold policy for terminal artifact disposition. Threshold values stay adapter-owned.
+- `reharvest_path(artifact_family, **context)`: optional M2 helper returning whether deterministic reharvest is available and an opaque command ID. Generic workflow skills must not assemble repository-specific reharvest commands.
+- `producer_directives(**context)`: optional M3 helper returning directive IDs, abstract directive classes, and affected fields for predicate/directive satisfiability checks.
+- `truncation_flag_aliases(**context)`: optional M4 helper returning additional collection truncation, sample-limit, partial, or sampled flag aliases when generic `*_truncated`, `*_sample_limit`, `*_partial`, and `*_sampled` fields do not apply.
 
 If the adapter is absent or omits a required vector, promotion must fail closed for the affected gate while packet production continues. If the adapter is registered by path or declaration but `adapter_loaded!=true`, set `adapter_wiring_defect=true`, route as `self_inflicted_gate_defect`, and select wiring/load correction instead of creating a new adapter. Do not hardcode project module paths, metric names, lexicon paths, or artifact filenames in the generic workflow skill body.
 
@@ -214,6 +220,17 @@ These rules revise existing validation consumption, decision refresh, derive sel
 - L7 surface-field review coverage: when a reviewed artifact family has source locators and `surface_field_classes(...)`, qualitative review samples the adapter-owned record count and compares every producer-written surface string field class, not only summaries. Record only scalar field-class by defect-class counts unless authority allows excerpts. Nonzero counts feed loopback root-family classification and producer-supply derivation; missing hooks fail quiet with `field_class_map_missing`.
 
 Keep lane key components, upstream contract versioning, gating-axis definitions, producer path maps, quota thresholds, scale units, metric basis classes, surface field classes, locators, and excerpt policy in repository adapters or authority/project contracts. Generic skills compare opaque keys, enums, booleans, counts, and safe scalar fields only.
+
+## Part M In-Place Revision Contract
+
+These rules revise existing long-run launch, terminal disposition, validation contract, and result-consumer decisions. They do not add a new phase, detector, report, authority grant, automatic retry, or repo-specific rule.
+
+- M1 harvest gate preflight: when `unreachable_within_cycle=true` routes work to long-run launch and `harvest_gate_inventory(...)` is available, audit non-degradable terminal harvest checks before launch. Set `lane_incompatible` when the expected terminal value depends on a mutable current task, current lane, monitor-switched context, or other non-launch-manifest anchor. Set `scale_incompatible` when a closed-world reference cap is below target run scale. Set `contract_conflict` when harvest validation predicates and producer directives cannot both be satisfied. Missing inventory is `harvest_gate_unaudited` fail-quiet. Findings require harvest-gate repair or mitigation before launch unless `harvest_risk_accepted=true` is explicit.
+- M2 cost-proportional disposition: when `disposal_cost_policy(...)` marks a terminal artifact high cost and the failure is not a safety violation, destructive deletion or overwrite is invalid. Preserve quarantine and classify failed checks by `failure_check_provenance` as `domain_quality`, `governance_metadata`, or `verifier_defect`. If verifier/governance failure dominates and `reharvest_path(...)` is available, derive should repair the gate and reharvest before a new full rerun. `rerun_before_reharvest=true` blocks goal-productive rerun claims. Missing cost or reharvest hooks fail quiet; safety violations keep fail-closed disposal.
+- M3 predicate-directive satisfiability: when validation predicates, floors, inclusion checks, required output classes, or schema rules change, compare them against `producer_directives(...)` when available; when producer directives change, compare them against affected predicates. Set `mutually_unsatisfiable_contract=true` if a predicate requires output the directive forbids, or if the directive permits output the predicate must reject. The same task must reconcile one side or preserve residual/terminal/user-escalation state before either side is consumed as valid.
+- M4 truncated collection consumption: before treating any collection field as a closed-world universe, inspect co-resident generic flags `*_truncated`, `*_sample_limit`, `*_partial`, `*_sampled`, plus aliases from `truncation_flag_aliases(...)`. If a truncation, partial, or sample flag is true, the collection can prove only included-element consistency. Absence from the sample is not a violation; closed-world consumption is `sample_as_universe_misuse` and fails close. Derive must supply a full untruncated collection or revise the contract to sample-only consistency.
+
+Keep harvest check names, threshold values, reharvest commands, directive content, predicate formulas, collection schemas, and flag aliases in repository adapters, caller packets, or project-owned contracts. Generic skills consume only abstract fields and supplied paths.
 
 ## G1 Disposition Intersection Gate
 
@@ -524,6 +541,8 @@ The producer must compute `anti_loop_progress_gate` from raw artifact content an
 - Part I evidence-lifecycle fields when supplied, such as `instrumentation_exercise_required`, `instrumentation_exercised`, `instrumentation_field_map`, `derived_from_existing_artifacts`, `acceptance.quantifiers`, `evidence_kind`, `verifier_surface_hardening`, `target_artifact_paths`, `change_set_kind`, `run_disposition`, `candidate_degraded`, `runtime_config_echo`, `config_overrides`, and `execution_starvation`
 - Part J decision-contract fields when supplied, such as `acceptance_scenario_gate`, `scenario_uncovered`, `acceptance_inversion`, `command_provenance_missing`, `blocker_opacity`, `outcome_variance`, `predetermined_unreachable`, `floor_edge_envelope`, `instrumentation_first_fire`, and `first_fire_consumed_item_id`
 - Part K lineage/comparison fields when supplied, such as `expectation_anchor`, `designated_baseline`, `expectation_anchor_missing`, `expectation_lineage_stale`, `parity_axes`, `parity_axis_status`, `parity_unverified`, `adoption_axis_classification`, `required_output_classes`, `majority_vote_adoption`, `provisional_adoption`, `measured_but_disqualified`, `required_evidence_resolution`, `observed_evidence_resolution`, `resolution_downgrade`, `surrogate_resolution_basis`, `report_key_divergence`, and duplicate report-key path/value evidence
+- Part L lane/premise fields when supplied, such as `production_lane_identity`, `current_decision_lane`, `pass_on_stale_lane`, `decision_metadata_revision`, `axis_starved_by_missing_producer`, `portfolio_quota_exceeded`, `unreachable_within_cycle`, `basis_overclaim`, and `surface_field_defect_matrix`
+- Part M execution-context fields when supplied, such as `harvest_contract_preflight`, `harvest_gate_unaudited`, `harvest_risk_accepted`, `lane_incompatible`, `scale_incompatible`, `contract_conflict`, `high_cost_artifact`, `destructive_disposition_blocked`, `quarantine_required`, `failure_check_provenance`, `reharvest_path`, `reharvest_before_rerun_required`, `rerun_before_reharvest`, `validation_predicate_contract`, `producer_directives`, `mutually_unsatisfiable_contract`, `closed_world_collection_consumption`, `collection_truncated`, `sample_as_universe_misuse`, and `full_collection_required`
 - `recommended_disposition`, `hard_stop_required`, `evidence_class`, and evidence paths
 
 The repository adapter or shared module must fail closed on noisy quality inputs. If confidence is low, artifacts are missing/malformed, adapter output is missing, or domain interpretation is uncertain, emit `evidence_class: insufficient_evidence`, `recommended_disposition: conservative_hold`, and `hard_stop_required: true`. Legacy repository quality modules may remain as compatibility fallbacks, but new domain-specific metrics, paths, lexicons, and thresholds belong behind the adapter interface.
@@ -575,6 +594,10 @@ Use the packet as a derive gate:
 - failed `gating` adoption axes or `measured_but_disqualified=true` prevent adoption of that candidate while preserving it as measured evidence.
 - `resolution_downgrade=true` means surrogate evidence cannot satisfy the original high-resolution contract without restoration, contract revision, or residual high-resolution scope; repeated same-contract downgrade should feed derive repair.
 - `report_key_divergence=true` blocks pass/close/adoption/baseline/comparison/high-water consumption of the divergent report. Matching duplicate terminal keys do not block consumption but should remain warn-only schema debt.
+- `lane_incompatible=true`, `scale_incompatible=true`, or `contract_conflict=true` inside harvest preflight means derive must select harvest-gate repair/mitigation before long-run launch unless `harvest_risk_accepted=true` is explicit.
+- `destructive_disposition_blocked=true` with `high_cost_artifact=true` means non-safety terminal artifacts must be quarantined; `rerun_before_reharvest=true` prevents counting a new full rerun as goal-productive until reharvest is attempted, unavailable, terminal-blocked, or explicitly descoped.
+- `mutually_unsatisfiable_contract=true` means predicate/directive reconciliation, residual descope, terminal blocker, or user escalation must precede pass/close/progress consumption.
+- `sample_as_universe_misuse=true` means truncated, partial, capped, or sampled collection absence was consumed as closed-world evidence; route full collection supply or sample-only contract revision before pass/close consumption.
 
 ## A1 Measurement Progress Exemption
 

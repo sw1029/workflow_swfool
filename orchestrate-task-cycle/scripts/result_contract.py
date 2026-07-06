@@ -809,6 +809,66 @@ SURFACE_FIELD_TASK_KINDS = {
     "terminal_blocked",
     "terminal_blocker",
 }
+HARVEST_GATE_TASK_KINDS = {
+    "harvest_gate_repair",
+    "harvest_gate_mitigation",
+    "harvest_contract_repair",
+    "launch_manifest_repair",
+    "harvest_anchor_repair",
+    "harvest_scale_repair",
+    "harvest_contract_mitigation",
+    "residual_descope",
+    "descope_with_residual",
+    "user_escalation",
+    "terminal_blocked",
+    "terminal_blocker",
+}
+REHARVEST_TASK_KINDS = {
+    "quarantine_artifact",
+    "artifact_quarantine",
+    "terminal_artifact_quarantine",
+    "reharvest",
+    "reharvest_preserved_artifact",
+    "reharvest_path_supply",
+    "verifier_repair_then_reharvest",
+    "governance_metadata_repair",
+    "verifier_defect_repair",
+    "gate_repair_then_reharvest",
+    "residual_descope",
+    "descope_with_residual",
+    "user_escalation",
+    "terminal_blocked",
+    "terminal_blocker",
+}
+CONTRACT_SATISFIABILITY_TASK_KINDS = {
+    "predicate_directive_reconciliation",
+    "predicate_directive_repair",
+    "predicate_revision",
+    "producer_directive_revision",
+    "validation_predicate_repair",
+    "producer_contract_repair",
+    "contract_satisfiability_repair",
+    "same_task_contract_repair",
+    "residual_descope",
+    "descope_with_residual",
+    "user_escalation",
+    "terminal_blocked",
+    "terminal_blocker",
+}
+COLLECTION_CONSUMPTION_TASK_KINDS = {
+    "full_collection_supply",
+    "untruncated_collection_supply",
+    "collection_contract_revision",
+    "sample_only_contract_revision",
+    "sample_consistency_contract",
+    "closed_world_collection_repair",
+    "collection_consumer_repair",
+    "residual_descope",
+    "descope_with_residual",
+    "user_escalation",
+    "terminal_blocked",
+    "terminal_blocker",
+}
 
 
 def forced_task_kind(result: dict[str, Any]) -> str:
@@ -1978,6 +2038,199 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                 "block" if mode == "block" else "warn",
                 "derive_surface_field_defects_unhandled",
                 "`derive` must route nonzero surface_field_defect_matrix to producer/field repair, residual descope, terminal state, or user escalation before consuming the review pass.",
+                {"selected_task_kind": selected_kind or None},
+            )
+        harvest_gate_unaudited = boolish(
+            first_present(
+                result,
+                [
+                    "harvest_gate_unaudited",
+                    "harvest_contract_preflight.harvest_gate_unaudited",
+                    "harvest_contract_preflight_gate.harvest_gate_unaudited",
+                    "anti_loop_progress_gate.harvest_gate_unaudited",
+                    "anti_loop_progress_gate.harvest_contract_preflight.harvest_gate_unaudited",
+                    "result.harvest_contract_preflight_gate.harvest_gate_unaudited",
+                ],
+            )
+        )
+        harvest_preflight_required = boolish(
+            first_present(
+                result,
+                [
+                    "harvest_preflight_required",
+                    "harvest_contract_preflight.required",
+                    "harvest_contract_preflight_gate.required",
+                    "acceptance.harvest_preflight_required",
+                    "result.harvest_contract_preflight_gate.required",
+                ],
+            )
+        )
+        harvest_risk_accepted = boolish(
+            first_present(
+                result,
+                [
+                    "harvest_risk_accepted",
+                    "harvest_contract_preflight.harvest_risk_accepted",
+                    "harvest_contract_preflight_gate.harvest_risk_accepted",
+                    "anti_loop_progress_gate.harvest_risk_accepted",
+                    "result.harvest_contract_preflight_gate.harvest_risk_accepted",
+                ],
+            )
+        )
+        harvest_preflight_incompatible = any(
+            boolish(
+                first_present(
+                    result,
+                    [
+                        field,
+                        f"harvest_contract_preflight.{field}",
+                        f"harvest_contract_preflight_gate.{field}",
+                        f"anti_loop_progress_gate.{field}",
+                        f"anti_loop_progress_gate.harvest_contract_preflight.{field}",
+                        f"result.harvest_contract_preflight_gate.{field}",
+                    ],
+                )
+            )
+            for field in ("lane_incompatible", "scale_incompatible", "contract_conflict")
+        )
+        if harvest_gate_unaudited and harvest_preflight_required and selected_kind in {"long_run_launch", "long_run_harvest"}:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_required_harvest_preflight_unaudited",
+                "`derive` cannot silently select long-run launch/harvest when a required harvest preflight is unaudited; supply the inventory, record explicit risk acceptance, or choose terminal/user escalation.",
+                {"selected_task_kind": selected_kind or None},
+            )
+        elif harvest_gate_unaudited:
+            add(
+                findings,
+                "warn",
+                "derive_harvest_gate_unaudited",
+                "`harvest_gate_unaudited` is fail-quiet warning evidence; preserve it without inventing repository-specific harvest checks.",
+            )
+        if harvest_preflight_incompatible and not harvest_risk_accepted and not terminal_selected and selected_kind not in HARVEST_GATE_TASK_KINDS:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_harvest_preflight_incompatible_unhandled",
+                "`derive` must route non-degradable harvest-gate incompatibility to repair/mitigation before long-run launch unless `harvest_risk_accepted=true` is explicit.",
+                {"selected_task_kind": selected_kind or None},
+            )
+        high_cost_artifact = boolish(
+            first_present(
+                result,
+                [
+                    "high_cost_artifact",
+                    "disposal_proportionality_gate.high_cost_artifact",
+                    "run_disposition_gate.high_cost_artifact",
+                    "anti_loop_progress_gate.high_cost_artifact",
+                    "result.disposal_proportionality_gate.high_cost_artifact",
+                ],
+            )
+        )
+        destructive_disposition_requested = boolish(
+            first_present(
+                result,
+                [
+                    "destructive_disposition_requested",
+                    "destructive_disposition",
+                    "disposal_proportionality_gate.destructive_disposition_requested",
+                    "run_disposition_gate.destructive_disposition_requested",
+                    "result.disposal_proportionality_gate.destructive_disposition_requested",
+                ],
+            )
+        )
+        destructive_disposition_blocked = boolish(
+            first_present(
+                result,
+                [
+                    "destructive_disposition_blocked",
+                    "disposal_proportionality_gate.destructive_disposition_blocked",
+                    "anti_loop_progress_gate.destructive_disposition_blocked",
+                    "result.disposal_proportionality_gate.destructive_disposition_blocked",
+                ],
+            )
+        )
+        safety_violation = boolish(
+            first_present(
+                result,
+                [
+                    "safety_violation",
+                    "safety_policy_violation",
+                    "disposal_proportionality_gate.safety_violation",
+                    "run_disposition_gate.safety_violation",
+                ],
+            )
+        )
+        reharvest_required = boolish(
+            first_present(
+                result,
+                [
+                    "reharvest_before_rerun_required",
+                    "disposal_proportionality_gate.reharvest_before_rerun_required",
+                    "anti_loop_progress_gate.reharvest_before_rerun_required",
+                    "result.disposal_proportionality_gate.reharvest_before_rerun_required",
+                ],
+            )
+        )
+        rerun_before_reharvest = boolish(
+            first_present(
+                result,
+                [
+                    "rerun_before_reharvest",
+                    "disposal_proportionality_gate.rerun_before_reharvest",
+                    "anti_loop_progress_gate.rerun_before_reharvest",
+                    "result.disposal_proportionality_gate.rerun_before_reharvest",
+                ],
+            )
+        )
+        destructive_high_cost = (destructive_disposition_blocked or (high_cost_artifact and destructive_disposition_requested)) and not safety_violation
+        if (destructive_high_cost or reharvest_required or rerun_before_reharvest) and not terminal_selected and selected_kind not in REHARVEST_TASK_KINDS:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_reharvest_or_quarantine_unhandled",
+                "`derive` must preserve high-cost non-safety artifacts through quarantine and route available reharvest or gate repair before a new full rerun.",
+                {"selected_task_kind": selected_kind or None},
+            )
+        mutually_unsatisfiable_contract = boolish(
+            first_present(
+                result,
+                [
+                    "mutually_unsatisfiable_contract",
+                    "contract_satisfiability_gate.mutually_unsatisfiable_contract",
+                    "validation_predicate_contract.mutually_unsatisfiable_contract",
+                    "anti_loop_progress_gate.mutually_unsatisfiable_contract",
+                    "result.contract_satisfiability_gate.mutually_unsatisfiable_contract",
+                ],
+            )
+        )
+        if mutually_unsatisfiable_contract and not terminal_selected and selected_kind not in CONTRACT_SATISFIABILITY_TASK_KINDS:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_mutually_unsatisfiable_contract_unhandled",
+                "`derive` must reconcile predicate/directive contracts, preserve residual scope, terminal-block, or user-escalate before consuming either side as valid.",
+                {"selected_task_kind": selected_kind or None},
+            )
+        sample_as_universe_misuse = boolish(
+            first_present(
+                result,
+                [
+                    "sample_as_universe_misuse",
+                    "collection_consumption_gate.sample_as_universe_misuse",
+                    "closed_world_collection_consumption.sample_as_universe_misuse",
+                    "anti_loop_progress_gate.sample_as_universe_misuse",
+                    "result.collection_consumption_gate.sample_as_universe_misuse",
+                ],
+            )
+        )
+        if sample_as_universe_misuse and not terminal_selected and selected_kind not in COLLECTION_CONSUMPTION_TASK_KINDS:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_sample_as_universe_misuse_unhandled",
+                "`derive` must supply a full untruncated collection or revise the consumer to sample-only consistency before pass/close consumption.",
                 {"selected_task_kind": selected_kind or None},
             )
         terminal_stage_contradiction = boolish(
@@ -4323,6 +4576,217 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                 ],
             )
         )
+        harvest_gate_unaudited = boolish(
+            first_present(
+                result,
+                [
+                    "harvest_gate_unaudited",
+                    "harvest_contract_preflight.harvest_gate_unaudited",
+                    "harvest_contract_preflight_gate.harvest_gate_unaudited",
+                    "anti_loop_progress_gate.harvest_gate_unaudited",
+                    "result.harvest_contract_preflight_gate.harvest_gate_unaudited",
+                ],
+            )
+        )
+        harvest_risk_accepted = boolish(
+            first_present(
+                result,
+                [
+                    "harvest_risk_accepted",
+                    "harvest_contract_preflight.harvest_risk_accepted",
+                    "harvest_contract_preflight_gate.harvest_risk_accepted",
+                    "anti_loop_progress_gate.harvest_risk_accepted",
+                    "result.harvest_contract_preflight_gate.harvest_risk_accepted",
+                ],
+            )
+        )
+        harvest_preflight_incompatible = any(
+            boolish(
+                first_present(
+                    result,
+                    [
+                        field,
+                        f"harvest_contract_preflight.{field}",
+                        f"harvest_contract_preflight_gate.{field}",
+                        f"anti_loop_progress_gate.{field}",
+                        f"anti_loop_progress_gate.harvest_contract_preflight.{field}",
+                        f"result.harvest_contract_preflight_gate.{field}",
+                    ],
+                )
+            )
+            for field in ("lane_incompatible", "scale_incompatible", "contract_conflict")
+        )
+        harvest_gate_repaired = non_empty(
+            first_present(
+                result,
+                [
+                    "harvest_gate_repair_complete",
+                    "harvest_gate_mitigation_complete",
+                    "harvest_contract_preflight_gate.repair_complete",
+                    "harvest_contract_preflight_gate.mitigation_complete",
+                    "result.harvest_contract_preflight_gate.repair_complete",
+                ],
+            )
+        )
+        high_cost_artifact = boolish(
+            first_present(
+                result,
+                [
+                    "high_cost_artifact",
+                    "disposal_proportionality_gate.high_cost_artifact",
+                    "run_disposition_gate.high_cost_artifact",
+                    "anti_loop_progress_gate.high_cost_artifact",
+                    "result.disposal_proportionality_gate.high_cost_artifact",
+                ],
+            )
+        )
+        destructive_disposition_requested = boolish(
+            first_present(
+                result,
+                [
+                    "destructive_disposition_requested",
+                    "destructive_disposition",
+                    "disposal_proportionality_gate.destructive_disposition_requested",
+                    "run_disposition_gate.destructive_disposition_requested",
+                    "result.disposal_proportionality_gate.destructive_disposition_requested",
+                ],
+            )
+        )
+        destructive_disposition_blocked = boolish(
+            first_present(
+                result,
+                [
+                    "destructive_disposition_blocked",
+                    "disposal_proportionality_gate.destructive_disposition_blocked",
+                    "anti_loop_progress_gate.destructive_disposition_blocked",
+                    "result.disposal_proportionality_gate.destructive_disposition_blocked",
+                ],
+            )
+        )
+        safety_violation = boolish(
+            first_present(
+                result,
+                [
+                    "safety_violation",
+                    "safety_policy_violation",
+                    "disposal_proportionality_gate.safety_violation",
+                    "run_disposition_gate.safety_violation",
+                ],
+            )
+        )
+        destructive_high_cost = (destructive_disposition_blocked or (high_cost_artifact and destructive_disposition_requested)) and not safety_violation
+        quarantine_preserved = non_empty(
+            first_present(
+                result,
+                [
+                    "quarantine_path",
+                    "quarantine_complete",
+                    "artifact_quarantined",
+                    "disposal_proportionality_gate.quarantine_path",
+                    "disposal_proportionality_gate.quarantine_complete",
+                    "result.disposal_proportionality_gate.quarantine_path",
+                ],
+            )
+        )
+        rerun_before_reharvest = boolish(
+            first_present(
+                result,
+                [
+                    "rerun_before_reharvest",
+                    "disposal_proportionality_gate.rerun_before_reharvest",
+                    "anti_loop_progress_gate.rerun_before_reharvest",
+                    "result.disposal_proportionality_gate.rerun_before_reharvest",
+                ],
+            )
+        )
+        reharvest_complete = non_empty(
+            first_present(
+                result,
+                [
+                    "reharvest_complete",
+                    "reharvest_attempted",
+                    "reharvest_terminal_blocked",
+                    "disposal_proportionality_gate.reharvest_complete",
+                    "disposal_proportionality_gate.reharvest_attempted",
+                    "result.disposal_proportionality_gate.reharvest_complete",
+                ],
+            )
+        )
+        mutually_unsatisfiable_contract = boolish(
+            first_present(
+                result,
+                [
+                    "mutually_unsatisfiable_contract",
+                    "contract_satisfiability_gate.mutually_unsatisfiable_contract",
+                    "validation_predicate_contract.mutually_unsatisfiable_contract",
+                    "anti_loop_progress_gate.mutually_unsatisfiable_contract",
+                    "result.contract_satisfiability_gate.mutually_unsatisfiable_contract",
+                ],
+            )
+        )
+        predicate_directive_reconciled = non_empty(
+            first_present(
+                result,
+                [
+                    "predicate_directive_reconciled",
+                    "contract_satisfiability_gate.reconciled",
+                    "contract_satisfiability_gate.contract_repaired",
+                    "same_task_contract_repair_complete",
+                    "result.contract_satisfiability_gate.reconciled",
+                ],
+            )
+        )
+        closed_world_consumption = boolish(
+            first_present(
+                result,
+                [
+                    "closed_world_collection_consumption",
+                    "collection_consumption_gate.closed_world_collection_consumption",
+                    "result.collection_consumption_gate.closed_world_collection_consumption",
+                ],
+            )
+        )
+        collection_truncated = boolish(
+            first_present(
+                result,
+                [
+                    "collection_truncated",
+                    "collection_partial",
+                    "collection_sampled",
+                    "collection_consumption_gate.collection_truncated",
+                    "collection_consumption_gate.collection_partial",
+                    "collection_consumption_gate.collection_sampled",
+                    "result.collection_consumption_gate.collection_truncated",
+                ],
+            )
+        )
+        sample_as_universe_misuse = boolish(
+            first_present(
+                result,
+                [
+                    "sample_as_universe_misuse",
+                    "collection_consumption_gate.sample_as_universe_misuse",
+                    "closed_world_collection_consumption.sample_as_universe_misuse",
+                    "anti_loop_progress_gate.sample_as_universe_misuse",
+                    "result.collection_consumption_gate.sample_as_universe_misuse",
+                ],
+            )
+        )
+        full_collection_supplied = non_empty(
+            first_present(
+                result,
+                [
+                    "full_collection_supplied",
+                    "full_collection_path",
+                    "untruncated_collection_supplied",
+                    "sample_only_contract_revision",
+                    "collection_consumption_gate.full_collection_supplied",
+                    "collection_consumption_gate.sample_only_contract_revision",
+                    "result.collection_consumption_gate.full_collection_supplied",
+                ],
+            )
+        )
+        collection_closed_world_misuse = sample_as_universe_misuse or (closed_world_consumption and collection_truncated)
         if lane_identity_missing:
             add(
                 findings,
@@ -4601,6 +5065,83 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                 "block" if mode == "block" else "warn",
                 "validate_advanced_with_surface_field_defects",
                 "`validate` cannot report advanced qualitative-review progress while nonzero surface-field defects remain unresolved.",
+            )
+        if harvest_gate_unaudited:
+            add(
+                findings,
+                "warn",
+                "validate_harvest_gate_unaudited",
+                "`harvest_gate_unaudited` is fail-quiet warning evidence; preserve it without inventing repository-specific harvest checks.",
+            )
+        if harvest_preflight_incompatible and validation_verdict in {"complete", "passed", "pass"} and not (explicit_descope or harvest_risk_accepted or harvest_gate_repaired):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_harvest_preflight_incompatible_complete",
+                "`validate` cannot complete long-run launch or harvest consumption from non-degradable harvest-gate incompatibility without repair, mitigation, explicit risk acceptance, or residual descope.",
+            )
+        if harvest_preflight_incompatible and progress_verdict == "advanced" and not (harvest_risk_accepted or harvest_gate_repaired):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_advanced_with_harvest_preflight_incompatibility",
+                "`validate` cannot report advanced progress while lane, scale, or predicate harvest incompatibility remains unresolved.",
+            )
+        if destructive_high_cost and validation_verdict in {"complete", "passed", "pass"} and not (explicit_descope or quarantine_preserved):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_destructive_high_cost_disposition_complete",
+                "`validate` cannot complete high-cost non-safety terminal output handling when destructive disposition was requested or blocked without preserved quarantine evidence.",
+            )
+        if destructive_high_cost and progress_verdict == "advanced" and not quarantine_preserved:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_advanced_from_destructive_high_cost_disposition",
+                "`validate` cannot report advanced progress from destructive disposition of high-cost non-safety artifacts; preserve quarantine or descope the artifact.",
+            )
+        if rerun_before_reharvest and validation_verdict in {"complete", "passed", "pass"} and not (explicit_descope or reharvest_complete):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_rerun_before_reharvest_complete",
+                "`validate` cannot complete a rerun path before available reharvest is attempted, terminal-blocked, or explicitly descoped.",
+            )
+        if rerun_before_reharvest and progress_verdict == "advanced" and not reharvest_complete:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_advanced_from_rerun_before_reharvest",
+                "`validate` cannot report advanced progress for a new full rerun while preserved high-cost artifacts still require reharvest first.",
+            )
+        if mutually_unsatisfiable_contract and validation_verdict in {"complete", "passed", "pass"} and not (explicit_descope or predicate_directive_reconciled):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_mutually_unsatisfiable_contract_complete",
+                "`validate` cannot complete while validation predicates and producer directives remain mutually unsatisfiable; reconcile one side or preserve residual scope.",
+            )
+        if mutually_unsatisfiable_contract and progress_verdict == "advanced" and not predicate_directive_reconciled:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_advanced_with_mutually_unsatisfiable_contract",
+                "`validate` cannot report advanced progress while contradictory predicate/directive contracts coexist as consumable truth.",
+            )
+        if collection_closed_world_misuse and validation_verdict in {"complete", "passed", "pass"} and not (explicit_descope or full_collection_supplied):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_sample_as_universe_misuse_complete",
+                "`validate` cannot complete closed-world collection evidence from truncated, partial, capped, or sampled collections without full collection supply or sample-only contract revision.",
+            )
+        if collection_closed_world_misuse and progress_verdict == "advanced" and not full_collection_supplied:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_advanced_from_sample_as_universe_misuse",
+                "`validate` cannot report advanced progress from absence checks over a truncated, partial, capped, or sampled collection.",
             )
         scenario_uncovered = boolish(
             first_present(
