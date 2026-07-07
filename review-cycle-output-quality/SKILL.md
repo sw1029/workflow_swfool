@@ -34,6 +34,14 @@ Give the single reviewer only task-local evidence needed to inspect the output:
 
 Ask the reviewer to directly open and inspect the named artifacts. The reviewer should compare actual artifact content against task intent and no-overclaim boundaries, then return a compact structured result. Do not pass the desired answer or prior diagnosis unless the task explicitly asks to verify a known finding.
 
+## Domain Adapter Contract
+
+Prefer caller-supplied adapter packets over reviewer-local domain assumptions. The reviewer may consume these optional hooks only through opaque ids, scalars, and enums:
+
+- `substance_density(metric_id, **context) -> dict`: optional N1 helper returning `referent_meaning_ratio`, `opaque_surrogate_ratio`, and adapter-owned `floor` for a metric target. The adapter owns what counts as referent meaning, opaque surrogate, and threshold. If absent, fail quiet with `substance_density_unchecked=true` and keep existing semantic-readiness/substance review behavior.
+
+Do not define domain lexicons, identifier surface forms, source-language rules, or thresholds in this skill. Part N hooks not used by the reviewer, such as deliverable fingerprinting or persistence policy maps, should be preserved from caller packets for downstream skills rather than reinterpreted here.
+
 ## Quality Dimensions
 
 Ask the reviewer to cover only dimensions relevant to the produced artifact:
@@ -44,6 +52,7 @@ Ask the reviewer to cover only dimensions relevant to the produced artifact:
 - `semantic_quality`: labels, entities, relations, claims, summaries, visuals, or decisions are meaningful rather than generic or meta-process filler.
 - `semantic_readiness`: whether primary output semantics are ready enough to count as progress, or are capped by placeholder events, surface-only entities, unsupported relations, generic labels, or meta-process filler.
 - `substance_delta`: whether the produced artifact contains real primary-output substance beyond validator/oracle/metric existence, using adapter/domain packet fields when supplied.
+- `constraint_forced_vacuity`: whether a passed metric points at adapter-classified opaque surrogates or otherwise meaning-empty targets below the adapter-owned density floor. This is separate from tautological metric validity: G-OENV covers metrics that pass by construction, while N1 covers real measurements over empty targets.
 - `vacuous_corrective`: whether corrective/backfill/reconciliation rows attempted work but resolved zero actual items.
 - `degenerate_surface_language`: whether entities or events appear to be pronouns, Korean particles attached to common nouns, repeated generic nouns, placeholders, or surface strings without stable identity.
 - `coverage_sufficiency`: whether `windows_covered` or equivalent source-window coverage satisfies the current task/rung; partial windows should cap progress when the rung requires full-window or multi-work coverage.
@@ -80,7 +89,7 @@ Return a JSON-compatible summary and, when durable evidence is required, write a
   "qualitative_findings": [
     {
       "severity": "high|medium|low|info",
-      "dimension": "artifact_presence|format_contract|content_coverage|semantic_quality|semantic_readiness|substance_delta|vacuous_corrective|degenerate_surface_language|coverage_sufficiency|goal_axis_completeness|surface_field_review|evidence_traceability|user_visible_quality|no_overclaim|blocker_direction",
+      "dimension": "artifact_presence|format_contract|content_coverage|semantic_quality|semantic_readiness|substance_delta|constraint_forced_vacuity|vacuous_corrective|degenerate_surface_language|coverage_sufficiency|goal_axis_completeness|surface_field_review|evidence_traceability|user_visible_quality|no_overclaim|blocker_direction",
       "summary": "concise finding",
       "evidence_refs": ["path:line, artifact id, hash, span ref, or log id"]
     }
@@ -91,6 +100,12 @@ Return a JSON-compatible summary and, when durable evidence is required, write a
   "changed_vs_previous": false,
   "semantic_progress": false,
   "substance_delta_pass": false,
+  "constraint_forced_vacuity": false,
+  "substance_density_unchecked": false,
+  "referent_meaning_ratio": null,
+  "opaque_surrogate_ratio": null,
+  "substance_density_floor": null,
+  "vacuity_cause": "production_constraint|missing_producer_capability|unknown|not_applicable",
   "surface_corrective_noop": false,
   "semantic_ready": "true|false|unknown",
   "placeholder_event_found": false,
@@ -166,6 +181,7 @@ Use `review_status` as the owning skill result status. When the orchestration le
 - When strict runner validation and output-delta disagree, carry both evidence paths and set `authoritative_semantic_progress` to the conservative output-delta value. Do not let strict runner pass override output-delta/review readiness.
 - When `coverage_quality_delta_reconciliation_gate.status=block`, report the disagreement and cap measurement/oracle/rung progress unless strict changed-and-semantic primary-output evidence independently proves progress.
 - When `substance_delta_gate` is supplied and `substance_delta_pass=false` or `status=missing`, cap measurement/oracle/rung progress at `governance_only` unless strict changed-and-semantic output-delta evidence independently proves primary-output progress.
+- When `substance_density` is supplied for a passed link, coverage, or response metric, apply this N1 flow: metric passed -> density hook present? if no, set `substance_density_unchecked=true` and fail quiet to existing review semantics; if yes, compare `referent_meaning_ratio` with adapter `floor`; if below floor, set `constraint_forced_vacuity=true`, cap affected metric progress at `governance_only`, and route `vacuity_cause=production_constraint` to persistence-policy repair or `vacuity_cause=missing_producer_capability` to producer supply. If the metric itself is tautological, route through G-OENV instead of N1.
 - When `vacuous_corrective_gate.surface_corrective_noop=true`, report `surface_corrective_noop: true`, cite the affected lanes, and do not count those attempted rows as semantic or produced output delta.
 - When `goal_axis_map` is supplied and any active measurable goal has zero mapped axes, set `goal_axis_completeness_gate.evaluation_status=fail`, set `pass_with_unobserved_axes=true`, cite the unobserved goals, and cap review-backed progress for those goals. Recommend adapter axis supply, explicit residual scope, terminal blocker, or user escalation; do not let the review's overall pass wording consume the affected target.
 - When `goal_axis_map` is absent, set `goal_axis_completeness_gate.evaluation_status=not_evaluated` or omit the gate. Missing optional axis mapping is fail-quiet unless acceptance/caller packets require it.
@@ -176,6 +192,7 @@ Use `review_status` as the owning skill result status. When the orchestration le
 - When the run disposition is `candidate_degraded`, preserve it as quality-miss evidence and do not call it acceptable/canonical output unless independent verification evidence is supplied for the consumed axes.
 - When `surface_field_classes` is supplied, cover every listed producer-written surface string field class, not only summaries or the most visible field. Set `surface_field_review_status=fail` when scalar defects are nonzero, preserve `surface_field_defect_matrix`, and recommend producer/field repair, residual descope, terminal blocker, or user escalation as appropriate. Missing field class maps are `field_class_map_missing=true` and fail quiet.
 - When `surface_quality_suspected=true`, `semantic_ready=false`, `placeholder_event_found=true`, or `surface_entity_suspected=true` affects the primary output, set `progress_cap: governance_only` unless strict changed-and-semantic output-delta evidence independently proves primary-output progress.
+- Do not double-count Part M and Part N: Part M harvest/preflight fields decide whether the execution-context exit contract was safe to consume; N1 decides whether the landed output target carries adapter-owned meaning after that exit. Preserve both when supplied, but use one blocking reason per affected progress claim.
 - When pronoun-only, particle-attached, common-noun, placeholder, or repeated-generic labels affect primary entities/events, set `surface_quality_suspected=true`, set `surface_entity_suspected=true`, add both codes when applicable, and cap progress at `governance_only` unless strict changed-and-semantic output-delta evidence proves otherwise.
 - When `windows_covered` is below the task/rung requirement, add `coverage_insufficient` to `quality_blocker_codes` and recommend full-window, multi-window, or multi-work extraction rather than another measurement surface.
 - When `observed_output_class` is available, carry it into `qualitative_review_packet` and downstream derivation. Do not allow self-declared `produced_domain_delta=true` to override an observed `metadata_only` or repeated `terminal_record` classification.

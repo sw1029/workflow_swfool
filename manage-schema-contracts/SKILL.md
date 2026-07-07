@@ -17,6 +17,14 @@ When `.agent_advice/active/*.md` names schema, module, script, validation, or de
 
 For the canonical file layout and contract fields, read [contract-format.md](references/contract-format.md).
 
+## Domain Adapter Contract
+
+Prefer repository-owned adapter policy over schema-author local assumptions. The module or caller packet may expose:
+
+- `persistence_policy_map(**context) -> dict`: optional N3 helper returning opaque storage-axis classes, actually persisted classes, leak indicators, required resolution-depth enum, and any capability-preserving alternative ids. The adapter owns what counts as identifier surface, leak equivalence, allowed storage class, and resolution floor.
+
+If the hook is absent, fail quiet and keep existing schema-contract rules. Do not infer privacy classes, identifier forms, merge depth, or thresholds from project filenames, sample text, or domain vocabulary in this skill.
+
 ## Efficiency Guidance
 
 - When several adjacent no-live/check-only tasks update the same script/module contract surface, prefer one consolidated schema refresh or one planned batch contract note instead of one near-identical contract artifact per micro-step.
@@ -37,6 +45,7 @@ For the canonical file layout and contract fields, read [contract-format.md](ref
 2. Identify contract surfaces.
    - Record shared data shapes, serialized files, JSON/JSONL/YAML/CSV fields, database tables, CLI flags, script inputs/outputs, public functions/classes, and module-level invariants.
    - Record shared execution-context contracts when they affect consumers: harvest-gate anchor kind and scale assumptions, terminal disposition/quarantine semantics, reharvest availability, producer directives, validation predicates/floors/inclusion checks, and collection truncation/sample flags.
+   - Record storage-policy contracts as two independent axes when `persistence_policy_map` is supplied: axis A is storage class (`plaintext`, `opaque_id`, or `not_stored` as adapter enums), and axis B is resolution depth (`none`, `same_surface`, or `cross_surface` as adapter enums). Treat these enum names as opaque policy values, not domain semantics.
    - For each contract, identify target modules/scripts, owners or producing code paths, consuming code paths, validation commands, and known compatibility assumptions.
    - Compare each record against `.agent_goal/goal_schema_contract.md` minimum fields and mandatory application rules. Mark missing required data as `not_applicable` or `needs_review` with a reason; do not omit it silently.
    - Distinguish stable public contracts from internal implementation details.
@@ -58,6 +67,7 @@ For the canonical file layout and contract fields, read [contract-format.md](ref
    - Before implementation or task derivation, read `.agent_goal/goal_schema_contract.md`, `.schema/`, and `.contract/` to identify compatibility risks, stale contracts, and unmet goal-level requirements.
    - After code/task changes, update `.schema/` and, when applicable, `.contract/` for any changed inputs, outputs, invariants, target scripts/modules, or validation requirements.
    - When a task changes a validation predicate or producer directive, record whether the pair is mutually satisfiable or mark `needs_review`/residual repair. When a task changes collection fields consumed as closed-world evidence, record the truncation/sample flag contract or full-collection requirement.
+   - When a task changes storage or privacy policy and `persistence_policy_map` is available, apply the N3 flow: hook absent -> fail quiet; hook present -> compare storage axis and resolution-depth axis independently; if the same adapter-classified identifier information leaks through another persisted class while only one class is anonymized, record `anonymization_theater`; if storage policy and required resolution depth cannot both hold, record `mutually_unsatisfiable_persistence_contract` and require same-task reconciliation, explicit residual scope, terminal blocker, or user escalation. Always present an ability-preserving opaque-id plus transient-merge-key alternative first when the adapter supplies it.
    - If a task batched several adjacent contract checks, refresh schema/contracts once for the combined durable interface change and list the covered subchecks or prerequisite artifacts.
    - If the code changed but contract impact is unclear, create a `needs_review` contract note under `.schema/contracts/` rather than inventing compatibility; include which `.agent_goal/goal_schema_contract.md` requirement could not yet be satisfied.
 
@@ -83,3 +93,4 @@ For the canonical file layout and contract fields, read [contract-format.md](ref
 - Do not write final goal schema-contract policy under `.schema/` or `.contract/`; final policy belongs at `.agent_goal/goal_schema_contract.md`.
 - Do not bump schema/contract versions only because a sequential no-live task number changed when the actual interface, producer, consumer, invariant, or validation requirement is unchanged.
 - Do not record validation predicates, producer directives, or closed-world collection consumers as compatible when current evidence shows `mutually_unsatisfiable_contract` or `sample_as_universe_misuse`; mark the contract gap instead of guessing a domain-specific fix.
+- Do not record a storage-policy contract as closed when `anonymization_theater` or `mutually_unsatisfiable_persistence_contract` is unresolved. Do not double-count it as Part M predicate/directive unsatisfiability unless a separate M3 predicate/directive conflict is present; Part N covers storage policy versus resolution ability.

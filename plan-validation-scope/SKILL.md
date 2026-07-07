@@ -11,6 +11,16 @@ Use this skill to choose the cheapest valid validation profile without skipping 
 
 Use `changed_surface.py` to classify changed files and `validation_scope.py` to render a validation manifest.
 
+## Domain Adapter Contract
+
+Use repository adapter hooks only to decide validation freshness; do not infer domain policy in this skill.
+
+- `producer_source_paths(artifact_family, **context) -> list|dict`: optional N2 helper returning producer/verifier source paths or globs for primary deliverables.
+- `output_fingerprint(...) -> str|dict`: optional N2 helper returning opaque output fingerprint/freshness metadata.
+- `persistence_policy_map(**context) -> dict`: optional N3 helper returning opaque storage-policy classes, persisted classes, leak indicators, and resolution-depth enums.
+
+Missing hooks fail quiet to existing validation-scope rules. The manifest may carry unchecked-hook warnings, but it must not invent reharvest commands, identifier classes, or thresholds.
+
 ## Workflow
 
 1. Collect changed files from Git, the cycle ledger, or a subskill result.
@@ -21,6 +31,7 @@ Use `changed_surface.py` to classify changed files and `validation_scope.py` to 
    - `full_chain` for live dispatch, readiness promotion, issue closure, shared validator/runtime changes, explicit user request, or high-risk contract logic.
    - Require a fresh or affected-chain profile when Part L evidence says the consumed lane, upstream production contract, metric basis input class, or surface-field class map changed. Do not plan reuse-only validation for current-lane capability, adoption, comparison, high-water, or close claims under `pass_on_stale_lane`, `decision_metadata_revision`, or `basis_overclaim`.
    - Require affected-chain or full-chain validation when Part M changes shared harvest gates, terminal disposition policy, reharvest paths, producer directives, validation predicates, or closed-world collection consumers. Do not plan reuse-only validation for long-run harvest, high-cost disposition, predicate/directive close, or collection-membership pass claims under `lane_incompatible`, `scale_incompatible`, `contract_conflict`, `mutually_unsatisfiable_contract`, or `sample_as_universe_misuse`.
+   - Require fresh or affected-chain validation when Part N evidence reports producer-source changes without refreshed output fingerprints, `deliverable_stale`, storage-policy/resolution-depth changes, `anonymization_theater`, or `mutually_unsatisfiable_persistence_contract`. Flow: adapter hook absent -> fail quiet; changed files intersect `producer_source_paths` and `output_fingerprint` did not update -> plan regeneration/revalidation before reuse; `persistence_policy_map` reports unresolved storage/ability conflict -> plan contract reconciliation validation before close.
 4. Record required commands, reusable prerequisites, fingerprints or hashes, and escalation reason.
 5. Save the manifest as a workflow artifact when the caller needs durable evidence.
 
@@ -30,4 +41,5 @@ Use `changed_surface.py` to classify changed files and `validation_scope.py` to 
 - Do not reuse prerequisite evidence when environment, schema, dependency, command, or input fingerprints are stale.
 - Do not reuse stale production-lane, stale-measurement, basis-overclaimed, or field-class-incomplete evidence as the validation basis for completion or advanced progress.
 - Do not reuse harvest validation, terminal disposition, predicate/directive compatibility, or collection-membership evidence after the corresponding Part M contract changed unless the affected-chain manifest proves the consumed surface is still compatible.
+- Do not reuse deliverable, schema, or privacy-policy evidence after a Part N producer path or persistence-policy contract changed unless the manifest proves refreshed output fingerprints and resolved storage/ability axes. Do not double-count a reharvest/disposition issue as both M2 and N2; N2 only covers whether the repaired producer path reached the deliverable.
 - Do not invent commands; use task instructions, repository scripts, governance output, or validation policy.

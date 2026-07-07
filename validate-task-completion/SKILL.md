@@ -25,10 +25,22 @@ When `task.md`, a caller packet, or active workflow evidence references `.agent_
 - Keep ID-only traceability correction routed through `$manage-task-state-index` with fixed `reasoning_effort: medium`.
 - If a tool cannot enforce the requested effort, encode the requirement in the prompt and record the limitation in the validation report.
 
+## Domain Adapter Contract
+
+Prefer repository-owned adapter outputs or caller packets over validation-local domain assumptions. The validator may consume these optional Part N hooks:
+
+- `substance_density(metric_id, **context) -> dict`: N1 helper returning `referent_meaning_ratio`, `opaque_surrogate_ratio`, and adapter-owned `floor`. Missing hook is fail-quiet and preserves existing progress classification while recording `substance_density_unchecked` when supplied.
+- `producer_source_paths(artifact_family, **context) -> list|dict`: N2 helper returning producer/verifier source paths or globs for primary deliverables.
+- `output_fingerprint(...) -> str|dict`: N2 helper returning opaque output fingerprint and optional freshness metadata.
+- `persistence_policy_map(**context) -> dict`: N3 helper returning opaque storage-policy classes, actually persisted classes, leak indicators, and resolution-depth enums.
+
+Do not define identifier surfaces, meaning floors, regeneration commands, storage policy thresholds, or privacy leak equivalence in this skill. If hooks are absent, fail quiet to legacy validation behavior unless a caller acceptance contract explicitly requires the missing gate.
+
 ## Workflow
 
 1. Collect local evidence.
    - Read `task.md`, `.task/index.jsonl`, `.task/index.md`, `.task/task_miss/`, `.task/candidate_task/`, `.issue/`, `.agent_log/`, `.agent_goal/goal_schema_contract.md`, `.agent_advice/`, `.schema/`, and `.contract/` when present.
+   - Read caller-supplied Part N fields when present: `constraint_forced_vacuity`, `substance_density_unchecked`, `referent_meaning_ratio`, `opaque_surrogate_ratio`, `substance_density_floor`, `vacuity_cause`, `deliverable_stale`, `contract_only`, `changed_producer_source_paths`, `producer_source_paths`, `output_fingerprint`, `output_fingerprint_updated`, `anonymization_theater`, `mutually_unsatisfiable_persistence_contract`, `persistence_policy_axes`, `adapter_hook_demand`, `hook_demand_unaccounted`, `hook_supply_required`, and `demanded_hooks`.
    - Use the bundled collector for a compact inventory:
 
      ```bash
@@ -101,6 +113,9 @@ When `task.md`, a caller packet, or active workflow evidence references `.agent_
    - When normalized acceptance or validation-set evidence provides `acceptance_scenarios`, require scenario coverage: a premise-satisfying fixture or live run plus observed terminal state equal to the expected state. If no evidence satisfies the premise, set `scenario_uncovered=true` and return `partial`. If a premise-satisfying item observes or asserts the opposite state, set `acceptance_inversion=true`, return `partial`, and route code/contract repair regardless of green tests.
    - When producer output or `observed_producer_claim` truthfully reports a residual blocker showing that a scenario premise cannot reach the expected terminal state, treat it as an `acceptance_inversion_candidate` for the acceptance-scenario gate. It is not completion evidence, but it is enough to block green-test close until scenario evidence resolves or confirms the inversion.
    - When a loopback packet provides `evidence_provenance_gate` or `attested_only_movement=true`, verify that claimed high-water movement and goal-progress evidence came from `independently_verified_fields`. Producer-attested scalar movement cannot satisfy acceptance, progress, or goal-distance movement by itself.
+   - When review or loopback evidence reports `constraint_forced_vacuity=true`, treat the affected metric as not goal-productive even if it passed. Use this flow: metric passed -> `substance_density` absent means fail quiet; density below adapter floor means N1; `vacuity_cause=production_constraint` requires persistence-policy repair or residual scope, while `vacuity_cause=missing_producer_capability` requires producer supply or residual scope. G-OENV remains responsible for metrics that pass by construction.
+   - When the task changed files intersecting `producer_source_paths` and `output_fingerprint_updated` is false or `deliverable_stale=true`, return `partial` or `failed` for close claims that consume the affected deliverable. Require regeneration/reharvest and revalidation before close; code, tests, schema records, and verifier passes alone are `contract_only`.
+   - When schema or policy evidence reports `anonymization_theater=true` or `mutually_unsatisfiable_persistence_contract=true`, do not complete the storage-policy or schema-contract task until same-task reconciliation, explicit residual descope, terminal blocker, or user escalation is recorded. Prefer an adapter-supplied opaque-id plus transient-merge-key alternative before stored-surface relaxation.
    - When a qualitative review packet provides `pass_with_unobserved_axes=true`, `goal_axis_completeness_gate.evaluation_status=fail`, or nonempty `unobserved_goal_axes`, do not consume that review as pass evidence for the affected measurable goals. Classify the relevant acceptance as partial unless adapter axis-supply work, explicit descope, terminal blocker, or user escalation is recorded.
    - When loopback or derive evidence shows generation-dependent count-key material, do not accept "new family" or "stall reset" claims based on raw task/advice/pack/cycle/run/date/hash/version labels. Validate against the effective root-family/dominant-parameter key or terminal-outcome family.
    - When loopback reports `failure_surface_stage_gate.terminal_classification_stage_contradiction=true`, `terminal_classification_invalid_for_counting=true`, or `same_input_contract_gate.same_input_contract_violation=true`, return `partial`/`failed` for any completion that depends on that classification or comparison. Contradictory terminal classification and same-input mismatch cannot support close, stall reset, or family seal.
@@ -166,6 +181,7 @@ When `task.md`, a caller packet, or active workflow evidence references `.agent_
    - If `parity_unverified=true` or any required parity axis is `unknown`, `complete` is invalid for final adoption, baseline promotion, or comparison-winner claims.
    - If a failed `gating` adoption axis or `measured_but_disqualified=true` is present, `complete` is invalid for adoption of that candidate.
    - If unresolved Part M findings are present, `complete` is invalid for affected launch, harvest, terminal disposition, predicate/directive, or collection-consumption claims: risky harvest preflight without repair or explicit risk acceptance, destructive high-cost disposition without safety exception, rerun before required reharvest, mutually unsatisfiable contract, or sample-as-universe misuse.
+   - If unresolved Part N findings are present, `complete` is invalid for affected progress, deliverable, or persistence-policy claims: constraint-forced vacuity below adapter floor, deliverable staleness after producer-source change, anonymization theater, mutually unsatisfiable persistence contract, or unaccounted decision-relevant hook demand.
    - If `resolution_downgrade=true` and the task required the original high-resolution evidence, `complete` is invalid unless the contract was revised, resolution restored, or residual scope remains open.
    - If `report_key_divergence=true`, `complete` is invalid for any claim consuming that report, and `advanced` is invalid when the claimed progress depends on the divergent value.
    - If convention conformance is applicable, `complete` also requires unresolved contract-backed code convention violations to be absent or intentionally deferred with open residual scope. Missing convention contract evidence is warn-only unless the task explicitly required contract creation/update.
@@ -179,6 +195,7 @@ When `task.md`, a caller packet, or active workflow evidence references `.agent_
      - `regressed`: the task weakened or broke a required state, contract, validation gate, safety boundary, or goal requirement.
    - Do not classify progress as `advanced` merely because a new input kind was named. Evidence-family progress requires a non-empty supplied artifact path, `produced_domain_delta=true`, or another validated positive domain/output artifact.
    - Do not classify progress as `advanced` from `observed_producer_claim`, self-declared `produced_domain_delta`, non-empty counts, fixture-only success, `producer_attested_fields`, `attested_only_movement`, or a blocker-state label unless adapter-recomputed quality/substance/structure evidence, `terminal_outcome_changed=true`, or strict observed changed-and-semantic output-delta evidence is present. Otherwise cap progress at `safety_only`.
+   - Do not classify progress as `advanced` from a passed metric whose measured target is `constraint_forced_vacuity=true`, from a producer/verifier repair that is `deliverable_stale=true`, or from a storage-policy change with unresolved `anonymization_theater` or `mutually_unsatisfiable_persistence_contract`.
    - If `observed_producer_claim` reports `goal_productive`, `advanced`, or equivalent while adapter recomputation or strict output-delta evidence is missing or negative, record `split_brain_progress_claim=true`, ignore the producer claim for the verdict, and preserve residual work or blockers.
    - Do not classify progress as `advanced` when the run evidence is `self_inflicted_gate_defect` unless the task actually corrected the gate contract/code or supplied a valid alternative evidence source. Rechecking the same unsatisfiable gate is `no_progress` or `safety_only` at most.
    - Do not classify repeated `terminal_blocked`/recheck closeout as `advanced`. If `terminal_escalation_gate.escalation_required=true`, a valid completion must record `user_escalation`, exactly one missing input, and family seal evidence; otherwise cap the verdict at `partial` or `failed` depending on the task objective.
@@ -279,6 +296,14 @@ Include a `Contract satisfiability` gate whenever `validation_predicate_contract
 
 Include a `Collection consumption` gate whenever `closed_world_collection_consumption`, `collection_truncated`, `sample_as_universe_misuse`, `full_collection_required`, or truncation/sample flag fields are present.
 
+Include a `Substance density` gate whenever `constraint_forced_vacuity`, `substance_density_unchecked`, `referent_meaning_ratio`, `opaque_surrogate_ratio`, `substance_density_floor`, or `vacuity_cause` fields are present.
+
+Include a `Deliverable freshness` gate whenever `producer_source_paths`, `changed_producer_source_paths`, `output_fingerprint`, `output_fingerprint_updated`, `deliverable_stale`, or `contract_only` fields are present.
+
+Include a `Persistence policy` gate whenever `persistence_policy_axes`, `anonymization_theater`, `mutually_unsatisfiable_persistence_contract`, or adapter storage/resolution policy fields are present.
+
+Include a `Hook demand accounting` gate whenever `adapter_hook_demand`, `decision_relevant_skip`, `hook_demand_unaccounted`, `hook_supply_required`, `demanded_hooks`, or `hook_demand_threshold` fields are present.
+
 Include a `Metric basis` gate whenever `basis_overclaim`, `claimed_basis_class`, `consumed_input_classes`, `actual_basis_class`, or `basis_downgraded_fields` fields are present.
 
 Include a `Surface field review` gate whenever `surface_field_classes`, `field_class_map_missing`, `surface_field_defect_matrix`, or `surface_field_review_status` fields are present.
@@ -373,6 +398,10 @@ Include a `Behavior-change live evidence` gate whenever the task changes runtime
 - Do not complete high-cost non-safety terminal disposition that destructively deleted or overwrote artifacts when quarantine was required, and do not classify rerun-before-reharvest as goal-productive while reharvest is available and not terminal-blocked.
 - Do not complete predicate/directive contract changes that remain mutually unsatisfiable.
 - Do not complete pass/close claims that use truncated, partial, capped, or sampled collections as closed-world universes.
+- Do not complete a producer/verifier path repair without a refreshed deliverable fingerprint when adapter-owned producer paths changed. Use any supplied `reharvest_path` only as the route to regeneration; do not count the same stale deliverable as both M2 and N2.
+- Do not complete a metric-backed progress claim when `constraint_forced_vacuity=true`; route production-constraint vacuity to persistence-policy repair and missing-producer-capability vacuity to producer supply.
+- Do not complete storage-policy contract work with unresolved `anonymization_theater` or `mutually_unsatisfiable_persistence_contract`. Storage axis and resolution-depth axis must be reconciled independently, with opaque-id plus transient merge key preferred when adapter-supplied.
+- Do not treat missing Part N adapter hooks as failures in unadapted repositories. Fail quiet unless an acceptance/caller contract requires the hook; preserve unchecked-hook evidence for derive.
 - Do not complete or advance from basis-overclaimed metrics as independently verified evidence.
 - Do not consume qualitative review pass for affected field classes when the surface field defect matrix has unresolved nonzero counts.
 - Do not complete frozen-envelope-unreachable acceptance without `envelope_thaw_item`, thaw condition/schedule, explicit residual/descope, terminal blocker, or user escalation.
