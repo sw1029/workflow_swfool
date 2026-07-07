@@ -27,6 +27,14 @@ Read these first-level references only when the corresponding part of the cycle 
 
 Do not add README, changelog, quick-reference, or auxiliary process documents. Put future detailed rules in the relevant `references/` file and link them here.
 
+## Domain Adapter Contract
+
+The orchestrator normally receives adapter-derived fields through subskill packets. When close accounting has direct adapter access, it may consume this optional Part O hook without interpreting domain-specific meanings:
+
+- `goal_axis_map(targets=None, quality_vector=None, **context) -> list|dict`: O2 helper returning adapter-owned goal axis ids, delta basis fields, and optional `axis_delta`, `axis_stall_streak`, direct-advancement task class, or terminal-blocker evidence. The adapter owns axis definitions, delta semantics, and thresholds. If absent or malformed, fail quiet and keep existing close, dashboard, and derive routing unchanged.
+
+Do not hardcode goal axes, thresholds, proxy names, or direct-advancement meanings in this skill. Part O/O2' is aggregate close accounting only; do not double-count it as B/G-series individual-cycle dilution or N1' vacuity.
+
 ## Core Invariants
 
 - Preserve one active `task.md`. Use task packs only as planning state; a pack item becomes executable only after `$derive-improvement-task` promotes it into `task.md`.
@@ -38,6 +46,7 @@ Do not add README, changelog, quick-reference, or auxiliary process documents. P
 - Preserve Part K expectation/comparison lineage fields across handoffs when supplied: `expectation_anchor`, `designated_baseline`, `expectation_anchor_missing`, `expectation_lineage_stale`, `parity_axes`, `parity_axis_status`, `parity_unverified`, `adoption_axis_classification`, `required_output_classes`, `majority_vote_adoption`, `provisional_adoption`, `measured_but_disqualified`, `required_evidence_resolution`, `observed_evidence_resolution`, `resolution_downgrade`, `surrogate_resolution_basis`, `report_key_divergence`, and duplicate report-key path/value evidence. These fields revise existing promotion, acceptance normalization, adoption, loopback, and result-contract decisions; they do not create a new phase, detector, report, or repo-specific axis vocabulary.
 - Preserve Part L lane-lineage and premise-supply fields across handoffs when supplied: `production_lane_identity`, `current_decision_lane`, `lane_identity_missing`, `pass_on_stale_lane`, `decision_metadata_revision`, `stale_measurement_artifact`, `axis_starved_by_missing_producer`, `producer_supply_required`, `portfolio_quota_exceeded`, `unreachable_within_cycle`, `long_run_launch_required`, `basis_overclaim`, `actual_basis_class`, `field_class_map_missing`, and `surface_field_defect_matrix`. These fields revise existing validation consumption, decision refresh, derive selection, reachability, metric provenance, and qualitative-review procedure; they do not create a new phase, detector, report, or repo-specific rule.
 - Preserve Part M execution-context fields across handoffs when supplied: `harvest_gate_inventory`, `harvest_gate_unaudited`, `harvest_risk_accepted`, `lane_incompatible`, `scale_incompatible`, `contract_conflict`, `high_cost_artifact`, `destructive_disposition_blocked`, `quarantine_required`, `failure_check_provenance`, `reharvest_before_rerun_required`, `rerun_before_reharvest`, `producer_directives`, `mutually_unsatisfiable_contract`, `closed_world_collection_consumption`, `collection_truncated`, and `sample_as_universe_misuse`. These fields revise existing long-run launch/monitor/harvest, terminal disposition, contract close, result-contract, and derivation decisions; they do not create a new phase, detector, report, or repo-specific rule. Use [execution-context-contracts.md](references/execution-context-contracts.md) when Part M fields appear.
+- Preserve Part O close-accounting fields across handoffs when supplied: `goal_axis_map`, `axis_delta`, `axis_stall_streak`, `goal_axis_stall`, `direct_axis_advancement_required`, and `axis_terminal_blocker_required`. At close, record axis deltas and streaks in existing progress state when the adapter supplies them; if the hook is absent, fail quiet and leave existing close behavior unchanged.
 - Do not treat a fail-quiet required verifier as pass. If normalized acceptance or loopback reports `unverifiable_acceptance_contract=true`, downstream derive/validation must preserve verifier-hook work, explicit descope with residual scope, terminal blocker, or user escalation before consuming the measurable target.
 - Do not treat a generation-dependent family/root key as proof that a blocker family is new. Preserve the trace key, but count with the adapter-collapsed root plus dominant parameter or the terminal-outcome family fallback.
 - Do not count or close a terminal classification that contradicts the observed `failure_surface_stage`, and do not compare same-family failures when the same-condition input set mismatches.
@@ -105,6 +114,8 @@ Use fixed routing requirements:
 ## Completion And Reporting
 
 Run `$validate-task-completion` before issue tracking, implementation commit, final report, or closeout commit. Validation must report `validation_verdict`, `progress_verdict`, and `progress_axes` when available. `progress_verdict: advanced` requires `terminal_outcome_changed=true` or strict changed-and-semantic observed output delta.
+
+When Part O/O2' `goal_axis_map` evidence is present at close, preserve per-axis `axis_delta` and `axis_stall_streak` for `$render-cycle-dashboard` and `$derive-improvement-task`. If an axis is stalled at the adapter-owned threshold, the next derivation must prefer direct axis advancement or record the terminal/user-escalation blocker. Missing hook evidence is a no-op.
 
 Call `$manage-implementation-issues` after validation and before `$repo-change-commit`. In a Git worktree, explicitly invoke `$repo-change-commit` after validation for coherent implementation/workflow changes; a raw `git status` check is not a substitute. A `partial` verdict can still produce a checkpoint commit when the changed set is coherent and blockers are named.
 

@@ -9,6 +9,14 @@ description: "Normalize task acceptance criteria and demo evidence before govern
 
 Use this skill to turn an active `task.md` into a concise acceptance packet that code-writing and validation steps can follow.
 
+## Domain Adapter Contract
+
+Prefer repository-owned adapter or caller-packet definitions for proxy criteria. The normalizer may consume:
+
+- `proxy_population(proxy_id, **context) -> dict`: optional Part O/O4' helper returning opaque fields such as `measures_new_behavior`, `new_behavior_sample_count_field`, `min_sample_k`, and replacement/proxy-population status. The adapter owns what counts as the proxy, the new behavior population, sample sufficiency, and threshold. If absent or malformed, fail quiet and keep existing acceptance normalization.
+
+Do not hardcode proxy names, new-behavior definitions, sample thresholds, or domain populations in this skill. O4' is distinct from G-OENV tautology, N1' landed-output vacuity, and B-series acceptance dilution.
+
 ## Workflow
 
 1. Read only workflow-level task context: `task.md`, authority summary, non-GT advice packet, schema/contract summaries, and existing cycle ledger.
@@ -18,6 +26,7 @@ Use this skill to turn an active `task.md` into a concise acceptance packet that
    - Tag `acceptance.evidence_kind` as `live_run`, `derived_artifact`, `code_contract`, or `report_only`. If the original text requires execution, dispatch, or a newly observed run, tag only `live_run` and set `required_new_run_id=true`.
    - Preserve `item_created_at` or the task/pack item creation timestamp when available so validation can require a run id after that point.
    - If extraction is uncertain, quote the original measurable clause in the packet rather than paraphrasing it.
+   - For proxy-backed criteria, when `proxy_population` is available and reports the proxy population does not measure the task's new behavior, set `trivially_satisfiable_proxy=true` and require either an adapter-owned new-behavior sample precondition or replacement with a proxy population that measures the new behavior. If the hook is absent, fail quiet and keep existing acceptance wording.
 4. When an acceptance criterion has an abstract measurable target, bind the criterion to the minimum executable envelope when a repository adapter or caller packet exposes `min_envelope_for(target) -> {envelope_floor, deficit_axis}`. Record this as `acceptance_envelope_contract` in the packet. If the hook is absent or cannot compare the target, keep the existing acceptance wording and emit only a warning.
 5. When a criterion has scenario form "premise class -> expected terminal state", preserve it as `acceptance_scenarios` with an abstract `scenario_id`, scalar `premise_predicate`, and `expected_terminal_state`. Use adapter/caller `acceptance_scenarios(...)` when available, or normalized acceptance fields when already supplied. If no reliable predicate can be extracted, quote the original clause and mark scenario coverage `needs_review` rather than inventing a predicate.
 6. For measurable targets, also bind the criterion to a live verifier when a repository adapter or caller packet exposes a target-to-verifier mapping such as `target_required_verifier(target, **context) -> {required_verifier, verifier_required}`. Record this as `acceptance_verifier_contract`.
@@ -56,6 +65,7 @@ Use this skill to turn an active `task.md` into a concise acceptance packet that
 - Do not make residual gap repair the default merely because a gap exists. Preserve adapter residual-gap policy fields for `$derive-improvement-task`; if the adapter is absent, do not invent a threshold.
 - Do not ignore cycle fixed cost when it is supplied. Residual repair must be compared by value per cycle cost before another same-gap repair is made the default.
 - Do not summarize away measurable quantifiers, disjointness predicates, required run counts, or evidence-kind requirements. If a criterion requires live execution, do not normalize it as derived-artifact, code-contract, or report-only evidence.
+- Do not normalize a Part O/O4' `trivially_satisfiable_proxy` as sufficient acceptance. Preserve the new-behavior sample precondition or replacement requirement, and do not double-count the same issue as G-OENV, N1', or B unless those packets separately report tautology, vacuity, or post-hoc dilution.
 - Do not drop premise-class -> expected-state scenario contracts. If the premise cannot be reduced safely, preserve the original clause and require validation-set planning rather than treating green tests as coverage.
 - Do not treat exact equality on stochastic output as feasible when variance evidence is already supplied. Preserve the variance/slack fields for loopback.
 - Do not invent blocker relation fields for a gate; if they are absent, mark the blocker actionability expectation as warn-only.

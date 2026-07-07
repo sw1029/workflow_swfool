@@ -13,12 +13,20 @@ The main agent owns the final record. The subagent, when used, only rewrites and
 
 When a task-state index exists, link the new `.agent_log` entry through `$manage-task-state-index`. If no ID context exists, write the log normally.
 
+## Domain Adapter Contract
+
+Work logs may consume this optional Part O hook only as retention metadata:
+
+- `record_retention_policy(**context) -> dict`: O5 helper returning adapter-owned retention class boundaries, large-record policy, archive manifest policy, and immutable evidence categories. The adapter owns retention boundaries and thresholds. If absent or malformed, fail quiet and do not rotate or summarize logs beyond existing behavior.
+
+Do not hardcode retention periods, packet-size thresholds, or archive locations. O5 is record hygiene only and must not change task, validation, progress, or advice lifecycle claims.
+
 ## Workflow
 
 1. Gather source facts.
    - Require enough information to fill: `task_intent`, `work_performed`, `result`, and `shortcomings`.
    - If any field is missing, infer only from the current conversation and tool evidence. If still unknown, write `Not specified`.
-   - Capture optional metadata when available: status, repo/workspace path, changed files, commands/tests, agents involved, follow-ups, tags.
+   - Capture optional metadata when available: status, repo/workspace path, changed files, commands/tests, agents involved, follow-ups, tags, retention class, archive reference, and retention exclusion reason.
 
 2. Normalize the record.
    - If the user explicitly requested agent-assisted logging or independent normalization, spawn one subagent with the prompt in [normalization-agent.md](references/normalization-agent.md).
@@ -41,6 +49,7 @@ When a task-state index exists, link the new `.agent_log` entry through `$manage
 
    - The script creates `.agent_log/YYYY-MM-DD/HHMMSS-title.md` and appends `.agent_log/index.jsonl`.
    - Use `--agent-note` for the normalization subagent's concise review, `--command`, `--changed-file`, `--follow-up`, and `--tag` as needed.
+   - If `record_retention_policy` is supplied, record only opaque retention metadata in the log or index; do not remove required record sections or provenance while writing the log.
 
 4. Update task-state IDs when possible.
    - After the log file is written, run `$manage-task-state-index` `scan`.
@@ -90,4 +99,6 @@ Keep entries factual. Do not make the record more successful than the evidence s
 - Do not let the normalization subagent write files; only the main agent runs the writer script.
 - Do not let an ID insight agent normalize the log or write files; it can only recommend task-state links.
 - Do not record claims of tests passing, commits, deployments, or file edits unless they actually happened.
+- Do not use Part O/O5 retention policy to delete, overwrite, or summarize away required log sections, validation scalars, visible-delta records, loop/progress ledgers, or disposition provenance. Missing `record_retention_policy` is fail-quiet no-op.
+- Do not treat retention metadata as completion, validation, advice lifecycle, or progress evidence; avoid double-counting O5 as Part M disposition or Part N persistence policy.
 - If the user asks to log confidential details, summarize at a safe level and mark sensitive details omitted.

@@ -11,6 +11,14 @@ Use this skill to record orchestration state as durable workflow evidence under 
 
 Use `/home/swfool/.codex/skills/orchestrate-task-cycle/scripts/cycle_ledger.py` for deterministic writes whenever possible.
 
+## Domain Adapter Contract
+
+Ledger maintenance may consume this optional Part O hook only during close hygiene:
+
+- `record_retention_policy(**context) -> dict`: O5 helper returning adapter-owned retention classes, hot/warm/cold boundaries, large-packet policy, archive manifest policy, and rotation exclusions. The adapter owns retention boundaries and thresholds. If absent or malformed, fail quiet and perform no rotation.
+
+Do not hardcode retention periods, packet-size thresholds, or archive locations in this skill. O5 is a hygiene contract only; it must not change validation, progress, or close verdicts.
+
 ## Workflow
 
 1. Initialize the cycle before authority or governance work:
@@ -26,10 +34,12 @@ Use `/home/swfool/.codex/skills/orchestrate-task-cycle/scripts/cycle_ledger.py` 
    - Preserve evidence-lifecycle and Part J contract fields when present: `instrumentation_exercise_gate`, `instrumentation_first_fire_gate`, `acceptance_encoding_gate`, `acceptance_scenario_gate`, `verifier_surface_hardening_gate`, `run_disposition`, `candidate_degraded`, `runtime_config_echo`, `config_overrides`, `command_argv`, `command_provenance_missing`, `blocker_actionability_gate`, `blocker_opacity`, `stochastic_feasibility_gate`, `execution_starvation`, and `recent_cycle_run_id_count`.
    - Preserve Part K contract fields when present: `expectation_anchor`, `designated_baseline`, `expectation_anchor_missing`, `expectation_lineage_stale`, `parity_axes`, `parity_axis_status`, `parity_unverified`, `adoption_axis_classification`, `required_output_classes`, `majority_vote_adoption`, `provisional_adoption`, `measured_but_disqualified`, `required_evidence_resolution`, `observed_evidence_resolution`, `resolution_downgrade`, `surrogate_resolution_basis`, `report_key_divergence`, and duplicate report-key path/value evidence.
    - Preserve Part L contract fields when present: `production_lane_identity`, `current_decision_lane`, `lane_identity_missing`, `pass_on_stale_lane`, `required_new_run_id`, `stale_measurement_artifact`, `decision_metadata_revision`, `axis_starved_by_missing_producer`, `producer_supply_required`, `portfolio_quota_exceeded`, `portfolio_quota_mode`, `unreachable_within_cycle`, `long_run_launch_required`, `metric_basis_inputs`, `basis_overclaim`, `actual_basis_class`, `field_class_map_missing`, and `surface_field_defect_matrix`.
+   - Preserve Part O/O5 retention fields when present: `record_retention_policy`, `retention_class`, `rotation_manifest`, `archive_ref`, `retention_exclusion`, and `retention_fail_quiet`.
 4. Save generated subskill packets under `packets/*.md` or `packets/*.json` and link them from the relevant event.
 5. When an event links an artifact whose path and hash are identical to a previous ledger artifact, use `artifact_refs[].unchanged_ref: {path, sha256}` and `unchanged_refs` instead of reserializing the same packet content in the ledger body. The deterministic writer computes this automatically for existing files.
    - For live-run command provenance, record the full redacted `command_argv` in the run packet once. Later ledger events should point to the packet path/hash with `unchanged_ref` rather than duplicating the argv body.
 6. Render `dashboard.md` in Korean and `final_report.md` from ledger/stage evidence near the end of the cycle. Treat dashboard/profile files as snapshots with an `event_count`; if closeout appends another ledger event after rendering, do not claim those files are post-closeout snapshots unless they were regenerated after that event.
+7. During close hygiene, apply `record_retention_policy` only when supplied by the adapter or caller packet. Hot records stay original, warm/cold large non-consumed packet bodies may be replaced by stubs plus archive references, and immutable evidence remains original regardless of class: loop ledgers, progress registries, validation scalars, visible-delta records, and disposition provenance. If the hook is absent, fail quiet and rotate nothing.
 
 ## Guardrails
 
@@ -42,6 +52,8 @@ Use `/home/swfool/.codex/skills/orchestrate-task-cycle/scripts/cycle_ledger.py` 
 - Do not collapse `instrumentation_first_fire` into ordinary success or goal progress. Record the first-fire event as its own evidence credit when supplied.
 - Do not drop Part K lineage fields during event append/rendering. Ledger snapshots may reference the packet by path/hash, but downstream consumers must still be able to recover stale expectation, parity, adoption, resolution, and report-key divergence evidence.
 - Do not drop Part L lane-lineage or premise-supply fields during event append/rendering. Ledger snapshots may reference the packet by path/hash, but downstream consumers must still recover stale-lane pass, stale decision measurement, producer-starved axis, restrictive quota, cycle-unreachable target, basis overclaim, and surface-field defect evidence.
+- Do not rotate, summarize, or archive away Part O/O5 immutable evidence categories: loop ledgers, progress registries, validation scalars, visible-delta records, and disposition provenance remain original regardless of retention class.
 - Do not overwrite existing stage history. Append a corrective event with a reason.
 - Do not reserialize identical packet bodies across cycle events when the path/hash are unchanged. Preserve `unchanged_ref(path+hash)` so cycle-efficiency profiling can distinguish fixed-cost work from repeated artifact payloads.
+- Do not treat record retention as completion, progress, or blocker evidence. It is close hygiene only and must not be double-counted as Part M disposition or Part N persistence policy.
 - Do not edit repository source, tests, notebooks, runtime/build configuration, or other behavior-changing files from this skill.

@@ -27,20 +27,22 @@ When `task.md`, a caller packet, or active workflow evidence references `.agent_
 
 ## Domain Adapter Contract
 
-Prefer repository-owned adapter outputs or caller packets over validation-local domain assumptions. The validator may consume these optional Part N hooks:
+Prefer repository-owned adapter outputs or caller packets over validation-local domain assumptions. The validator may consume these optional Part N and Part O hooks:
 
 - `substance_density(metric_id, **context) -> dict`: N1 helper returning `referent_meaning_ratio`, `opaque_surrogate_ratio`, and adapter-owned `floor`. Missing hook is fail-quiet and preserves existing progress classification while recording `substance_density_unchecked` when supplied.
 - `producer_source_paths(artifact_family, **context) -> list|dict`: N2 helper returning producer/verifier source paths or globs for primary deliverables.
 - `output_fingerprint(...) -> str|dict`: N2 helper returning opaque output fingerprint and optional freshness metadata.
 - `persistence_policy_map(**context) -> dict`: N3 helper returning opaque storage-policy classes, actually persisted classes, leak indicators, and resolution-depth enums.
+- `proxy_population(proxy_id, **context) -> dict`: O4 helper returning opaque proxy-population fields such as `measures_new_behavior`, `new_behavior_sample_count_field`, `min_sample_k`, and sample-count/evaluation status. Missing hook is fail-quiet and preserves existing completion behavior unless caller acceptance explicitly requires proxy non-triviality.
 
-Do not define identifier surfaces, meaning floors, regeneration commands, storage policy thresholds, or privacy leak equivalence in this skill. If hooks are absent, fail quiet to legacy validation behavior unless a caller acceptance contract explicitly requires the missing gate.
+Do not define identifier surfaces, meaning floors, regeneration commands, storage policy thresholds, privacy leak equivalence, proxy populations, new-behavior samples, or sample thresholds in this skill. If hooks are absent, fail quiet to legacy validation behavior unless a caller acceptance contract explicitly requires the missing gate.
 
 ## Workflow
 
 1. Collect local evidence.
    - Read `task.md`, `.task/index.jsonl`, `.task/index.md`, `.task/task_miss/`, `.task/candidate_task/`, `.issue/`, `.agent_log/`, `.agent_goal/goal_schema_contract.md`, `.agent_advice/`, `.schema/`, and `.contract/` when present.
    - Read caller-supplied Part N fields when present: `constraint_forced_vacuity`, `substance_density_unchecked`, `referent_meaning_ratio`, `opaque_surrogate_ratio`, `substance_density_floor`, `vacuity_cause`, `deliverable_stale`, `contract_only`, `changed_producer_source_paths`, `producer_source_paths`, `output_fingerprint`, `output_fingerprint_updated`, `anonymization_theater`, `mutually_unsatisfiable_persistence_contract`, `persistence_policy_axes`, `adapter_hook_demand`, `hook_demand_unaccounted`, `hook_supply_required`, and `demanded_hooks`.
+   - Read caller-supplied Part O/O4' fields when present: `trivially_satisfiable_proxy`, `proxy_population`, `measures_new_behavior`, `new_behavior_sample_count`, `new_behavior_sample_count_field`, `proxy_evaluation_status`, and `proxy_not_applicable`.
    - Use the bundled collector for a compact inventory:
 
      ```bash
@@ -106,6 +108,7 @@ Do not define identifier surfaces, meaning floors, regeneration commands, storag
 
 10. Evaluate acceptance provenance, convention conformance, and structure effect.
    - When `task.md`, `.task/task_pack`, active advice, or caller packets provide `scope_fidelity`, compare the original measurable target against actual achievement before allowing close.
+   - When acceptance or caller packets report Part O/O4' `trivially_satisfiable_proxy=true`, require evidence that the adapter-owned new-behavior sample precondition was met or that the proxy was replaced with a new-behavior population. If the new-behavior sample count is zero and the proxy otherwise passed, reclassify that proxy as `not_applicable` and downgrade dependent progress to `contract_only`. If `proxy_population` is absent, fail quiet and keep existing acceptance gates. Do not double-count O4' as G-OENV, N1', or B without separate tautology, vacuity, or dilution evidence.
    - When a normalized acceptance packet provides `acceptance_envelope_contract`, verify that the executed or selected envelope satisfied the adapter-owned `envelope_floor`. If the execution envelope is below the floor, classify the acceptance as unmet or partial; do not reframe the planned-failure result as a tool, prompt, runtime, or schema blocker.
    - When a normalized acceptance packet or loopback packet provides `acceptance_verifier_contract` or `unverifiable_acceptance_contract=true`, verify that each required live verifier evaluated to `pass`. If a required verifier is `not_evaluated`, classify the measurable acceptance as unmet or partial, preserve the verifier-hook follow-up or residual scope, and do not mark the source directive applied or consumed.
    - When a measurable acceptance target depends on a gate's required adapter hook, verify that the hook was supplied and evaluated. If the hook is missing, unloaded, fail-quiet, or `not_evaluated`, treat it as `unverifiable_acceptance_contract=true`; preserve hook-supply follow-up or residual scope and do not mark the source directive applied or consumed.
@@ -182,6 +185,7 @@ Do not define identifier surfaces, meaning floors, regeneration commands, storag
    - If a failed `gating` adoption axis or `measured_but_disqualified=true` is present, `complete` is invalid for adoption of that candidate.
    - If unresolved Part M findings are present, `complete` is invalid for affected launch, harvest, terminal disposition, predicate/directive, or collection-consumption claims: risky harvest preflight without repair or explicit risk acceptance, destructive high-cost disposition without safety exception, rerun before required reharvest, mutually unsatisfiable contract, or sample-as-universe misuse.
    - If unresolved Part N findings are present, `complete` is invalid for affected progress, deliverable, or persistence-policy claims: constraint-forced vacuity below adapter floor, deliverable staleness after producer-source change, anonymization theater, mutually unsatisfiable persistence contract, or unaccounted decision-relevant hook demand.
+   - If unresolved Part O/O4' findings are present, `complete` or `advanced` is invalid for claims depending on a proxy whose measured population does not include new behavior. A passed proxy with zero new-behavior samples is `not_applicable`, and dependent progress remains `contract_only` unless explicit descope/residual scope, terminal blocker, or user escalation resolves it.
    - If `resolution_downgrade=true` and the task required the original high-resolution evidence, `complete` is invalid unless the contract was revised, resolution restored, or residual scope remains open.
    - If `report_key_divergence=true`, `complete` is invalid for any claim consuming that report, and `advanced` is invalid when the claimed progress depends on the divergent value.
    - If convention conformance is applicable, `complete` also requires unresolved contract-backed code convention violations to be absent or intentionally deferred with open residual scope. Missing convention contract evidence is warn-only unless the task explicitly required contract creation/update.
@@ -239,6 +243,8 @@ Include a `Goal schema contract` gate whenever `.agent_goal/goal_schema_contract
 Include an `External advice` gate whenever `.agent_advice/` exists, the caller supplied `used_advice`, or `task.md` references an advice ID/path.
 
 Include an `Acceptance provenance` gate whenever `scope_fidelity`, measurable advice targets, or directive-derived acceptance criteria are present.
+
+Include a `Proxy non-triviality` gate whenever `trivially_satisfiable_proxy`, `proxy_population`, `new_behavior_sample_count`, `proxy_not_applicable`, or proxy replacement/precondition fields are present.
 
 Include an `Acceptance verifier` gate whenever `acceptance_verifier_contract`, `unverifiable_acceptance_contract`, or required gate `evaluation_status` fields are present.
 
@@ -362,6 +368,7 @@ Include a `Behavior-change live evidence` gate whenever the task changes runtime
 - Do not mark advice applied without `$manage-external-advice` lifecycle evidence or a clear validation/report rationale.
 - Do not return `complete` for `acceptance_diluted=true`; return `partial` and preserve residual scope.
 - Do not complete measurable directive-derived work against a weaker criterion unless explicit descope and residual tracking exist.
+- Do not complete or advance proxy-backed measurable work when Part O/O4' shows the proxy population excludes the task's new behavior. A passed proxy with zero new-behavior samples is `not_applicable`, not pass; dependent progress is `contract_only` unless residual/descope, terminal blocker, or user escalation is recorded.
 - Do not complete measurable work when an adapter-supplied `acceptance_envelope_contract` proves the executed envelope was below the minimum needed for the target.
 - Do not complete measurable work when a required verifier is `not_evaluated`; preserve verifier implementation, residual scope, terminal blocker, or user escalation.
 - Do not complete measurable work when an acceptance-required gate hook is missing or `not_evaluated`; preserve hook-supply work, residual scope, terminal blocker, or user escalation.
@@ -402,6 +409,7 @@ Include a `Behavior-change live evidence` gate whenever the task changes runtime
 - Do not complete a metric-backed progress claim when `constraint_forced_vacuity=true`; route production-constraint vacuity to persistence-policy repair and missing-producer-capability vacuity to producer supply.
 - Do not complete storage-policy contract work with unresolved `anonymization_theater` or `mutually_unsatisfiable_persistence_contract`. Storage axis and resolution-depth axis must be reconciled independently, with opaque-id plus transient merge key preferred when adapter-supplied.
 - Do not treat missing Part N adapter hooks as failures in unadapted repositories. Fail quiet unless an acceptance/caller contract requires the hook; preserve unchecked-hook evidence for derive.
+- Do not treat missing Part O/O4' `proxy_population` as failure in unadapted repositories. Fail quiet unless an acceptance/caller contract requires proxy non-triviality; do not invent proxy populations or thresholds.
 - Do not complete or advance from basis-overclaimed metrics as independently verified evidence.
 - Do not consume qualitative review pass for affected field classes when the surface field defect matrix has unresolved nonzero counts.
 - Do not complete frozen-envelope-unreachable acceptance without `envelope_thaw_item`, thaw condition/schedule, explicit residual/descope, terminal blocker, or user escalation.
