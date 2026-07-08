@@ -437,18 +437,29 @@ def semantic_findings(
     convention_contract: dict[str, Any],
 ) -> list[dict[str, Any]]:
     enforced = convention_enforced(convention_contract)
-    severity = "refactor_required" if enforced else "warn"
+    convention_severity = "refactor_required" if enforced else "warn"
     findings: list[dict[str, Any]] = []
+    min_reuse_ratio = numeric_contract_value(convention_contract, "min_reuse_root_import_ratio")
+    reuse_ratio = semantic_metrics.get("reuse_root_import_ratio")
+    reuse_below_convention = min_reuse_ratio is not None and reuse_ratio is not None and reuse_ratio < min_reuse_ratio
+    mechanical_shard_count = int(semantic_metrics.get("mechanical_shard_file_count", 0) or 0)
+    placement_burden_coupled = bool(
+        mechanical_shard_count
+        or duplicates
+        or int(semantic_metrics.get("global_rebinding_signal_count", 0) or 0)
+        or reuse_below_convention
+    )
     mechanical_paths = [
         {"path": str(item.get("path")), "signals": item.get("mechanical_naming_signals", [])}
         for item in scanned
         if item.get("mechanical_naming_signals")
     ]
     if mechanical_paths:
+        mechanical_severity = "refactor_required" if mechanical_shard_count else convention_severity
         findings.append(
             {
                 "code": "mechanical_or_versioned_naming_detected",
-                "severity": severity,
+                "severity": mechanical_severity,
                 "message": "Changed files include numbered shard, part, or version-suffix naming that needs semantic justification or convention approval.",
                 "paths": mechanical_paths[:20],
             }
@@ -462,7 +473,7 @@ def semantic_findings(
         findings.append(
             {
                 "code": "global_rebinding_coupling_detected",
-                "severity": severity,
+                "severity": convention_severity,
                 "message": "Changed files include global rebinding or binding-shim signals; prefer explicit parameters or dependency injection.",
                 "paths": rebinding_paths[:20],
             }
@@ -471,40 +482,42 @@ def semantic_findings(
         findings.append(
             {
                 "code": "duplicate_public_symbol_names_detected",
-                "severity": severity,
+                "severity": convention_severity,
                 "message": "Changed files repeat public symbol names across files; verify reuse or consolidate shared behavior.",
                 "duplicates": duplicates,
             }
         )
     max_depth = numeric_contract_value(convention_contract, "max_tree_depth")
     if max_depth is not None and semantic_metrics.get("max_changed_tree_depth", 0) > max_depth:
+        placement_severity = "refactor_required" if enforced and placement_burden_coupled else "warn"
         findings.append(
             {
                 "code": "tree_depth_exceeds_convention",
-                "severity": severity,
-                "message": "Changed file depth exceeds the repository-owned convention contract.",
+                "severity": placement_severity,
+                "message": "Changed file depth exceeds the repository-owned convention contract; depth alone is warn-only unless coupled with reuse, duplicate, mechanical-shard, or coupling evidence.",
                 "observed": semantic_metrics.get("max_changed_tree_depth"),
                 "limit": max_depth,
+                "standalone_depth_penalty_blocked": not placement_burden_coupled,
             }
         )
     max_fan_out = numeric_contract_value(convention_contract, "max_dir_fan_out")
     if max_fan_out is not None and semantic_metrics.get("max_changed_dir_fan_out", 0) > max_fan_out:
+        placement_severity = "refactor_required" if enforced and placement_burden_coupled else "warn"
         findings.append(
             {
                 "code": "dir_fan_out_exceeds_convention",
-                "severity": severity,
-                "message": "Changed directory fan-out exceeds the repository-owned convention contract.",
+                "severity": placement_severity,
+                "message": "Changed directory fan-out exceeds the repository-owned convention contract; fan-out alone is warn-only unless coupled with reuse, duplicate, mechanical-shard, or coupling evidence.",
                 "observed": semantic_metrics.get("max_changed_dir_fan_out"),
                 "limit": max_fan_out,
+                "standalone_fan_out_penalty_blocked": not placement_burden_coupled,
             }
         )
-    min_reuse_ratio = numeric_contract_value(convention_contract, "min_reuse_root_import_ratio")
-    reuse_ratio = semantic_metrics.get("reuse_root_import_ratio")
-    if min_reuse_ratio is not None and reuse_ratio is not None and reuse_ratio < min_reuse_ratio:
+    if reuse_below_convention:
         findings.append(
             {
                 "code": "reuse_root_import_ratio_below_convention",
-                "severity": severity,
+                "severity": convention_severity,
                 "message": "Changed files import less from the repository reuse layer than the convention contract requires.",
                 "observed": reuse_ratio,
                 "limit": min_reuse_ratio,
@@ -553,6 +566,9 @@ def audit(
     }
     if reuse_ratio is not None:
         semantic_metrics["reuse_root_import_ratio"] = reuse_ratio
+    semantic_metrics["relocated_mechanical_shard"] = bool(semantic_metrics["mechanical_shard_file_count"])
+    semantic_metrics["depth_fan_out_enforcement"] = "contract_coupled" if convention_contract.get("status") == "provided" else "warn_only_no_contract"
+    semantic_metrics["depth_fan_out_standalone_penalty_blocked"] = True
     semantic_structure_findings = semantic_findings(
         scanned=scanned,
         semantic_metrics=semantic_metrics,
@@ -561,6 +577,7 @@ def audit(
     )
     semantic_refactor_required = any(str(item.get("severity")) == "refactor_required" for item in semantic_structure_findings)
     semantic_warn = bool(semantic_structure_findings)
+    convention_status = "refactor_required" if semantic_refactor_required else ("warn" if semantic_warn else "not_applicable")
     if not scanned:
         audit_status = "not_applicable"
         status = "not_applicable"
@@ -604,7 +621,7 @@ def audit(
             "code_convention_contract_status": convention_contract.get("status"),
             "enforcement": convention_contract.get("enforcement"),
             "warn_only": bool(convention_contract.get("warn_only")),
-            "status": audit_status if semantic_structure_findings else "not_applicable",
+            "status": convention_status,
             "checked_axes": [
                 "reuse_before_create",
                 "semantic_naming",
@@ -613,6 +630,7 @@ def audit(
                 "tree_depth",
                 "fan_out",
                 "reuse_root_import_ratio",
+                "relocated_mechanical_shard",
             ],
         },
         "moduleization_required": moduleization_required,
