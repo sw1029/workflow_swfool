@@ -92,6 +92,11 @@ def markdown_path(root: Path) -> Path:
     return task_dir(root) / "index.md"
 
 
+def immutable_snapshot_path(root: Path, item_id: str, source_path: Path) -> Path:
+    suffix = source_path.suffix or ".txt"
+    return task_dir(root) / "snapshots" / f"{item_id}{suffix}"
+
+
 def ensure_index(root: Path) -> None:
     task_dir(root).mkdir(parents=True, exist_ok=True)
     if not jsonl_path(root).exists():
@@ -267,6 +272,19 @@ def upsert_item(
     digest = sha256_file(path)
     state = merge_state(load_events(root))
     title = title or read_title(path)
+    lifecycle_transition_result: dict[str, Any] | None = None
+    transition_links: list[dict[str, str]] = []
+    previous_active_aliases = [
+        (existing_id, existing)
+        for existing_id, existing in state.items()
+        if item_type == "task"
+        and path_value == "task.md"
+        and existing.get("type") == "task"
+        and existing.get("path") == path_value
+        and existing.get("status") == "active"
+        and digest
+        and existing.get("content_sha256") != digest
+    ]
     provided_item_id = item_id is not None
     item_id = item_id or find_existing_id(state, item_type, path_value, digest) or make_id(item_type, title, path_value)
     if not provided_item_id:
@@ -280,6 +298,62 @@ def upsert_item(
             item_id = f"{base_id}-{suffix}"
             suffix += 1
     timestamp = now_iso()
+    if previous_active_aliases and not provided_item_id:
+        lifecycle_transition_result = {
+            "previous_snapshot_preserved": False,
+            "previous_active_superseded": False,
+            "new_canonical_id_added": False,
+            "mutable_alias_updated": False,
+            "links_updated": False,
+            "index_rendered": False,
+            "atomic": False,
+        }
+        for previous_id, previous in previous_active_aliases:
+            append_event(
+                root,
+                {
+                    "event": "upsert",
+                    "id": previous_id,
+                    "updated_at": timestamp,
+                    "fields": {
+                        "record_class": "immutable_snapshot",
+                        "snapshot_digest": previous.get("content_sha256"),
+                        "snapshot_path": (previous.get("fields") or {}).get("snapshot_path"),
+                        "alias_path": path_value,
+                        "canonical_id": previous_id,
+                    },
+                },
+            )
+            lifecycle_transition_result["previous_snapshot_preserved"] = True
+            append_event(
+                root,
+                {
+                    "event": "upsert",
+                    "id": previous_id,
+                    "status": "superseded",
+                    "updated_at": timestamp,
+                },
+            )
+            lifecycle_transition_result["previous_active_superseded"] = True
+        fields = dict(fields or {})
+        fields.update({"record_class": "mutable_alias", "snapshot_digest": digest or "", "canonical_id": item_id})
+        transition_links = list(links or []) + [{"rel": "supersedes", "id": previous_id} for previous_id, _ in previous_active_aliases]
+        links = None
+    if item_type == "task" and path_value == "task.md" and path.is_file():
+        snapshot_path = immutable_snapshot_path(root, item_id, path)
+        snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        if not snapshot_path.exists():
+            snapshot_path.write_bytes(path.read_bytes())
+        fields = dict(fields or {})
+        fields.update(
+            {
+                "record_class": "mutable_alias",
+                "snapshot_digest": digest or "",
+                "snapshot_path": rel_path(root, snapshot_path),
+                "canonical_id": item_id,
+                "alias_path": path_value,
+            }
+        )
     event = {
         "event": "upsert",
         "id": item_id,
@@ -301,8 +375,53 @@ def upsert_item(
     if note:
         event["note"] = note
     append_event(root, event)
+    if lifecycle_transition_result is not None:
+        lifecycle_transition_result["new_canonical_id_added"] = True
+        alias_event = {
+            "event": "upsert",
+            "id": item_id,
+            "updated_at": timestamp,
+            "fields": {
+                "record_class": "mutable_alias",
+                "snapshot_digest": digest,
+                "snapshot_path": (fields or {}).get("snapshot_path"),
+                "canonical_id": item_id,
+                "alias_path": path_value,
+            },
+        }
+        append_event(root, alias_event)
+        lifecycle_transition_result["mutable_alias_updated"] = True
+        for previous_id, _ in previous_active_aliases:
+            append_event(
+                root,
+                {
+                    "event": "link",
+                    "id": previous_id,
+                    "updated_at": timestamp,
+                    "links": [{"rel": "superseded_by", "id": item_id}],
+                },
+            )
+        if transition_links:
+            append_event(
+                root,
+                {"event": "link", "id": item_id, "updated_at": timestamp, "links": transition_links},
+            )
+        lifecycle_transition_result["links_updated"] = True
     rebuild = rebuild_markdown(root)
-    return {"id": item_id, "event": event, **rebuild}
+    if lifecycle_transition_result is not None:
+        lifecycle_transition_result["index_rendered"] = True
+        lifecycle_transition_result["atomic"] = all(
+            lifecycle_transition_result[field]
+            for field in (
+                "previous_snapshot_preserved",
+                "previous_active_superseded",
+                "new_canonical_id_added",
+                "mutable_alias_updated",
+                "links_updated",
+                "index_rendered",
+            )
+        )
+    return {"id": item_id, "event": event, "lifecycle_transition_result": lifecycle_transition_result, **rebuild}
 
 
 def infer_miss_status(path: Path) -> str:
@@ -774,7 +893,17 @@ def audit_index(root: Path) -> dict[str, Any]:
             path = root / str(path_value)
             if not path.exists() and status not in {"obsolete", "superseded"}:
                 add_issue(issues, "high", "missing_path", "Indexed artifact path does not exist.", [item_id], [str(path_value)])
-            if path.is_file():
+            fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
+            if fields.get("record_class") == "immutable_snapshot":
+                snapshot_value = fields.get("snapshot_path")
+                snapshot_path = root / str(snapshot_value) if snapshot_value else None
+                if snapshot_path is None or not snapshot_path.is_file():
+                    add_issue(issues, "medium", "immutable_snapshot_missing", "Historical record lacks its immutable snapshot body.", [item_id], [str(snapshot_value or path_value)])
+                else:
+                    snapshot_digest = sha256_file(snapshot_path)
+                    if fields.get("snapshot_digest") and snapshot_digest != fields.get("snapshot_digest"):
+                        add_issue(issues, "medium", "immutable_snapshot_digest_mismatch", "Historical snapshot body differs from its immutable digest.", [item_id], [str(snapshot_value)])
+            elif path.is_file():
                 digest = sha256_file(path)
                 if item.get("content_sha256") and digest and digest != item.get("content_sha256"):
                     add_issue(
@@ -809,6 +938,8 @@ def audit_index(root: Path) -> dict[str, Any]:
     ]
     if len(active_tasks) > 1:
         add_issue(issues, "high", "multiple_active_tasks", "More than one task is marked active.", active_tasks)
+    if (root / "task.md").is_file() and not active_tasks:
+        add_issue(issues, "high", "current_canonical_id_missing", "Current task.md has no active canonical task ID.", paths=["task.md"])
 
     active_packs = [
         item_id
@@ -869,6 +1000,15 @@ def audit_index(root: Path) -> dict[str, Any]:
     for item in state.values():
         counts_by_type[str(item.get("type", "unknown"))] = counts_by_type.get(str(item.get("type", "unknown")), 0) + 1
 
+    current_blocker_codes = {"current_canonical_id_missing", "multiple_active_tasks", "duplicate_active_path"}
+    active_ids = set(active_tasks)
+    current_surface_blockers = [
+        issue
+        for issue in issues
+        if issue.get("code") in current_blocker_codes
+        or (issue.get("code") == "broken_link" and active_ids.intersection(issue.get("ids") or []))
+    ]
+    historical_debt = [issue for issue in issues if issue not in current_surface_blockers]
     return {
         "workspace": str(root),
         "audited_at": now_iso(),
@@ -877,6 +1017,8 @@ def audit_index(root: Path) -> dict[str, Any]:
         "counts_by_type": counts_by_type,
         "issue_count": len(issues),
         "issues": issues,
+        "current_surface_blockers": current_surface_blockers,
+        "historical_debt": historical_debt,
     }
 
 

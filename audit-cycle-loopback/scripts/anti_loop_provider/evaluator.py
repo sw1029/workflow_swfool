@@ -70,6 +70,54 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
         gate_inputs.extend(extract_disposition_gates(load_json_value(root, raw_gate)))
     runner_validation = load_json_value(root, getattr(args, "runner_validation_json", None))
     output_delta = load_json_value(root, getattr(args, "output_delta_json", None))
+    terminal_self_resolution = terminal_self_resolution_gate(runner_validation, output_delta, *gate_inputs)
+    if bool_value(terminal_self_resolution.get("goal_terminal_prohibited")):
+        gate_inputs.append(
+            {
+                "name": "terminal_self_resolution",
+                **terminal_self_resolution,
+                "constrains_disposition": True,
+                "allowed_dispositions": ["goal_productive"],
+            }
+        )
+    consumer_conformance_gate = consumer_context_conformance_gate(runner_validation, output_delta, *gate_inputs)
+    if adapter_registered:
+        consumer_id = "audit-cycle-loopback"
+        probe_basis = f"{consumer_id}|{domain_adapter_path or adapter_expected_path or 'missing'}|{domain_adapter_error or 'loaded'}"
+        probe_row = {
+            "consumer_context_id": consumer_id,
+            "adapter_loaded": domain_adapter is not None,
+            "required_hook_callable": domain_adapter is not None,
+            "hook_signature_compatible": domain_adapter is not None,
+            "return_contract_valid": domain_adapter is not None,
+            "probe_evidence_id": "probe-" + hashlib.sha256(probe_basis.encode("utf-8")).hexdigest()[:16],
+            "status": "pass" if domain_adapter is not None else "not_evaluated",
+        }
+        required_ids = list(consumer_conformance_gate.get("required_consumer_ids") or [])
+        if consumer_id not in required_ids:
+            required_ids.append(consumer_id)
+        rows = [row for row in consumer_conformance_gate.get("rows") or [] if row.get("consumer_context_id") != consumer_id]
+        rows.append(probe_row)
+        missing_ids = [item for item in consumer_conformance_gate.get("missing_consumer_context_ids") or [] if item != consumer_id]
+        if domain_adapter is None:
+            missing_ids.append(consumer_id)
+        consumer_conformance_gate.update(
+            {
+                "required_consumer_ids": required_ids,
+                "rows": rows,
+                "missing_consumer_context_ids": sorted(set(missing_ids)),
+                "status": "pass" if not missing_ids else "not_evaluated",
+            }
+        )
+    adapter_load_gate["consumer_context_conformance"] = consumer_conformance_gate
+    if bool_value(consumer_conformance_gate.get("missing_consumer_context_ids")):
+        adapter_load_gate["status"] = "block"
+        adapter_load_gate["constrains_disposition"] = True
+        adapter_load_gate["adapter_wiring_defect"] = True
+        if gate_inputs and gate_inputs[0].get("name") == "adapter_wiring_gate":
+            gate_inputs[0].update(adapter_load_gate)
+        else:
+            gate_inputs.append({"name": "adapter_wiring_gate", **adapter_load_gate})
     failure_autopsies = load_json_values(root, getattr(args, "failure_autopsy_json", []) or [])
     validator_gate = validator_integrity_gate(runner_validation, output_delta, gate_inputs)
     if bool_value(validator_gate.get("constrains_disposition")):

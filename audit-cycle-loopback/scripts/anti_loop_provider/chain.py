@@ -133,6 +133,45 @@ def adapter_wiring_gate(
         "recommended_disposition": "self_inflicted_gate_defect" if defect else None,
     }
 
+
+def consumer_context_conformance_gate(*values: Any) -> dict[str, Any]:
+    required_ids = list_values(first_field_value(list(values), {"required_consumer_ids"}))
+    rows_value = first_field_value(list(values), {"consumer_context_conformance", "adapter_consumer_conformance"})
+    if isinstance(rows_value, dict):
+        rows = rows_value.get("rows") or []
+    else:
+        rows = rows_value if isinstance(rows_value, list) else []
+    by_id = {
+        str(row.get("consumer_context_id")): row
+        for row in rows
+        if isinstance(row, dict) and row.get("consumer_context_id")
+    }
+    missing: list[str] = []
+    normalized: list[dict[str, Any]] = []
+    for consumer_id in required_ids:
+        row = by_id.get(str(consumer_id)) or {}
+        valid = bool(row) and all(
+            bool_value(row.get(field))
+            for field in ("adapter_loaded", "required_hook_callable", "hook_signature_compatible", "return_contract_valid")
+        ) and bool(str(row.get("probe_evidence_id") or "").strip())
+        normalized.append({
+            "consumer_context_id": str(consumer_id),
+            "adapter_loaded": bool_value(row.get("adapter_loaded")),
+            "required_hook_callable": bool_value(row.get("required_hook_callable")),
+            "hook_signature_compatible": bool_value(row.get("hook_signature_compatible")),
+            "return_contract_valid": bool_value(row.get("return_contract_valid")),
+            "probe_evidence_id": row.get("probe_evidence_id"),
+            "status": "pass" if valid else "not_evaluated",
+        })
+        if not valid:
+            missing.append(str(consumer_id))
+    return {
+        "required_consumer_ids": required_ids,
+        "rows": normalized,
+        "missing_consumer_context_ids": missing,
+        "status": "pass" if required_ids and not missing else ("not_evaluated" if required_ids else "not_applicable"),
+    }
+
 def cumulative_goal_distance_scope_key(artifact_family: str, root_family_key: str, facet_root_map_missing: bool) -> str:
     if facet_root_map_missing:
         return f"artifact_family:{normalize_root_family_key(artifact_family)}"

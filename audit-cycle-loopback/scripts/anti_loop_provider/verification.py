@@ -13,6 +13,10 @@ def evidence_source_metadata(value: Any) -> dict[str, Any]:
             or source.get("input_paths")
             or source.get("read_paths")
         ),
+        "verification_input_ids": string_list(source.get("verification_input_ids")),
+        "producer_input_ids": string_list(source.get("producer_input_ids")),
+        "verified_artifact_ids": string_list(source.get("verified_artifact_ids")),
+        "input_fingerprints": source.get("input_fingerprints") if isinstance(source.get("input_fingerprints"), dict) else {},
         "self_grounded_axes": {
             normalize_gate_key(item)
             for item in string_list(
@@ -56,6 +60,10 @@ def verification_source_separation_gate(
         "gate": "H4-VERIFICATION-SOURCE-SEPARATION",
         "verification_input_paths": input_paths,
         "verified_artifact_paths": artifact_paths,
+        "verification_input_ids": metadata.get("verification_input_ids") or [],
+        "producer_input_ids": metadata.get("producer_input_ids") or [],
+        "verified_artifact_ids": metadata.get("verified_artifact_ids") or [],
+        "input_fingerprints": metadata.get("input_fingerprints") or {},
         "self_grounded_axes": sorted(self_grounded),
         "source_separation_required_fields": source_required_fields,
         "verification_input_disjoint": bool(source_required_fields and input_paths and not overlaps),

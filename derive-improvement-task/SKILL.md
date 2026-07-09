@@ -194,6 +194,14 @@ Keep Part O distinct from B/G/N accounting: O1' is same-lineage special-case rep
 
 ## Workflow
 
+Consume loopback `authoritative_semantic_progress` and hard-stop facts monotonically. Never upgrade false/block to true/advanced from review wording, report fields, dashboard state, or terminal-outcome labels. If required actual-body truth, report convergence, consumer context, artifact class, freshness/current lane, or verifier completeness is `not_evaluated`, do not select an `advanced` interpretation.
+
+Before choosing terminal/user escalation, consume the loopback residual classification. `self_resolvable_local`, `offline_recompute`, and `existing_authority` require a bounded local task; `unverified` requires classification/probe work. Only genuine new authority or external state may support external escalation after existing-authority work is exhausted. `pack_exhausted_needs_derivation` is not goal terminal.
+
+When family profile scope is unverified, ignore global any/max exhaustion and hard-stop aggregates. Use only the current goal axis, stable root family, producer lineage, artifact class, decision lane, and input cohort. A trace-label rename cannot create a new family. When the existing sprawl hard gate is active, select consolidation, goal-productive producer work, terminal block, or escalation as allowed; do not merely report it.
+
+Do not drop a required structure-repair lineage because the debt is pre-existing or because an outer packet declares the slice complete. Until adapter-owned structure high-water moves, select the in-place repair, explicit residual/descope, terminal block, or escalation already allowed by the existing disposition contract.
+
 1. Load planning context.
    - Read `.agent_goal/final_goal.md`, `.agent_goal/conventions.md`, `.agent_goal/goal_architecture.md`, `.agent_goal/goal_theory.md`, and `.agent_goal/goal_schema_contract.md` when present.
    - Use `$manage-agent-authority` in `summarize` mode when `.agent_goal/agent_authority.md` exists. If absent and no caller supplied an authority summary, use `$manage-agent-authority` to return `authority_policy: default_current_agent_permissions` without writing.

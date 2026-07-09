@@ -136,6 +136,10 @@ Use `$skill-creator` rules for adapter tasks:
 
 ## Adapter Validation
 
+Adapter registration, repository-root import, or a passing adapter unit test does not prove wiring. The project contract lists only opaque `required_consumer_ids`; each actual consumer loader must probe from its own working directory, module-loading mechanism, and environment and return a row with `consumer_context_id`, `adapter_loaded`, `required_hook_callable`, `hook_signature_compatible`, `return_contract_valid`, and `probe_evidence_id`. Store these rows in the existing consumer packet as `consumer_context_conformance`.
+
+`consumer_context_ready` is not an adapter self-hook. Hook-name strings, metric labels, filenames, and packet claims are not probe evidence. If an acceptance-required consumer row is missing or fails, that consumer's dependent hook is `not_evaluated`, not pass.
+
 When `.codex/skills/` changed in the current task, run `repo_skill_adapter_validate` before treating the adapter as consumable in later cycles.
 
 Validation must check:

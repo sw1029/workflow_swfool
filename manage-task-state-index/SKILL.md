@@ -104,6 +104,8 @@ For the complete event schema and link relationship names, read [index-schema.md
      ```
 
 5. Record lifecycle transitions before destructive cleanup.
+- Treat mutable aliases such as `task.md` separately from immutable task/advice/validation snapshots. Persist the alias body under `.task/snapshots/<canonical-id>.<ext>` when the canonical ID is first indexed. A historical record is checked only against its own `snapshot_path` and immutable snapshot digest; a later alias body must not create historical digest mismatch debt.
+- For an active switch, perform and report one `lifecycle_transition_result` in this order: preserve the previous immutable snapshot, supersede the previous active canonical ID, add the new canonical ID, update the mutable alias, update links, then render the index. A partial sequence is not a completed switch.
 - Before deleting an applied candidate, mark it `applied` and link it to the active task.
 - Before superseding, completing, or terminal-blocking a task pack, index the task-pack JSON and link the evidence with `reordered_by`, `terminal_blocker_for`, or `input_delta_for` as applicable.
 - Before deleting a resolved task miss, mark it `resolved` or `deleted` and link the evidence report.
@@ -126,7 +128,7 @@ For the complete event schema and link relationship names, read [index-schema.md
      ```
 
    - Use `audit --summary-only --focus-path <path>` for cycle reports that need global counts and current-surface issues without dumping unrelated historical debt. The summary output is not a replacement for full audit evidence when deletion, issue closure, or completion depends on global consistency.
-   - Treat high-severity ID issues as traceability blockers for completion-oriented workflows until they are resolved or explicitly documented as non-applicable.
+   - Split `current_surface_blockers` from `historical_debt`. For completion-oriented close, block on a missing current canonical ID, duplicate active alias, or broken current link. Missing paths, stale alias digests, or links belonging only to inactive immutable history remain historical debt and do not block the current surface by themselves.
    - If several consecutive cycles used exact-path-only add/link instead of global scan/audit, recommend a global audit before the next completion claim, candidate deletion, issue closure, readiness promotion, or commit that changes workflow state.
    - When cycle/profile evidence reports over-threshold run directories, processed candidates, versioned command families, or repeated exact-path-only state mutations, register or link a consolidation candidate instead of recording the growth as informational only. Mark that candidate or index note as `progress_kind: governance_only` unless strict changed-and-semantic primary-output evidence proves otherwise. Use `consolidation_candidate_for`, `supersedes`, or `depends_on` links to tie the candidate to the budget evidence.
    - If no `.task`, `.issue`, `.agent_log`, `.agent_goal`, `.agent_advice`, `.interview`, `.schema`, `.contract`, or task artifact exists, do not force an ID workflow; report that no ID context was available and let the calling skill continue its original purpose.
@@ -162,6 +164,7 @@ All commands print JSON so the caller can capture IDs and changed paths.
 - Do not use the index as proof that work is complete; use `$validate-task-completion` for verdicts.
 - Do not delete, move, or rewrite task artifacts from this skill unless the user or owning workflow explicitly requested it.
 - Do not overwrite `.task/index.jsonl`.
+- Do not compare an immutable historical snapshot digest with the current mutable alias body. Store `record_class: mutable_alias|immutable_snapshot`, `snapshot_digest`, and `canonical_id` in the existing event `fields` when applicable.
 - Do not remove historical events from `.task/index.jsonl`; append a correcting event instead.
 - Do not store secrets, private tokens, raw sensitive data, or large copyrighted excerpts in index fields.
 - Do not store full schema payloads or large contract bodies in index fields; store paths, titles, statuses, versions, and concise relationship fields.

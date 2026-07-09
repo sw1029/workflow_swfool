@@ -581,6 +581,17 @@ def apply_disposition_and_findings(ns: dict[str, Any]) -> dict[str, Any]:
         findings.append(disagreement)
         row["authoritative_semantic_progress"] = False
         row["hard_stop_required"] = True
+    if bool_value(terminal_self_resolution.get("goal_terminal_prohibited")):
+        row["effective_allowed_dispositions"] = ["goal_productive"]
+        row["recommended_disposition"] = "goal_productive"
+        findings.append(
+            {
+                "severity": "block",
+                "code": "goal_terminal_prohibited_by_self_resolvable_residual",
+                "message": "local, offline, existing-authority, or unverified residual work remains; terminal and user-escalation dispositions are unavailable until it is resolved or classified.",
+                "evidence": terminal_self_resolution,
+            }
+        )
     if findings:
         row["findings"] = findings
     return row

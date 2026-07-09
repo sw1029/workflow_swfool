@@ -12,6 +12,10 @@ This reference indexes the contact surfaces between `$orchestrate-task-cycle`, i
 
 ## Ownership Model
 
+Run/review own observed claims only. Loopback owns `authoritative_semantic_progress` before derive, and completion validation owns `authoritative_progress_verdict` at close. Derive, result-contract, dashboard, index, report, and later packets may preserve or downgrade but never upgrade an authoritative false/hard-stop result. A terminal-outcome change is progress only with independent evidence, no conflict, and all acceptance-required integrity axes evaluated.
+
+Actual-artifact recomputation outranks verifier, current-transform, producer, carried-forward, and workflow claims. `report_key_divergence` and `report_body_divergence` are distinct blocking facts. Source-separated ids/fingerprints and external consumer-context probe rows travel in existing packets; no additional workflow phase is introduced.
+
 The orchestrator coordinates packets and ordering. It does not own implementation edits, final validation, issue lifecycle decisions, schema authority, Git staging, or subskill-internal verdicts.
 
 Use these ownership rules:

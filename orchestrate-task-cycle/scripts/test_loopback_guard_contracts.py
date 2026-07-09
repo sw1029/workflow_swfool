@@ -32,6 +32,8 @@ anti_loop_gate_provider = load_module(
 task_pack_queue = load_module(ORCHESTRATE_ROOT / "scripts" / "task_pack_queue.py")
 safe_failure_autopsy = load_module(SKILLS_ROOT / "run-task-code-and-log" / "scripts" / "safe_failure_autopsy.py")
 cycle_ledger = load_module(ORCHESTRATE_ROOT / "scripts" / "cycle_ledger.py")
+profile_cycle_efficiency = load_module(ORCHESTRATE_ROOT / "scripts" / "profile_cycle_efficiency.py")
+task_state_index = load_module(SKILLS_ROOT / "manage-task-state-index" / "scripts" / "task_state_index.py")
 
 
 def base_pack(items: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1678,6 +1680,181 @@ def test_cycle_ledger_accepts_long_run_monitor_as_run_step() -> None:
     assert "noncanonical_step" not in result["event"]
 
 
+def validate_packet(**overrides: Any) -> dict[str, Any]:
+    packet = {
+        "step": "validate",
+        "task_id": "task-forward",
+        "validation_verdict": "complete",
+        "progress_verdict": "advanced",
+        "authoritative_progress_verdict": "advanced",
+        "changed_vs_previous": True,
+        "semantic_progress": True,
+        "produced_domain_delta": True,
+        "blockers": [],
+        "evidence_paths": ["validation.json"],
+    }
+    packet.update(overrides)
+    return packet
+
+
+def test_fixture_only_movement_cannot_satisfy_real_artifact() -> None:
+    result = result_contract.validate(
+        "validate",
+        validate_packet(required_artifact_class="real_artifact", observed_artifact_class="fixture"),
+        "block",
+    )
+    assert any(item.get("code") == "validate_required_artifact_class_mismatch" for item in result["findings"])
+    nonadvanced = result_contract.validate(
+        "validate",
+        validate_packet(
+            progress_verdict="safety_only",
+            authoritative_progress_verdict="safety_only",
+            required_artifact_class="real_artifact",
+            observed_artifact_class="fixture",
+        ),
+        "block",
+    )
+    assert any(item.get("code") == "validate_complete_required_artifact_class_mismatch" for item in nonadvanced["findings"])
+
+
+def test_actual_artifact_report_body_divergence_blocks_close() -> None:
+    result = result_contract.validate(
+        "validate",
+        validate_packet(
+            actual_body_truth_required=True,
+            truth_basis="independently_recomputed_actual_artifact",
+            report_body_divergence=True,
+        ),
+        "block",
+    )
+    assert any(item.get("code") == "report_body_divergence" for item in result["findings"])
+    automatic = result_contract.validate(
+        "validate",
+        validate_packet(actual_artifact={"metric_M": 1}, validation_report={"metric_M": 2}),
+        "block",
+    )
+    assert any(item.get("code") == "report_body_divergence" for item in automatic["findings"])
+
+
+def test_metadata_only_delta_cannot_advance() -> None:
+    result = result_contract.validate(
+        "validate",
+        validate_packet(metadata_only=True, produced_domain_delta=False, semantic_progress=False),
+        "block",
+    )
+    assert any(item.get("code") == "validate_advanced_without_terminal_outcome_changed" for item in result["findings"])
+    contradictory = result_contract.validate(
+        "validate",
+        validate_packet(metadata_only=True, produced_domain_delta=True, semantic_progress=True),
+        "block",
+    )
+    assert any(item.get("code") == "validate_advanced_from_metadata_only_delta" for item in contradictory["findings"])
+
+
+def test_downstream_cannot_upgrade_loopback_false_or_hard_stop() -> None:
+    result = result_contract.validate(
+        "validate",
+        validate_packet(authoritative_semantic_progress=False, hard_stop_required=True),
+        "block",
+    )
+    codes = {item.get("code") for item in result["findings"]}
+    assert "validate_progress_monotonicity_violation" in codes
+    assert "validate_advanced_despite_hard_stop" in codes
+
+
+def test_root_import_does_not_satisfy_failed_consumer_context() -> None:
+    result = result_contract.validate(
+        "validate",
+        validate_packet(
+            required_consumer_ids=["runtime-loader"],
+            consumer_context_conformance={
+                "rows": [{
+                    "consumer_context_id": "runtime-loader",
+                    "adapter_loaded": False,
+                    "required_hook_callable": False,
+                    "hook_signature_compatible": False,
+                    "return_contract_valid": False,
+                    "probe_evidence_id": "probe-runtime-failed",
+                    "repository_root_import_succeeded": True,
+                }]
+            },
+        ),
+        "block",
+    )
+    assert any(item.get("code") == "required_consumer_context_not_evaluated" for item in result["findings"])
+
+
+def test_terminal_request_with_local_residual_is_prohibited() -> None:
+    gate = anti_loop_gate_provider.terminal_self_resolution_gate(
+        {"terminal_requested": True, "residuals": [{"residual_id": "r1", "classification": "self_resolvable_local"}]}
+    )
+    assert gate["goal_terminal_prohibited"] is True
+    assert gate["status"] == "block"
+
+
+def test_repeated_terminal_tuple_latches_without_full_cycle() -> None:
+    previous = {
+        "event_id": "terminal-1",
+        "terminal_justified": True,
+        "terminal_outcome_family_key": "family-a",
+        "input_state_fingerprint": "input-a",
+        "authority_state_fingerprint": "authority-a",
+        "terminal_latch_streak": 1,
+    }
+    current = dict(previous, event_id="terminal-2")
+    state = cycle_ledger.terminal_latch_state([previous], current)
+    assert state["quiescent_terminal_latched"] is True
+    assert state["suppress_full_cycle"] is True
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        first = cycle_ledger.append_event(root, "cycle-terminal", {**previous, "step": "report", "status": "complete"})
+        second = cycle_ledger.append_event(root, "cycle-terminal", {**current, "step": "report", "status": "complete"})
+        rows = cycle_ledger.read_events(root, "cycle-terminal")
+        restart = cycle_ledger.init_cycle(root, "cycle-terminal-restart", "task-terminal", "restart", current)
+        restart_dir_exists = (root / ".task" / "cycle" / "cycle-terminal-restart").exists()
+    assert first.get("event_suppressed") is not True
+    assert second["event_suppressed"] is True
+    assert len(rows) == 1
+    assert restart["cycle_suppressed"] is True
+    assert not restart_dir_exists
+
+
+def test_mutable_alias_change_preserves_immutable_history() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "task.md").write_text("# First\n", encoding="utf-8")
+        first = task_state_index.upsert_item(root, "task", "task.md", "active")
+        (root / "task.md").write_text("# Second\n", encoding="utf-8")
+        second = task_state_index.upsert_item(root, "task", "task.md", "active")
+        audit = task_state_index.audit_index(root)
+        first_snapshot_body = (root / ".task" / "snapshots" / f"{first['id']}.md").read_text(encoding="utf-8")
+    assert first["id"] != second["id"]
+    assert second["lifecycle_transition_result"]["atomic"] is True
+    assert not any(item.get("code") == "digest_mismatch" and first["id"] in item.get("ids", []) for item in audit["issues"])
+    assert first_snapshot_body == "# First\n"
+
+
+def test_trace_label_variants_share_family_profile_scope() -> None:
+    shared = {
+        "goal_axis": "quality",
+        "producer_lineage": "producer-main",
+        "artifact_class": "real-artifact",
+        "current_decision_lane": "production",
+        "input_cohort": "cohort-a",
+    }
+    events = [
+        {**shared, "event_id": "outside", "root_family_key": "other", "goal_axis": "other"},
+        {**shared, "event_id": "e1", "root_family_key": "root-run-1", "hypothesis_exhausted": True},
+        {**shared, "event_id": "e2", "root_family_key": "root-run-2"},
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        profile = profile_cycle_efficiency.analyze(Path(tmp), events, [])
+    assert profile["profile_scope_unverified"] is False
+    assert profile["family_scoped_event_count"] == 2
+    assert profile["hypothesis_exhausted"] is True
+    assert profile["cycle_fixed_cost"] == 2
+
+
 def main() -> int:
     test_task_pack_scope_fidelity_blocks_diluted_consumed_item()
     test_task_pack_scope_fidelity_allows_explicit_descope_with_open_residual()
@@ -1713,6 +1890,15 @@ def main() -> int:
     test_monitor_running_execution_detects_completed_pending_validation()
     test_validate_transition_blocks_pending_long_run_derive()
     test_cycle_ledger_accepts_long_run_monitor_as_run_step()
+    test_fixture_only_movement_cannot_satisfy_real_artifact()
+    test_actual_artifact_report_body_divergence_blocks_close()
+    test_metadata_only_delta_cannot_advance()
+    test_downstream_cannot_upgrade_loopback_false_or_hard_stop()
+    test_root_import_does_not_satisfy_failed_consumer_context()
+    test_terminal_request_with_local_residual_is_prohibited()
+    test_repeated_terminal_tuple_latches_without_full_cycle()
+    test_mutable_alias_change_preserves_immutable_history()
+    test_trace_label_variants_share_family_profile_scope()
     print("loopback guard contract tests passed")
     return 0
 

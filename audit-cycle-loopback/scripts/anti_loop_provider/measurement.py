@@ -173,6 +173,7 @@ def extract_disposition_gates(value: Any) -> list[dict[str, Any]]:
 def effective_allowed_dispositions(gates: list[dict[str, Any]]) -> tuple[list[str], dict[str, Any]]:
     constraining: list[set[str]] = []
     basis: dict[str, Any] = {}
+    terminal_safety_valves_prohibited = False
     for index, gate in enumerate(gates):
         name = str(gate.get("name") or gate.get("gate") or f"gate_{index}")
         allowed = gate_allowed_dispositions(name, gate)
@@ -186,8 +187,12 @@ def effective_allowed_dispositions(gates: list[dict[str, Any]]) -> tuple[list[st
             basis[name]["allowed_task_kinds"] = sorted(task_kinds)
         if constrains:
             constraining.append(allowed)
+        if name == "terminal_self_resolution" and bool_value(gate.get("goal_terminal_prohibited")):
+            terminal_safety_valves_prohibited = True
     if constraining:
-        effective = set.intersection(*constraining) | SAFETY_VALVES
+        effective = set.intersection(*constraining)
+        if not terminal_safety_valves_prohibited:
+            effective |= SAFETY_VALVES
     else:
         effective = set(DISPOSITION_UNIVERSE)
     return sorted(effective), basis

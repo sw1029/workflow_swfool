@@ -22,6 +22,8 @@ Common `upsert` fields:
 - `links`: optional list of relationship objects.
 - `note`: concise factual note.
 
+Lifecycle fields use the existing `fields` object: `record_class` (`mutable_alias` or `immutable_snapshot`), `snapshot_digest`, `snapshot_path`, `canonical_id`, and optional `alias_path`. Historical records compare only to their own immutable snapshot body/digest. Active switches return `lifecycle_transition_result` with ordered booleans for previous snapshot preservation, previous active supersede, new canonical add, alias update, link update, and index render.
+
 Relationship object:
 
 ```json
@@ -101,6 +103,8 @@ Use `scripts/task_state_index.py --root . audit` for deterministic checks before
 - `.task/task_pack` JSON queues present on disk but not represented in the index,
 - multiple active task packs,
 - missing or stale `.task/index.md`.
+
+Audit output separates `current_surface_blockers` from `historical_debt`. Only missing current canonical ID, duplicate active alias, and broken current links block completion-oriented close; inactive immutable-history defects remain debt.
 
 Use `--write-report` to create `.task/id_audit/YYYYMMDD-HHMMSS-id-consistency-audit.md` and index it as `audit-*`.
 

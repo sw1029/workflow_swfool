@@ -46,6 +46,52 @@ def terminal_outcome_changed(output_delta: Any, changed_vs_previous: bool, seman
         return False
     return bool_value(produced) and strict_changed and strict_semantic
 
+
+def terminal_self_resolution_gate(*values: Any) -> dict[str, Any]:
+    allowed = {
+        "self_resolvable_local",
+        "offline_recompute",
+        "existing_authority",
+        "genuine_new_authority",
+        "external_state_change",
+        "unverified",
+    }
+    residual_rows: list[dict[str, Any]] = []
+    terminal_requested = False
+    for value in values:
+        for row in iter_dicts(value):
+            terminal_requested = terminal_requested or any(
+                bool_value(row.get(key)) for key in ("terminal_justified", "terminal_requested", "user_escalation_required")
+            )
+            raw_rows = row.get("residual_classification") or row.get("residuals")
+            if isinstance(raw_rows, list):
+                for item in raw_rows:
+                    if isinstance(item, dict):
+                        residual_rows.append(item)
+                    elif item is not None:
+                        residual_rows.append({"residual_id": str(item), "classification": "unverified"})
+    normalized: list[dict[str, Any]] = []
+    for index, row in enumerate(residual_rows):
+        classification = str(row.get("classification") or row.get("residual_class") or "unverified").strip().lower()
+        if classification not in allowed:
+            classification = "unverified"
+        normalized.append({
+            "residual_id": row.get("residual_id") or row.get("id") or f"residual-{index + 1}",
+            "classification": classification,
+        })
+    local_classes = {"self_resolvable_local", "offline_recompute", "existing_authority"}
+    self_resolvable = [row for row in normalized if row["classification"] in local_classes]
+    unverified = [row for row in normalized if row["classification"] == "unverified"]
+    classification_missing = terminal_requested and not normalized
+    return {
+        "residual_classification": normalized,
+        "self_resolvable_residual_count": len(self_resolvable),
+        "unverified_residual_count": len(unverified),
+        "offline_scope_unverified": classification_missing or bool(unverified),
+        "goal_terminal_prohibited": bool(self_resolvable) or classification_missing or bool(unverified),
+        "status": "block" if bool(self_resolvable) else ("not_evaluated" if classification_missing or unverified else "pass"),
+    }
+
 def terminal_outcome_key(output_delta: Any, changed_vs_previous: bool, semantic_progress: bool) -> str:
     observed = observed_delta_class(output_delta, changed_vs_previous, semantic_progress)
     status = first_scalar_by_key(

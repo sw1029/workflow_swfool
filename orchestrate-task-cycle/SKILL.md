@@ -49,6 +49,9 @@ Do not hardcode goal axes, thresholds, proxy names, feature classes, producer-ex
 
 ## Core Invariants
 
+- Progress ownership is single-writer by stage: run and qualitative review emit observation claims; loopback emits pre-derive `authoritative_semantic_progress` and factual hard stops; completion validation alone emits close-time `authoritative_progress_verdict`. Result-contract, dashboard, index, report, and later packets may preserve or downgrade those fields but never upgrade them. Required actual-body truth, report convergence, artifact class/freshness/lane, consumer context, or verifier completeness at `not_evaluated` prohibits `advanced`.
+- Before starting a full cycle from a terminal wait state, compare `(terminal_outcome_family_key, input_state_fingerprint, authority_state_fingerprint)` and material delta. An identical tuple without material delta reuses the existing terminal wait record instead of producing another full cycle. Do not latch when loopback reports self-resolvable or unverified residuals; reopen seal/registry/pack/index atomically.
+
 - Preserve one active `task.md`. Use task packs only as planning state; a pack item becomes executable only after `$derive-improvement-task` promotes it into `task.md`.
 - Route all behavior-changing implementation edits through `$task-md-agent-governance`. The orchestrator and non-governance skills must not patch source files, tests, notebooks, runtime/build/CI config, or behavior-changing scripts.
 - Treat `.agent_goal/*.md` as the only long-term goal truth. Treat `.agent_advice/` and repo-local `.codex/skills/` adapters as non-GT direction/capability evidence.

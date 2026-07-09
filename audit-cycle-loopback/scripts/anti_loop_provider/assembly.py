@@ -4,6 +4,23 @@ from .common import *
 
 def build_base_packet(ns: dict[str, Any]) -> dict[str, Any]:
     globals().update(ns)
+    integrity_values = [runner_validation, output_delta, quality, *gate_inputs]
+    truth_required = bool_value(first_field_value(integrity_values, {"actual_body_truth_required", "acceptance_required_actual_body_truth"}))
+    truth_basis = str(first_field_value(integrity_values, {"truth_basis", "actual_body_truth_basis"}) or "").strip().lower()
+    body_divergence = bool_value(first_field_value(integrity_values, {"report_body_divergence"}))
+    key_divergence = bool_value(first_field_value(integrity_values, {"report_key_divergence"}))
+    consumer_missing = bool_value((adapter_load_gate.get("consumer_context_conformance") or {}).get("missing_consumer_context_ids"))
+    authoritative_progress = bool(semantic_progress) and not any(
+        (
+            hard_stop,
+            body_divergence,
+            key_divergence,
+            consumer_missing,
+            truth_required and truth_basis in {"", "not_evaluated", "missing", "unknown"},
+            bool_value(validator_gate.get("constrains_disposition")),
+            bool_value(source_separation_gate.get("independently_verified_downgraded_fields")),
+        )
+    )
     row = {
         "schema_version": SCHEMA_VERSION,
         "step": "loopback_audit",
@@ -29,6 +46,7 @@ def build_base_packet(ns: dict[str, Any]) -> dict[str, Any]:
         "adapter_missing_streak": adapter_gate.get("adapter_missing_streak"),
         "adapter_contract_unmet": adapter_contract_unmet,
         "adapter_wiring_gate": adapter_load_gate,
+        "consumer_context_conformance": adapter_load_gate.get("consumer_context_conformance") or {},
         "adapter_wiring_defect": bool_value(adapter_load_gate.get("adapter_wiring_defect")),
         "adapter_loaded": domain_adapter is not None,
         "adapter_registered": adapter_registered,
@@ -76,6 +94,9 @@ def build_base_packet(ns: dict[str, Any]) -> dict[str, Any]:
         "terminal_outcome_family_fallback_applied": terminal_family_fallback,
         "terminal_outcome_family_previous_count": previous_micro_hardening_count(registry_rows, current_root_family_key),
         "terminal_outcome_family_previous_cycle_id": (latest_terminal_family or {}).get("cycle_id"),
+        "terminal_self_resolution_gate": terminal_self_resolution,
+        "offline_scope_unverified": bool_value(terminal_self_resolution.get("offline_scope_unverified")),
+        "goal_terminal_prohibited": bool_value(terminal_self_resolution.get("goal_terminal_prohibited")),
         "advice_freshness_gate": advice_gate,
         "partial_progress_axes_gate": partial_progress_gate,
         "structure_metrics_gate": structure_gate,
@@ -84,6 +105,9 @@ def build_base_packet(ns: dict[str, Any]) -> dict[str, Any]:
         "provider_scale_dispatch_gate": dispatch_gate,
         "changed_vs_previous": changed_vs_previous,
         "semantic_progress": semantic_progress,
+        "authoritative_semantic_progress": authoritative_progress,
+        "truth_basis": truth_basis or ("not_evaluated" if truth_required else None),
+        "report_body_divergence": body_divergence,
         "same_family_micro_hardening_count": count,
         "micro_hardening_count": count,
         "recommended_disposition": disposition,
@@ -141,6 +165,10 @@ def build_base_packet(ns: dict[str, Any]) -> dict[str, Any]:
         "diagnostics_unavailable_streak": diagnostics_gate.get("diagnostics_unavailable_streak"),
         "instrumentation_supply_required": bool_value(diagnostics_gate.get("instrumentation_supply_required")),
         "verification_source_separation_gate": source_separation_gate,
+        "verification_input_ids": source_separation_gate.get("verification_input_ids") or [],
+        "producer_input_ids": source_separation_gate.get("producer_input_ids") or [],
+        "verified_artifact_ids": source_separation_gate.get("verified_artifact_ids") or [],
+        "input_fingerprints": source_separation_gate.get("input_fingerprints") or {},
         "independent_source_separation_status": source_separation_gate.get("independent_source_separation_status"),
         "independently_verified_downgraded_fields": source_separation_gate.get("independently_verified_downgraded_fields") or [],
         "root_dominant_parameter_key": root_dominant_parameter_key,

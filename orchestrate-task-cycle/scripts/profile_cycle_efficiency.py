@@ -18,6 +18,7 @@ COMMAND_SURFACE_RE = re.compile(
 RUN_DIR_THRESHOLD = 100
 PROCESSED_CANDIDATE_THRESHOLD = 200
 VERSIONED_FAMILY_THRESHOLD = 12
+TRACE_LABEL_RE = re.compile(r"(?:^|[-_:])(cycle|task|run|gen|generation|v)[-_:]?(?:\d+|[0-9a-f]{6,})|20\d{6,}", re.IGNORECASE)
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -81,6 +82,28 @@ def is_metadata_only(event: dict[str, Any]) -> bool:
     if produced is not None and not boolish(produced):
         return True
     return str(effective or progress_kind).lower() == "governance_only"
+
+
+def stable_scope_value(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    text = TRACE_LABEL_RE.sub("", text)
+    return re.sub(r"[-_:]+", "-", text).strip("-")
+
+
+def family_scope(event: dict[str, Any]) -> dict[str, str]:
+    return {
+        "goal_axis": stable_scope_value(first_present(event, ("goal_axis", "profile_scope.goal_axis"))),
+        "root_family_key": stable_scope_value(first_present(event, ("root_family_key", "blocker_root_family", "profile_scope.root_family_key"))),
+        "producer_lineage": stable_scope_value(first_present(event, ("producer_lineage", "profile_scope.producer_lineage"))),
+        "artifact_class": stable_scope_value(first_present(event, ("observed_artifact_class", "artifact_class", "profile_scope.artifact_class"))),
+        "decision_lane": stable_scope_value(first_present(event, ("current_decision_lane", "decision_lane", "profile_scope.decision_lane"))),
+        "input_cohort": stable_scope_value(first_present(event, ("input_cohort", "profile_scope.input_cohort"))),
+    }
+
+
+def same_family_scope(event: dict[str, Any], scope: dict[str, str]) -> bool:
+    candidate = family_scope(event)
+    return all(candidate.get(key) == value for key, value in scope.items())
 
 
 def collect_events(root: Path, cycle_id: str | None) -> list[dict[str, Any]]:
@@ -174,9 +197,13 @@ def artifact_sprawl_budget(root: Path) -> dict[str, Any]:
 
 
 def analyze(root: Path, events: list[dict[str, Any]], index_records: list[dict[str, Any]]) -> dict[str, Any]:
+    latest_scope = family_scope(events[-1]) if events else family_scope({})
+    profile_scope_unverified = not all(latest_scope.values())
+    scoped_events = [event for event in events if same_family_scope(event, latest_scope)] if not profile_scope_unverified else []
     progress_values = [str(event.get("progress_verdict")).lower() for event in events if event.get("progress_verdict")]
     progress_kinds = [str(first_present(event, ("effective_progress_kind", "progress_kind"))).lower() for event in events if first_present(event, ("effective_progress_kind", "progress_kind"))]
-    blockers = [str(item) for event in events for item in (event.get("blockers") or [])]
+    global_blockers = [str(item) for event in events for item in (event.get("blockers") or [])]
+    blockers = [str(item) for event in scoped_events for item in (event.get("blockers") or [])]
     artifacts = [str(item) for event in events for item in (event.get("artifacts") or [])]
     unchanged_refs = [
         ref
@@ -185,7 +212,8 @@ def analyze(root: Path, events: list[dict[str, Any]], index_records: list[dict[s
         if isinstance(ref, dict)
     ]
     validation_profiles = [str(event.get("validation_profile")).lower() for event in events if event.get("validation_profile")]
-    blocker_signatures = [str(event.get("blocker_signature")).lower() for event in events if event.get("blocker_signature")]
+    global_blocker_signatures = [str(event.get("blocker_signature")).lower() for event in events if event.get("blocker_signature")]
+    blocker_signatures = [str(event.get("blocker_signature")).lower() for event in scoped_events if event.get("blocker_signature")]
     validation_set_events = [event for event in events if str(event.get("step") or "") == "validation_set_build"]
     validation_set_artifacts = [artifact for artifact in artifacts if ".validation/sets/" in artifact or ".task/validation_set/" in artifact]
     validation_set_blockers = [
@@ -201,16 +229,19 @@ def analyze(root: Path, events: list[dict[str, Any]], index_records: list[dict[s
     vacuous_untried_streak = max(
         [
             int(value)
-            for event in events
+            for event in scoped_events
             if (value := first_present(event, ("vacuous_untried_streak", "anti_loop_progress_gate.vacuous_untried_streak"))) is not None
             and str(value).isdigit()
         ]
         or [0]
     )
-    hypothesis_exhausted = any(boolish(first_present(event, ("hypothesis_exhausted", "anti_loop_progress_gate.hypothesis_exhausted"))) for event in events)
+    hypothesis_exhausted = any(
+        boolish(first_present(event, ("hypothesis_exhausted", "anti_loop_progress_gate.hypothesis_exhausted")))
+        for event in scoped_events
+    ) if not profile_scope_unverified else False
     forward_mutation_vacuous_count = sum(
         1
-        for event in events
+        for event in scoped_events
         if boolish(first_present(event, ("forward_mutation_vacuous", "anti_loop_progress_gate.forward_mutation_vacuous")))
     )
     full_chain_without_reason = [
@@ -288,7 +319,31 @@ def analyze(root: Path, events: list[dict[str, Any]], index_records: list[dict[s
         findings.append({"severity": "info", "code": "base_commit_present", "message": "Pre-commit hashes should stay classified as base/pre_commit evidence until $repo-change-commit returns a final commit."})
     surface_budget = command_surface_budget(root, len(metadata_only_events))
     sprawl_budget = artifact_sprawl_budget(root)
-    cycle_fixed_cost = max(1, len(events) - len(unchanged_refs))
+    cost_events = scoped_events if not profile_scope_unverified else []
+    scoped_unchanged_refs = [
+        ref
+        for event in cost_events
+        for ref in (event.get("unchanged_refs") or [])
+        if isinstance(ref, dict)
+    ]
+    unique_unchanged_artifact_ids = sorted(
+        {
+            str(ref.get("sha256") or ref.get("artifact_id") or ref.get("path"))
+            for ref in scoped_unchanged_refs
+            if ref.get("sha256") or ref.get("artifact_id") or ref.get("path")
+        }
+    )
+    artifact_identities = {
+        str(ref.get("sha256") or ref.get("artifact_id") or ref.get("path"))
+        for event in cost_events
+        for ref in (event.get("artifact_refs") or [])
+        if isinstance(ref, dict) and (ref.get("sha256") or ref.get("artifact_id") or ref.get("path"))
+    }
+    unique_new_artifact_ids = sorted(artifact_identities - set(unique_unchanged_artifact_ids))
+    fresh_stage_event_ids = sorted(
+        {str(event.get("event_id")) for event in cost_events if event.get("event_id") and not boolish(event.get("replayed"))}
+    )
+    cycle_fixed_cost = max(1, len(unique_new_artifact_ids) + len(fresh_stage_event_ids))
     if surface_budget["consolidation_candidate_required"]:
         findings.append(
             {
@@ -337,9 +392,18 @@ def analyze(root: Path, events: list[dict[str, Any]], index_records: list[dict[s
         "unchanged_ref_count": len(unchanged_refs),
         "cycle_fixed_cost": cycle_fixed_cost,
         "cycle_cost_basis": {
-            "event_count": len(events),
-            "unchanged_ref_count": len(unchanged_refs),
-            "denominator": "max(1, event_count - unchanged_ref_count)",
+            "unique_new_artifact_ids": unique_new_artifact_ids,
+            "unique_unchanged_artifact_ids": unique_unchanged_artifact_ids,
+            "fresh_stage_event_ids": fresh_stage_event_ids,
+            "denominator": "max(1, unique_new_artifact_count + fresh_stage_event_count)",
+        },
+        "profile_scope": latest_scope,
+        "profile_scope_unverified": profile_scope_unverified,
+        "family_scoped_event_count": len(scoped_events),
+        "global_aggregate": {
+            "blocker_counts": dict(Counter(global_blockers)),
+            "blocker_signature_counts": dict(Counter(global_blocker_signatures)),
+            "dashboard_only": True,
         },
         "vacuous_untried_streak": vacuous_untried_streak,
         "hypothesis_exhausted": hypothesis_exhausted,

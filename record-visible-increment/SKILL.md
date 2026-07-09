@@ -28,5 +28,6 @@ The artifact is progress context only. It must include `not_validation_evidence:
 - Always set `not_validation_evidence: true`.
 - Do not claim a visible delta when the evidence only shows internal planning.
 - Do not let metadata-only, repeated terminal-record, sidecar-only, or workflow-only output satisfy `progress_verdict: advanced`; leave that verdict to `$validate-task-completion` and the observed output-delta gate.
+- Treat annotation fields, report wording, honesty labels, and the same delta already counted as safety/metadata progress as non-semantic. Preserve the existing progress axes and never count one delta in both semantic and metadata/safety categories.
 - Do not describe Part L stale-lane pass, decision metadata revision, producer-starved axis, warn-only quota, cycle-unreachable launch/heartbeat, basis downgrade, or surface-field defect accounting as `advanced`; they are routing context unless validation records the required current-lane rerun, fresh measurement, producer supply, harvest, basis-compatible input, or field repair.
 - Do not replace `$run-task-code-and-log`, `$validate-task-completion`, or issue closure evidence.

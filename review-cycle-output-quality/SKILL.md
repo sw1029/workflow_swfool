@@ -68,7 +68,7 @@ Ask the reviewer to cover only dimensions relevant to the produced artifact:
 - `run_disposition`: when reviewing run outputs, distinguish `candidate_degraded` quality-miss evidence from `candidate_written` output and `failed_closed` unsafe discard.
 - `surface_field_review`: when artifacts have source locators and the caller or adapter supplies `surface_field_classes`, sample the adapter-owned number of records and compare every producer-written surface string field class against the located source. Record scalar counts by field class and defect class; do not store excerpts unless authority explicitly permits them. If the field map is absent, report `field_class_map_missing` and fail quiet to existing review semantics.
 - `output_delta`: when the caller supplies an output-delta contract packet, call the contract helper on produced artifact paths and report whether the repository-defined primary output layer actually changed.
-- `validator_disagreement`: when the caller supplies strict runner validation plus output-delta evidence, compare their `semantic_progress` values. If runner validation says true while output-delta says false, report a block-level disagreement and use the output-delta value as authoritative for progress accounting.
+- `validator_disagreement`: when the caller supplies strict runner validation plus output-delta evidence, compare their `semantic_progress` values. If runner validation says true while output-delta says false, report a block-level disagreement and return only an `observed_semantic_progress` claim. This review never owns the authoritative progress verdict.
 - `coverage_quality_reconciliation`: when the caller supplies both loopback and output-delta G-COV evidence, report a block-level disagreement if `coverage_quality_delta_reconciliation_gate.status=block`; do not let the favorable G-COV source override inspected output quality.
 - `observed_output_class`: when the caller supplies loop-breaker or output-delta evidence from `detect_progress_loop.py`, prefer the observed class over self-declared progress fields. Classify `metadata_only` and repeated `terminal_record` as governance-only unless independent artifact inspection proves a primary output delta.
 - `evidence_traceability`: claims link to exact supporting paths, hashes, spans, logs, or validation records.
@@ -185,7 +185,18 @@ Return a JSON-compatible summary and, when durable evidence is required, write a
     "excerpt_policy": "counts_only|authority_allows_excerpts|not_applicable"
   },
   "pass_with_unobserved_axes": false,
-  "authoritative_semantic_progress": false,
+  "observed_semantic_progress": false,
+  "truth_basis": "independently_recomputed_actual_artifact|source_separated_verifier|current_transform_report|producer_report|carried_forward_report|workflow_status_claim|not_evaluated",
+  "body_projection_fingerprint": null,
+  "recomputed_fields": [],
+  "source_artifact_ids": [],
+  "current_artifact_id": null,
+  "report_body_divergence": false,
+  "verification_input_ids": [],
+  "producer_input_ids": [],
+  "verified_artifact_ids": [],
+  "input_fingerprints": {},
+  "evidence_provenance": "independently_verified|producer_attested|self_grounded|not_evaluated",
   "blocker_taxonomy_delta": ["quality_blocker|output_artifact_blocker|kg_core_blocker|claim_readiness_blocker|workflow_lifecycle_blocker|task_state_blocker"],
   "no_overclaim_flags": ["not_gold", "not_ready", "not_complete"],
   "evidence_paths": ["review report path or inspected artifact path"],
@@ -204,7 +215,9 @@ Use `review_status` as the owning skill result status. When the orchestration le
 - Pass the result into `$derive-improvement-task` as `qualitative_review_packet`. The derivation portfolio packet should synthesize this review with run evidence, schema status, advice disposition, progress-loop detection, issues, misses, and goal alignment.
 - When reviewing artifact presence or emptiness from a producer manifest, apply S2 path binding before judging output absence: if `output_body_locator` supplies declared `body_dir` and `required_files` and those files exist, report the output as present/readable rather than `missing_or_empty`; if the hook is absent, preserve the old fixed-path behavior but carry `path_binding=fixed_only` and `output_body_locator_unverified`; if layout drift is observed, warn with `layout_drift=true` and use the declared path fallback. Keep this as Part M/N input rebinding only; do not add a new detector or report.
 - When `produced_domain_delta` is false, `changed_vs_previous` is false, `semantic_progress` is false, or `metadata_only` is true, require downstream derivation to treat the cycle as `governance_only` unless independent validated positive evidence proves otherwise. Do not let metadata-only measurement, non-empty counts, lineage, or gap reports masquerade as goal-productive output.
-- When strict runner validation and output-delta disagree, carry both evidence paths and set `authoritative_semantic_progress` to the conservative output-delta value. Do not let strict runner pass override output-delta/review readiness.
+- When strict runner validation and output-delta disagree, carry source-separated evidence ids/fingerprints and set `observed_semantic_progress` to the conservative observation. `$audit-cycle-loopback` owns the pre-derive `authoritative_semantic_progress`; `$validate-task-completion` alone owns the close-time `authoritative_progress_verdict`.
+- Prefer independently recomputed values from the actual artifact body over source-separated verifier results, current transform reports, producer reports, carried-forward reports, and workflow claims, in that order. Keep carried-forward values under `source_*` and current-transform values under `current_*`. If a required body projection cannot be recomputed, return `truth_basis: not_evaluated`; if its canonical fingerprint disagrees with the report, set `report_body_divergence: true`. This review reports the observation and must not close the task.
+- Persist privacy-safe `verification_input_ids`, `producer_input_ids`, `verified_artifact_ids`, fingerprints, and provenance labels. Re-reading a producer scalar is `producer_attested`, not independent verification; a coupled verifier is `self_grounded`/`pass_with_coupled_verifier` and cannot move high-water.
 - When `coverage_quality_delta_reconciliation_gate.status=block`, report the disagreement and cap measurement/oracle/rung progress unless strict changed-and-semantic primary-output evidence independently proves progress.
 - When `substance_delta_gate` is supplied and `substance_delta_pass=false` or `status=missing`, cap measurement/oracle/rung progress at `governance_only` unless strict changed-and-semantic output-delta evidence independently proves primary-output progress.
 - When `landed_feature_inventory` is supplied, use `feature_presence_evidence` as the Q2 body anchor when available. If `artifact_body_present=false` or the representative body file is missing, set `artifact_body_missing=true` and fail-close the landed-feature review instead of accepting manifest declarations. If the body exists but `observed_count < min_count`, or presence relies only on `metadata_only` pointers or other artifact existence, set `synthesis_not_materialized=true`, increment `feature_regression_count`, preserve `feature_regressed_artifact=true`, and cap all axis deltas derived from that artifact at `governance_only`. If the Q2 hook is absent, fail quiet to the existing manifest comparison, set `presence_basis=manifest_declaration_only`, and do not infer body fields locally. Do not double-count Q2 separately from P1; it is the present-condition for the same landed-feature inheritance gate.

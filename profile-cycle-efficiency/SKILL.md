@@ -17,6 +17,12 @@ When a task pack or blocker family has no fresh run id for the recent-cycle wind
 
 ## Workflow
 
+Scope terminal and exhaustion evidence to the current `goal_axis`, stable `root_family_key`, `producer_lineage`, `artifact_class`, `decision_lane`, and `input_cohort`. Exclude task/run/date/version/generation labels from family identity. If any required scope component is unavailable, emit `profile_scope_unverified=true`; do not derive current-family hard stops, exhaustion, or terminal state from global `any`/`max` history. Global aggregates remain dashboard and long-term debt observations only.
+
+Compute cost from separate identity sets: `unique_new_artifact_ids`, `unique_unchanged_artifact_ids`, and `fresh_stage_event_ids`. Never subtract raw counts measured in different units. Preserve the existing sprawl hard gate and require derive to consume its allowed dispositions.
+
+When profile inputs depend on an adapter, consume the same external `consumer_context_conformance` row for the profile loader. A repository-root import or adapter self-report cannot establish profile wiring; an acceptance-required missing row leaves the profile axis `not_evaluated` and prevents family exhaustion/hard-stop use.
+
 1. Load cycle ledger events, `.task/index.jsonl`, validation artifacts, run logs, task misses, and active issues when available.
 2. Detect repeated `safety_only`, metadata-only, no-live/fail-closed-only cycles, duplicate evidence artifacts, missing `unchanged_ref` for duplicate artifacts, repeated blockers, stale output-delta absence, `vacuous_untried_streak`, `hypothesis_exhausted`, `forward_mutation_vacuous` signals, run-directory growth, processed-candidate growth, versioned command-family growth, pack/family windows with zero fresh run ids, and full-chain runs without an escalation reason.
    - When Part L packet fields are present, preserve verifier/report/metadata versus producer/envelope/long-run counts as portfolio evidence; if an adapter supplied restrictive quota evidence, pass it through unchanged rather than recomputing thresholds here.

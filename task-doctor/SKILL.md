@@ -66,6 +66,8 @@ If the task direction change reveals a required code change, write it into the n
 
 ## Workflow
 
+When reviewing a terminal or escalation request, require the existing loopback residual classification first. Any `self_resolvable_local`, `offline_recompute`, or `existing_authority` item keeps the goal nonterminal and should be retargeted into a bounded task. `unverified` yields `offline_scope_unverified`, not an assertion that external authority is required. Keep task-pack exhaustion separate from goal terminal.
+
 1. Establish the workspace and explicit instruction.
    - Locate the repository or workspace root.
    - Restate the user's explicit task-doctor instruction in one or two sentences.

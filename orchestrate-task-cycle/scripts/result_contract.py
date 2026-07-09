@@ -630,6 +630,50 @@ def report_key_duplicate_matches(data: dict[str, Any]) -> list[dict[str, Any]]:
     return duplicates
 
 
+def scalar_leaves(value: Any, prefix: str = "") -> dict[str, Any]:
+    leaves: dict[str, Any] = {}
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_prefix = f"{prefix}.{key}" if prefix else str(key)
+            leaves.update(scalar_leaves(child, child_prefix))
+    elif not isinstance(value, list) and prefix:
+        leaves[prefix] = value
+        leaves.setdefault(prefix.rsplit(".", 1)[-1], value)
+    return leaves
+
+
+def actual_report_body_divergences(data: dict[str, Any]) -> list[dict[str, Any]]:
+    actual_roots: list[tuple[str, dict[str, Any]]] = []
+    report_roots: list[tuple[str, dict[str, Any]]] = []
+    for key, value in data.items():
+        if not isinstance(value, dict):
+            continue
+        normalized = str(key).strip().lower()
+        if normalized in {"actual_artifact", "current_artifact", "artifact_body", "body_projection"}:
+            actual_roots.append((str(key), value))
+        elif normalized.endswith("report") or normalized.endswith("manifest") or normalized in {"validation_report", "result_report"}:
+            report_roots.append((str(key), value))
+    divergences: list[dict[str, Any]] = []
+    for actual_name, actual_value in actual_roots:
+        actual_fields = scalar_leaves(actual_value)
+        for report_name, report_value in report_roots:
+            report_fields = scalar_leaves(report_value)
+            for field in sorted(set(actual_fields) & set(report_fields)):
+                if "." not in field and any(key.endswith(f".{field}") for key in actual_fields):
+                    continue
+                if actual_fields[field] != report_fields[field]:
+                    divergences.append(
+                        {
+                            "field": field,
+                            "actual_source": actual_name,
+                            "report_source": report_name,
+                            "actual_value": actual_fields[field],
+                            "report_value": report_fields[field],
+                        }
+                    )
+    return divergences
+
+
 def normalize_task_kind(value: Any) -> str:
     return "".join(
         ch if ch.isalnum() or ch == "_" else "_"
@@ -1218,6 +1262,119 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
             "Matching duplicate terminal report keys are schema debt; consumption may continue, but the report should be normalized to one authoritative copy.",
             {"auto_detected": auto_report_key_duplicate_matches[:20]},
         )
+
+    auto_report_body_divergences = actual_report_body_divergences(result)
+    report_body_divergence = boolish(
+        first_present(
+            result,
+            [
+                "report_body_divergence",
+                "actual_artifact_truth.report_body_divergence",
+                "validation.actual_artifact_truth.report_body_divergence",
+                "result.report_body_divergence",
+            ],
+        )
+    ) or bool(auto_report_body_divergences)
+    actual_truth_required = boolish(
+        first_present(
+            result,
+            [
+                "actual_body_truth_required",
+                "acceptance_required_actual_body_truth",
+                "target_metric_delta.actual_body_truth_required",
+                "acceptance.actual_body_truth_required",
+            ],
+        )
+    )
+    truth_basis = str(
+        first_present(
+            result,
+            [
+                "truth_basis",
+                "actual_body_truth_basis",
+                "actual_artifact_truth.truth_basis",
+                "target_metric_delta.truth_basis",
+            ],
+        )
+        or ""
+    ).strip().lower()
+    if report_body_divergence:
+        add(
+            findings,
+            "block" if mode == "block" or target in {"validate", "report"} else "warn",
+            "report_body_divergence",
+            "The canonical actual-artifact body projection disagrees with the consumed report; this is distinct from duplicate report-key divergence.",
+            {"auto_detected": auto_report_body_divergences[:20]},
+        )
+    if actual_truth_required and truth_basis in {"", "not_evaluated", "missing", "unknown"}:
+        add(
+            findings,
+            "block" if mode == "block" or target == "validate" else "warn",
+            "actual_body_truth_not_evaluated",
+            "Acceptance-required actual-artifact body truth was not independently evaluated.",
+        )
+
+    required_consumer_ids = list_values(
+        first_present(
+            result,
+            [
+                "required_consumer_ids",
+                "adapter_contract.required_consumer_ids",
+                "consumer_context_conformance.required_consumer_ids",
+            ],
+        )
+    )
+    conformance_rows_value = first_present(
+        result,
+        [
+            "consumer_context_conformance.rows",
+            "consumer_context_conformance",
+            "adapter_consumer_conformance",
+        ],
+    )
+    if isinstance(conformance_rows_value, dict):
+        conformance_rows = conformance_rows_value.get("rows") or []
+    else:
+        conformance_rows = conformance_rows_value or []
+    conformance_by_id = {
+        str(row.get("consumer_context_id")): row
+        for row in conformance_rows
+        if isinstance(row, dict) and row.get("consumer_context_id")
+    }
+    invalid_consumers: list[str] = []
+    for consumer_id in required_consumer_ids:
+        row = conformance_by_id.get(str(consumer_id))
+        if not row or not all(
+            boolish(row.get(field))
+            for field in ("adapter_loaded", "required_hook_callable", "hook_signature_compatible", "return_contract_valid")
+        ) or not non_empty(row.get("probe_evidence_id")):
+            invalid_consumers.append(str(consumer_id))
+    if invalid_consumers:
+        add(
+            findings,
+            "block" if mode == "block" or target == "validate" else "warn",
+            "required_consumer_context_not_evaluated",
+            "Required adapter consumer contexts lack external loader probe evidence; root import or adapter self-attestation is insufficient.",
+            {"consumer_context_ids": invalid_consumers},
+        )
+
+    if target == "validate":
+        validation_verdict_early = str(value_for(result, "validation_verdict") or "").strip().lower()
+        required_artifact_class_early = str(first_present(result, ["required_artifact_class", "acceptance.required_artifact_class"]) or "").strip()
+        observed_artifact_class_early = str(first_present(result, ["observed_artifact_class", "artifact_class", "target_metric_delta.artifact_class"]) or "").strip()
+        if (
+            validation_verdict_early in {"complete", "passed", "pass", "success"}
+            and required_artifact_class_early
+            and observed_artifact_class_early
+            and required_artifact_class_early != observed_artifact_class_early
+        ):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_complete_required_artifact_class_mismatch",
+                "Completion is invalid when the observed artifact class differs from the acceptance-required artifact class, regardless of progress verdict.",
+                {"required_artifact_class": required_artifact_class_early, "observed_artifact_class": observed_artifact_class_early},
+            )
 
     if target == "code_structure_audit":
         audit_status = str(value_for(result, "audit_status") or value_for(result, "status") or "").lower()
@@ -5676,6 +5833,22 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                 )
             )
         )
+        metadata_only_value = first_present(
+            result,
+            [
+                "metadata_only",
+                "output_delta.metadata_only",
+                "output_delta_gate.metadata_only",
+                "anti_loop_progress_gate.metadata_only",
+            ],
+        )
+        if progress_verdict == "advanced" and boolish(metadata_only_value):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_advanced_from_metadata_only_delta",
+                "Metadata-only output cannot be advanced even when producer progress booleans claim semantic or domain movement.",
+            )
         if progress_verdict == "advanced" and not strict_observed_change:
             add(
                 findings,
@@ -5690,6 +5863,93 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
                     "observed_delta_class": observed_delta_class or None,
                 },
             )
+        if progress_verdict == "advanced":
+            authoritative_progress_verdict = str(
+                first_present(
+                    result,
+                    [
+                        "authoritative_progress_verdict",
+                        "validation.authoritative_progress_verdict",
+                        "result.authoritative_progress_verdict",
+                    ],
+                )
+                or ""
+            ).strip().lower()
+            loopback_authoritative = first_present(
+                result,
+                [
+                    "authoritative_semantic_progress",
+                    "anti_loop_progress_gate.authoritative_semantic_progress",
+                    "loopback_audit.authoritative_semantic_progress",
+                    "result.anti_loop_progress_gate.authoritative_semantic_progress",
+                ],
+            )
+            hard_stop = boolish(
+                first_present(
+                    result,
+                    [
+                        "hard_stop_required",
+                        "anti_loop_progress_gate.hard_stop_required",
+                        "loopback_audit.hard_stop_required",
+                    ],
+                )
+            )
+            if authoritative_progress_verdict != "advanced":
+                add(
+                    findings,
+                    "block" if mode == "block" else "warn",
+                    "validate_advanced_without_authoritative_progress_verdict",
+                    "Only completion validation may emit close-time advanced progress, and it must explicitly own `authoritative_progress_verdict: advanced`.",
+                )
+            if loopback_authoritative is not None and not boolish(loopback_authoritative):
+                add(
+                    findings,
+                    "block" if mode == "block" else "warn",
+                    "validate_progress_monotonicity_violation",
+                    "Completion validation cannot upgrade loopback `authoritative_semantic_progress=false` to advanced.",
+                )
+            if hard_stop:
+                add(
+                    findings,
+                    "block" if mode == "block" else "warn",
+                    "validate_advanced_despite_hard_stop",
+                    "Completion validation cannot report advanced while an authoritative hard stop remains active.",
+                )
+
+            required_artifact_class = str(first_present(result, ["required_artifact_class", "acceptance.required_artifact_class"]) or "").strip()
+            observed_artifact_class = str(first_present(result, ["observed_artifact_class", "artifact_class", "target_metric_delta.artifact_class"]) or "").strip()
+            if required_artifact_class and observed_artifact_class and required_artifact_class != observed_artifact_class:
+                add(
+                    findings,
+                    "block" if mode == "block" else "warn",
+                    "validate_required_artifact_class_mismatch",
+                    "Observed artifact class does not satisfy the acceptance-required artifact class.",
+                    {"required_artifact_class": required_artifact_class, "observed_artifact_class": observed_artifact_class},
+                )
+
+            required_status_paths = (
+                "actual_body_truth_status",
+                "report_convergence_status",
+                "artifact_class_status",
+                "freshness_status",
+                "current_lane_status",
+                "consumer_context_status",
+                "verifier_completeness_status",
+            )
+            unevaluated_axes = [
+                field
+                for field in required_status_paths
+                if str(first_present(result, [field, f"progress_integrity.{field}"]) or "").strip().lower()
+                in {"not_evaluated", "missing", "unknown"}
+            ]
+            if unevaluated_axes:
+                add(
+                    findings,
+                    "block" if mode == "block" else "warn",
+                    "validate_advanced_with_required_integrity_not_evaluated",
+                    "Advanced progress is invalid while a required integrity axis is not evaluated.",
+                    {"axes": unevaluated_axes},
+                )
     if target == "report" and task_pack_in_scope(result):
         require_context_field("task_pack_status", "report_task_pack_status_missing", "`report` result references task-pack evidence but lacks `task_pack_status`.")
         require_context_field("task_pack_path", "report_task_pack_path_missing", "`report` result references task-pack evidence but lacks `task_pack_path`.")

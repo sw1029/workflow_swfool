@@ -87,6 +87,16 @@ def normalize_stage_status(value: Any) -> str:
     return STAGE_STATUS_NORMALIZATION.get(raw, raw)
 
 
+def truthy_delta(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() not in {"", "0", "false", "none", "null", "unchanged", "no_delta"}
+    return bool(value)
+
+
 def now_iso() -> str:
     return dt.datetime.now().astimezone().isoformat(timespec="seconds")
 
@@ -246,6 +256,49 @@ def validate_event_step(event: dict[str, Any], allow_noncanonical_step: bool) ->
     return event
 
 
+def terminal_latch_state(previous_events: list[dict[str, Any]], event: dict[str, Any]) -> dict[str, Any]:
+    if not event.get("terminal_justified"):
+        return {}
+    tuple_fields = ("terminal_outcome_family_key", "input_state_fingerprint", "authority_state_fingerprint")
+    current_key = tuple(str(event.get(field) or "") for field in tuple_fields)
+    if not all(current_key):
+        return {"terminal_latch_status": "not_evaluated", "terminal_latch_missing_fields": [field for field, value in zip(tuple_fields, current_key) if not value]}
+    residuals = event.get("residual_classification") or event.get("residuals") or []
+    residual_classes = {
+        str(item.get("classification") or item.get("residual_class") or item)
+        for item in residuals
+        if isinstance(item, (dict, str))
+    }
+    if residual_classes & {"self_resolvable_local", "offline_recompute", "existing_authority", "unverified"}:
+        return {"terminal_latch_status": "prohibited", "quiescent_terminal_latched": False, "terminal_latch_residual_classes": sorted(residual_classes)}
+    previous = next(
+        (
+            row
+            for row in reversed(previous_events)
+            if tuple(str(row.get(field) or "") for field in tuple_fields) == current_key
+        ),
+        None,
+    )
+    material_delta = truthy_delta(event.get("material_delta")) or truthy_delta(event.get("input_delta"))
+    if previous is not None and not material_delta:
+        return {
+            "terminal_latch_status": "latched",
+            "quiescent_terminal_latched": True,
+            "suppress_full_cycle": True,
+            "terminal_latch_streak": int(previous.get("terminal_latch_streak") or 1) + 1,
+            "unchanged_terminal_ref": previous.get("event_id"),
+        }
+    if material_delta and any(row.get("quiescent_terminal_latched") for row in previous_events):
+        transition = event.get("lifecycle_transition_result") if isinstance(event.get("lifecycle_transition_result"), dict) else {}
+        required = ("seal_updated", "registry_updated", "pack_updated", "index_updated")
+        return {
+            "terminal_latch_status": "reopened" if all(transition.get(field) for field in required) else "reopen_incomplete",
+            "quiescent_terminal_latched": False,
+            "lifecycle_transition_result": {**transition, "atomic": all(transition.get(field) for field in required)},
+        }
+    return {"terminal_latch_status": "observed", "quiescent_terminal_latched": False, "terminal_latch_streak": 1}
+
+
 def read_events(root: Path, cycle_id: str) -> list[dict[str, Any]]:
     path = ledger_path(root, cycle_id)
     if not path.is_file():
@@ -261,6 +314,16 @@ def read_events(root: Path, cycle_id: str) -> list[dict[str, Any]]:
                 continue
             if isinstance(value, dict):
                 events.append(value)
+    return events
+
+
+def read_all_cycle_events(root: Path) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    cycle_root = root / ".task" / "cycle"
+    if not cycle_root.is_dir():
+        return events
+    for path in sorted(cycle_root.glob("*/stage.jsonl")):
+        events.extend(read_events(root, path.parent.name))
     return events
 
 
@@ -301,6 +364,22 @@ def append_event(root: Path, cycle_id: str, event: dict[str, Any], allow_noncano
     path = ledger_path(root, cycle_id)
     previous_events = read_events(root, cycle_id)
     event = validate_event_step(event, allow_noncanonical_step)
+    latch = terminal_latch_state(previous_events, event)
+    event.update(latch)
+    if latch.get("suppress_full_cycle"):
+        current = write_current(root, cycle_id, previous_events)
+        return {
+            "event": {
+                "cycle_id": cycle_id,
+                "step": event.get("step"),
+                "created_at": now_iso(),
+                **latch,
+            },
+            "event_suppressed": True,
+            "current_stage": current,
+            "ledger_path": rel_path(root, path),
+            "current_stage_path": rel_path(root, current_stage_path(root, cycle_id)),
+        }
     completed = complete_event(cycle_id, event)
     annotate_artifact_refs(root, completed, previous_events)
     with path.open("a", encoding="utf-8") as handle:
@@ -309,7 +388,21 @@ def append_event(root: Path, cycle_id: str, event: dict[str, Any], allow_noncano
     return {"event": completed, "current_stage": current, "ledger_path": rel_path(root, path), "current_stage_path": rel_path(root, current_stage_path(root, cycle_id))}
 
 
-def init_cycle(root: Path, cycle_id: str | None, task_id: str | None, reason: str) -> dict[str, Any]:
+def init_cycle(
+    root: Path,
+    cycle_id: str | None,
+    task_id: str | None,
+    reason: str,
+    terminal_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if terminal_state:
+        latch = terminal_latch_state(read_all_cycle_events(root), terminal_state)
+        if latch.get("suppress_full_cycle"):
+            return {
+                "cycle_suppressed": True,
+                "reason": "quiescent_terminal_latched",
+                **latch,
+            }
     cycle_id = cycle_id or default_cycle_id()
     directory = cycle_dir(root, cycle_id)
     (directory / "packets").mkdir(parents=True, exist_ok=True)
@@ -440,6 +533,7 @@ def main(argv: list[str] | None = None) -> int:
     init_p.add_argument("--cycle-id")
     init_p.add_argument("--task-id")
     init_p.add_argument("--reason", default="cycle ledger initialized")
+    init_p.add_argument("--terminal-state-json", help="Optional terminal state used to suppress an unchanged full-cycle restart.")
 
     append_p = sub.add_parser("append", help="Append a stage event.")
     append_p.add_argument("--cycle-id", required=True)
@@ -480,7 +574,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     root = Path(args.root).resolve()
     if args.command == "init":
-        result = init_cycle(root, args.cycle_id, args.task_id, args.reason)
+        result = init_cycle(root, args.cycle_id, args.task_id, args.reason, load_json_value(args.terminal_state_json))
     elif args.command == "append":
         event = load_json_value(args.event_json)
         for attr, key in (
