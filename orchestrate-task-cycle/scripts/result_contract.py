@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -52,6 +53,40 @@ CANONICAL_LEDGER_STEPS = {
     "commit",
     "dashboard",
     "report",
+    "closeout_commit",
+}
+
+MODEL_EFFORT_PROFILE_PATH = Path(__file__).resolve().parents[1] / "references" / "model-effort-profiles.json"
+MODEL_EFFORT_ROUTER_PATH = Path(__file__).resolve().parent / "model_effort_router.py"
+
+
+def load_model_effort_router() -> Any:
+    spec = importlib.util.spec_from_file_location("result_contract_model_effort_router", MODEL_EFFORT_ROUTER_PATH)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load model-effort router: {MODEL_EFFORT_ROUTER_PATH}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+MODEL_EFFORT_ROUTER = load_model_effort_router()
+MODEL_EFFORT_POLICY = MODEL_EFFORT_ROUTER.load_policy(MODEL_EFFORT_PROFILE_PATH)
+SUPPORTED_AGENT_MODELS = {str(item) for item in MODEL_EFFORT_POLICY["models"].values()}
+SUPPORTED_AGENT_EFFORTS = {str(item) for item in MODEL_EFFORT_POLICY["supported_efforts"]}
+ROUTING_ENFORCEMENT_VALUES = {str(item) for item in MODEL_EFFORT_POLICY["result_enforcement_values"]}
+AGENT_ROUTING_TARGETS = {
+    "governance",
+    "validation_set_plan",
+    "qualitative_review",
+    "loopback_audit",
+    "validation_set_build",
+    "schema_pre_derive",
+    "derive",
+    "schema_post_derive",
+    "index",
+    "validate",
+    "issue",
+    "commit",
     "closeout_commit",
 }
 
@@ -126,6 +161,7 @@ COMMON_FIELDS = {
     "report": [
         "used_goal_truth",
         "used_advice",
+        "model_effort_routing",
         "task_id",
         "changed_files",
         "commands",
@@ -249,6 +285,26 @@ def has_value(data: dict[str, Any], field: str) -> bool:
         "expected_completion_artifacts": ["expected_completion_artifacts", "expected_completion_paths", "run.expected_completion_artifacts", "monitor_result.expected_completion_artifacts"],
         "used_advice": ["used_advice", "external_advice", "advice", "packet.used_advice", "routing_packet.used_advice", "result.used_advice"],
         "reviewer_routing": ["reviewer_routing", "reviewer_route", "reviewer_reasoning", "quality_review.reviewer_routing", "qualitative_review.reviewer_routing"],
+        "agent_routing_applicability": ["agent_routing_applicability", "agent_routing.applicability", "routing.agent_routing_applicability"],
+        "policy_id": ["policy_id", "agent_routing.policy_id", "routing.policy_id"],
+        "profile_id": ["profile_id", "agent_routing.profile_id", "routing.profile_id"],
+        "routing_tier": ["routing_tier", "agent_routing.routing_tier", "routing.routing_tier"],
+        "requested_model": ["requested_model", "agent_routing.requested_model", "routing.requested_model"],
+        "requested_reasoning_effort": ["requested_reasoning_effort", "agent_routing.requested_reasoning_effort", "routing.requested_reasoning_effort"],
+        "routing_reason_codes": ["routing_reason_codes", "agent_routing.routing_reason_codes", "routing.routing_reason_codes"],
+        "routing_signals": ["routing_signals", "agent_routing.routing_signals", "routing.routing_signals"],
+        "routing_signal_evidence": ["routing_signal_evidence", "agent_routing.routing_signal_evidence", "routing.routing_signal_evidence"],
+        "routing_violations": ["routing_violations", "agent_routing.routing_violations", "routing.routing_violations"],
+        "final_direction_ownership": ["final_direction_ownership", "agent_routing.final_direction_ownership", "routing.final_direction_ownership"],
+        "routing_enforcement": ["routing_enforcement", "agent_routing.routing_enforcement", "routing.routing_enforcement"],
+        "actual_model": ["actual_model", "agent_routing.actual_model", "routing.actual_model"],
+        "actual_reasoning_effort": ["actual_reasoning_effort", "agent_routing.actual_reasoning_effort", "routing.actual_reasoning_effort"],
+        "routing_limitation": ["routing_limitation", "agent_routing.routing_limitation", "routing.routing_limitation"],
+        "max_escalation_reason": ["max_escalation_reason", "agent_routing.max_escalation_reason", "routing.max_escalation_reason"],
+        "prior_tier5_unresolved": ["prior_tier5_unresolved", "agent_routing.prior_tier5_unresolved", "routing.prior_tier5_unresolved"],
+        "prior_tier5_evidence": ["prior_tier5_evidence", "agent_routing.prior_tier5_evidence", "routing.prior_tier5_evidence"],
+        "agent_count": ["agent_count", "agent_routing.agent_count", "routing.agent_count", "review_agent_count"],
+        "model_effort_routing": ["model_effort_routing", "routing_summary", "fields.모델/effort 라우팅"],
         "reviewed_artifacts": ["reviewed_artifacts", "reviewed_artifact_paths", "quality_review.reviewed_artifacts", "qualitative_review.reviewed_artifacts", "artifacts"],
         "direct_read_scope": ["direct_read_scope", "read_scope", "quality_review.direct_read_scope", "qualitative_review.direct_read_scope"],
         "qualitative_findings": ["qualitative_findings", "quality_review.qualitative_findings", "quality_review.findings", "qualitative_review.qualitative_findings", "qualitative_review.findings", "findings"],
@@ -996,6 +1052,95 @@ def validate(target: str, result: dict[str, Any], mode: str) -> dict[str, Any]:
     severity = "block" if mode == "block" or target == "report" else "warn"
     for field in missing:
         add(findings, severity, "missing_required_field", f"`{target}` result is missing `{field}`.", {"field": field})
+
+    if target in AGENT_ROUTING_TARGETS:
+        applicability = str(value_for(result, "agent_routing_applicability") or "").lower()
+        if applicability not in {"delegated", "deterministic_only", "delegation_unavailable"}:
+            add(
+                findings,
+                severity,
+                "agent_routing_applicability_missing",
+                "Agent-bearing phase must declare whether work was delegated, deterministic-only, or unavailable.",
+            )
+        elif applicability == "delegated":
+            for field in ("policy_id", "profile_id", "routing_tier", "requested_model", "requested_reasoning_effort", "routing_reason_codes", "routing_enforcement"):
+                if not has_value(result, field):
+                    add(findings, severity, "delegated_routing_evidence_missing", f"Delegated result is missing `{field}`.", {"field": field})
+            if value_for(result, "routing_violations") is None:
+                add(findings, severity, "delegated_routing_evidence_missing", "Delegated result is missing `routing_violations`.", {"field": "routing_violations"})
+            requested_model = str(value_for(result, "requested_model") or "")
+            requested_effort = str(value_for(result, "requested_reasoning_effort") or "")
+            enforcement = str(value_for(result, "routing_enforcement") or "")
+            claim = {
+                "policy_id": value_for(result, "policy_id"),
+                "profile_id": value_for(result, "profile_id"),
+                "routing_tier": value_for(result, "routing_tier"),
+                "requested_model": requested_model,
+                "requested_reasoning_effort": requested_effort,
+                "routing_reason_codes": value_for(result, "routing_reason_codes"),
+                "routing_signals": value_for(result, "routing_signals") or {},
+                "routing_signal_evidence": value_for(result, "routing_signal_evidence") or {},
+                "routing_violations": value_for(result, "routing_violations") or [],
+                "final_direction_ownership": value_for(result, "final_direction_ownership"),
+                "max_escalation_reason": value_for(result, "max_escalation_reason"),
+                "prior_tier5_unresolved": value_for(result, "prior_tier5_unresolved"),
+                "prior_tier5_evidence": value_for(result, "prior_tier5_evidence"),
+                "agent_count": value_for(result, "agent_count"),
+            }
+            hard_routing_codes = {
+                "unknown_model_effort_profile",
+                "target_profile_mismatch",
+                "routing_policy_id_mismatch",
+                "reported_routing_violations",
+                "routing_tier_missing_or_invalid",
+                "unknown_routing_tier",
+                "profile_tier_mismatch",
+                "dynamic_tier_not_justified",
+                "dynamic_tier_reason_missing",
+                "unknown_routing_signals",
+                "tier5_signal_evidence_missing",
+                "direction_ownership_unclassified",
+                "direction_signal_conflicts_with_ownership",
+                "direction_signal_missing_for_owned_decision",
+                "tier_model_mismatch",
+                "tier_effort_mismatch",
+                "max_not_allowed_for_profile_or_tier",
+                "max_prior_tier5_evidence_missing",
+                "max_escalation_reason_missing",
+                "max_agent_count_invalid",
+                "delegated_ultra_prohibited",
+            }
+            for routing_finding in MODEL_EFFORT_ROUTER.validate_claim(claim, MODEL_EFFORT_POLICY, target):
+                code = str(routing_finding.get("code") or "model_effort_routing_invalid")
+                add(
+                    findings,
+                    "block" if code in hard_routing_codes else severity,
+                    code,
+                    "Delegated model/effort claim violates the tier routing policy.",
+                    routing_finding,
+                )
+            if requested_model and requested_model not in SUPPORTED_AGENT_MODELS:
+                add(findings, "block", "unsupported_requested_model", "Requested model is outside the tier routing policy.", {"requested_model": requested_model})
+            if requested_effort and requested_effort not in SUPPORTED_AGENT_EFFORTS:
+                add(findings, "block", "unsupported_requested_effort", "Requested effort is outside the tier routing policy.", {"requested_reasoning_effort": requested_effort})
+            if enforcement and enforcement not in ROUTING_ENFORCEMENT_VALUES:
+                add(findings, "block", "invalid_routing_enforcement", "Delegated result has invalid routing enforcement.", {"routing_enforcement": enforcement})
+            if enforcement == "enforced" and (not has_value(result, "actual_model") or not has_value(result, "actual_reasoning_effort")):
+                add(findings, severity, "enforced_routing_actual_evidence_missing", "Enforced routing requires actual model and effort evidence.")
+            if enforcement in {"prompt_only", "inherited_unverified"} and not has_value(result, "routing_limitation"):
+                add(findings, severity, "routing_limitation_missing", "Non-enforced routing requires a concrete limitation note.")
+            actual_model = str(value_for(result, "actual_model") or "")
+            actual_effort = str(value_for(result, "actual_reasoning_effort") or "")
+            if actual_model and actual_model not in SUPPORTED_AGENT_MODELS:
+                add(findings, "block", "actual_model_outside_policy", "Actual model is outside the tier routing policy.", {"actual_model": actual_model})
+            if actual_effort and actual_effort not in SUPPORTED_AGENT_EFFORTS:
+                add(findings, "block", "unsupported_actual_effort", "Actual effort is outside the tier routing policy.", {"actual_reasoning_effort": actual_effort})
+            if actual_model and requested_model and actual_model != requested_model:
+                add(findings, "block", "actual_model_route_mismatch", "Actual model does not match the validated requested route.", {"requested_model": requested_model, "actual_model": actual_model})
+            if actual_effort and requested_effort and actual_effort != requested_effort:
+                add(findings, "block", "actual_effort_route_mismatch", "Actual effort does not match the validated requested route.", {"requested_reasoning_effort": requested_effort, "actual_reasoning_effort": actual_effort})
+        elif applicability == "delegation_unavailable" and not has_value(result, "routing_limitation"):
+            add(findings, severity, "routing_limitation_missing", "Unavailable delegation requires a concrete routing limitation.")
 
     def require_context_field(field: str, code: str, message: str) -> None:
         if has_value(result, field):

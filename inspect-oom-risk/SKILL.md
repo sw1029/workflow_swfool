@@ -1,6 +1,6 @@
 ---
 name: inspect-oom-risk
-description: "Audit a working repository for out-of-memory risk surfaces using at least `reasoning_effort: high` for code/resource analysis agents and `reasoning_effort: xhigh` for important work review, then return prioritized evidence-backed findings. Use when the user asks to inspect, review, audit, or diagnose OOM, memory blowups, RAM/VRAM/GPU failures, container limits, large data loading, batch/concurrency risks, model serving memory, build/test pressure, caches, leaks, or unbounded accumulation."
+description: "Audit a working repository for out-of-memory risk using Tier 3 `gpt-5.6-terra/high` for code/resource analysis and Tier 4 `gpt-5.6-terra/xhigh` for important completion, safety, or production review, then return prioritized evidence-backed findings. This recommendation-only audit is capped at Tier 4. Use to inspect or diagnose OOM, RAM/VRAM/GPU failures, container limits, large data loading, batch/concurrency risks, model serving memory, build/test pressure, caches, leaks, or unbounded accumulation."
 ---
 
 # Inspect OOM Risk
@@ -15,10 +15,10 @@ When task-state artifacts exist, use `$manage-task-state-index` as a nonblocking
 
 ## Agent Routing Policy
 
-- Treat OOM code/resource analysis as high-reasoning work. Use `reasoning_effort: high` as the minimum for delegated OOM inspection agents whenever tooling exposes it.
-- Treat OOM review as important work review with `reasoning_effort: xhigh` when it supports completion validation, post-implementation governance, model/data pipeline safety, production/runtime reliability, high-severity memory findings, or irreversible task/issue/miss cleanup decisions.
+- Request Tier 3 `model: gpt-5.6-terra` at minimum `reasoning_effort: high` for delegated OOM code/resource analysis.
+- Use Tier 4 Terra/xhigh when OOM review supports completion validation, post-implementation governance, model/data pipeline safety, production/runtime reliability, high-severity findings, or irreversible task/issue/miss cleanup recommendations.
 - Keep ID-only traceability agents routed through `$manage-task-state-index` with fixed `reasoning_effort: medium`.
-- If tooling cannot enforce the requested effort, include the requirement in the prompt and report the limitation.
+- If tooling cannot enforce model/effort, preserve the request in the prompt and report prompt-only or inherited-unverified routing. Do not claim Terra execution or use delegated `ultra`.
 
 ## Workflow
 
@@ -32,7 +32,7 @@ When task-state artifacts exist, use `$manage-task-state-index` as a nonblocking
 2. Choose inspection mode.
    - Use local inspection by default.
    - If the user explicitly requests agent-based, delegated, parallel, or multi-agent inspection, use 3-6 read-only explorer agents with distinct OOM perspectives. Load [agent-perspectives.md](references/agent-perspectives.md) for role selection and prompts.
-   - Spawn OOM code/resource analysis agents with minimum `reasoning_effort: high`; use `reasoning_effort: xhigh` for important work review.
+   - Spawn Terra OOM agents at minimum `reasoning_effort: high`; use `xhigh` for important work review.
    - If ID context exists and the workflow authorizes agents, optionally spawn one additional read-only ID consistency agent. It is separate from OOM agents and must only inspect task-state IDs, links, lifecycle status, and whether OOM audit evidence is traceable.
    - Continue useful local work while agents inspect non-overlapping areas.
 

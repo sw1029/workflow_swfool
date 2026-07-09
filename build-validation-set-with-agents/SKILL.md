@@ -11,6 +11,13 @@ Use this skill to produce validation assets, not completion verdicts. Keep `$val
 
 The skill may create or update `.validation/sets/`, `.validation/candidates/`, `.validation/registry.jsonl`, and cycle-local `.task/validation_set/` evidence. It must not edit implementation source, tests, runtime/build/CI config, or validator code; route those changes to `$task-md-agent-governance`.
 
+## Agent Routing Policy
+
+- Prefer deterministic oracles, split/leakage scripts, and manifest validation without an agent model.
+- When semantic planning or labeling needs agents, request Tier 3 `model: gpt-5.6-terra` with `reasoning_effort: high`.
+- Use one Tier 4 Terra/xhigh adjudicator only for final semantic disagreement, sealed-label policy, or contract-sensitive oracle review. This evidence-building skill is capped at Tier 4; do not use Sol or delegated `ultra`.
+- Record routing applicability and enforcement. If the tool cannot enforce model/effort, report prompt-only or inherited-unverified routing and do not claim Terra execution.
+
 ## Modes
 
 Use `plan` mode before implementation when a task needs evaluation criteria without exposing holdout labels. Produce task family, failure taxonomy, oracle strategy, split strategy, leakage policy, label visibility policy, source boundary, and no-overclaim constraints.
@@ -80,6 +87,8 @@ Return these fields when applicable:
 - `evidence_paths`
 - `used_goal_truth`
 - `used_advice` or `advice_handling_rationale`
+- `agent_routing_applicability`: `delegated`, `deterministic_only`, or `delegation_unavailable`
+- delegated routing fields: `policy_id`, `profile_id`, `routing_tier`, `requested_model`, `requested_reasoning_effort`, `routing_reason_codes`, `routing_signals`, `routing_signal_evidence` when Tier 5, `routing_violations` even when empty, `routing_enforcement`, and `routing_limitation` when not enforced
 
 If `validation_set_status` is blocked, include `blocked_reason` and the exact missing source/authority/oracle condition. If `quality_tier` is `gold`, include human-reviewed or fully deterministic authoritative evidence.
 

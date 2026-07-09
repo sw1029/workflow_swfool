@@ -1,4 +1,4 @@
 interface:
   display_name: "Inspect Repo With Agents"
   short_description: "Multi-agent repo task inspection"
-  default_prompt: "Use $inspect-repo-with-agents to inspect this repository with 3-6 focused agents, using at least reasoning_effort high for code analysis and xhigh for important reviews, including .agent_goal/goal_schema_contract.md and .schema/.contract context when relevant."
+  default_prompt: "Use $inspect-repo-with-agents with 3-6 focused Tier 3 Terra/high code-analysis agents and Tier 4 Terra/xhigh important reviewers; keep this recommendation-only skill capped at Tier 4."

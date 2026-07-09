@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -67,6 +68,26 @@ STEP_ALIASES = {
     "issue": ["issue_tracking"],
     "closeout_commit": ["closeout"],
 }
+
+MODEL_EFFORT_PROFILE_PATH = Path(__file__).resolve().parents[1] / "references" / "model-effort-profiles.json"
+MODEL_EFFORT_ROUTER_PATH = Path(__file__).resolve().parent / "model_effort_router.py"
+
+
+def load_model_effort_router() -> Any:
+    spec = importlib.util.spec_from_file_location("transition_model_effort_router", MODEL_EFFORT_ROUTER_PATH)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load model-effort router: {MODEL_EFFORT_ROUTER_PATH}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+MODEL_EFFORT_ROUTER = load_model_effort_router()
+MODEL_EFFORT_POLICY = MODEL_EFFORT_ROUTER.load_policy(MODEL_EFFORT_PROFILE_PATH)
+SUPPORTED_AGENT_MODELS = {str(item) for item in MODEL_EFFORT_POLICY["models"].values()}
+CODE_WORKER_MODEL = str(MODEL_EFFORT_POLICY["tiers"]["2"]["model"])
+SUPPORTED_AGENT_EFFORTS = {str(item) for item in MODEL_EFFORT_POLICY["supported_efforts"]}
+ROUTING_ENFORCEMENT_VALUES = {str(item) for item in MODEL_EFFORT_POLICY["result_enforcement_values"]}
 
 
 def load_json_arg(value: str | None) -> dict[str, Any]:
@@ -1077,10 +1098,207 @@ def validate(context: dict[str, Any], stage: dict[str, Any], transition: str) ->
 
     blob = text_blob(stage)
     if "gpt-5.3-codex-spark" in blob or "spark worker" in blob or "spark workers" in blob:
-        add(findings, "warn", "stale_worker_model", "Stale Spark worker routing detected. Canonical code-writing workers use `model: gpt-5.5`.")
+        add(findings, "warn", "stale_worker_model", "Stale Spark worker routing detected. Delegated agents must use the tier policy.")
     worker_model = first_value(stage, "routing.code_worker_model", "worker.model", "code_worker_model")
-    if worker_model and str(worker_model) != "gpt-5.5":
-        add(findings, "warn", "noncanonical_worker_model", "Code-writing worker model is not the canonical `gpt-5.5`.", {"worker_model": worker_model})
+    if worker_model and str(worker_model) != CODE_WORKER_MODEL:
+        add(findings, "warn", "noncanonical_worker_model", f"Code-writing worker model must remain Tier 2/3 `{CODE_WORKER_MODEL}`.", {"worker_model": worker_model})
+
+    requested_model = first_value(
+        stage,
+        "requested_model",
+        "agent_routing.requested_model",
+        "routing.requested_model",
+        "routing.code_worker.requested_model",
+        "worker.requested_model",
+    )
+    policy_id = first_value(
+        stage,
+        "policy_id",
+        "agent_routing.policy_id",
+        "routing.policy_id",
+        "routing.code_worker.policy_id",
+        "worker.policy_id",
+    )
+    requested_effort = first_value(
+        stage,
+        "requested_reasoning_effort",
+        "agent_routing.requested_reasoning_effort",
+        "routing.requested_reasoning_effort",
+        "routing.code_worker.requested_reasoning_effort",
+        "worker.requested_reasoning_effort",
+    )
+    routing_tier = first_value(
+        stage,
+        "routing_tier",
+        "agent_routing.routing_tier",
+        "routing.routing_tier",
+        "routing.code_worker.routing_tier",
+        "worker.routing_tier",
+    )
+    routing_reason_codes = first_value(
+        stage,
+        "routing_reason_codes",
+        "agent_routing.routing_reason_codes",
+        "routing.routing_reason_codes",
+        "routing.code_worker.routing_reason_codes",
+        "worker.routing_reason_codes",
+    )
+    routing_signals = first_value(
+        stage,
+        "routing_signals",
+        "agent_routing.routing_signals",
+        "routing.routing_signals",
+        "routing.code_worker.routing_signals",
+        "worker.routing_signals",
+    )
+    routing_signal_evidence = first_value(
+        stage,
+        "routing_signal_evidence",
+        "agent_routing.routing_signal_evidence",
+        "routing.routing_signal_evidence",
+        "routing.code_worker.routing_signal_evidence",
+        "worker.routing_signal_evidence",
+    )
+    routing_violations = first_value(
+        stage,
+        "routing_violations",
+        "agent_routing.routing_violations",
+        "routing.routing_violations",
+        "routing.code_worker.routing_violations",
+        "worker.routing_violations",
+    )
+    final_direction_ownership = first_value(
+        stage,
+        "final_direction_ownership",
+        "agent_routing.final_direction_ownership",
+        "routing.final_direction_ownership",
+        "worker.final_direction_ownership",
+    )
+    routing_enforcement = first_value(
+        stage,
+        "routing_enforcement",
+        "agent_routing.routing_enforcement",
+        "routing.routing_enforcement",
+        "worker.routing_enforcement",
+    )
+    routing_applicability = str(
+        first_value(
+            stage,
+            "agent_routing_applicability",
+            "agent_routing.applicability",
+            "routing.agent_routing_applicability",
+        )
+        or ""
+    ).lower()
+    actual_model = first_value(stage, "actual_model", "agent_routing.actual_model", "routing.actual_model", "worker.actual_model")
+    actual_effort = first_value(
+        stage,
+        "actual_reasoning_effort",
+        "agent_routing.actual_reasoning_effort",
+        "routing.actual_reasoning_effort",
+        "worker.actual_reasoning_effort",
+    )
+    profile_id = str(
+        first_value(
+            stage,
+            "profile_id",
+            "agent_routing.profile_id",
+            "routing.profile_id",
+            "routing.code_worker.profile_id",
+            "worker.profile_id",
+        )
+        or ""
+    )
+
+    if requested_model and str(requested_model) not in SUPPORTED_AGENT_MODELS:
+        add(findings, "block", "unsupported_requested_model", "Delegated agent request is outside the tier routing policy.", {"requested_model": requested_model})
+    if requested_effort and str(requested_effort) not in SUPPORTED_AGENT_EFFORTS:
+        add(findings, "block", "unsupported_requested_effort", "Requested reasoning effort is outside the tier routing policy.", {"requested_reasoning_effort": requested_effort})
+    claim = {
+        "policy_id": policy_id,
+        "profile_id": profile_id,
+        "routing_tier": routing_tier,
+        "requested_model": requested_model,
+        "requested_reasoning_effort": requested_effort,
+        "routing_reason_codes": routing_reason_codes,
+        "routing_signals": routing_signals or {},
+        "routing_signal_evidence": routing_signal_evidence or {},
+        "routing_violations": routing_violations or [],
+        "final_direction_ownership": final_direction_ownership,
+        "max_escalation_reason": first_value(stage, "max_escalation_reason", "agent_routing.max_escalation_reason", "routing.max_escalation_reason"),
+        "prior_tier5_unresolved": first_value(stage, "prior_tier5_unresolved", "agent_routing.prior_tier5_unresolved", "routing.prior_tier5_unresolved"),
+        "prior_tier5_evidence": first_value(stage, "prior_tier5_evidence", "agent_routing.prior_tier5_evidence", "routing.prior_tier5_evidence"),
+        "agent_count": first_value(stage, "agent_count", "agent_routing.agent_count", "routing.agent_count", "review_agent_count"),
+    }
+    if profile_id or routing_tier or requested_model or requested_effort:
+        route_target = transition.removeprefix("pre_")
+        supplied_route_target = str(first_value(stage, "target", "step") or "")
+        if supplied_route_target and supplied_route_target != route_target:
+            add(
+                findings,
+                "block",
+                "routing_target_transition_mismatch",
+                "Caller-supplied routing target does not match the canonical transition target.",
+                {"transition_target": route_target, "supplied_target": supplied_route_target},
+            )
+        hard_routing_codes = {
+            "unknown_model_effort_profile",
+            "target_profile_mismatch",
+            "routing_policy_id_mismatch",
+            "reported_routing_violations",
+            "routing_tier_missing_or_invalid",
+            "unknown_routing_tier",
+            "profile_tier_mismatch",
+            "dynamic_tier_not_justified",
+            "dynamic_tier_reason_missing",
+            "unknown_routing_signals",
+            "tier5_signal_evidence_missing",
+            "direction_ownership_unclassified",
+            "direction_signal_conflicts_with_ownership",
+            "direction_signal_missing_for_owned_decision",
+            "tier_model_mismatch",
+            "tier_effort_mismatch",
+            "max_not_allowed_for_profile_or_tier",
+            "max_prior_tier5_evidence_missing",
+            "max_escalation_reason_missing",
+            "max_agent_count_invalid",
+            "delegated_ultra_prohibited",
+        }
+        for routing_finding in MODEL_EFFORT_ROUTER.validate_claim(claim, MODEL_EFFORT_POLICY, route_target):
+            code = str(routing_finding.get("code") or "model_effort_routing_invalid")
+            add(
+                findings,
+                "block" if code in hard_routing_codes else "warn",
+                code,
+                "Delegated model/effort claim violates the tier routing policy.",
+                routing_finding,
+            )
+    if routing_enforcement and str(routing_enforcement) not in ROUTING_ENFORCEMENT_VALUES:
+        add(findings, "block", "invalid_routing_enforcement", "Agent routing enforcement has a noncanonical value.", {"routing_enforcement": routing_enforcement})
+    if routing_applicability == "delegated":
+        for field, value in (
+            ("policy_id", policy_id),
+            ("profile_id", profile_id),
+            ("routing_tier", routing_tier),
+            ("requested_model", requested_model),
+            ("requested_reasoning_effort", requested_effort),
+            ("routing_reason_codes", routing_reason_codes),
+            ("routing_enforcement", routing_enforcement),
+        ):
+            if value is None or str(value).strip() == "":
+                add(findings, "warn", "delegated_routing_evidence_missing", f"Delegated agent result is missing `{field}`.", {"field": field})
+        if routing_violations is None:
+            add(findings, "warn", "delegated_routing_evidence_missing", "Delegated agent result is missing `routing_violations`.", {"field": "routing_violations"})
+    if str(routing_enforcement) == "enforced" and (not actual_model or not actual_effort):
+        add(findings, "warn", "enforced_routing_actual_evidence_missing", "Enforced routing lacks actual model/effort runtime evidence.", {"actual_model": actual_model, "actual_reasoning_effort": actual_effort})
+    if actual_model and str(actual_model) not in SUPPORTED_AGENT_MODELS:
+        add(findings, "block", "actual_model_outside_policy", "Actual delegated model is outside the tier routing policy.", {"actual_model": actual_model})
+    if actual_effort and str(actual_effort) not in SUPPORTED_AGENT_EFFORTS:
+        add(findings, "block", "unsupported_actual_effort", "Actual reasoning effort is outside the tier routing policy.", {"actual_reasoning_effort": actual_effort})
+    if actual_model and requested_model and str(actual_model) != str(requested_model):
+        add(findings, "block", "actual_model_route_mismatch", "Actual model does not match the validated requested route.", {"requested_model": requested_model, "actual_model": actual_model})
+    if actual_effort and requested_effort and str(actual_effort) != str(requested_effort):
+        add(findings, "block", "actual_effort_route_mismatch", "Actual effort does not match the validated requested route.", {"requested_reasoning_effort": requested_effort, "actual_reasoning_effort": actual_effort})
 
     execution_status = str(first_value(stage, "execution_status", "run_log.status") or "").lower()
     validation_verdict = str(first_value(stage, "validation_verdict", "validation.verdict") or "").lower()

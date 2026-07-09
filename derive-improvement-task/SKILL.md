@@ -1,6 +1,6 @@
 ---
 name: derive-improvement-task
-description: "Derive the next actionable `task.md` or bounded task-pack transaction from agent-based repository analysis with fixed `reasoning_effort: xhigh` for improvement, issue-fit, task_miss, synthesis, schema-planning, and ID-consistency agents. Use when Codex should combine `.agent_goal` alignment, `$manage-agent-authority`, active `.agent_advice` non-GT direction, `.issue`, `.task/task_miss`, `.task/candidate_task`, semantic structure/convention evidence, and optional `.task/task_pack` queues; create an initial task when absent; create a bounded task pack when long-range ordering prevents myopic loops; promote one active task-pack item into `task.md`; archive the old task as `past_task`; write the new task with a top execution-environment section; retain candidates; update task packs for insert/reorder/skip/supersede/terminal blocker state; and delete applied candidates only after the real task is written."
+description: "Derive the next actionable `task.md` or bounded task-pack transaction with tiered GPT-5.6 routing: Tier 3 `gpt-5.6-terra/high` inspectors and candidate agents, Tier 4 `gpt-5.6-terra/xhigh` cross-contract analysis, Tier 5 `gpt-5.6-sol/xhigh` final synthesis/selection, Tier 2 `gpt-5.6-terra/medium` ID-only work, and bounded Tier 5 Sol/max only after unresolved Tier 5 evidence. Use when Codex must combine goal, authority, non-GT advice, issues, misses, candidates, semantic structure, validation, loopback, and optional task-pack evidence into one active next task or terminal disposition."
 ---
 
 # Derive Improvement Task
@@ -155,7 +155,7 @@ Keep task derivation conservative, but avoid selecting another task whose main e
 - If there are zero viable standalone candidates and no viable pack items, write terminal blocker state instead of inventing another narrowing task.
 - Do not select a candidate merely because it is the next sequential version number. Prefer candidates that reduce the primary blocker, improve final-goal progress, or make a blocked transition possible.
 - The generated `task.md` must include a `progress_target` and a validation profile in `## Execution Environment`: `current_only`, `affected_chain`, or `full_chain`. Use `full_chain` only for live dispatch, readiness promotion, issue closure, shared validator/runtime changes, or explicit user request.
-- When `$optimize-task-slice` advisory evidence is supplied, treat it as non-authoritative classification input. It may recommend state-transition work, batched micro-contracts, evidence supply, bounded preflight, narrowing, or stopping with a blocker, but it must not replace this skill's fixed `xhigh` synthesis or final next-task selection.
+- When `$optimize-task-slice` advisory evidence is supplied, treat it as non-authoritative classification input. It may recommend state-transition work, batched micro-contracts, evidence supply, bounded preflight, narrowing, or stopping with a blocker, but it must not replace this skill's Tier 5 Sol/xhigh synthesis or final next-task selection.
 - If `$optimize-task-slice` reports `narrowing_of_measurable_target=true`, require an explicit descope rationale and residual item in the derive result before selecting `narrow_current_only`.
 
 ## Domain Adapter Contract
@@ -183,12 +183,14 @@ Keep Part O distinct from B/G/N accounting: O1' is same-lineage special-case rep
 
 ## Agent Routing Policy
 
-- When called from `$orchestrate-task-cycle`, include the canonical orchestration reference [workflow-routing.md](../orchestrate-task-cycle/references/workflow-routing.md) in the evidence packet, but keep this skill's fixed routing policy below.
-- Treat improvement derivation as xhigh-reasoning work. When spawning or requesting goal/convention alignment, task_miss analysis, issue goal-fit, improvement-analysis, synthesis, candidate-prioritization, schema-contract planning, or ID-consistency agents, set `reasoning_effort: xhigh` whenever the subagent tooling exposes it.
-- Do not downgrade these agents to `high`, `medium`, or inherited effort for speed. The selected next task controls downstream implementation direction, so the reasoning effort is fixed.
-- If a called skill owns its own subagents, include the fixed `reasoning_effort: xhigh` requirement in that skill request.
-- If the available delegation tool cannot enforce `reasoning_effort: xhigh`, include the requirement in the prompt and report the limitation in the outcome.
-- If the available thread/agent budget cannot run the exact requested fanout, run the maximum available independent xhigh-capable lenses, keep synthesis evidence-separated, and record `degraded_agents: true` with the unavailable agents, covered lenses, missing lenses, and risk. Do not claim the exact agent policy was satisfied.
+- When called from `$orchestrate-task-cycle`, resolve every delegated role through [model-effort-routing.md](../orchestrate-task-cycle/references/model-effort-routing.md) and its deterministic selector.
+- Use Tier 3 `gpt-5.6-terra/high` for goal/convention alignment, task_miss analysis, issue goal-fit, improvement candidates, candidate prioritization inputs, and schema-contract planning. Use Tier 4 `gpt-5.6-terra/xhigh` for cross-contract/blocker-level analysis that recommends but does not own final direction.
+- Use Tier 5 `gpt-5.6-sol/xhigh` for exactly one final synthesis/selection owner that writes or selects the next `task.md`, chooses task-pack topology/disposition, resolves final GT/authority direction, or emits a terminal disposition.
+- Route separate ID-only consistency through `$manage-task-state-index` at Tier 2 `gpt-5.6-terra/medium`; do not spend derive synthesis effort on traceability-only work.
+- Use Tier 5 `gpt-5.6-sol/max` only for exactly one bounded arbitration after a prior Tier 5 Sol/xhigh synthesis leaves a documented high-impact ambiguity involving conflicting GT/authority contracts, a security-critical irreversible direction, or terminal disposition. Record `prior_tier5_unresolved: true`, `prior_tier5_evidence`, `max_escalation_reason`, and `agent_count: 1`.
+- If a called skill owns subagents, include the matching tier profile in the request. Never use delegated `ultra`.
+- If the delegation tool cannot enforce model/effort, preserve the tier request in the prompt and report `routing_enforcement: prompt_only|inherited_unverified` plus the limitation. Do not claim Terra or Sol execution.
+- If the thread/agent budget cannot run the requested fanout, preserve independent lenses where possible, keep synthesis evidence-separated, and record `degraded_agents: true` with unavailable agents, covered/missing lenses, and risk.
 
 ## Workflow
 
@@ -218,7 +220,7 @@ Keep Part O distinct from B/G/N accounting: O1' is same-lineage special-case rep
 
 2. Analyze goal alignment with `$inspect-repo-with-agents`.
    - Invoke `$inspect-repo-with-agents` to inspect whether the repo and current/planned task direction align with `$manage-agent-goal`, `$manage-goal-architecture`, `$manage-goal-theory`, the `$manage-agent-authority` result, and `.agent_goal/goal_schema_contract.md` outputs.
-   - Request fixed `reasoning_effort: xhigh` for all alignment inspectors when the tooling exposes reasoning effort.
+   - Request Tier 3 `model: gpt-5.6-terra` with `reasoning_effort: high` for alignment inspectors.
    - Run the inspection with a critical review stance, not a confirmation-seeking stance. Require inspectors to actively search for goal mismatch, convention violations, unsupported assumptions, scope creep, overfitting to the current task, contradictions between goal files, missing repository evidence, and validation blind spots.
    - Treat `.agent_goal/conventions.md` as first-class evaluation criteria. Inspectors must name the relevant conventions considered, classify each as `satisfied`, `violated`, `insufficient_evidence`, or `not_applicable`, and cite evidence where possible.
    - Treat the `$manage-agent-authority` result as first-class evaluation criteria. Inspectors must classify relevant API/external-call permission, direction-freedom, implementation-priority, validation-priority, strictness, conservative-implementation, and escalation rules as `satisfied`, `violated`, `insufficient_evidence`, or `not_applicable`.
@@ -232,7 +234,7 @@ Keep Part O distinct from B/G/N accounting: O1' is same-lineage special-case rep
 
 3. Analyze `.task/task_miss` with agents.
    - Use 2-4 read-only agents, or include this as a distinct `$inspect-repo-with-agents` perspective, to analyze `.task/task_miss/`.
-   - Require fixed `reasoning_effort: xhigh` for task_miss analysis agents.
+   - Require Tier 3 Terra/high for task_miss analysis agents.
    - Extract unresolved misses, resolved/deleted miss records, recurring patterns, generalization gaps, failed validation, and candidate follow-ups.
    - Identify repeated `safety_only` or no-live/fail-closed cycles that preserve safety but do not reduce the active issue blocker; pass that pattern to improvement-analysis and synthesis agents as a task-selection constraint.
    - Do not treat old misses as still active if a later resolved/deleted report clearly closed them.
@@ -254,7 +256,7 @@ Keep Part O distinct from B/G/N accounting: O1' is same-lineage special-case rep
 
 6. Analyze implementation issues with one issue goal-fit agent.
    - Spawn exactly one read-only issue agent before the three improvement-analysis agents.
-   - Spawn or request this issue agent with fixed `reasoning_effort: xhigh`.
+   - Spawn or request this issue agent on Tier 3 Terra/high.
    - Use the issue prompt from `$manage-implementation-issues` [issue-agent-prompts.md](../manage-implementation-issues/references/issue-agent-prompts.md) when available.
    - Give the issue agent the critical goal/convention alignment report so it can classify whether issues reinforce, conflict with, or distract from the goal and conventions.
    - Give the issue agent active advice summaries when present so it can classify whether issue-driven work should incorporate, defer, reject, or ignore that advice.
@@ -265,7 +267,7 @@ Keep Part O distinct from B/G/N accounting: O1' is same-lineage special-case rep
 
 7. Run three parallel improvement-analysis agents.
    - Spawn exactly three independent agents unless the user requests a different count.
-   - Spawn all three improvement-analysis agents with fixed `reasoning_effort: xhigh`.
+   - Spawn all three improvement-analysis agents on Tier 3 Terra/high.
    - Give each agent the same evidence package, including the critical goal/convention alignment report, but a different lens:
      - Goal and user-value fit.
      - Architecture/theory/code-governance fit.
@@ -284,12 +286,13 @@ Keep Part O distinct from B/G/N accounting: O1' is same-lineage special-case rep
    - Each agent must explain whether the proposal should be standalone, used to create a bounded pack, promoted from the active task pack, inserted/reordered/skipped inside the task pack, or used to terminal-block/supersede the pack.
    - Use [agent-prompts.md](references/agent-prompts.md).
    - If ID context exists and the workflow authorizes agents, spawn one separate read-only ID consistency agent. It is not one of the three improvement-analysis agents and must only analyze task-state IDs, lifecycle transitions, and candidate/miss/log link integrity.
-   - Spawn the separate ID consistency agent with fixed `reasoning_effort: xhigh`.
+   - Route the separate ID consistency agent through `$manage-task-state-index` on Tier 2 Terra/medium.
    - If thread limits prevent the exact issue/improvement/ID agent fanout, preserve distinct lenses in the agents that can run, perform a main-agent synthesis over the evidence packet, and emit a degraded-agent note instead of silently reducing coverage.
 
 8. Synthesize the final task with one agent.
    - Spawn one synthesis agent after the three improvement agents return.
-   - Spawn the synthesis agent with fixed `reasoning_effort: xhigh`.
+   - Spawn exactly one final synthesis/selection owner at Tier 5 with `model: gpt-5.6-sol` and `reasoning_effort: xhigh`.
+   - If and only if that Tier 5 synthesis leaves a documented high-impact ambiguity allowed by the routing policy, run one Tier 5 `gpt-5.6-sol/max` arbitration agent and record `prior_tier5_unresolved: true`, `prior_tier5_evidence` pointing to the synthesis result/finding, `max_escalation_reason`, and `agent_count: 1`; otherwise do not use `max`.
    - The synthesis agent must select one final improvement to become `task.md`, or write a terminal blocker result when no viable task or pack item remains.
    - The synthesis agent must choose exactly one pack disposition when a pack is in scope: `create_pack`, `promote_next_item`, `insert_items`, `reorder_items`, `skip_items`, `supersede_pack`, `derive_standalone`, or `terminal_blocked`.
    - For `insert_items`, `reorder_items`, `skip_items`, `supersede_pack`, `create_pack`, or `terminal_blocked`, it must emit a `pack_mutation_plan` with `action`, `reason`, `evidence_paths`, `pack_path` when mutating an existing pack, changed item IDs, `before_order` and `after_order` when order changes, and `terminal_blocker` when terminal-blocking.
@@ -422,6 +425,7 @@ Keep Part O distinct from B/G/N accounting: O1' is same-lineage special-case rep
 11. Report outcome.
    - Summarize the selected task, why it won, issue insights used or ignored, where `past_task` was logged, which candidates were retained, which applied candidate file was deleted, and the relevant task/candidate/issue/past/log IDs.
    - Include `selected_task_source: task_pack | candidate_task | standalone | terminal_blocked | user_escalation`, `pack_disposition` when a pack is in scope, `progress_kind: goal_productive | governance_only`, selected or terminal `semantic_signature`, `task_pack_status` when a pack exists, mutation evidence paths, and `loop_breaker_disposition`.
+   - Include `policy_id`, delegated tier profiles, requested model/effort, routing reason codes/signals/evidence, `routing_violations` even when empty, routing enforcement, actual routing when exposed, limitations, degraded fanout, and the complete structured bounded-max evidence when that exception ran.
    - In `initial_init` mode, report that no `past_task` log was created because there was no previous `task.md`.
 
 ## Initial Init Mode
@@ -499,7 +503,7 @@ Prefer the improvement that:
 - Do not claim `$inspect-repo-with-agents` analysis happened if subagents were unavailable.
 - Do not claim exact issue/improvement/synthesis/ID agent fanout when thread limits forced degraded execution; record the degraded state and missing independent lenses.
 - Do not let analysis agents edit files.
-- Do not spawn or request improvement-derivation agents with any reasoning effort other than `xhigh` when the tooling exposes `reasoning_effort`.
+- Do not run evidence inspectors below Tier 3 Terra/high, cross-contract analysis below Tier 4 Terra/xhigh, final synthesis below Tier 5 Sol/xhigh, ID-only agents outside Tier 2 Terra/medium, or a Sol/max arbitration without its bounded trigger and complete evidence.
 - Do not let the issue goal-fit agent open, close, edit, or implement issues.
 - Do not treat absent or weak evidence as goal alignment or convention compliance.
 - Do not allow supportive goal-fit summaries to override blocker-level convention violations unless the selected task directly addresses those violations.
@@ -512,7 +516,8 @@ Prefer the improvement that:
 - Do not delete an applied candidate until its ID transition and link to the new task are recorded when ID context exists.
 - Do not omit the top execution-environment section from generated `task.md`.
 - Do not derive repeated `safety_only` no-live micro-contracts on the same blocker without either batching them, naming the unlocked transition, or recording why evidence supply/bounded execution is blocked.
-- Do not let `$optimize-task-slice` write `task.md`, apply/delete candidates, or downgrade this skill's fixed `reasoning_effort: xhigh` routing.
+- Do not let `$optimize-task-slice` write `task.md`, apply/delete candidates, or alter this skill's tiered role profiles.
+- Do not use `ultra` for any delegated derive agent.
 - Do not create multiple active `task.md` files or multiple active task packs to simulate parallelism.
 - Do not create, reorder, insert, skip, supersede, or terminal-block task-pack items without citing new evidence, repeated blocker signature, missing supplied positive input delta, provider-neutral retargeting, dependency repair, user-supplied exclusion direction, or terminal blocker state.
 - Do not use task packs as `.agent_goal` goal truth, authority, or completion evidence.

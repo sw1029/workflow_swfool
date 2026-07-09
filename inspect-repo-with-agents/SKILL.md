@@ -1,6 +1,6 @@
 ---
 name: inspect-repo-with-agents
-description: "Coordinate a dynamic 3-6 subagent inspection of the current repository for a user-specified task or concern, using at least `reasoning_effort: high` for code-analysis agents and `reasoning_effort: xhigh` for important work reviews, then synthesize findings into an actionable repo-aware report. Use when the user explicitly invokes this skill or asks for multi-agent repo inspection, audit, review, investigation, migration analysis, feature impact analysis, architecture review, test-gap analysis, performance review, or security-oriented codebase analysis."
+description: "Coordinate a dynamic 3-6 subagent inspection of the current repository using Tier 3 `gpt-5.6-terra/high` for ordinary code analysis and Tier 4 `gpt-5.6-terra/xhigh` for important work review, then synthesize evidence into an actionable repo-aware report. This recommendation-only inspection skill is capped at Tier 4; final direction remains with its caller. Use for multi-agent repository inspection, audit, investigation, architecture or feature-impact analysis, test-gap analysis, performance review, or security-oriented codebase analysis."
 ---
 
 # Inspect Repo With Agents
@@ -15,11 +15,11 @@ When task-state artifacts exist, add ID traceability as a separate concern throu
 
 ## Agent Routing Policy
 
-- Treat repository code analysis as high-reasoning work. Spawn normal code-analysis agents with `reasoning_effort: high` whenever the subagent tooling exposes it.
-- Treat important work review as xhigh-reasoning work. Use `reasoning_effort: xhigh` when the inspection informs final completion validation, post-implementation governance blockers, miss/candidate/issue cleanup, schema/API/CLI/data-contract review, security-sensitive review, destructive or irreversible workflow decisions, or high-severity regression analysis.
+- Request Tier 3 `model: gpt-5.6-terra` with `reasoning_effort: high` for ordinary repository code analysis.
+- Use Tier 4 Terra/xhigh when the inspection controls completion evidence, post-implementation blockers, miss/candidate/issue cleanup recommendations, schema/API/CLI/data-contract compatibility, security-sensitive review, destructive or irreversible workflow review, or high-severity regression analysis.
 - Do not downgrade code-analysis agents below `high` for speed. If a caller already requires `xhigh`, keep `xhigh`.
 - Keep ID-only traceability agents routed through `$manage-task-state-index`; their fixed routing is `reasoning_effort: medium`.
-- If tooling cannot enforce the requested reasoning effort, include the routing requirement in the prompt and report the limitation.
+- If tooling cannot enforce model/effort, include the request in the prompt and report prompt-only or inherited-unverified routing. Do not claim Terra execution, and do not use delegated `ultra`.
 
 ## Workflow
 
@@ -41,7 +41,7 @@ When task-state artifacts exist, add ID traceability as a separate concern throu
    - Use 5 agents for cross-cutting behavior, multiple runtimes, architecture, data flow, or risk analysis.
    - Use 6 agents only when the repo/task has genuinely independent concerns such as backend, frontend, persistence, CI, security, and tests.
    - Prefer `explorer` agents for read-only inspection. Use `worker` only if the user also asks for implementation.
-   - Spawn code-analysis inspection agents with minimum `reasoning_effort: high`; use `reasoning_effort: xhigh` for important work review.
+   - Spawn Terra inspection agents at minimum `reasoning_effort: high`; use `xhigh` for important work review.
    - Load [perspective-catalog.md](references/perspective-catalog.md) when you need help selecting complementary perspectives.
    - If ID context exists, optionally spawn one additional read-only ID consistency agent using `$manage-task-state-index` guidance. This agent is not part of the 3-6 repo-inspection agent count and must not receive normal code-review ownership.
 
@@ -88,8 +88,9 @@ Use this shape and fill in the bracketed parts:
 You are one of [N] agents inspecting the repository at [repo path].
 
 Agent routing:
-- Use `reasoning_effort: high` for ordinary code analysis.
-- Use `reasoning_effort: xhigh` for important work review: completion validation, blocker-clearing governance, miss/candidate/issue cleanup decisions, schema/API/CLI/data-contract review, security-sensitive review, irreversible workflow decisions, or high-severity regression analysis.
+- Use `model: gpt-5.6-terra` with `reasoning_effort: high` for ordinary code analysis.
+- Use Terra at `reasoning_effort: xhigh` for important work review: completion validation, blocker-clearing governance, miss/candidate/issue cleanup decisions, schema/API/CLI/data-contract review, security-sensitive review, irreversible workflow decisions, or high-severity regression analysis.
+- Report routing enforcement and any limitation; do not use `ultra`.
 
 User task:
 [task]

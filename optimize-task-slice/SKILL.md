@@ -67,7 +67,7 @@ Use this skill as an advisory pre-derive classifier. It helps prevent repeated t
 
 - Do not write `task.md`.
 - Do not delete or apply candidates.
-- Do not downgrade `$derive-improvement-task` fixed `reasoning_effort: xhigh` routing.
+- Do not alter `$derive-improvement-task` tier profiles: Tier 3 Terra/high inspectors, Tier 4 Terra/xhigh cross-contract analysis, Tier 5 Sol/xhigh synthesis, Tier 2 Terra/medium ID-only work, and bounded evidence-backed Tier 5 Sol/max arbitration only.
 - Do not claim final next-task choice authority.
 - Do not recommend another same-family untried repair when `hypothesis_exhausted=true`; recommend `stop_with_blocker` unless a supplied input delta or explicit user override exists.
 - Do not treat `pilot`, `plan`, `slice`, or `bounded` wording as permission to weaken a measurable target. Emit the narrowing warning and leave final descope/residual handling to `$derive-improvement-task`.

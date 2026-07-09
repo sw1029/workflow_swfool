@@ -1,4 +1,4 @@
 interface:
   display_name: "Manage Task State Index"
   short_description: "Link task workflow artifacts by ID"
-  default_prompt: "Use $manage-task-state-index with fixed reasoning_effort medium for ID correction; when called from $orchestrate-task-cycle, consume references/workflow-routing.md context while assigning stable IDs and linking task, task_pack, issue, goal, .agent_advice, interview, .schema/.contract, execution, audit, and validation artifacts."
+  default_prompt: "Use $manage-task-state-index with deterministic helpers first and fixed Tier 2 Terra/medium for delegated ID-only work, while linking task, task_pack, issue, goal, advice, schema/contract, execution, audit, and validation artifacts."

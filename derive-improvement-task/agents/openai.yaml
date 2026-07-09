@@ -1,4 +1,4 @@
 interface:
   display_name: "Derive Improvement Task"
   short_description: "Derive task.md with constrained gates"
-  default_prompt: "Use $derive-improvement-task with fixed reasoning_effort xhigh agents to select the next task.md or task-pack transaction from goal, authority, advice, loopback task-kind constraints, code-structure, convention, and blocker evidence."
+  default_prompt: "Use $derive-improvement-task with Tier 3 Terra/high inspectors, Tier 4 Terra/xhigh cross-contract analysis, and one Tier 5 Sol/xhigh final selection owner to select the next task.md or task-pack transaction from goal, authority, advice, loopback, code-structure, convention, and blocker evidence."

@@ -1,4 +1,4 @@
 interface:
   display_name: "Build Validation Set"
   short_description: "Create reusable validation sets safely"
-  default_prompt: "Use $build-validation-set-with-agents to plan or build a source-traced validation set for the current task."
+  default_prompt: "Use $build-validation-set-with-agents with deterministic oracles first, Tier 3 Terra/high semantic labeling, and at most one Tier 4 Terra/xhigh adjudicator; do not use Sol."

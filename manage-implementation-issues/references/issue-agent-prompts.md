@@ -7,6 +7,10 @@ Use this prompt when `$derive-improvement-task` needs one additional read-only i
 ```text
 You are analyzing implementation issues before the next `task.md` is derived.
 
+Agent routing:
+- Use Tier 3 `model: gpt-5.6-terra` with `reasoning_effort: high`.
+- Report whether routing was enforced, prompt-only, or inherited-unverified. Do not use `ultra`.
+
 Review:
 - `.agent_goal/final_goal.md`
 - `.agent_goal/conventions.md`

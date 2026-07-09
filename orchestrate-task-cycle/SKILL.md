@@ -1,6 +1,6 @@
 ---
 name: orchestrate-task-cycle
-description: "Run the governed repository task workflow cycle: ensure `task.md`, resolve `.agent_goal/agent_authority.md`, consume repo-local `.codex/skills` adapters as compact non-GT packets including optional `code_convention_contract`, plan/build validation assets through `$build-validation-set-with-agents`, route implementation through `$task-md-agent-governance`, audit code structure and semantic modularity before execution, log execution, run single-agent qualitative review, audit loopback progress including semantic structure metrics, refresh schemas, derive the next task/task-pack transaction with fixed `xhigh`, optionally schedule repo-local adapter creation/update through `$skill-creator`, preserve one active `task.md`, enforce blocker/input-delta loop breakers and terminal state, index artifacts with fixed `medium`, validate progress axes and structure high-water, track issues, commit coherent partial or complete changes with fixed `low`, report in Korean, and keep the orchestrator summary-first."
+description: "Run the governed repository task workflow cycle with dynamic Tier 1-5 model/effort routing: use `gpt-5.6-terra` from mechanical through decisive-review work, allow `gpt-5.6-sol` only for final core-direction Tier 5 decisions, preserve explicit routing enforcement evidence, and coordinate task discovery, validation assets, governed implementation, execution, review, loopback, schema, next-task derivation, indexing, validation, issues, commits, and Korean reporting."
 ---
 
 # Orchestrate Task Cycle
@@ -16,6 +16,7 @@ The main agent is the coordinator. Each called skill owns its own implementation
 Read these first-level references only when the corresponding part of the cycle is active:
 
 - [workflow-routing.md](references/workflow-routing.md): full phase order, detailed procedure, routing table, transition rules, worker reasoning/model policy, helper-script hooks, ordering rules, and failure handling.
+- [model-effort-routing.md](references/model-effort-routing.md): dynamic Tier 1-5 policy, Terra/Sol boundary, structured promotion signals, enforcement evidence, and bounded `max`/`ultra` rules. The executable map is [model-effort-profiles.json](references/model-effort-profiles.json).
 - [workflow-interface-contracts.md](references/workflow-interface-contracts.md): skill handoff surfaces, packet ownership, required fields, helper-script inputs/outputs, fail-closed rules, and downstream consumers.
 - [cycle-artifacts.md](references/cycle-artifacts.md): ledger, result-contract, visible-increment, validation-scope, evidence-cache, dashboard/profile, and running-execution artifact contracts.
 - [repo-local-skill-adapters.md](references/repo-local-skill-adapters.md): repository-local `.codex/skills/` adapter scan, consumption, creation/update routing, validation, and `$skill-creator` compliance.
@@ -128,12 +129,14 @@ When acceptance reachability, loopback, or validation builds disposition options
 
 When loopback or validation would route `positive_input_delta=false` to terminal/user escalation, preserve S4/Q1 self-resolvable evidence in the same disposition packet. If `self_resolvable_input` or the Q1 probe says the missing input is self-resolvable without new authority, route the next derive call as `in_scope_engineering_task`; otherwise keep the existing terminal/escalation path.
 
-Use fixed routing requirements:
+Use [model-effort-routing.md](references/model-effort-routing.md) for every agent-bearing phase and `scripts/model_effort_router.py` for dynamic selection. Record `routing_tier`, requested model/effort, reason codes, and `routing_enforcement`; never report prompt-only or inherited routing as enforced execution.
 
-- `$task-md-agent-governance`: code analysis at least `high`; important review `xhigh`; code-writing workers on `model: gpt-5.5` with `reasoning_effort: medium` by default or `high` for high-reliability core logic.
-- `$derive-improvement-task`: fixed `reasoning_effort: xhigh` for goal/convention alignment, task_miss analysis, issue-fit, improvement, synthesis, candidate prioritization, schema planning, and ID-consistency agents.
-- `$manage-task-state-index`: fixed `reasoning_effort: medium` for ID scan, audit, link repair, lifecycle transition recording, and optional ID insight agents.
-- `$repo-change-commit`: fixed `reasoning_effort: low` for Git status classification, staging, commit readiness, and commit creation.
+- Use Tier 1 Terra/low for Git finalization, Tier 2 Terra/medium for routine implementation and ID work, Tier 3 Terra/high for high-reliability implementation and complex analysis, and Tier 4 Terra/xhigh for decisive review or cross-contract analysis.
+- Use Tier 5 Sol/xhigh only when an agent owns the final future direction: next-task synthesis, GT/authority resolution, task-pack topology, terminal disposition, or final architecture direction.
+- Keep code workers, ordinary analyzers, qualitative reviewers, and completion validators at Tier 4 or below even when their work is important.
+- Permit dynamic promotion only from structured signals and within each profile's tier bounds. Optional Tier 5 profiles must explicitly classify final-direction ownership, and every Tier 5 signal must cite a structured artifact/event reference; do not infer it from prose or difficulty alone.
+- Permit Sol/max only after an unresolved Tier 5 Sol/xhigh pass with one agent, a structured reference bound to that prior pass and finding, and a recorded escalation reason. Never assign delegated `ultra`.
+- This skill cannot retroactively change an already-running coordinator model; record inherited routing as unverified when runtime selectors are unavailable.
 
 ## Completion And Reporting
 

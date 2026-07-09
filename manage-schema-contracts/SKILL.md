@@ -13,6 +13,8 @@ When `.agent_goal/goal_schema_contract.md` exists, it is the governing goal-leve
 
 The goal is not to document every implementation detail. Capture the contract elements future agents need to avoid breaking module compatibility when deriving tasks or changing code.
 
+When called from `$orchestrate-task-cycle`, perform deterministic contract management directly where possible. Before delegation, classify `final_direction_ownership: true|false`; omission blocks routing. If delegated analysis is needed, request Tier 3 `gpt-5.6-terra/high`, or Tier 4 `gpt-5.6-terra/xhigh` when the review controls compatibility, blockers, or irreversible version decisions. Promote to Tier 5 `gpt-5.6-sol/xhigh` only when one agent owns a final architecture-direction change, `final_direction_ownership` is true, the structured `architecture_direction_change` signal is true, and `signal_evidence.architecture_direction_change` is a structured reference to the controlling architecture evidence; recommendation-only schema review remains capped at Tier 4. Record routing applicability and enforcement; do not use delegated `ultra` or claim Terra/Sol execution when routing was prompt-only or inherited-unverified.
+
 When `.agent_advice/active/*.md` names schema, module, script, validation, or design-contract concerns, treat it as non-GT contract evidence. Advice can influence a `needs_review` note, task requirement, or schema planning edge, but it cannot override `.agent_goal/goal_schema_contract.md` or repository facts.
 
 For the canonical file layout and contract fields, read [contract-format.md](references/contract-format.md).
@@ -92,6 +94,7 @@ If a hook is absent, fail quiet and keep existing schema-contract rules, except 
 
 7. Report contract status.
    - Summarize created or changed `.schema/` and `.contract/` files, affected contract IDs, version changes, target modules/scripts, causal-map changes, compatibility risks, validation evidence, and how the changes satisfy `.agent_goal/goal_schema_contract.md`.
+   - Report `agent_routing_applicability: deterministic_only` unless analysis was delegated; delegated results include `policy_id`, `profile_id`, `routing_tier`, `final_direction_ownership`, requested model/effort, reason codes, signals/evidence, `routing_violations` even when empty, and routing enforcement or limitation.
    - Call out unresolved compatibility questions clearly.
 
 ## Guardrails

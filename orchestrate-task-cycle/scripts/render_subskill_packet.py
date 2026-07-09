@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -32,6 +33,26 @@ OUTPUT_DELTA_CONTRACT_CANDIDATES = (
     ".agent_goal/output_delta_contract.json",
 )
 
+MODEL_EFFORT_PROFILE_PATH = Path(__file__).resolve().parents[1] / "references" / "model-effort-profiles.json"
+MODEL_EFFORT_ROUTER_PATH = Path(__file__).resolve().parent / "model_effort_router.py"
+
+
+def load_model_effort_router() -> Any:
+    spec = importlib.util.spec_from_file_location("orchestrate_model_effort_router", MODEL_EFFORT_ROUTER_PATH)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load model-effort router: {MODEL_EFFORT_ROUTER_PATH}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+MODEL_EFFORT_ROUTER = load_model_effort_router()
+MODEL_EFFORT_POLICY = MODEL_EFFORT_ROUTER.load_policy(MODEL_EFFORT_PROFILE_PATH)
+
+
+def routing_profile(profile_id: str, request: dict[str, Any] | None = None) -> dict[str, Any]:
+    return MODEL_EFFORT_ROUTER.select_route(profile_id, request, MODEL_EFFORT_POLICY)
+
 
 def load_json(path_value: str | None) -> dict[str, Any]:
     if not path_value:
@@ -59,6 +80,23 @@ def deep_get(data: dict[str, Any], *keys: str) -> Any:
             return None
         current = current.get(key)
     return current
+
+
+def routing_request_for(profile_id: str, context: dict[str, Any], stage: dict[str, Any]) -> dict[str, Any]:
+    merged: dict[str, Any] = {"signals": {}}
+    for source in (context, stage):
+        routing = source.get("model_effort_routing") if isinstance(source.get("model_effort_routing"), dict) else {}
+        profiles = routing.get("profiles") if isinstance(routing.get("profiles"), dict) else {}
+        profile_request = profiles.get(profile_id) if isinstance(profiles.get(profile_id), dict) else {}
+        profile_signals = profile_request.get("signals") if isinstance(profile_request.get("signals"), dict) else {}
+        merged["signals"].update(profile_signals)
+        profile_evidence = profile_request.get("signal_evidence") if isinstance(profile_request.get("signal_evidence"), dict) else {}
+        if profile_evidence:
+            merged.setdefault("signal_evidence", {}).update(profile_evidence)
+        for field in ("final_direction_ownership", "request_max", "max_escalation_reason", "prior_tier5_evidence", "agent_count"):
+            if field in profile_request:
+                merged[field] = profile_request[field]
+    return merged
 
 
 def goal_truth(context: dict[str, Any]) -> list[str]:
@@ -228,6 +266,7 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
     gt = goal_truth(context)
     available_gt = available_goal_truth(context)
     authority = authority_policy(stage)
+    route = lambda profile_id: routing_profile(profile_id, routing_request_for(profile_id, context, stage))
     base: dict[str, Any] = {
         "target": target,
         "workspace": context.get("workspace"),
@@ -239,6 +278,33 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
         "advice_not_goal_truth": True,
         "context_counts": counts(context),
         "routing_reference": "/home/swfool/.codex/skills/orchestrate-task-cycle/references/workflow-routing.md",
+        "model_effort_policy": {
+            "policy_id": MODEL_EFFORT_POLICY["policy_id"],
+            "policy_path": str(MODEL_EFFORT_PROFILE_PATH),
+            "models": MODEL_EFFORT_POLICY["models"],
+            "tiers": MODEL_EFFORT_POLICY["tiers"],
+            "dynamic_routing_input": {
+                "path": "model_effort_routing.profiles.<profile_id>",
+                    "fields": ["final_direction_ownership", "signals", "signal_evidence", "request_max", "max_escalation_reason", "prior_tier5_evidence", "agent_count"],
+                "allowed_signals": MODEL_EFFORT_POLICY["dynamic_signals"],
+            },
+            "routing_result_contract": {
+                "agent_routing_applicability": "delegated|deterministic_only|delegation_unavailable",
+                "routing_enforcement": MODEL_EFFORT_POLICY["result_enforcement_values"],
+                "required_when_delegated": [
+                    "policy_id",
+                    "profile_id",
+                    "routing_tier",
+                    "requested_model",
+                    "requested_reasoning_effort",
+                    "routing_reason_codes",
+                    "routing_violations",
+                    "routing_enforcement",
+                ],
+                "optional_runtime_evidence": ["actual_model", "actual_reasoning_effort"],
+                "limitation_field": "routing_limitation",
+            },
+        },
     }
     output_delta_packet = output_delta_contract_packet(context)
     if output_delta_packet:
@@ -251,12 +317,12 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
             {
                 "skill": "$task-md-agent-governance",
                 "routing": {
-                    "code_analysis_minimum": "reasoning_effort: high",
-                    "important_review": "reasoning_effort: xhigh",
-                    "code_worker_model": "gpt-5.5",
-                    "code_worker_reasoning_default": "medium",
-                    "code_worker_reasoning_high_reliability": "high",
-                    "id_correction": "reasoning_effort: medium via $manage-task-state-index",
+                    "code_analysis": route("code_analysis"),
+                    "important_review": route("important_review"),
+                    "code_worker": route("code_worker"),
+                    "code_worker_high_reliability": route("code_worker_high_reliability"),
+                    "id_correction": route("id_index"),
+                    "code_worker_model": route("code_worker")["requested_model"],
                 },
                 "required_inputs": [
                     "task.md",
@@ -277,7 +343,8 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                 "mode": "plan",
                 "routing": {
                     "phase": "pre-implementation validation asset planning",
-                    "reasoning": "use xhigh planning agents when agent delegation is available",
+                    "planning_agents": route("validation_set"),
+                    "final_adjudication": route("validation_set_adjudication"),
                     "implementation_edits": "forbidden",
                     "label_visibility": "public criteria only; sealed labels must not be exposed to implementation workers",
                 },
@@ -393,7 +460,8 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                 "skill": "$review-cycle-output-quality",
                 "routing": {
                     "review_agent_count": "exactly one",
-                    "reviewer_reasoning": "reasoning_effort: xhigh when available",
+                    "reviewer": route("qualitative_review"),
+                    "reviewer_reasoning": route("qualitative_review")["requested_reasoning_effort"],
                     "access": "read-only direct inspection of task output artifacts",
                     "implementation_edits": "forbidden",
                 },
@@ -432,6 +500,7 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                 "skill": "$audit-cycle-loopback",
                 "routing": {
                     "phase": "post-review anti-loop packet production",
+                    "optional_threshold_reviewer": route("loopback_analysis"),
                     "implementation_edits": "forbidden",
                     "truth_policy": "recompute from raw artifacts and registry; do not trust self-declared progress",
                 },
@@ -471,6 +540,8 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                 "routing": {
                     "phase": "post-run validation asset production or refresh",
                     "reasoning": "use independent labeler/adjudicator agents only for semantic labels; deterministic scripts first",
+                    "semantic_labeler": route("validation_set"),
+                    "final_adjudicator": route("validation_set_adjudication"),
                     "implementation_edits": "forbidden",
                     "quality_claim": "default not_gold unless human-reviewed or fully deterministic authoritative evidence exists",
                 },
@@ -514,7 +585,11 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
         base.update(
             {
                 "skill": "$manage-schema-contracts",
-                "routing": {"phase": "pre-derive refresh", "implementation_edits": "forbidden"},
+                "routing": {
+                    "phase": "pre-derive refresh",
+                    "schema_planning": route("schema_planning"),
+                    "implementation_edits": "forbidden",
+                },
                 "required_inputs": [
                     "implementation summary",
                     "execution evidence or running startup evidence",
@@ -532,8 +607,12 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
             {
                 "skill": "$derive-improvement-task",
                 "routing": {
-                    "all_derivation_agents": "fixed reasoning_effort: xhigh",
-                    "id_consistency_agent": "fixed reasoning_effort: xhigh for this skill only",
+                    "evidence_inspectors": route("derive_inspector"),
+                    "cross_contract_analysis": route("derive_cross_contract"),
+                    "synthesis": route("derive_synthesis"),
+                    "exceptional_arbitration": route("exceptional_arbitration"),
+                    "id_consistency": route("id_index"),
+                    "max_requires": "Tier 5 Sol/xhigh ran first, prior_tier5_unresolved=true, prior_tier5_evidence, one agent, and max_escalation_reason",
                 },
                 "required_inputs": [
                     "completed task evidence or initial_init context",
@@ -591,7 +670,7 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                     "loop_breaker_disposition",
                     "evidence_paths",
                     "used_advice or advice disposition rationale when active advice is in scope",
-                    "degraded_agents and unavailable agent/lens notes when exact xhigh agent fanout is unavailable",
+                    "degraded_agents and unavailable agent/lens notes when the requested tiered role fanout is unavailable",
                 ],
             }
         )
@@ -599,7 +678,11 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
         base.update(
             {
                 "skill": "$manage-schema-contracts",
-                "routing": {"phase": "post-derive planned-contract reconciliation", "implementation_edits": "forbidden"},
+                "routing": {
+                    "phase": "post-derive planned-contract reconciliation",
+                    "schema_planning": route("schema_planning"),
+                    "implementation_edits": "forbidden",
+                },
                 "required_inputs": [
                     "new active task.md",
                     "retained candidate tasks",
@@ -613,7 +696,7 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
         base.update(
             {
                 "skill": "$manage-task-state-index",
-                "routing": {"id_correction": "fixed reasoning_effort: medium"},
+                "routing": {"id_correction": route("id_index"), "deterministic_scan_first": True},
                 "required_inputs": [
                     "task.md",
                     "past_task log",
@@ -634,9 +717,9 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
             {
                 "skill": "$validate-task-completion",
                 "routing": {
-                    "repository_audit": "reasoning_effort: xhigh",
-                    "oom_audit_when_relevant": "reasoning_effort: xhigh",
-                    "id_correction": "reasoning_effort: medium via $manage-task-state-index",
+                    "repository_audit": route("completion_review"),
+                    "oom_audit_when_relevant": route("completion_review"),
+                    "id_correction": route("id_index"),
                 },
                 "required_inputs": [
                     "implementation summary",
@@ -666,7 +749,10 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
         base.update(
             {
                 "skill": "$manage-implementation-issues",
-                "routing": {"issue_lifecycle": "after validation, before commit"},
+                "routing": {
+                    "issue_lifecycle": "after validation, before commit",
+                    "issue_fit_agent": route("issue_fit"),
+                },
                 "required_inputs": [
                     "validation_verdict",
                     "progress_verdict",
@@ -681,7 +767,7 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
         base.update(
             {
                 "skill": "$repo-change-commit",
-                "routing": {"commit_finalization": "fixed reasoning_effort: low"},
+                "routing": {"commit_finalization": route("commit")},
                 "required_inputs": [
                     "validation_verdict",
                     "progress_verdict",
@@ -717,6 +803,7 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                     "기준 GT",
                     "비-GT 방향성 문서",
                     "주 진행 skill",
+                    "모델/effort 라우팅",
                     "수행한 task",
                     "변경한 파일",
                     "실행한 검증",
@@ -733,7 +820,7 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
         base.update(
             {
                 "skill": "$repo-change-commit",
-                "routing": {"commit_finalization": "fixed reasoning_effort: low", "phase": "closeout artifact commit after report"},
+                "routing": {"commit_finalization": route("commit"), "phase": "closeout artifact commit after report"},
                 "required_inputs": [
                     "rendered dashboard.md",
                     "final_report.md or report draft path",

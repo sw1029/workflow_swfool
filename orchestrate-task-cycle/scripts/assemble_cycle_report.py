@@ -12,6 +12,7 @@ FIELD_ORDER = [
     "기준 GT",
     "비-GT 방향성 문서",
     "주 진행 skill",
+    "모델/effort 라우팅",
     "수행한 task",
     "변경한 파일",
     "실행한 검증",
@@ -217,6 +218,55 @@ def advice_docs(context: dict[str, Any], stage: dict[str, Any], validation: dict
         if isinstance(item, dict) and item.get("path"):
             docs.append(f"{item.get('path')}: {item.get('title', 'external advice')}")
     return docs
+
+
+def model_effort_routing_lines(context: dict[str, Any], stage: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    seen: set[str] = set()
+    for event in all_events(context, stage):
+        routing = event.get("agent_routing") if isinstance(event.get("agent_routing"), dict) else {}
+        applicability = event.get("agent_routing_applicability") or routing.get("applicability")
+        if not applicability:
+            continue
+        step = event.get("step") or event.get("target") or "unknown_step"
+        if str(applicability) == "deterministic_only":
+            line = f"{step}: deterministic_only"
+        elif str(applicability) == "delegation_unavailable":
+            limitation = event.get("routing_limitation") or routing.get("routing_limitation") or "not_recorded"
+            line = f"{step}: delegation_unavailable; limitation={limitation}"
+        else:
+            profile_id = event.get("profile_id") or routing.get("profile_id") or "unknown_profile"
+            routing_tier = event.get("routing_tier") or routing.get("routing_tier") or "?"
+            model = event.get("requested_model") or routing.get("requested_model") or "unknown_model"
+            effort = event.get("requested_reasoning_effort") or routing.get("requested_reasoning_effort") or "unknown_effort"
+            policy_id = event.get("policy_id") or routing.get("policy_id") or "unknown_policy"
+            reason_codes = event.get("routing_reason_codes") or routing.get("routing_reason_codes") or []
+            signals = event.get("routing_signals") or routing.get("routing_signals") or {}
+            violations = event.get("routing_violations")
+            if violations is None:
+                violations = routing.get("routing_violations")
+            enforcement = event.get("routing_enforcement") or routing.get("routing_enforcement") or "not_recorded"
+            actual_model = event.get("actual_model") or routing.get("actual_model")
+            actual_effort = event.get("actual_reasoning_effort") or routing.get("actual_reasoning_effort")
+            actual = f"; actual={actual_model}/{actual_effort}" if actual_model or actual_effort else ""
+            limitation = event.get("routing_limitation") or routing.get("routing_limitation")
+            limitation_text = f"; limitation={limitation}" if limitation else ""
+            max_reason = event.get("max_escalation_reason") or routing.get("max_escalation_reason")
+            max_text = f"; max_reason={max_reason}" if max_reason else ""
+            prior_evidence = event.get("prior_tier5_evidence") or routing.get("prior_tier5_evidence")
+            agent_count = event.get("agent_count") or routing.get("agent_count")
+            max_evidence_text = f"; prior_tier5_evidence={prior_evidence}; agent_count={agent_count}" if max_reason else ""
+            line = (
+                f"{step}: T{routing_tier} {profile_id} {model}/{effort}; policy={policy_id}; "
+                f"reasons={json.dumps(reason_codes, ensure_ascii=False, separators=(',', ':'))}; "
+                f"signals={json.dumps(signals, ensure_ascii=False, separators=(',', ':'))}; "
+                f"violations={json.dumps(violations, ensure_ascii=False, separators=(',', ':'))}; "
+                f"enforcement={enforcement}{actual}{limitation_text}{max_text}{max_evidence_text}"
+            )
+        if line not in seen:
+            lines.append(line)
+            seen.add(line)
+    return lines
 
 
 def changed_files(context: dict[str, Any], stage: dict[str, Any], validation: dict[str, Any], commit: dict[str, Any]) -> list[str]:
@@ -452,6 +502,7 @@ def assemble(
         "기준 GT": goal_truth(context, stage, validation) or ["없음"],
         "비-GT 방향성 문서": advice_docs(context, stage, validation) or ["없음"],
         "주 진행 skill": ["$orchestrate-task-cycle"],
+        "모델/effort 라우팅": model_effort_routing_lines(context, stage) or ["not_recorded"],
         "수행한 task": [task_line(context, validation, stage)],
         "변경한 파일": changed_files(context, stage, validation, commit) or ["없음"],
         "실행한 검증": command_results(validation, stage),

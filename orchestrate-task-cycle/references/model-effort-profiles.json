@@ -1,0 +1,263 @@
+{
+  "schema_version": 2,
+  "policy_id": "gpt-5.6-tiered-routing-v2",
+  "models": {
+    "balanced": "gpt-5.6-terra",
+    "direction": "gpt-5.6-sol"
+  },
+  "supported_efforts": [
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+    "ultra"
+  ],
+  "result_enforcement_values": [
+    "enforced",
+    "prompt_only",
+    "inherited_unverified"
+  ],
+  "prohibited_delegated_efforts": [
+    "ultra"
+  ],
+  "tiers": {
+    "1": {
+      "model": "gpt-5.6-terra",
+      "effort": "low",
+      "work_class": "mechanical_reversible"
+    },
+    "2": {
+      "model": "gpt-5.6-terra",
+      "effort": "medium",
+      "work_class": "routine_bounded"
+    },
+    "3": {
+      "model": "gpt-5.6-terra",
+      "effort": "high",
+      "work_class": "complex_analysis_or_high_reliability"
+    },
+    "4": {
+      "model": "gpt-5.6-terra",
+      "effort": "xhigh",
+      "work_class": "decisive_review_or_cross_contract_analysis"
+    },
+    "5": {
+      "model": "gpt-5.6-sol",
+      "effort": "xhigh",
+      "max_effort": "max",
+      "work_class": "core_direction_or_terminal_arbitration"
+    }
+  },
+  "dynamic_signals": [
+    "high_reliability",
+    "durable_state_mutation",
+    "security_sensitive",
+    "completion_controlling",
+    "compatibility_controlling",
+    "irreversible_cleanup",
+    "cross_contract_conflict",
+    "direction_setting",
+    "final_decision",
+    "gt_authority_conflict",
+    "terminal_disposition",
+    "task_pack_topology_change",
+    "architecture_direction_change",
+    "security_direction_decision",
+    "prior_tier5_unresolved"
+  ],
+  "tier5_signal_evidence_required": [
+    "direction_setting",
+    "final_decision",
+    "gt_authority_conflict",
+    "terminal_disposition",
+    "task_pack_topology_change",
+    "architecture_direction_change",
+    "security_direction_decision"
+  ],
+  "direction_ownership_profiles": [
+    "schema_planning"
+  ],
+  "promotion_rules": [
+    {
+      "rule_id": "high_reliability_floor",
+      "when_any": [
+        "high_reliability",
+        "durable_state_mutation",
+        "security_sensitive"
+      ],
+      "min_tier": 3
+    },
+    {
+      "rule_id": "decisive_review_floor",
+      "when_any": [
+        "completion_controlling",
+        "compatibility_controlling",
+        "irreversible_cleanup",
+        "cross_contract_conflict"
+      ],
+      "min_tier": 4
+    },
+    {
+      "rule_id": "final_direction_floor",
+      "when_all": [
+        "direction_setting",
+        "final_decision"
+      ],
+      "min_tier": 5
+    },
+    {
+      "rule_id": "critical_direction_floor",
+      "when_any": [
+        "gt_authority_conflict",
+        "terminal_disposition",
+        "task_pack_topology_change",
+        "architecture_direction_change",
+        "security_direction_decision"
+      ],
+      "min_tier": 5
+    }
+  ],
+  "max_escalation": {
+    "tier": 5,
+    "model": "gpt-5.6-sol",
+    "effort": "max",
+    "required_signal": "prior_tier5_unresolved",
+    "required_evidence_field": "prior_tier5_evidence",
+    "required_evidence_profile": "derive_synthesis",
+    "required_reason_field": "max_escalation_reason",
+    "required_agent_count": 1
+  },
+  "target_profiles": {
+    "governance": ["code_worker", "code_worker_high_reliability", "code_analysis", "important_review", "id_index"],
+    "validation_set_plan": ["validation_set", "validation_set_adjudication"],
+    "qualitative_review": ["qualitative_review"],
+    "loopback_audit": ["loopback_analysis"],
+    "validation_set_build": ["validation_set", "validation_set_adjudication"],
+    "schema_pre_derive": ["schema_planning"],
+    "derive": ["derive_inspector", "derive_cross_contract", "derive_synthesis", "exceptional_arbitration", "issue_fit", "id_index"],
+    "schema_post_derive": ["schema_planning"],
+    "index": ["id_index"],
+    "validate": ["completion_review", "id_index"],
+    "issue": ["issue_fit"],
+    "commit": ["commit"],
+    "closeout_commit": ["commit"]
+  },
+  "profiles": {
+    "coordinator": {
+      "default_tier": 3,
+      "min_tier": 3,
+      "max_tier": 5,
+      "allow_max": false
+    },
+    "coordinator_arbitration": {
+      "default_tier": 5,
+      "min_tier": 5,
+      "max_tier": 5,
+      "allow_max": true
+    },
+    "validation_set": {
+      "default_tier": 3,
+      "min_tier": 3,
+      "max_tier": 3,
+      "allow_max": false
+    },
+    "validation_set_adjudication": {
+      "default_tier": 4,
+      "min_tier": 4,
+      "max_tier": 4,
+      "allow_max": false
+    },
+    "code_worker": {
+      "default_tier": 2,
+      "min_tier": 2,
+      "max_tier": 3,
+      "allow_max": false
+    },
+    "code_worker_high_reliability": {
+      "default_tier": 3,
+      "min_tier": 3,
+      "max_tier": 3,
+      "allow_max": false
+    },
+    "code_analysis": {
+      "default_tier": 3,
+      "min_tier": 3,
+      "max_tier": 4,
+      "allow_max": false
+    },
+    "important_review": {
+      "default_tier": 4,
+      "min_tier": 4,
+      "max_tier": 4,
+      "allow_max": false
+    },
+    "loopback_analysis": {
+      "default_tier": 4,
+      "min_tier": 4,
+      "max_tier": 4,
+      "allow_max": false
+    },
+    "derive_inspector": {
+      "default_tier": 3,
+      "min_tier": 3,
+      "max_tier": 4,
+      "allow_max": false
+    },
+    "derive_cross_contract": {
+      "default_tier": 4,
+      "min_tier": 4,
+      "max_tier": 4,
+      "allow_max": false
+    },
+    "derive_synthesis": {
+      "default_tier": 5,
+      "min_tier": 5,
+      "max_tier": 5,
+      "allow_max": false
+    },
+    "exceptional_arbitration": {
+      "default_tier": 5,
+      "min_tier": 5,
+      "max_tier": 5,
+      "allow_max": true
+    },
+    "id_index": {
+      "default_tier": 2,
+      "min_tier": 2,
+      "max_tier": 2,
+      "allow_max": false
+    },
+    "schema_planning": {
+      "default_tier": 3,
+      "min_tier": 3,
+      "max_tier": 5,
+      "allow_max": false
+    },
+    "issue_fit": {
+      "default_tier": 3,
+      "min_tier": 3,
+      "max_tier": 4,
+      "allow_max": false
+    },
+    "qualitative_review": {
+      "default_tier": 4,
+      "min_tier": 4,
+      "max_tier": 4,
+      "allow_max": false,
+      "max_agent_count": 1
+    },
+    "completion_review": {
+      "default_tier": 4,
+      "min_tier": 4,
+      "max_tier": 4,
+      "allow_max": false
+    },
+    "commit": {
+      "default_tier": 1,
+      "min_tier": 1,
+      "max_tier": 1,
+      "allow_max": false
+    }
+  }
+}

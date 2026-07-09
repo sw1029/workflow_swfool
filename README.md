@@ -218,7 +218,7 @@ flowchart TD
   Governance["$task-md-agent-governance"]
   ReadTask["task.md, authority, advice, schema, code_convention_contract 읽기"]
   MapRepo["repo map<br/>git status, rg --files, manifests, tests"]
-  Workers["gpt-5.5 worker agents<br/>disjoint write scopes, authority/advice/convention 포함"]
+  Workers["Tier 2-3 gpt-5.6-terra workers<br/>medium/high, disjoint write scopes, authority/advice/convention 포함"]
   Integrate["worker changes 통합<br/>format/tests, convention_conformance 확인"]
   Inspect["$inspect-repo-with-agents<br/>3-6 read-only code/schema/authority/generalization audit"]
   CodeStructure["code_structure_audit.py<br/>depth/fan-out only with cohesion/reuse/contract evidence<br/>relocated_mechanical_shard + convention_conformance packet"]

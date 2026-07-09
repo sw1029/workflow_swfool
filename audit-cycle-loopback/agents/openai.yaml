@@ -1,4 +1,4 @@
 interface:
   display_name: "Audit Cycle Loopback"
   short_description: "Compute anti-loop adapter routing gates"
-  default_prompt: "Use $audit-cycle-loopback to compute a conservative anti-loop progress gate with adapter routing, provenance-hardened root causes, and structure high-water metrics before deriving the next task."
+  default_prompt: "Use $audit-cycle-loopback to compute a deterministic anti-loop gate, using at most one read-only Tier 4 Terra/xhigh reviewer when evidence is insufficient or near threshold; do not use Sol."

@@ -33,7 +33,8 @@ The skill is workflow evidence only. It is not goal truth, authority, validation
    - Keep `--detection-only-streak-cap` at the default `2` unless the active workflow explicitly records a different cap. This cap is root-family scoped and only controls detection-only repetition.
 3. Write the resulting packet under `.task/cycle/<cycle-id>/packets/loopback_audit_packet.json` when `$orchestrate-task-cycle` owns durable cycle artifacts.
 4. Pass the packet into `$derive-improvement-task` as `anti_loop_progress_gate`.
-5. If the packet is `insufficient_evidence` or near the hard-stop threshold, optionally ask exactly one read-only reviewer to inspect the same raw artifacts and registry. Use the more conservative disposition when reviewer and producer disagree.
+5. If the packet is `insufficient_evidence` or near the hard-stop threshold, optionally ask exactly one read-only Tier 4 `gpt-5.6-terra/xhigh` reviewer to inspect the same raw artifacts and registry. This reviewer is advisory and cannot promote to Sol; record routing enforcement, do not use `ultra`, and use the more conservative disposition when reviewer and producer disagree.
+6. Set `agent_routing_applicability: deterministic_only` when no reviewer ran. When the optional reviewer ran, include its profile, requested model/effort, routing enforcement, actual routing when exposed, and limitation.
 
 ## Domain Adapter Contract
 

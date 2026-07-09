@@ -14,7 +14,7 @@ The caller should invoke it after `$run-task-code-and-log` returns execution evi
 ## Invocation Contract
 
 - Invoke exactly one read-only reviewer agent. Do not fan out multiple reviewers, create debate panels, or let the main coordinator silently replace the reviewer.
-- Route the reviewer as important qualitative work with `reasoning_effort: xhigh` when the delegation tool exposes that field. If the tool cannot enforce it, include the requirement in the prompt and report the limitation.
+- Route the reviewer at Tier 4 with `model: gpt-5.6-terra` and `reasoning_effort: xhigh`. This read-only qualitative reviewer is capped at Tier 4 and must not use Sol. If the tool cannot enforce either field, preserve the request in the prompt, report prompt-only or inherited-unverified routing, and do not claim Terra execution. Do not use `ultra`.
 - Keep the reviewer read-only. It may inspect task outputs, generated artifacts, logs, validation bundles, `.task/`, `.agent_log/`, `.schema/`, `.contract/`, `.issue/`, `.agent_advice/`, and source/output artifacts named by task/run evidence when authority permits.
 - Do not let the reviewer edit implementation files, workflow artifacts, task state, issue state, schema records, commits, or advice lifecycle files.
 - Do not read `.env`, credentials, private keys, raw secrets, or unrelated personal data. Do not persist raw provider prompts/responses/source bodies unless the task policy explicitly allows bounded local evidence.
@@ -85,7 +85,19 @@ Return a JSON-compatible summary and, when durable evidence is required, write a
   "task_id": "task-* or unknown",
   "cycle_id": "cycle-* or unknown",
   "review_agent_count": 1,
-  "reviewer_routing": "reasoning_effort: xhigh or limitation note",
+  "agent_routing_applicability": "delegated|delegation_unavailable",
+  "policy_id": "gpt-5.6-tiered-routing-v2",
+  "profile_id": "qualitative_review",
+  "routing_tier": 4,
+  "requested_model": "gpt-5.6-terra",
+  "requested_reasoning_effort": "xhigh",
+  "routing_reason_codes": ["profile_default"],
+  "routing_signals": {},
+  "routing_signal_evidence": {},
+  "routing_violations": [],
+  "routing_enforcement": "enforced|prompt_only|inherited_unverified",
+  "routing_limitation": "required unless enforced",
+  "reviewer_routing": "structured routing evidence or limitation note",
   "review_status": "complete|partial|blocked|not_applicable",
   "quality_verdict": "acceptable|candidate_only|quality_blocked|unreviewable|not_applicable",
   "reviewed_artifacts": ["path-or-id"],

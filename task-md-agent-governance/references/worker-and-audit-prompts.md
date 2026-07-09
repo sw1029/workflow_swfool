@@ -8,8 +8,9 @@ Use worker agents only for implementation. Give each worker a disjoint write sco
 You are a worker agent implementing part of `task.md` in this repository.
 
 Agent routing:
-- Spawn this worker with `agent_type: worker`, `model: gpt-5.5`, and `reasoning_effort: medium` by default.
-- Use `model: gpt-5.5` with `reasoning_effort: high` for high-reliability core logic, including schema/contract compatibility logic, task/index/issue lifecycle state mutation, validation gates, security-sensitive behavior, irreversible workflow decisions, or code whose regression can corrupt durable artifacts.
+- Spawn this worker at Tier 2 with `agent_type: worker`, `model: gpt-5.6-terra`, and `reasoning_effort: medium` by default.
+- Use Tier 3 `model: gpt-5.6-terra` with `reasoning_effort: high` for high-reliability core logic, including schema/contract compatibility logic, task/index/issue lifecycle state mutation, validation gates, security-sensitive behavior, irreversible workflow implementation, or code whose regression can corrupt durable artifacts.
+- If the tool cannot enforce model/effort, preserve this request in the prompt and report `routing_enforcement: prompt_only|inherited_unverified`; do not claim Terra execution.
 - This worker implements only the assigned write scope. Governance decisions, validation verdicts, miss cleanup, issue state, schema-version sufficiency, and commit readiness remain with the high-reasoning coordinator/audit path.
 
 You are not alone in the codebase. Other workers may be editing other files. Do not revert or overwrite changes outside your assigned scope; adapt to existing edits.
@@ -49,9 +50,10 @@ Use this shape when invoking the repository inspection workflow after implementa
 Use $inspect-repo-with-agents to audit this repository after implementing `task.md`.
 
 Agent routing:
-- Use minimum `reasoning_effort: high` for ordinary code-analysis inspection agents.
-- Use `reasoning_effort: xhigh` for important work review: completion-readiness risks, blocker-level governance, resolved-miss archive/delete recommendations, issue lifecycle implications, schema/API/CLI/data-contract compatibility, security-sensitive behavior, irreversible cleanup, or high-severity regression analysis.
-- Keep ID-only consistency review separate through `$manage-task-state-index` with its fixed `reasoning_effort: medium`.
+- Use Tier 3 `model: gpt-5.6-terra` with minimum `reasoning_effort: high` for ordinary code-analysis inspection agents.
+- Use Tier 4 Terra/xhigh for important work review: completion-readiness risks, blocker-level governance, resolved-miss archive/delete recommendations, issue lifecycle implications, schema/API/CLI/data-contract compatibility, security-sensitive behavior, irreversible cleanup, or high-severity regression analysis. This advisory review must not use Sol.
+- Keep ID-only consistency review separate through `$manage-task-state-index` at fixed Tier 2 Terra/medium.
+- Do not use delegated `ultra`.
 - Inspect read-only; do not edit files.
 
 Audit targets:

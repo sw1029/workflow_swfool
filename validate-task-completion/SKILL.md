@@ -1,6 +1,6 @@
 ---
 name: validate-task-completion
-description: "Run a common pre-close task completion gate that combines repository audit, OOM-risk audit, environment checks, execution logs, task_miss status, issue status, active `.agent_advice` usage/status, code convention conformance, semantic structure metrics/high-water movement, task index traceability, and agent log evidence into a `complete`, `partial`, or `failed` verdict. Treat repository and OOM code-analysis audits as important work review with `reasoning_effort: xhigh`. Use before Codex declares `task.md` implemented, closes a workflow cycle, promotes or deletes artifacts, reports final completion, or verifies outputs from task lifecycle skills."
+description: "Run a common pre-close task completion gate combining repository/OOM audits, environment checks, execution logs, task_miss and issue state, advice usage, code conventions, semantic structure movement, task-index traceability, and agent logs into a `complete`, `partial`, or `failed` verdict. Use Tier 4 `gpt-5.6-terra/xhigh` for completion-controlling repository and OOM review; completion validation does not own future direction and is capped at Tier 4. Use before declaring task completion, closing a workflow cycle, promoting or deleting artifacts, or reporting final completion."
 ---
 
 # Validate Task Completion
@@ -20,10 +20,10 @@ When `task.md`, a caller packet, or active workflow evidence references `.agent_
 ## Agent Routing Policy
 
 - When called from `$orchestrate-task-cycle`, consume the canonical orchestration reference [workflow-routing.md](../orchestrate-task-cycle/references/workflow-routing.md) as caller context, but keep completion validation's own routing below.
-- Treat completion validation repository audits as important work review. Invoke `$inspect-repo-with-agents` with `reasoning_effort: xhigh` whenever the tooling exposes it.
-- Treat completion validation OOM audits as important work review when OOM risk is relevant. Invoke `$inspect-oom-risk` with `reasoning_effort: xhigh` whenever the tooling exposes it.
+- Treat completion validation repository audits as Tier 4 important work review. Invoke `$inspect-repo-with-agents` with `model: gpt-5.6-terra` and `reasoning_effort: xhigh`.
+- Treat relevant completion OOM audits the same way through `$inspect-oom-risk`.
 - Keep ID-only traceability correction routed through `$manage-task-state-index` with fixed `reasoning_effort: medium`.
-- If a tool cannot enforce the requested effort, encode the requirement in the prompt and record the limitation in the validation report.
+- If a tool cannot enforce model/effort, encode the request in the prompt and record prompt-only or inherited-unverified routing in the validation report. Do not claim Terra execution or use delegated `ultra`.
 
 ## Domain Adapter Contract
 
@@ -80,7 +80,7 @@ Do not define identifier surfaces, meaning floors, regeneration commands, storag
 
 5. Run repository audit.
    - Use `$inspect-repo-with-agents` to audit requirement coverage, regressions, maintainability, tests, and generalization gaps.
-   - Invoke this repository audit as important work review with `reasoning_effort: xhigh`.
+   - Invoke this repository audit on Terra at `reasoning_effort: xhigh`.
    - Include both existing code and changed code when implementation occurred.
    - Include `.agent_goal/goal_schema_contract.md`, `.schema/`, and `.contract/` when the task touches shared schemas, module/script contracts, serialized artifacts, CLI/script I/O, producers, consumers, versions, or compatibility.
    - Include task-referenced `.agent_advice` when present. Audit whether implementation and task artifacts handled the advice as non-GT planning evidence and did not use it to override GT, authority, or repository facts.
@@ -90,7 +90,7 @@ Do not define identifier surfaces, meaning floors, regeneration commands, storag
 
 6. Run OOM-risk audit when relevant.
    - Use `$inspect-oom-risk` when the task touches large data loading, model inference/training, batching, concurrency, caches, build/test memory pressure, containers, GPU/VRAM, or unbounded accumulation.
-   - Invoke relevant OOM-risk audit as important work review with `reasoning_effort: xhigh`.
+   - Invoke relevant OOM-risk audit on Terra at `reasoning_effort: xhigh`.
    - If no plausible memory-risk surface exists, mark the OOM gate `not_applicable`.
    - If OOM audit is relevant but not run, cap the verdict at `partial`.
 
@@ -229,6 +229,7 @@ Do not define identifier surfaces, meaning floors, regeneration commands, storag
 13. Report the outcome.
    - Lead with the verdict.
    - For `partial` or `failed`, list blockers before summarizing completed work.
+   - Include completion-audit `policy_id`, `profile_id`, `routing_tier`, requested model/effort, routing reason codes/signals, `routing_violations` even when empty, routing enforcement, actual model/effort when exposed, and limitations; distinguish deterministic-only gates from delegated audits.
    - Include the validation report path and the updated task index path.
 
 ## Validation Report Shape

@@ -64,6 +64,7 @@ When a task validation reports `progress_verdict: safety_only` or `no_progress`,
 
 7. Report status.
    - Summarize issue backend, issue ID or URL, local mirror path, branch/worktree path, linked task ID, index result, and any unresolved blockers.
+   - Report `agent_routing_applicability: deterministic_only` unless the optional issue-fit agent ran; if it ran, include the Tier 3 Terra/high profile and routing enforcement or limitation.
    - For `$orchestrate-task-cycle`, explicitly state whether the new active `task.md` is tracked by a GitHub issue or `.issue/` document.
 
 ## Orchestrated Cycle Behavior

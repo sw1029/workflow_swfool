@@ -32,6 +32,7 @@ Use these ownership rules:
 
 | Surface | Producer | Consumers | Required handoff |
 | --- | --- | --- | --- |
+| Model/effort routing evidence | Every agent-bearing owning skill | Result contract, ledger, validation, report | `policy_id`, `profile_id`, `routing_tier`, requested model/effort, reason codes/signals, Tier 5 signal evidence, routing violations even when empty, `routing_enforcement: enforced|prompt_only|inherited_unverified`, optional actual model/effort, and limitation or max prior-pass evidence when applicable. |
 | Authority policy | `$manage-agent-authority` | Governance, derive, validation, report | Policy source, effective permissions, external/API posture, strictness, escalation posture. |
 | Active advice packet | `$manage-external-advice` or orchestrator context | Governance, validation-set, review, derive, validation, report, commit | Advice ID/path, summary, actionable directives, application gates, raw-direct-reference requirement, disposition or explicit non-use rationale. |
 | Acceptance packet | `$normalize-acceptance-and-demo` | Governance, validation-scope, run planning, validation-set, loopback, derive, validation | Acceptance criteria, non-goals, demo surfaces, validation commands, forbidden shortcuts, preserved `acceptance.quantifiers`, `evidence_kind`, `item_created_at`, and `required_new_run_id` for measurable criteria, scenario contracts (`acceptance_scenarios` with premise predicates and expected terminal states), optional `acceptance_envelope_contract` from adapter `min_envelope_for`, optional `acceptance_verifier_contract` from adapter target-to-verifier mapping, required gate-hook completeness for gates named by measurable acceptance, frozen-envelope reachability and `envelope_thaw_item`/`envelope_thaw_item_required` when supplied, residual-gap value/cycle-cost comparison inputs when supplied, Part K fields for output-derived expectations, comparison parity axes, adoption-axis classification, evidence resolution requirements, and provisional/disqualified adoption state when applicable, Part L scale/freshness fields such as `acceptance_scale`, `throughput_evidence`, `unreachable_within_cycle`, `required_new_run_id`, and `decision_metadata_revision` when supplied, and Part M launch/contract fields such as `harvest_contract_preflight`, `harvest_gate_unaudited`, `harvest_risk_accepted`, `validation_predicate_contract`, `producer_directives`, `mutually_unsatisfiable_contract`, and `closed_world_collection_consumption` when supplied. |
@@ -49,6 +50,14 @@ Use these ownership rules:
 | Commit packet | `$repo-change-commit` | Dashboard, report, closeout | `commit_role`, created/skipped/blocked status, commit hash/subject when created, skipped reason when not. |
 
 ## Core Packet Contracts
+
+### Model And Effort Routing Evidence
+
+Use [model-effort-routing.md](model-effort-routing.md), [model-effort-profiles.json](model-effort-profiles.json), and `scripts/model_effort_router.py` for delegated LLM work. Request packets carry `policy_id`, `profile_id`, `routing_tier`, requested model/effort, reason codes, signals, and routing violations. Result packets carry the same selection plus `routing_enforcement`; include actual model/effort only when the runtime exposes them.
+
+`prompt_only` means the routing was written into the prompt but the delegation API did not enforce it. `inherited_unverified` means the child inherited an unverified runtime selection. Neither value proves Terra execution. A result that claims `enforced` without runtime-selectable model/effort evidence is a routing-contract defect. Deterministic scripts and direct shell commands do not need routing evidence.
+
+Do not use delegated `ultra`. Tier 5 Sol is valid only for a target/profile allowlisted final-direction role with explicit final-direction ownership and structured evidence for every active Tier 5 signal. A Sol `max` result requires one bounded `exceptional_arbitration` agent, `prior_tier5_unresolved=true`, a structured `prior_tier5_evidence` object bound to the earlier `derive_synthesis` Sol/xhigh pass and unresolved finding, and `max_escalation_reason` describing that ambiguity.
 
 ### Gate Satisfiability
 
