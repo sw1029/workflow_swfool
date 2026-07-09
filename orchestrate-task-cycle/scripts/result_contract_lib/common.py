@@ -1,0 +1,81 @@
+"""Compatibility exports shared by target rule modules and the CLI facade."""
+
+# Re-export modules intentionally expose a stable import surface.
+# ruff: noqa: F401
+
+from .accessors import (
+    boolish,
+    command_summary_omitted,
+    deep_get,
+    first_present,
+    float_value,
+    has_value,
+    list_values,
+    load_json,
+    non_empty,
+    nonzero_scalar,
+    number_value,
+    positive_count,
+    recursive_key_present,
+    value_for,
+)
+from .configuration import (
+    ADVICE_REQUIRED_TARGETS,
+    AGENT_ROUTING_TARGETS,
+    CANONICAL_LEDGER_STEPS,
+    COMMON_FIELDS,
+    LONG_RUN_REQUIRED_FIELDS,
+    LONG_RUN_ROLES,
+    LONG_RUN_STATUSES,
+    MODEL_EFFORT_POLICY,
+    MODEL_EFFORT_ROUTER,
+    PACK_DISPOSITIONS,
+    PACK_MUTATION_DISPOSITIONS,
+    ROUTING_ENFORCEMENT_VALUES,
+    RUNNING_FIELDS,
+    SUPPORTED_AGENT_EFFORTS,
+    SUPPORTED_AGENT_MODELS,
+    TARGETS,
+)
+from .integrity import (
+    actual_report_body_divergences,
+    report_key_divergences,
+    report_key_duplicate_matches,
+)
+from .scope import (
+    active_advice_present,
+    active_task_pack_present,
+    add,
+    advice_handling_rationale_present,
+    task_pack_in_scope,
+)
+from .task_routing import (
+    ADOPTION_AXIS_TASK_KINDS,
+    BLOCKER_CONTRACT_REPAIR_TASK_KINDS,
+    CLASSIFICATION_REPAIR_TASK_KINDS,
+    COLLECTION_CONSUMPTION_TASK_KINDS,
+    COMMAND_PROVENANCE_TASK_KINDS,
+    CONTRACT_SATISFIABILITY_TASK_KINDS,
+    CURRENT_LANE_TASK_KINDS,
+    CYCLE_REACHABILITY_TASK_KINDS,
+    DECISION_FRESHNESS_TASK_KINDS,
+    ENVELOPE_THAW_TASK_KINDS,
+    EXPECTATION_REBASELINE_TASK_KINDS,
+    HARVEST_GATE_TASK_KINDS,
+    INSTRUMENTATION_TASK_KINDS,
+    METRIC_BASIS_TASK_KINDS,
+    PARITY_AXIS_TASK_KINDS,
+    PORTFOLIO_QUOTA_TASK_KINDS,
+    PRODUCER_SUPPLY_TASK_KINDS,
+    REHARVEST_TASK_KINDS,
+    REPORT_KEY_REPAIR_TASK_KINDS,
+    RESOLUTION_REPAIR_TASK_KINDS,
+    SCENARIO_REPAIR_TASK_KINDS,
+    SCENARIO_SUPPLY_TASK_KINDS,
+    STOCHASTIC_CONTRACT_TASK_KINDS,
+    SURFACE_FIELD_TASK_KINDS,
+    allowed_task_kinds_from_basis,
+    forced_task_kind,
+    selected_disposition,
+    selected_task_kind_value,
+)

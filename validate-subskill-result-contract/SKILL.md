@@ -11,6 +11,8 @@ Use this skill as a stage gate between orchestration phases. It checks whether t
 
 Use `/home/swfool/.codex/skills/orchestrate-task-cycle/scripts/result_contract.py` for deterministic validation.
 
+`result_contract.py` is the stable CLI and `validate(target, result, mode)` facade. Reusable implementation lives under `scripts/result_contract_lib/`: `RuleContext` and the abstract `ContractRule`/`TargetContractRule` hierarchy own the extension contract, `RuleRegistry` composes ordered rules, common modules own configuration/access/integrity/task-routing helpers, and `rules/` owns one target-specific validator class per result family. Add or test a target rule through the registry instead of expanding the facade.
+
 ## Workflow
 
 1. Choose the target: `governance`, `validation_set_plan`, `run`, `qualitative_review`, `validation_set_build`, `schema_pre_derive`, `derive`, `schema_post_derive`, `index`, `validate`, `issue`, `commit`, `report`, or `closeout_commit`.
