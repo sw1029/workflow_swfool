@@ -15,6 +15,15 @@ External advice under `.agent_advice/active/*.md` is not authority evidence. It 
 
 Use [agent-authority-template.md](references/agent-authority-template.md) for both `.agent_goal/agent_authority.md` and `.interview/drafts/agent_authority.md`.
 
+## Domain Adapter Contract
+
+Prefer project-owned policy and escalation adapters over authority-local domain assumptions. The module or caller packet may expose:
+
+- `policy_consumption_sites(policy_id, **context) -> list|dict`: optional S8 helper returning opaque judgment sites and `reflects_policy: bool` for an authorized authority or acceptance-policy change. If any site reports `reflects_policy=false`, record `policy_propagation_incomplete` debt and route a derive/update item for that site; do not declare the policy fully applied from producer-layer updates alone. If absent or malformed, fail quiet to existing authority validation and emit `propagation=unverified` when policy application is claimed.
+- `authority_axis_classify(required_input, granted_authorities, **context) -> dict`: optional S5 helper classifying escalation inputs as `already_granted`, `self_resolvable`, or `genuine_authority`, with opaque evidence refs. Only `genuine_authority` remains a user-escalation candidate. If absent or malformed, fail quiet, keep the existing escalation interpretation, and emit `authority_axis_unclassified`.
+
+Do not define policy-consumption sites, authority axes, self-resolution meanings, or domain-specific permission units in this skill. S8 propagation debt is visibility and backlog routing only; S5 classification narrows escalation inputs but does not grant new authority.
+
 ## Workflow
 
 1. Locate the workspace root.
@@ -48,6 +57,8 @@ Use [agent-authority-template.md](references/agent-authority-template.md) for bo
    - Confirm the file does not grant network, API, destructive, credentialed, long-running, filesystem, or external-service authority that the active session lacks.
    - Confirm the file states that current system/developer/user instructions and active tool/sandbox permissions have precedence.
    - Confirm the newest explicit user instruction controls the current turn when it conflicts with stored goal authority, but do not let downstream workflow artifacts cite "latest user instruction" as a durable supersession unless they preserve a verifiable timestamp or log/transcript path plus the quoted instruction text.
+   - When an update claims a policy change is applied, use S8 `policy_consumption_sites` when supplied to verify all opaque judgment sites reflect the policy. Sites with `reflects_policy=false` are `policy_propagation_incomplete` debt and derive backlog, not a hard validation failure by themselves. Missing hook evidence is `propagation=unverified` warning evidence.
+   - When a workflow packet asks for user escalation, use S5 `authority_axis_classify` when supplied to remove `already_granted` inputs and route `self_resolvable` inputs away from user escalation. If the hook is absent, keep the existing escalation set with `authority_axis_unclassified`.
    - Confirm secrets, credentials, private keys, tokens, sensitive transcripts, and large copyrighted excerpts are absent.
 
 6. Report outcome.
@@ -67,6 +78,8 @@ Use [agent-authority-template.md](references/agent-authority-template.md) for bo
 - Do not use this file to bypass sandbox, approval, network, filesystem, tool, model, or higher-priority instruction limits.
 - Do not treat `.agent_advice` as authority or permission evidence. Advice can only narrow/clarify after explicit user-supported update and validation.
 - Do not infer permission for API calls, network access, external services, destructive operations, credential use, costly actions, long-running jobs, or broad direction changes from silence.
+- Do not declare an authority or acceptance-policy change fully propagated when S8 reports any consumer site with `reflects_policy=false`; record debt and follow-up instead. Missing propagation evidence is `propagation=unverified`, not fail-close.
+- Do not escalate inputs that S5 classifies as `already_granted` or `self_resolvable`; keep missing classifier evidence as `authority_axis_unclassified` rather than inventing authority axes.
 - Do not overwrite `.agent_goal/agent_authority.md` wholesale unless it is empty, placeholder-only, explicitly replaced by the user, or being created for the first time.
 - Do not write final authority policy from `.interview/drafts/agent_authority.md` unless `$deep-interview-goal-context` reports final user confirmation, evidence-consistency confirmation, final critical review confirmation, and `agent_write_confirmed: yes`.
 - Do not store secrets, credentials, private keys, tokens, sensitive raw transcripts, or large copyrighted excerpts in `.agent_goal/agent_authority.md` or `.interview/drafts/agent_authority.md`.

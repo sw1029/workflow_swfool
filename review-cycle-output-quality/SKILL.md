@@ -39,6 +39,7 @@ Ask the reviewer to directly open and inspect the named artifacts. The reviewer 
 Prefer caller-supplied adapter packets over reviewer-local domain assumptions. The reviewer may consume these optional hooks only through opaque ids, scalars, and enums:
 
 - `substance_density(metric_id, **context) -> dict`: optional N1 helper returning `referent_meaning_ratio`, `opaque_surrogate_ratio`, and adapter-owned `floor` for a metric target. The adapter owns what counts as referent meaning, opaque surrogate, and threshold. If absent, fail quiet with `substance_density_unchecked=true` and keep existing semantic-readiness/substance review behavior.
+- `output_body_locator(manifest, **context) -> dict`: optional S2 helper returning producer-declared body locations such as `body_dir`, `required_files`, opaque schema/layout ids, and optional evidence refs. Use it before any artifact-present or empty judgment. If declared required files exist at the producer-declared body location, do not mark the output `missing_or_empty` only because a fixed legacy path is empty. If the hook is absent or malformed, fail quiet to existing fixed-path lookup and record `path_binding=fixed_only` / `output_body_locator_unverified`; if manifest layout differs from reviewer expectations, record `layout_drift=true` and fall back to the producer-declared path without inventing repo-specific paths.
 - `landed_feature_inventory(**context) -> dict`: optional P1 helper returning adapter-owned landed feature classes and the authorized set expected on a representative output. The reviewer compares only opaque class ids against output-manifest `feature_classes_present` when available. If absent, fail quiet and keep existing output-quality review behavior.
 - `feature_presence_evidence(feature_class, artifact_root, **context) -> dict`: optional Q2 helper returning `presence_field`, `observed_count`, `min_count`, `artifact_body_present`, and optional opaque evidence ids for a representative output body. When supplied, P1 `present` is true only when `artifact_body_present=true` and `observed_count >= min_count`; metadata-only pointers, manifests, or other artifact existence cannot satisfy presence. If absent, fail quiet to existing P1 review and record `presence_basis=manifest_declaration_only` when the manifest is the only basis.
 
@@ -48,7 +49,7 @@ Do not define domain lexicons, identifier surface forms, source-language rules, 
 
 Ask the reviewer to cover only dimensions relevant to the produced artifact:
 
-- `artifact_presence`: expected outputs exist, are readable, and are in the intended location.
+- `artifact_presence`: expected outputs exist, are readable, and are in the intended location. For existence/empty judgments, first resolve the body through S2 `output_body_locator` when a producer manifest is supplied; producer-declared body files prevent `missing_or_empty` even if a fixed legacy directory is empty. When the hook is absent, keep the fixed-path legacy check but report `path_binding=fixed_only` / `output_body_locator_unverified`; when the manifest schema or layout id differs from reviewer expectations, report `layout_drift` and use the declared path fallback. Do not infer output-layer paths from project-specific names in this skill.
 - `format_contract`: files parse and follow the expected schema, report, dashboard, KG, or validation shape.
 - `content_coverage`: output covers the task's material requirements and important source/output regions.
 - `semantic_quality`: labels, entities, relations, claims, summaries, visuals, or decisions are meaningful rather than generic or meta-process filler.
@@ -89,6 +90,9 @@ Return a JSON-compatible summary and, when durable evidence is required, write a
   "quality_verdict": "acceptable|candidate_only|quality_blocked|unreviewable|not_applicable",
   "reviewed_artifacts": ["path-or-id"],
   "direct_read_scope": ["path-or-class"],
+  "path_binding": "producer_declared|fixed_only|not_applicable",
+  "layout_drift": false,
+  "output_body_locator_unverified": false,
   "qualitative_findings": [
     {
       "severity": "high|medium|low|info",
@@ -186,6 +190,7 @@ Use `review_status` as the owning skill result status. When the orchestration le
 - Pass the result to `$manage-schema-contracts` before derivation when the review found schema, evidence, or artifact-contract gaps.
 - Pass the result to `$record-visible-increment` as explanatory context only; it is not validation evidence by itself.
 - Pass the result into `$derive-improvement-task` as `qualitative_review_packet`. The derivation portfolio packet should synthesize this review with run evidence, schema status, advice disposition, progress-loop detection, issues, misses, and goal alignment.
+- When reviewing artifact presence or emptiness from a producer manifest, apply S2 path binding before judging output absence: if `output_body_locator` supplies declared `body_dir` and `required_files` and those files exist, report the output as present/readable rather than `missing_or_empty`; if the hook is absent, preserve the old fixed-path behavior but carry `path_binding=fixed_only` and `output_body_locator_unverified`; if layout drift is observed, warn with `layout_drift=true` and use the declared path fallback. Keep this as Part M/N input rebinding only; do not add a new detector or report.
 - When `produced_domain_delta` is false, `changed_vs_previous` is false, `semantic_progress` is false, or `metadata_only` is true, require downstream derivation to treat the cycle as `governance_only` unless independent validated positive evidence proves otherwise. Do not let metadata-only measurement, non-empty counts, lineage, or gap reports masquerade as goal-productive output.
 - When strict runner validation and output-delta disagree, carry both evidence paths and set `authoritative_semantic_progress` to the conservative output-delta value. Do not let strict runner pass override output-delta/review readiness.
 - When `coverage_quality_delta_reconciliation_gate.status=block`, report the disagreement and cap measurement/oracle/rung progress unless strict changed-and-semantic primary-output evidence independently proves progress.
