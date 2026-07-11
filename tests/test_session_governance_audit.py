@@ -19,6 +19,8 @@ CONSUMER = (
     / "result_contract_lib"
     / "session_audit.py"
 )
+MODE_SCRIPT = ROOT / "orchestrate-task-cycle" / "scripts" / "mode_profile.py"
+MODE_REGISTRY = ROOT / "orchestrate-task-cycle" / "references" / "mode-profiles.json"
 
 
 def load(path: Path, name: str) -> Any:
@@ -31,6 +33,7 @@ def load(path: Path, name: str) -> Any:
 
 audit = load(SCRIPT, "session_audit_producer")
 consumer = load(CONSUMER, "session_audit_consumer")
+mode_profile = load(MODE_SCRIPT, "session_audit_mode_profile")
 
 
 def write_jsonl(path: Path, events: list[Any]) -> None:
@@ -506,6 +509,46 @@ def test_ambiguous_or_unbound_observation_cannot_be_consumable(
     unbound, _ = audit.inspect(tmp_path, source, tool="codex")
     assert unbound["binding"] == {"status": "unbound"}
     assert unbound["consumable"] is False
+
+
+def test_unattended_index_repair_requires_validated_nondefault_mode_resolution(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "logs" / "codex" / "repair.jsonl"
+    write_jsonl(source, codex_events("repair-source"))
+    audit.inspect(
+        tmp_path,
+        source,
+        tool="codex",
+        cycle_id="cycle-repair",
+        task_id="task-repair",
+    )
+    profile = mode_profile.load_profile(MODE_REGISTRY, "audit-index-repair")
+    resolution = mode_profile.resolve_profile(
+        profile,
+        activation_source="caller_policy",
+    )
+    resolution_path = tmp_path / ".task" / "mode-resolution.json"
+    resolution_path.write_text(json.dumps(resolution), encoding="utf-8")
+
+    receipt, output = audit.auto_rebuild_index(tmp_path, resolution_path)
+
+    assert output == tmp_path / ".task" / "session_audit" / "index.json"
+    assert receipt["artifact_kind"] == "workflow_mode_repair_receipt"
+    assert receipt["resolution_id"] == resolution["resolution_id"]
+    assert receipt["operation"] == "rebuild_index"
+    assert receipt["target"] == ".task/session_audit/index.json"
+    assert receipt["before_sha256"] is None
+    assert receipt["after_sha256"] == audit.digest(output.read_bytes())
+    assert receipt["not_goal_truth"] is True
+    assert receipt["not_validation_evidence"] is True
+
+    forged = json.loads(json.dumps(resolution))
+    forged["activation_source"] = "default"
+    forged_path = tmp_path / ".task" / "forged-mode-resolution.json"
+    forged_path.write_text(json.dumps(forged), encoding="utf-8")
+    with pytest.raises(audit.AuditError, match="mode resolution is invalid"):
+        audit.auto_rebuild_index(tmp_path, forged_path)
 
 
 def test_cli_is_fail_quiet_for_quarantine_but_validation_detects_tamper(

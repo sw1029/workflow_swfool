@@ -37,7 +37,7 @@ SEMANTIC_AXIS_PATTERNS: tuple[tuple[str, str], ...] = (
 ROOT_AXIS_PATTERNS: tuple[tuple[str, str], ...] = (
     (
         "source_to_llm_output_execution",
-        r"openai|provider|credential|dispatch|llm|api|source[-_ ]?backed|"
+        r"provider|credential|dispatch|llm|api|source[-_ ]?backed|"
         r"provider[-_ ]?neutral.*(?:kg|validation[-_ ]?set|oracle|quality)",
     ),
     ("validation_oracle_quality", r"validation[-_ ]?set|oracle|split|leakage|holdout|quality[-_ ]?review"),
@@ -49,13 +49,9 @@ REGISTRY_REL_PATH = ".task/dedup_symbol_registry.jsonl"
 DISPOSITION_UNIVERSE = {"goal_productive", "consolidation", "terminal_blocked", "user_escalation"}
 SAFETY_VALVES = {"terminal_blocked", "user_escalation"}
 CONSOLIDATION_STREAK_CAP = 2
-QUALITY_DELTA_KEYS = (
-    "event_named_ratio",
-    "proper_noun_character_ratio",
-    "coreference_resolved_ratio",
-    "causal_edge_count",
-    "windows_covered",
-)
+# Compatibility export only. Metric names and aliases come from an explicit
+# quality_delta_policy packet supplied by a repository adapter/provider.
+QUALITY_DELTA_KEYS: tuple[str, ...] = ()
 KG_NODE_EDGE_FILES = {"kg_nodes.jsonl", "kg_edges.jsonl"}
 INPUT_MANIFEST_NAMES = {"input_manifest.json", "hash_summary.json"}
 PATH_FIELD_NAMES = {
@@ -121,7 +117,7 @@ TERMINAL_QUIESCENCE_STREAK_DEFAULT = 2
 TERMINAL_ESCALATION_STREAK_DEFAULT = 2
 FACET_SUFFIX_RE = re.compile(
     r"([_.:/|-])(?:v\d+|ver\d+|version\d+|facet|variant|case|mode|phase|stage|"
-    r"vocab|pov|timing|typing|schema|contract|gate|metric|oracle|validator|lineage|"
+    r"vocab|timing|typing|schema|contract|gate|metric|oracle|validator|lineage|"
     r"coverage|preflight|handoff|packet|dashboard|report|field|scalar|check|review|surface)$",
     re.IGNORECASE,
 )

@@ -70,6 +70,16 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
         gate_inputs.extend(extract_disposition_gates(load_json_value(root, raw_gate)))
     runner_validation = load_json_value(root, getattr(args, "runner_validation_json", None))
     output_delta = load_json_value(root, getattr(args, "output_delta_json", None))
+    quality_delta_policy_value, quality_delta_policy_error = call_adapter(
+        domain_adapter,
+        "quality_delta_policy",
+        root=root,
+        artifact_paths=[rel_path(root, path) for path in paths],
+        quality_vector=quality,
+        output_delta=output_delta,
+        runner_validation=runner_validation,
+    )
+    quality_delta_policy = normalize_quality_delta_policy(quality_delta_policy_value)
     terminal_self_resolution = terminal_self_resolution_gate(runner_validation, output_delta, *gate_inputs)
     if bool_value(terminal_self_resolution.get("goal_terminal_prohibited")):
         gate_inputs.append(
@@ -170,6 +180,7 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
     if previous_adapter_high:
         prev_high = {**prev_high, **previous_adapter_high}
         previous_baseline_source = "domain_adapter.previous_accepted_fp"
+    prev_high = quality_high_water_for_policy(prev_high, quality_delta_policy)
     changed_vs_previous = bool(prev_fingerprint and quality.get("current_output_fingerprint") != prev_fingerprint)
     facet_map_error: str | None = None
     facet_map_value = load_json_value(root, getattr(args, "facet_root_map_json", None))
@@ -185,7 +196,13 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
             facet_map_value = None
     facet_root_map = normalize_facet_root_map(facet_map_value)
     preliminary_changed = bool(prev_fingerprint and quality.get("current_output_fingerprint") != prev_fingerprint)
-    preliminary_semantic = False if insufficient_reason else semantic_progress_from_high_water(quality, prev_high, provider_request_count, args.epsilon)
+    preliminary_semantic = False if insufficient_reason else semantic_progress_from_high_water(
+        quality,
+        prev_high,
+        provider_request_count,
+        args.epsilon,
+        quality_delta_policy,
+    )
     current_terminal_outcome_key = terminal_outcome_key(output_delta, preliminary_changed, preliminary_semantic)
     raw_root_family_key = collapse_root_family(facet_root_map, current_root_key, args.semantic_signature, args.artifact_family)
     terminal_family_key, terminal_family_source, terminal_family_fallback = terminal_outcome_root_family(
@@ -288,7 +305,15 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
     current_check_ids.update(extract_check_ids(measurement_ids_value, runner_validation, output_delta, quality, gate_inputs))
     current_frontiers = {frontier_key(item) for item in getattr(args, "measurement_frontier", []) or [] if item}
     current_frontiers.update(extract_frontier_observations(runner_validation, output_delta, quality, gate_inputs))
-    coverage_gate = coverage_quality_delta_gate(quality, prev_high, provider_request_count, args.epsilon)
+    coverage_gate = coverage_quality_delta_gate(
+        quality,
+        prev_high,
+        provider_request_count,
+        args.epsilon,
+        quality_delta_policy,
+    )
+    if quality_delta_policy_error:
+        coverage_gate["quality_delta_policy_error"] = quality_delta_policy_error
     substance_value = load_json_value(root, getattr(args, "substance_metrics_json", None))
     if substance_value is None:
         substance_value, substance_error = call_adapter(
@@ -334,7 +359,7 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
         runner_validation=runner_validation,
         family_key=family_key,
         root_key=current_root_key,
-        candidate_metric_keys=[*QUALITY_DELTA_KEYS, *sorted(numeric_vector(current_substance))],
+        candidate_metric_keys=[*quality_delta_policy["keys"], *sorted(numeric_vector(current_substance))],
     )
     evidence_provenance, evidence_provenance_provided = normalize_evidence_provenance(evidence_provenance_value)
     coverage_gate, independent_coverage_fields, attested_coverage_fields = apply_evidence_provenance_filter(
@@ -548,7 +573,13 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
         evidence_class = "computed"
         allowed_high_water_keys = set(coverage_gate.get("improved_fields") or []) if evidence_provenance_provided else None
         high_water = (
-            updated_high_water(quality, prev_high, provider_request_count, allowed_high_water_keys)
+            updated_high_water(
+                quality,
+                prev_high,
+                provider_request_count,
+                allowed_high_water_keys,
+                quality_delta_policy,
+            )
             if semantic_progress
             else prev_high
         )

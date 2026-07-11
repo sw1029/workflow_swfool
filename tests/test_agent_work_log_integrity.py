@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 import subprocess
@@ -28,6 +29,26 @@ def load_module(path: Path, name: str) -> Any:
 work_log = load_module(
     ROOT / "record-agent-work-log" / "scripts" / "write_agent_log.py",
     "agent_work_log_integrity_tests",
+)
+cycle_context = load_module(
+    ROOT / "orchestrate-task-cycle" / "scripts" / "collect_cycle_context.py",
+    "agent_work_log_cycle_context_tests",
+)
+completion_evidence = load_module(
+    ROOT / "validate-task-completion" / "scripts" / "collect_completion_evidence.py",
+    "agent_work_log_completion_evidence_tests",
+)
+task_state_index = load_module(
+    ROOT / "manage-task-state-index" / "scripts" / "task_state_index.py",
+    "agent_work_log_task_state_index_tests",
+)
+advice_registry = load_module(
+    ROOT / "manage-external-advice" / "scripts" / "advice_registry.py",
+    "agent_work_log_advice_registry_tests",
+)
+progress_loop = load_module(
+    ROOT / "orchestrate-task-cycle" / "scripts" / "detect_progress_loop.py",
+    "agent_work_log_progress_loop_tests",
 )
 
 
@@ -86,15 +107,47 @@ def test_record_contains_versions_status_retention_and_sensitivity(tmp_path: Pat
     assert record["status"] == "informational"
     assert record["retention_class"] == "immutable-evidence"
     assert record["sensitivity"] == "internal"
+    assert record["body_sha256"] == hashlib.sha256(Path(result["path"]).read_bytes()).hexdigest()
+    assert record["content_id"] == f"log-content-{record['body_sha256'][:32]}"
+    assert record["record_id"] == work_log.expected_record_id(record)
     assert f"- Log ID: {record['log_id']}" in body
     assert "- Retention class: immutable-evidence" in body
     assert "- Sensitivity: internal" in body
+    for collector in (cycle_context.collect_agent_log, completion_evidence.collect_agent_log):
+        integrity = collector(tmp_path, 10)["integrity"]
+        assert integrity["status"] == "valid"
+        assert integrity["verified_count"] == 1
 
 
 def test_blank_direct_input_cannot_be_labeled_completed(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="must be explicitly non-empty"):
         work_log.write_log(args_for(tmp_path, status="completed", result=""))
     assert not (tmp_path / ".agent_log").exists()
+
+
+def test_external_advice_handoff_uses_integrity_bound_writer(tmp_path: Path) -> None:
+    relative = advice_registry.write_past_advice_log(
+        tmp_path,
+        {
+            "advice_id": "advice-1",
+            "title": "Use bounded evidence",
+            "path": ".agent_advice/active/advice-1.md",
+            "raw_source_path": ".agent_advice/raw/advice-1.md",
+        },
+        "task.md:12",
+        "Applied to the active task.",
+    )
+
+    assert relative.startswith(".agent_log/")
+    integrity = cycle_context.collect_agent_log(tmp_path, 10)["integrity"]
+    assert integrity["status"] == "valid"
+    assert integrity["verified_count"] == 1
+    records = [
+        json.loads(line)
+        for line in (tmp_path / ".agent_log" / "index.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert records[0]["title"].startswith("past_advice:")
+    assert records[0]["body_sha256"]
 
 
 def test_legacy_index_is_readable_and_new_record_is_versioned(tmp_path: Path) -> None:
@@ -185,3 +238,99 @@ def test_concurrent_cli_processes_share_the_workspace_lock(tmp_path: Path) -> No
     assert len(rows) == 12
     assert len({row["log_id"] for row in rows}) == 12
     assert all((tmp_path / row["path"]).is_file() for row in rows)
+
+
+def test_agent_log_symlink_is_rejected_without_writing_or_collecting_outside(
+    tmp_path: Path,
+) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-agent-log"
+    outside.mkdir()
+    (outside / "secret.md").write_text("# outside secret\n", encoding="utf-8")
+    (tmp_path / ".agent_log").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symlink|workspace"):
+        work_log.write_log(args_for(tmp_path))
+
+    assert sorted(path.name for path in outside.iterdir()) == ["secret.md"]
+    for collector in (cycle_context.collect_agent_log, completion_evidence.collect_agent_log):
+        projection = collector(tmp_path, 10)
+        assert projection["integrity"]["status"] == "unsafe"
+        assert projection["markdown_count"] == 0
+        assert "outside secret" not in json.dumps(projection, sort_keys=True)
+    discovered = task_state_index.discover_standard_artifacts(tmp_path)
+    assert not any(item_type in {"agent_log", "past_task"} for item_type, *_ in discovered)
+    assert "outside secret" not in json.dumps(discovered, sort_keys=True)
+    assert not progress_loop.candidate_files(tmp_path)
+
+
+def test_body_tampering_fails_closed_and_is_reported_by_collectors(tmp_path: Path) -> None:
+    result = work_log.write_log(args_for(tmp_path))
+    Path(result["path"]).write_text("tampered\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="body SHA-256 mismatch"):
+        work_log.write_log(args_for(tmp_path, 1))
+
+    for collector in (cycle_context.collect_agent_log, completion_evidence.collect_agent_log):
+        projection = collector(tmp_path, 10)
+        assert projection["integrity"]["status"] == "invalid"
+        assert projection["integrity"]["tampered_count"] == 1
+        assert "agent_log_body_hash_mismatch" in {
+            finding["code"] for finding in projection["integrity"]["findings"]
+        }
+    assert not any(
+        item_type in {"agent_log", "past_task"}
+        for item_type, *_ in task_state_index.discover_standard_artifacts(tmp_path)
+    )
+    assert not any(
+        ".agent_log" in path.parts
+        for path in progress_loop.candidate_files(tmp_path)
+    )
+
+
+def test_duplicate_ids_and_paths_fail_closed(tmp_path: Path) -> None:
+    work_log.write_log(args_for(tmp_path))
+    index = tmp_path / ".agent_log" / "index.jsonl"
+    row = index.read_text(encoding="utf-8")
+    index.write_text(row + row, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="duplicate log_id"):
+        work_log.write_log(args_for(tmp_path, 1))
+
+    for collector in (cycle_context.collect_agent_log, completion_evidence.collect_agent_log):
+        integrity = collector(tmp_path, 10)["integrity"]
+        assert integrity["status"] == "invalid"
+        assert integrity["duplicate_count"] >= 2
+
+
+def test_orphan_markdown_fails_closed_and_is_reported(tmp_path: Path) -> None:
+    work_log.write_log(args_for(tmp_path))
+    orphan = tmp_path / ".agent_log" / "2026-01-01" / "orphan.md"
+    orphan.parent.mkdir(parents=True)
+    orphan.write_text("# orphan\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="orphan agent-log Markdown"):
+        work_log.write_log(args_for(tmp_path, 1))
+
+    for collector in (cycle_context.collect_agent_log, completion_evidence.collect_agent_log):
+        projection = collector(tmp_path, 10)
+        assert projection["integrity"]["status"] == "invalid"
+        assert projection["integrity"]["orphan_count"] == 1
+        assert projection["integrity"]["orphan_paths"] == [
+            ".agent_log/2026-01-01/orphan.md"
+        ]
+
+
+def test_nested_agent_log_symlink_component_is_rejected(tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-nested-agent-log"
+    outside.mkdir()
+    log_root = tmp_path / ".agent_log"
+    log_root.mkdir()
+    (log_root / "2099-01-01").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symlink"):
+        work_log.write_log(args_for(tmp_path))
+
+    for collector in (cycle_context.collect_agent_log, completion_evidence.collect_agent_log):
+        projection = collector(tmp_path, 10)
+        assert projection["integrity"]["status"] == "unsafe"
+        assert projection["markdown_count"] == 0

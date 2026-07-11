@@ -14,6 +14,12 @@ import threading
 from pathlib import Path
 from typing import Any, Iterator
 
+AGENT_LOG_SCRIPTS = Path(__file__).resolve().parents[2] / "record-agent-work-log" / "scripts"
+if str(AGENT_LOG_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(AGENT_LOG_SCRIPTS))
+
+from agent_log_integrity import inspect_agent_log_store  # noqa: E402
+
 try:
     import fcntl
 except ImportError:  # pragma: no cover - Windows fallback keeps thread safety only.
@@ -980,9 +986,9 @@ def discover_standard_artifacts(root: Path) -> list[tuple[str, str, str, str]]:
         for path in sorted(id_audit_dir.glob("*.md")):
             artifacts.append(("audit", rel_path(root, path), "logged", read_title(path)))
 
-    log_dir = root / ".agent_log"
-    if log_dir.is_dir():
-        for path in sorted(log_dir.rglob("*.md")):
+    log_integrity, log_markdown, _ = inspect_agent_log_store(root)
+    if log_integrity["status"] in {"valid", "legacy_unverified"}:
+        for path in log_markdown:
             title = read_title(path)
             item_type = "past_task" if "past_task" in title.lower() or "past-task" in path.name.lower() else "agent_log"
             artifacts.append((item_type, rel_path(root, path), "logged", title))

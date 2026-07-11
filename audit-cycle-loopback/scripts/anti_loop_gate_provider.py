@@ -14,14 +14,12 @@ from anti_loop_provider import api as _api  # noqa: E402
 
 
 _DOMAIN_ADAPTER_MODULE: Any | None = None
-_QUALITY_METRICS_MODULE: Any | None = None
 
 
 def _sync_runtime_to_api() -> None:
     _api.set_runtime_caches(
         {
             "_DOMAIN_ADAPTER_MODULE": globals().get("_DOMAIN_ADAPTER_MODULE"),
-            "_QUALITY_METRICS_MODULE": globals().get("_QUALITY_METRICS_MODULE"),
         }
     )
 
@@ -29,7 +27,6 @@ def _sync_runtime_to_api() -> None:
 def _sync_runtime_from_api() -> None:
     caches = _api.get_runtime_caches()
     globals()["_DOMAIN_ADAPTER_MODULE"] = caches.get("_DOMAIN_ADAPTER_MODULE")
-    globals()["_QUALITY_METRICS_MODULE"] = caches.get("_QUALITY_METRICS_MODULE")
 
 
 def evaluate(args: Any) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
@@ -57,7 +54,6 @@ __all__ = sorted(
         "evaluate",
         "main",
         "_DOMAIN_ADAPTER_MODULE",
-        "_QUALITY_METRICS_MODULE",
         *[name for name in _api.__all__ if name not in {"evaluate", "main"}],
     }
 )

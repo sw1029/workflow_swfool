@@ -17,7 +17,7 @@ For local issue file structure and fields, read [issue-format.md](references/iss
 
 When a task validation reports `progress_verdict: safety_only` or `no_progress`, preserve that distinction in the issue update. Do not describe a still-open issue as substantively advanced merely because a no-live/fail-closed guardrail passed.
 
-When session governance is available, consume only a validated privacy-safe packet from [$audit-session-governance](../audit-session-governance/SKILL.md). An independently referenced canonical mismatch may support opening or updating an issue; transcript-only observation, capture absence, quarantine, or an incomplete packet cannot establish resolution, authority, or a blocker by itself unless acceptance/caller independently required the audit.
+When session governance is available, consume only a trusted-collector privacy-safe projection from [$audit-session-governance](../audit-session-governance/SKILL.md). A separate deterministic comparator receipt may support opening or updating an issue; a session-owned canonical claim, transcript-only observation, capture absence, quarantine, or incomplete packet cannot establish resolution, authority, or a blocker by itself unless acceptance/caller independently required audit completeness.
 
 ## Workflow
 
@@ -38,7 +38,7 @@ When session governance is available, consume only a validated privacy-safe pack
    - Derive the issue title from the active `task.md` objective or validation blocker.
    - Include goal fit, task ID, validation status, issue source, expected branch/worktree, acceptance criteria, and links to task_miss, validation, schema/contract, and agent log evidence when known.
    - Include progress status when known (`advanced`, `safety_only`, `no_progress`, or `regressed`) and the remaining blocker-state transition required to move the issue forward.
-   - For a session-audit finding, cite the validated packet and independent canonical references, not transcript text. Route semantic/source/task/acceptance repair through the owning governed skill; issue management records the work but does not apply it.
+   - For a session-audit finding, cite the trusted projection and, when present, the separate comparator receipt—not transcript text or packet-owned relation claims. Route semantic/source/task/acceptance repair through the owning governed skill; issue management records the work but does not apply it.
    - Before reopening or reactivating an issue in a quiesced or exhausted blocker family, inspect the latest loopback/progress-loop evidence for `terminal_quiescence_gate`, `quiescence_untried_reconcile`, `hypothesis_exhausted`, and `.task/anti_loop/root_cause_ledger.jsonl`. Reopen only when the issue supplies a concrete input delta, authority change, external-state change, or verified unexhausted repair path.
    - For GitHub-backed issues, create or update a local mirror under `.issue/open/` or `.issue/git/` containing the remote URL, issue number, branch, worktree path, and task links.
    - For local-only issues, create `.issue/open/YYYYMMDD-HHMMSS-<slug>.md` using [issue-format.md](references/issue-format.md).

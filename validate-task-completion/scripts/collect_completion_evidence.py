@@ -14,6 +14,11 @@ WORKFLOW_SCRIPTS = Path(__file__).resolve().parents[2] / "orchestrate-task-cycle
 if str(WORKFLOW_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(WORKFLOW_SCRIPTS))
 
+AGENT_LOG_SCRIPTS = Path(__file__).resolve().parents[2] / "record-agent-work-log" / "scripts"
+if str(AGENT_LOG_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(AGENT_LOG_SCRIPTS))
+
+from agent_log_integrity import inspect_agent_log_store  # noqa: E402
 from result_contract_lib.session_audit import collect_session_audit_directory  # noqa: E402
 
 
@@ -195,15 +200,25 @@ def collect_issues(root: Path, max_files: int) -> dict[str, Any]:
 
 
 def collect_agent_log(root: Path, max_files: int) -> dict[str, Any]:
-    log_dir = root / ".agent_log"
-    markdown_files = sorted(log_dir.rglob("*.md")) if log_dir.is_dir() else []
-    index_jsonl = log_dir / "index.jsonl"
+    integrity, markdown_files, jsonl_files = inspect_agent_log_store(root)
+    index_jsonl = root / ".agent_log" / "index.jsonl"
+    if index_jsonl in jsonl_files:
+        index_projection = file_info(root, index_jsonl)
+    else:
+        index_projection = {
+            "path": ".agent_log/index.jsonl",
+            "exists": index_jsonl.exists() or index_jsonl.is_symlink(),
+            "is_file": False,
+            "is_dir": False,
+            "is_symlink": index_jsonl.is_symlink(),
+        }
     return {
-        "directory": file_info(root, log_dir),
-        "index_jsonl": file_info(root, index_jsonl),
-        "index_entries": count_jsonl_lines(index_jsonl),
+        "directory": integrity["directory"],
+        "index_jsonl": index_projection,
+        "index_entries": integrity["indexed_count"],
         "markdown_count": len(markdown_files),
         "latest_markdown": limited_files(root, markdown_files, max_files),
+        "integrity": integrity,
     }
 
 

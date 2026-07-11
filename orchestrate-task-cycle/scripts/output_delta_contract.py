@@ -13,13 +13,7 @@ DEFAULT_CONTRACT_PATHS = (
     ".task/contracts/output_delta_contract.json",
     ".agent_goal/output_delta_contract.json",
 )
-QUALITY_DELTA_KEYS = (
-    "event_named_ratio",
-    "proper_noun_character_ratio",
-    "coreference_resolved_ratio",
-    "causal_edge_count",
-    "windows_covered",
-)
+QUALITY_DELTA_KEYS: tuple[str, ...] = ()
 
 
 def read_json(path: Path) -> Any:
@@ -77,23 +71,88 @@ def number_value(value: Any) -> float:
     return 0.0
 
 
-def quality_metric_value(quality: dict[str, Any], key: str) -> float:
-    aliases = {
-        "causal_edge_count": ("causal_edge_count", "causal_or_temporal_edge_count", "causal_temporal_edge_count"),
-        "windows_covered": ("windows_covered", "source_windows_covered", "window_count", "selected_source_window_count"),
-    }
-    for candidate in aliases.get(key, (key,)):
+def policy_items(value: Any) -> list[str]:
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def normalize_quality_delta_policy(value: Any) -> dict[str, Any]:
+    if isinstance(value, (list, tuple, set)):
+        raw_keys = value
+        raw_aliases: Any = {}
+    elif isinstance(value, dict):
+        raw_keys = (
+            value.get("keys")
+            or value.get("quality_delta_keys")
+            or value.get("metric_keys")
+            or value.get("axes")
+            or []
+        )
+        raw_aliases = (
+            value.get("aliases")
+            or value.get("quality_metric_aliases")
+            or value.get("metric_aliases")
+            or {}
+        )
+    else:
+        raw_keys = []
+        raw_aliases = {}
+    keys = list(dict.fromkeys(policy_items(raw_keys)))
+    aliases: dict[str, list[str]] = {}
+    for key in keys:
+        supplied = policy_items(raw_aliases.get(key)) if isinstance(raw_aliases, dict) else []
+        aliases[key] = list(dict.fromkeys([key, *supplied]))
+    return {"keys": keys, "aliases": aliases, "supplied": bool(keys)}
+
+
+def explicit_quality_delta_policy(
+    contract: dict[str, Any] | None,
+    payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    for source in (payload, contract):
+        if not isinstance(source, dict):
+            continue
+        policy = source.get("quality_delta_policy")
+        if policy is not None:
+            return normalize_quality_delta_policy(policy)
+        if source.get("quality_delta_keys") is not None:
+            return normalize_quality_delta_policy(
+                {
+                    "keys": source.get("quality_delta_keys"),
+                    "aliases": source.get("quality_metric_aliases") or {},
+                }
+            )
+    return normalize_quality_delta_policy(None)
+
+
+def quality_metric_value(
+    quality: dict[str, Any],
+    key: str,
+    aliases: dict[str, Any] | None = None,
+) -> float:
+    candidates = policy_items((aliases or {}).get(key)) or [key]
+    for candidate in candidates:
         if candidate in quality:
             return number_value(quality.get(candidate))
     return 0.0
 
 
-def quality_delta_gate(current_quality: dict[str, Any], previous_quality: dict[str, Any], epsilon: float = 1e-9) -> dict[str, Any]:
-    current = {key: quality_metric_value(current_quality, key) for key in QUALITY_DELTA_KEYS}
-    previous = {key: quality_metric_value(previous_quality, key) for key in QUALITY_DELTA_KEYS}
+def quality_delta_gate(
+    current_quality: dict[str, Any],
+    previous_quality: dict[str, Any],
+    epsilon: float = 1e-9,
+    quality_delta_policy: Any = None,
+) -> dict[str, Any]:
+    policy = normalize_quality_delta_policy(quality_delta_policy)
+    keys = policy["keys"]
+    current = {key: quality_metric_value(current_quality, key, policy["aliases"]) for key in keys}
+    previous = {key: quality_metric_value(previous_quality, key, policy["aliases"]) for key in keys}
     improved_fields = [
         key
-        for key in QUALITY_DELTA_KEYS
+        for key in keys
         if current[key] > previous[key] + (epsilon if key.endswith("_ratio") else 0.0)
     ]
     return {
@@ -102,7 +161,10 @@ def quality_delta_gate(current_quality: dict[str, Any], previous_quality: dict[s
         "improved_fields": improved_fields,
         "current_quality_vector": current,
         "previous_quality_vector": previous,
-        "status": "pass" if improved_fields else "block",
+        "quality_delta_policy": policy,
+        "quality_delta_policy_supplied": policy["supplied"],
+        "evaluation_status": "evaluated" if keys else "not_evaluated",
+        "status": "pass" if improved_fields else ("block" if keys else "not_evaluated"),
     }
 
 
@@ -146,6 +208,7 @@ def normalize_provider_result(
     substance_metrics = payload.get("substance_metrics") if isinstance(payload.get("substance_metrics"), dict) else {}
     previous_substance_metrics = payload.get("previous_substance_metrics") if isinstance(payload.get("previous_substance_metrics"), dict) else {}
     corrective_resolution = payload.get("corrective_resolution") if isinstance(payload.get("corrective_resolution"), (list, dict)) else []
+    quality_delta_policy = explicit_quality_delta_policy(contract, payload)
     return {
         "schema_version": "output-delta-gate-v1",
         "output_delta_status": status,
@@ -163,7 +226,12 @@ def normalize_provider_result(
         "output_delta_summary": payload.get("output_delta_summary") or payload.get("summary") or {},
         "quality_vector": quality_vector,
         "previous_quality_vector": previous_quality_vector,
-        "coverage_quality_delta_gate": quality_delta_gate(quality_vector, previous_quality_vector),
+        "quality_delta_policy": quality_delta_policy,
+        "coverage_quality_delta_gate": quality_delta_gate(
+            quality_vector,
+            previous_quality_vector,
+            quality_delta_policy=quality_delta_policy,
+        ),
         "substance_metrics": substance_metrics,
         "previous_substance_metrics": previous_substance_metrics,
         "corrective_resolution": corrective_resolution,

@@ -126,7 +126,7 @@
       "name": "QUALITY_DELTA_KEYS",
       "category": "metric_keys",
       "expected_type": "tuple",
-      "expected_value": ["causal_edge_count", "coreference_resolved_ratio", "event_named_ratio", "proper_noun_character_ratio", "windows_covered"]
+      "expected_value": []
     },
     {
       "module": "common",
@@ -145,7 +145,8 @@
       "module": "common",
       "name": "FRONTIER_CHECK_KEYS",
       "category": "measurement_keys",
-      "expected_type": "set"
+      "expected_type": "set",
+      "expected_value": []
     },
     {
       "module": "common",
@@ -163,13 +164,15 @@
       "module": "common",
       "name": "LADDER_RANK",
       "category": "blocker_ladder",
-      "expected_type": "dict"
+      "expected_type": "dict",
+      "expected_value": {}
     },
     {
       "module": "common",
       "name": "RUNG_ALIASES",
       "category": "blocker_ladder",
-      "expected_type": "dict"
+      "expected_type": "dict",
+      "expected_value": {}
     },
     {
       "module": "common",

@@ -9,6 +9,8 @@ import json
 import os
 import re
 import subprocess
+import stat
+import sys
 import tempfile
 import threading
 import uuid
@@ -16,15 +18,32 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterator, List
 
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from agent_log_integrity import (  # noqa: E402
+    AgentLogIntegrityError,
+    LOG_FORMAT_VERSION,
+    LOG_SCHEMA_VERSION,
+    LOG_STATUSES,
+    content_id_for,
+    ensure_log_root,
+    ensure_safe_directory,
+    expected_record_id,
+    parse_index,
+    sha256_bytes,
+    validate_store_for_append,
+    workspace_root,
+)
+
 try:
     import fcntl
 except ImportError:  # pragma: no cover - Windows fallback keeps thread safety only.
     fcntl = None  # type: ignore[assignment]
 
 
-LOG_FORMAT_VERSION = 2
-LOG_SCHEMA_VERSION = 1
-LOG_STATUSES = ("blocked", "completed", "failed", "informational", "partial")
 SENSITIVITY_CLASSES = ("confidential", "internal", "public", "restricted", "unspecified")
 
 _THREAD_LOCKS: dict[str, threading.RLock] = {}
@@ -78,11 +97,21 @@ def _thread_lock(root: Path) -> threading.RLock:
 
 @contextlib.contextmanager
 def log_lock(root: Path) -> Iterator[None]:
-    root = root.resolve()
-    log_root = root / ".agent_log"
-    log_root.mkdir(parents=True, exist_ok=True)
+    root = workspace_root(root)
+    log_root = ensure_log_root(root, create=True)
     with _thread_lock(root):
-        with (log_root / "index.lock").open("a+b") as handle:
+        lock_path = log_root / "index.lock"
+        if lock_path.exists() or lock_path.is_symlink():
+            mode = lock_path.lstat().st_mode
+            if stat.S_ISLNK(mode) or not stat.S_ISREG(mode):
+                raise AgentLogIntegrityError("agent-log index lock must be a regular non-symlink file")
+        flags = os.O_CREAT | os.O_RDWR
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(lock_path, flags, 0o600)
+        with os.fdopen(descriptor, "a+b", closefd=True) as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise AgentLogIntegrityError("agent-log index lock must be a regular file")
             if fcntl is not None:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
             try:
@@ -104,7 +133,10 @@ def _fsync_directory(path: Path) -> None:
 
 
 def atomic_replace(path: Path, payload: bytes, mode: int = 0o600) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() or path.is_symlink():
+        target_mode = path.lstat().st_mode
+        if stat.S_ISLNK(target_mode) or not stat.S_ISREG(target_mode):
+            raise AgentLogIntegrityError("agent-log index target must be a regular non-symlink file")
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     temporary = Path(temporary_name)
     try:
@@ -125,7 +157,8 @@ def atomic_replace(path: Path, payload: bytes, mode: int = 0o600) -> None:
 
 
 def publish_new(path: Path, payload: bytes, mode: int = 0o600) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() or path.is_symlink():
+        raise AgentLogIntegrityError("agent-log output already exists or is unsafe")
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     temporary = Path(temporary_name)
     try:
@@ -145,30 +178,7 @@ def publish_new(path: Path, payload: bytes, mode: int = 0o600) -> None:
 
 
 def validate_index(payload: bytes, path: Path) -> None:
-    try:
-        text = payload.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise ValueError(f"Malformed agent-log index {path}: invalid UTF-8") from exc
-    for line_no, line in enumerate(text.splitlines(), start=1):
-        if not line.strip():
-            continue
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Malformed agent-log index {path} line {line_no}: {exc}") from exc
-        if not isinstance(record, dict):
-            raise ValueError(f"Malformed agent-log index {path} line {line_no}: expected a JSON object")
-        for field in ("timestamp", "status", "path"):
-            if not isinstance(record.get(field), str) or not record[field].strip():
-                raise ValueError(f"Malformed agent-log index {path} line {line_no}: missing non-empty {field}")
-        if record["status"] not in LOG_STATUSES:
-            raise ValueError(f"Malformed agent-log index {path} line {line_no}: unsupported status {record['status']!r}")
-        for field, current in (("format_version", LOG_FORMAT_VERSION), ("schema_version", LOG_SCHEMA_VERSION)):
-            value = record.get(field, 1)
-            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-                raise ValueError(f"Malformed agent-log index {path} line {line_no}: invalid {field}")
-            if value > current:
-                raise ValueError(f"Unsupported agent-log {field} {value} in {path} line {line_no}")
+    parse_index(payload, path)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -207,7 +217,7 @@ def validate_args(args: argparse.Namespace) -> None:
 def write_log(args: argparse.Namespace) -> dict[str, Any]:
     validate_args(args)
 
-    root = Path(args.root).resolve()
+    root = workspace_root(args.root)
     now = datetime.now().astimezone()
     date = now.strftime("%Y-%m-%d")
     time_part = now.strftime("%H%M%S%f")
@@ -218,11 +228,15 @@ def write_log(args: argparse.Namespace) -> dict[str, Any]:
     index_path = root / ".agent_log" / "index.jsonl"
 
     with log_lock(root):
+        if index_path.exists() or index_path.is_symlink():
+            mode = index_path.lstat().st_mode
+            if stat.S_ISLNK(mode) or not stat.S_ISREG(mode):
+                raise AgentLogIntegrityError("agent-log index must be a regular non-symlink file")
         current_index = index_path.read_bytes() if index_path.exists() else b""
-        validate_index(current_index, index_path)
+        validate_store_for_append(root, current_index, index_path)
         token = uuid.uuid4().hex[:16]
         log_id = f"log-{now.strftime('%Y%m%d-%H%M%S%f')}-{token}"
-        log_dir = root / ".agent_log" / date
+        log_dir = ensure_safe_directory(root, Path(".agent_log") / date, create=True)
         path = log_dir / f"{time_part}-{slug}-{token}.md"
         rel_path = path.relative_to(root)
         content = f"""# {title}
@@ -275,10 +289,14 @@ def write_log(args: argparse.Namespace) -> dict[str, Any]:
 
 {list_values(args.tag)}
 """
+        content_bytes = content.encode("utf-8")
+        body_sha256 = sha256_bytes(content_bytes)
         record: Dict[str, Any] = {
             "format_version": LOG_FORMAT_VERSION,
             "schema_version": LOG_SCHEMA_VERSION,
             "log_id": log_id,
+            "body_sha256": body_sha256,
+            "content_id": content_id_for(body_sha256),
             "timestamp": now.isoformat(),
             "status": args.status,
             "title": title,
@@ -301,7 +319,8 @@ def write_log(args: argparse.Namespace) -> dict[str, Any]:
             "retention_exclusion_reason": args.retention_exclusion_reason,
             "sensitivity": args.sensitivity,
         }
-        publish_new(path, content.encode("utf-8"))
+        record["record_id"] = expected_record_id(record)
+        publish_new(path, content_bytes)
         try:
             payload = current_index
             if payload and not payload.endswith(b"\n"):
@@ -315,6 +334,8 @@ def write_log(args: argparse.Namespace) -> dict[str, Any]:
         "format_version": LOG_FORMAT_VERSION,
         "schema_version": LOG_SCHEMA_VERSION,
         "log_id": log_id,
+        "content_id": record["content_id"],
+        "record_id": record["record_id"],
         "path": str(path),
         "index": str(index_path),
     }

@@ -57,7 +57,7 @@ Do not hardcode retention periods, packet-size thresholds, or archive locations.
    - Use `--agent-note` for the normalization subagent's concise review, `--command`, `--changed-file`, `--follow-up`, and `--tag` as needed.
    - Record `--retention-class`, optional `--archive-reference` / `--retention-exclusion-reason`, and `--sensitivity public|internal|confidential|restricted|unspecified`. These fields are hygiene metadata, not completion evidence.
    - If `record_retention_policy` is supplied, record only opaque retention metadata in the log or index; do not remove required record sections or provenance while writing the log.
-   - Validate existing JSONL before writing. New rows carry `format_version` and `schema_version`; legacy versionless rows remain readable, while malformed or future-version JSONL fails closed before a log is published.
+   - Validate the complete `.agent_log` store before writing. New rows use `format_version: 3` and `schema_version: 2`, bind the immutable Markdown bytes with `body_sha256` and `content_id`, and bind the index row with content-derived `record_id`. Legacy rows remain readable but explicitly lack this body-integrity guarantee; malformed/future-version rows, duplicate IDs or paths, orphan Markdown, body tampering, and missing current-version bodies fail closed before publication.
 
 4. Update task-state IDs when possible.
    - After the log file is written, run `$manage-task-state-index` `scan`.
@@ -110,6 +110,9 @@ Keep entries factual. Do not make the record more successful than the evidence s
 - Do not overwrite existing log files. Create a new timestamped entry.
 - Do not infer success or completion from empty intent/work/result/shortcomings. Require all four to be explicitly non-empty and require the caller to choose the status.
 - Serialize log publication and index replacement through `.agent_log/index.lock`; keep filenames and IDs collision-safe under concurrent writers.
+- Require `.agent_log`, its date directories, lock, index, and Markdown files to remain regular non-symlink paths beneath the resolved workspace. Never follow a symlink component for writing or collection.
+- Treat `body_sha256`, `content_id`, and `record_id` as immutable bindings for current-version rows. Do not rewrite a bound Markdown body or repair an integrity mismatch by silently replacing index evidence; surface the duplicate, orphan, missing, or tampered record for governed resolution.
+- Require context/completion collectors and `$manage-task-state-index` discovery to use the shared integrity inspector before reading Markdown. Any workflow that creates a handoff log, including external-advice retirement, must use the standard writer rather than creating orphan `.agent_log/*.md` directly.
 - Do not use `.agent_log` for secrets, credentials, private keys, raw tokens, or raw/slim transcript bodies. Store session capture only through `$audit-session-governance`; cite its validated privacy-safe packet rather than copying the packet or transcript body.
 - Do not let the normalization subagent write files; only the main agent runs the writer script.
 - Do not let an ID insight agent normalize the log or write files; it can only recommend task-state links.

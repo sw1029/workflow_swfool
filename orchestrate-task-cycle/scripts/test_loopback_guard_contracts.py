@@ -577,7 +577,9 @@ def write_hook_demand_adapter(path: Path) -> None:
         "\n".join(
             [
                 "def quality_vector(**kwargs):",
-                "    return {'quality_vector': {'event_named_ratio': 1, 'proper_noun_character_ratio': 1, 'coreference_resolved_ratio': 1, 'causal_edge_count': 1, 'windows_covered': 1, 'current_output_fingerprint': 'fp-hook-demand'}}",
+                "    return {'quality_vector': {'quality_score': 1, 'current_output_fingerprint': 'fp-hook-demand'}}",
+                "def quality_delta_policy(**kwargs):",
+                "    return {'keys': ['quality_score']}",
                 "",
                 "def substance_metrics(**kwargs):",
                 "    return {'substance_metrics': {'primary_output_rows': 1}}",
@@ -680,7 +682,9 @@ def test_cumulative_chain_overrides_untried_veto_after_quality_stall() -> None:
             "\n".join(
                 [
                     "def quality_vector(**kwargs):",
-                    "    return {'quality_vector': {'event_named_ratio': 0, 'proper_noun_character_ratio': 0, 'coreference_resolved_ratio': 0, 'causal_edge_count': 0, 'windows_covered': 0, 'current_output_fingerprint': 'fp-current'}}",
+                    "    return {'quality_vector': {'quality_score': 0, 'current_output_fingerprint': 'fp-current'}}",
+                    "def quality_delta_policy(**kwargs):",
+                    "    return {'keys': ['quality_score']}",
                     "def substance_metrics(**kwargs):",
                     "    return {'event_count': 0}",
                     "def facet_root_map(**kwargs):",
@@ -789,7 +793,9 @@ def test_chain_stall_forces_actionable_ladder_task_kind() -> None:
             "\n".join(
                 [
                     "def quality_vector(**kwargs):",
-                    "    return {'quality_vector': {'event_named_ratio': 0, 'proper_noun_character_ratio': 0, 'coreference_resolved_ratio': 0, 'causal_edge_count': 0, 'windows_covered': 0, 'current_output_fingerprint': 'fp-current'}}",
+                    "    return {'quality_vector': {'quality_score': 0, 'current_output_fingerprint': 'fp-current'}}",
+                    "def quality_delta_policy(**kwargs):",
+                    "    return {'keys': ['quality_score']}",
                     "def substance_metrics(**kwargs):",
                     "    return {'event_count': 0}",
                     "def facet_root_map(**kwargs):",
@@ -890,7 +896,9 @@ def test_repo_owned_source_provenance_rejects_nonactionable_self_report() -> Non
                     "def facet_root_map(**kwargs):",
                     "    return {'self_gate': 'self_gate'}",
                     "def quality_vector(**kwargs):",
-                    "    return {'quality_vector': {'event_named_ratio': 0, 'proper_noun_character_ratio': 0, 'coreference_resolved_ratio': 0, 'causal_edge_count': 0, 'windows_covered': 0, 'current_output_fingerprint': 'fp-current'}}",
+                    "    return {'quality_vector': {'quality_score': 0, 'current_output_fingerprint': 'fp-current'}}",
+                    "def quality_delta_policy(**kwargs):",
+                    "    return {'keys': ['quality_score']}",
                     "def substance_metrics(**kwargs):",
                     "    return {'event_count': 0}",
                     "def partial_progress_axes(**kwargs):",
@@ -1072,7 +1080,9 @@ def test_evaluate_applies_target_required_verifier_adapter_contract() -> None:
             "\n".join(
                 [
                     "def quality_vector(**kwargs):",
-                    "    return {'quality_vector': {'event_named_ratio': 0, 'proper_noun_character_ratio': 0, 'coreference_resolved_ratio': 0, 'causal_edge_count': 0, 'windows_covered': 0, 'current_output_fingerprint': 'fp-current'}}",
+                    "    return {'quality_vector': {'quality_score': 0, 'current_output_fingerprint': 'fp-current'}}",
+                    "def quality_delta_policy(**kwargs):",
+                    "    return {'keys': ['quality_score']}",
                     "def substance_metrics(**kwargs):",
                     "    return {'event_count': 0}",
                     "def facet_root_map(**kwargs):",

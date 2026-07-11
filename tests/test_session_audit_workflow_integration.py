@@ -134,7 +134,186 @@ def test_invalid_optional_packets_warn_and_required_positive_close_blocks() -> N
     )["severity"] == "warn"
 
 
-def test_only_verified_canonical_block_findings_prevent_positive_close(tmp_path: Path) -> None:
+def test_required_audit_accepts_only_collector_verified_source_projection(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "logs" / "codex" / "session.jsonl"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-07-11T01:00:00Z",
+                "type": "event_msg",
+                "payload": {"type": "user_message", "message": "private"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    produced, _ = audit_producer.inspect(
+        tmp_path,
+        source,
+        tool="codex",
+        cycle_id="cycle-1",
+        task_id="task-1",
+    )
+
+    direct = contracts.validate(
+        "validate",
+        validate_payload(),
+        "warn",
+        {
+            "long_run_state_checked": True,
+            "session_audit_required": True,
+            "session_audit": produced,
+        },
+    )
+    assert direct["status"] == "block"
+    assert "required_session_audit_source_projection_unverified" in codes(direct)
+
+    collection = cycle_context.collect(tmp_path, include_git=False, max_files=12)["session_audit"]
+    assert collection["valid_count"] == 1
+    verified = contracts.validate(
+        "validate",
+        validate_payload(),
+        "warn",
+        {
+            "long_run_state_checked": True,
+            "session_audit_required": True,
+            "session_audit": collection,
+        },
+    )
+    assert verified["status"] != "block"
+    assert "required_session_audit_source_projection_unverified" not in codes(verified)
+
+    self_promoted_result = {
+        **validate_payload(),
+        "session_audit": collection,
+    }
+    self_promoted = contracts.validate(
+        "validate",
+        self_promoted_result,
+        "warn",
+        {
+            "long_run_state_checked": True,
+            "session_audit_required": True,
+        },
+    )
+    assert self_promoted["status"] == "block"
+    assert "session_audit_collection_projection_untrusted_origin" in codes(
+        self_promoted
+    )
+    assert "required_session_audit_source_projection_unverified" in codes(
+        self_promoted
+    )
+
+
+def test_collector_rejects_handcrafted_complete_packet_for_raw_tool_source(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "logs" / "codex" / "session.jsonl"
+    source.parent.mkdir(parents=True)
+    source_bytes = (
+        json.dumps(
+            {
+                "timestamp": "2026-07-11T01:00:00Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "shell",
+                    "arguments": "private tool payload",
+                },
+            }
+        )
+        + "\n"
+    ).encode("utf-8")
+    source.write_bytes(source_bytes)
+    forged = packet(source_bytes=source_bytes)
+    audit_dir = tmp_path / ".task" / "session_audit"
+    audit_dir.mkdir(parents=True)
+    (audit_dir / f"{forged['audit_id']}.json").write_text(
+        json.dumps(forged), encoding="utf-8"
+    )
+
+    collection = cycle_context.collect(tmp_path, include_git=False, max_files=12)["session_audit"]
+    assert collection["valid_count"] == 0
+    assert collection["invalid_count"] == 1
+    assert "session_audit_source_projection_mismatch" in collection["invalid_packets"][0]["error_codes"]
+
+    required = contracts.validate(
+        "validate",
+        validate_payload(),
+        "warn",
+        {
+            "long_run_state_checked": True,
+            "session_audit_required": True,
+            "session_audit": collection,
+        },
+    )
+    assert required["status"] == "block"
+    assert "required_session_audit_not_consumable" in codes(required)
+
+
+def test_session_packet_cannot_invent_cross_source_close_block(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "logs" / "codex" / "session.jsonl"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"")
+    canonical_artifact = tmp_path / ".task" / "cycle" / "cycle-1" / "stage.jsonl"
+    canonical_artifact.parent.mkdir(parents=True)
+    canonical_artifact.write_text('{"step":"validate"}\n', encoding="utf-8")
+    invented = packet(
+        findings=[
+            {
+                "code": "invented_relation",
+                "severity": "block",
+                "message": "session packet claims a semantic mismatch",
+                "evidence_class": "cross_source_mismatch",
+                "resolved": False,
+                "evidence": {
+                    "canonical_evidence_refs": [
+                        {
+                            "path": ".task/cycle/cycle-1/stage.jsonl",
+                            "sha256": hashlib.sha256(canonical_artifact.read_bytes()).hexdigest(),
+                            "cycle_id": "cycle-1",
+                            "task_id": "task-1",
+                        }
+                    ]
+                },
+            }
+        ]
+    )
+    audit_dir = tmp_path / ".task" / "session_audit"
+    audit_dir.mkdir(parents=True)
+    (audit_dir / f"{invented['audit_id']}.json").write_text(
+        json.dumps(invented), encoding="utf-8"
+    )
+
+    collection = cycle_context.collect(tmp_path, include_git=False, max_files=12)["session_audit"]
+    assert collection["valid_count"] == 0
+    assert "session_audit_source_projection_mismatch" in collection["invalid_packets"][0]["error_codes"]
+    result = contracts.validate(
+        "validate",
+        validate_payload(),
+        "warn",
+        {
+            "long_run_state_checked": True,
+            "cycle_id": "cycle-1",
+            "session_audit": collection,
+        },
+    )
+    assert "session_audit_unresolved_canonical_finding" not in codes(result)
+    assert not any(
+        finding["severity"] == "block"
+        for finding in result["findings"]
+        if finding["code"].startswith("session_audit_")
+    )
+
+
+def test_session_owned_findings_remain_advisory_without_comparator_contract(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "logs" / "codex" / "session.jsonl"
     source.parent.mkdir(parents=True)
     source.write_bytes(b"")
@@ -162,66 +341,37 @@ def test_only_verified_canonical_block_findings_prevent_positive_close(tmp_path:
             }
         ]
     )
-    blocked = contracts.validate(
+    direct = contracts.validate(
         "validate",
         validate_payload(),
         "warn",
         {"long_run_state_checked": True, "cycle_id": "cycle-1", "session_audit": canonical},
     )
-    assert "session_audit_canonical_finding_not_bound_to_current_close" in codes(blocked)
+    assert "session_audit_cross_source_claim_routes_review" in codes(direct)
     assert next(
         item
-        for item in blocked["findings"]
-        if item["code"] == "session_audit_canonical_finding_not_bound_to_current_close"
+        for item in direct["findings"]
+        if item["code"] == "session_audit_cross_source_claim_routes_review"
     )["severity"] == "warn"
 
     audit_dir = tmp_path / ".task" / "session_audit"
     audit_dir.mkdir(parents=True)
     (audit_dir / f"{canonical['audit_id']}.json").write_text(json.dumps(canonical), encoding="utf-8")
-    verified_collection = cycle_context.collect(tmp_path, include_git=False, max_files=12)["session_audit"]
-    assert verified_collection["valid_count"] == 1
-    blocked = contracts.validate(
+    collection = cycle_context.collect(tmp_path, include_git=False, max_files=12)["session_audit"]
+    assert collection["valid_count"] == 0
+    assert "session_audit_source_projection_mismatch" in collection["invalid_packets"][0]["error_codes"]
+    collected = contracts.validate(
         "validate",
         validate_payload(),
         "warn",
         {
             "long_run_state_checked": True,
             "cycle_id": "cycle-1",
-            "session_audit": verified_collection,
+            "session_audit": collection,
         },
     )
-    assert blocked["status"] == "block"
-    assert "session_audit_unresolved_canonical_finding" in codes(blocked)
-
-    partial = contracts.validate(
-        "validate",
-        validate_payload(complete=False),
-        "warn",
-        {
-            "long_run_state_checked": True,
-            "cycle_id": "cycle-1",
-            "session_audit": verified_collection,
-        },
-    )
-    finding = next(item for item in partial["findings"] if item["code"] == "session_audit_unresolved_canonical_finding")
-    assert finding["severity"] == "warn"
-
-    mismatched = contracts.validate(
-        "validate",
-        validate_payload(),
-        "warn",
-        {
-            "long_run_state_checked": True,
-            "cycle_id": "cycle-other",
-            "session_audit": verified_collection,
-        },
-    )
-    mismatch_finding = next(
-        item
-        for item in mismatched["findings"]
-        if item["code"] == "session_audit_canonical_finding_not_bound_to_current_close"
-    )
-    assert mismatch_finding["severity"] == "warn"
+    assert collected["status"] != "block"
+    assert "session_audit_unresolved_canonical_finding" not in codes(collected)
 
     transcript_only = packet(
         findings=[
@@ -245,32 +395,6 @@ def test_only_verified_canonical_block_findings_prevent_positive_close(tmp_path:
         finding["severity"] == "block" and finding["code"] == "session_audit_observation_routes_review"
         for finding in routed["findings"]
     )
-
-    report = contracts.validate(
-        "report",
-        {
-            "step": "report",
-            "completion_status": "complete_verified",
-            "validation_verdict": "passed",
-            "progress_verdict": "advanced",
-            "blockers": [],
-            "commands": ["pytest: passed"],
-            "progress_axes": {"behavior": "advanced"},
-            "evidence_paths": ["validation.json"],
-            "task_id": "task-1",
-            "next_task_id": "task-2",
-            "selected_task_source": "standalone",
-            "closure_steps": ["issue", "derive", "commit", "dashboard"],
-            "closure_records": [],
-        },
-        "warn",
-        {"cycle_id": "cycle-1", "session_audit": verified_collection},
-    )
-    assert "session_audit_unresolved_canonical_finding" in codes(report)
-    assert next(
-        finding for finding in report["findings"] if finding["code"] == "session_audit_unresolved_canonical_finding"
-    )["severity"] == "block"
-
 
 def test_incomplete_capture_blocks_only_when_caller_requires_it() -> None:
     partial_packet = packet(capture_status="partial", consumable=False)
@@ -308,23 +432,26 @@ def test_collectors_and_renderer_exclude_raw_logs_and_finding_messages(tmp_path:
     secret = "SESSION-RAW-SECRET-DO-NOT-COLLECT"
     raw_dir = tmp_path / "logs" / "codex"
     raw_dir.mkdir(parents=True)
-    source_bytes = secret.encode("utf-8")
-    (raw_dir / "session.jsonl").write_bytes(source_bytes)
-    audit_dir = tmp_path / ".task" / "session_audit"
-    audit_dir.mkdir(parents=True)
-    valid = packet(
-        source_bytes=source_bytes,
-        findings=[
+    source = raw_dir / "session.jsonl"
+    source.write_text(
+        json.dumps(
             {
-                "code": "observation",
-                "severity": "warn",
-                "message": secret,
-                "evidence_class": "transcript_observation",
-                "resolved": False,
+                "timestamp": "2026-07-11T01:00:00Z",
+                "type": "event_msg",
+                "payload": {"type": "user_message", "message": secret},
             }
-        ]
+        )
+        + "\n",
+        encoding="utf-8",
     )
-    (audit_dir / f"{valid['audit_id']}.json").write_text(json.dumps(valid), encoding="utf-8")
+    audit_producer.inspect(
+        tmp_path,
+        source,
+        tool="codex",
+        cycle_id="cycle-1",
+        task_id="task-1",
+    )
+    audit_dir = tmp_path / ".task" / "session_audit"
     (audit_dir / "broken.json").write_text("{broken", encoding="utf-8")
 
     cycle = cycle_context.collect(tmp_path, include_git=False, max_files=12)
@@ -381,7 +508,16 @@ def test_collectors_and_renderer_exclude_raw_logs_and_finding_messages(tmp_path:
     )["severity"] == "block"
 
     cycle["session_audit"]["packets"][0]["file"]["raw_body"] = secret
-    cycle["session_audit"]["packets"][0]["findings"][0]["message"] = secret
+    cycle["session_audit"]["packets"][0]["findings"].append(
+        {
+            "code": "observation",
+            "severity": "warn",
+            "message": secret,
+            "evidence_class": "transcript_observation",
+            "resolved": False,
+            "canonical_evidence_ref_hashes": [],
+        }
+    )
     assert secret not in json.dumps(renderer.packet_for("validate", cycle, {}), sort_keys=True)
 
 

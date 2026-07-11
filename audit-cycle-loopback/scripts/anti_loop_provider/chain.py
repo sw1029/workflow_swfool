@@ -321,54 +321,39 @@ def semantic_progress_from_high_water(
     prev_high: dict[str, Any],
     provider_request_count: int,
     epsilon: float,
+    quality_delta_policy: Any = None,
 ) -> bool:
     if quality.get("quality_signal_confidence") == "low":
         return False
-    return bool(coverage_quality_delta_gate(quality, prev_high, provider_request_count, epsilon)["quality_delta_pass"])
+    return bool(
+        coverage_quality_delta_gate(
+            quality,
+            prev_high,
+            provider_request_count,
+            epsilon,
+            quality_delta_policy,
+        )["quality_delta_pass"]
+    )
 
 def updated_high_water(
     quality: dict[str, Any],
     prev_high: dict[str, Any],
     provider_request_count: int,
     allowed_quality_keys: set[str] | None = None,
+    quality_delta_policy: Any = None,
 ) -> dict[str, Any]:
+    policy = normalize_quality_delta_policy(quality_delta_policy)
+
     def updated(key: str) -> bool:
         return allowed_quality_keys is None or key in allowed_quality_keys
 
-    return {
-        "event_named_ratio": (
-            max(high_water_metric_value(prev_high, "event_named_ratio"), quality_metric_value(quality, "event_named_ratio"))
-            if updated("event_named_ratio")
-            else high_water_metric_value(prev_high, "event_named_ratio")
-        ),
-        "proper_noun_character_ratio": max(
-            high_water_metric_value(prev_high, "proper_noun_character_ratio"),
-            quality_metric_value(quality, "proper_noun_character_ratio"),
-        )
-        if updated("proper_noun_character_ratio")
-        else high_water_metric_value(prev_high, "proper_noun_character_ratio"),
-        "coreference_resolved_ratio": max(
-            high_water_metric_value(prev_high, "coreference_resolved_ratio"),
-            quality_metric_value(quality, "coreference_resolved_ratio"),
-        )
-        if updated("coreference_resolved_ratio")
-        else high_water_metric_value(prev_high, "coreference_resolved_ratio"),
-        "causal_edge_count": max(
-            int_metric(high_water_metric_value(prev_high, "causal_edge_count")),
-            int_metric(quality_metric_value(quality, "causal_edge_count")),
-        )
-        if updated("causal_edge_count")
-        else int_metric(high_water_metric_value(prev_high, "causal_edge_count")),
-        "windows_covered": max(
-            int_metric(high_water_metric_value(prev_high, "windows_covered")),
-            int_metric(quality_metric_value(quality, "windows_covered")),
-        )
-        if updated("windows_covered")
-        else int_metric(high_water_metric_value(prev_high, "windows_covered")),
-        "ever_causal_edge": bool_value(prev_high.get("ever_causal_edge"))
-        or (updated("causal_edge_count") and bool_value(quality.get("causal_edge_present"))),
-        "ever_provider_dispatch": bool_value(prev_high.get("ever_provider_dispatch")) or provider_request_count > 0,
-    }
+    result: dict[str, Any] = {}
+    for key in policy["keys"]:
+        previous = high_water_metric_value(prev_high, key, policy["aliases"])
+        current = quality_metric_value(quality, key, policy["aliases"])
+        result[key] = max(previous, current) if updated(key) else previous
+    result["ever_provider_dispatch"] = bool_value(prev_high.get("ever_provider_dispatch")) or provider_request_count > 0
+    return result
 
 def previous_primary_metric_value(latest: dict[str, Any] | None) -> float:
     if not isinstance(latest, dict):

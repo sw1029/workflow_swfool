@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from .common import *
 
-_QUALITY_METRICS_MODULE: Any | None = None
 _DOMAIN_ADAPTER_MODULE: Any | None = None
 
 def load_python_module(path: Path, module_name: str) -> Any | None:
@@ -71,35 +70,6 @@ def call_adapter(adapter: Any | None, function_name: str, **kwargs: Any) -> tupl
     except Exception as exc:  # pragma: no cover - adapter-owned code
         return None, f"{function_name}_failed:{type(exc).__name__}"
 
-def load_quality_metrics(root: Path) -> Any:
-    global _QUALITY_METRICS_MODULE
-    if _QUALITY_METRICS_MODULE is not None:
-        return _QUALITY_METRICS_MODULE
-    candidates: list[Path] = []
-    env_path = os.environ.get(LEGACY_QUALITY_ENV)
-    if env_path:
-        candidates.append(Path(env_path))
-    candidates.extend(
-        [
-            root / "scripts" / LEGACY_QUALITY_MODULE_NAME,
-            Path.cwd() / "scripts" / LEGACY_QUALITY_MODULE_NAME,
-        ]
-    )
-    seen: set[str] = set()
-    for candidate in candidates:
-        resolved = candidate.expanduser().resolve()
-        if resolved.as_posix() in seen:
-            continue
-        seen.add(resolved.as_posix())
-        if not resolved.is_file():
-            continue
-        module = load_python_module(resolved, "legacy_quality_metrics_shared")
-        if module is None:
-            continue
-        _QUALITY_METRICS_MODULE = module
-        return module
-    raise RuntimeError(f"{LEGACY_QUALITY_MODULE_NAME}_not_found")
-
 def load_artifact_paths(root: Path, artifact_paths_json: str | None, artifact_paths: list[str]) -> list[Path]:
     values = list(artifact_paths)
     if artifact_paths_json:
@@ -136,20 +106,6 @@ def load_artifact_paths(root: Path, artifact_paths_json: str | None, artifact_pa
             paths.append(path)
     return paths
 
-def candidate_work_dirs(paths: list[Path]) -> list[Path]:
-    candidates: set[Path] = set()
-    required_names = {"kg_nodes.jsonl", "kg_edges.jsonl", "evidence.jsonl", "quality_report.json"}
-    for path in paths:
-        if path.is_file() and path.name in required_names:
-            candidates.add(path.parent)
-        elif path.is_dir():
-            if any((path / name).exists() for name in required_names):
-                candidates.add(path)
-            for name in required_names:
-                for match in path.rglob(name):
-                    candidates.add(match.parent)
-    return sorted(candidates, key=lambda item: item.as_posix())
-
 def canonicalize(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(key): canonicalize(child) for key, child in sorted(value.items()) if str(key) not in VOLATILE_KEYS}
@@ -175,42 +131,5 @@ def compute_quality(root: Path, paths: list[Path], adapter: Any | None) -> tuple
             return {}, [], adapter_error
         return normalize_adapter_quality_result(adapter_value, root)
 
-    work_dirs = candidate_work_dirs(paths)
-    if not paths:
-        return {}, [], "no_artifact_paths_supplied"
-    if not work_dirs:
-        return {}, [rel_path(root, path) for path in paths if path.exists()], "no_kg_work_dirs_found"
-
-    all_nodes: list[dict[str, Any]] = []
-    all_edges: list[dict[str, Any]] = []
-    evidence_count = 0
-    missing: list[str] = []
-    evidence_paths: list[str] = []
-    for work_dir in work_dirs:
-        nodes_path = work_dir / "kg_nodes.jsonl"
-        edges_path = work_dir / "kg_edges.jsonl"
-        evidence_path = work_dir / "evidence.jsonl"
-        for path in (nodes_path, edges_path, evidence_path, work_dir / "quality_report.json"):
-            if not path.exists():
-                missing.append(rel_path(root, path))
-            elif path.is_file():
-                evidence_paths.append(rel_path(root, path))
-        nodes = read_jsonl(nodes_path)
-        edges = read_jsonl(edges_path)
-        evidence = read_jsonl(evidence_path)
-        all_nodes.extend(nodes)
-        all_edges.extend(edges)
-        evidence_count += len(evidence)
-
-    if missing or not all_nodes or not all_edges or evidence_count == 0:
-        return {}, sorted(set(evidence_paths)), "required_output_artifacts_missing_or_empty"
-
-    try:
-        quality_metrics = load_quality_metrics(root)
-    except RuntimeError as exc:
-        return {}, sorted(set(evidence_paths)), str(exc)
-    quality = quality_metrics.summarize_quality(all_nodes, all_edges, evidence_count, root=root)
-    quality["current_output_fingerprint"] = fingerprint_rows(all_nodes + all_edges)
-    if quality.get("quality_signal_confidence") == "low":
-        return quality, sorted(set(evidence_paths)), "quality_signal_confidence_low"
-    return quality, sorted(set(evidence_paths)), None
+    evidence_paths = sorted({rel_path(root, path) for path in paths if path.exists()})
+    return {}, evidence_paths, "domain_adapter_not_supplied"

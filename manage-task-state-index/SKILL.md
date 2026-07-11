@@ -67,7 +67,7 @@ For the complete event schema and link relationship names, read [index-schema.md
      ```
 
 2. Discover current artifacts.
-   - Scan for `task.md`, `.task/candidate_task/*.md`, `.task/task_pack/*.json`, `.task/task_miss/**/*.md`, `.task/validation/*.md`, `.task/id_audit/*.md`, `.issue/**/*.md`, `.agent_log/**/*.md`, `.agent_goal/*.md`, `.agent_advice/**/*.md`, `.interview/**/*.md`, `.schema/` schema/contract/map artifacts, and `.contract/` auxiliary contract/map artifacts.
+   - Scan for `task.md`, `.task/candidate_task/*.md`, `.task/task_pack/*.json`, `.task/task_miss/**/*.md`, `.task/validation/*.md`, `.task/id_audit/*.md`, `.issue/**/*.md`, integrity-verified `.agent_log/**/*.md`, `.agent_goal/*.md`, `.agent_advice/**/*.md`, `.interview/**/*.md`, `.schema/` schema/contract/map artifacts, and `.contract/` auxiliary contract/map artifacts. Reject unsafe/invalid agent-log stores through the shared `$record-agent-work-log` inspector instead of following symlinks or indexing tampered/orphan bodies.
    - Assign IDs to artifacts that are not already indexed.
    - During `scan`, reuse the stable ID for the same artifact type and path and append an update event when content, title, status, or bounded metadata changes.
    - Create a new ID only for an explicit semantic replacement: pass a new `--id`, or use `add --replace`. Supersede and cross-link the previous active same-path record in the same locked transaction.

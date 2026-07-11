@@ -85,17 +85,12 @@ def _bind_modules(exports: dict[str, Any]) -> None:
 
 
 def get_runtime_caches() -> dict[str, Any]:
-    return {
-        '_DOMAIN_ADAPTER_MODULE': adapters._DOMAIN_ADAPTER_MODULE,
-        '_QUALITY_METRICS_MODULE': adapters._QUALITY_METRICS_MODULE,
-    }
+    return {'_DOMAIN_ADAPTER_MODULE': adapters._DOMAIN_ADAPTER_MODULE}
 
 
 def set_runtime_caches(values: dict[str, Any]) -> None:
     if '_DOMAIN_ADAPTER_MODULE' in values:
         adapters._DOMAIN_ADAPTER_MODULE = values['_DOMAIN_ADAPTER_MODULE']
-    if '_QUALITY_METRICS_MODULE' in values:
-        adapters._QUALITY_METRICS_MODULE = values['_QUALITY_METRICS_MODULE']
     _bind_modules(_collect_exports())
 
 

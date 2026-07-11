@@ -3,15 +3,7 @@ from __future__ import annotations
 from .common import *
 
 def default_high_water() -> dict[str, Any]:
-    return {
-        "event_named_ratio": 0.0,
-        "proper_noun_character_ratio": 0.0,
-        "coreference_resolved_ratio": 0.0,
-        "causal_edge_count": 0,
-        "windows_covered": 0,
-        "ever_causal_edge": False,
-        "ever_provider_dispatch": False,
-    }
+    return {"ever_provider_dispatch": False}
 
 def load_registry(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []

@@ -1,0 +1,286 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parents[1]
+LOOPBACK_SCRIPT = ROOT / "audit-cycle-loopback" / "scripts" / "anti_loop_gate_provider.py"
+
+
+def load_module(path: Path, name: str) -> Any:
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+loopback = load_module(LOOPBACK_SCRIPT, "domain_default_loopback")
+progress_loop = load_module(
+    ROOT / "orchestrate-task-cycle" / "scripts" / "detect_progress_loop.py",
+    "domain_default_progress_loop",
+)
+output_delta = load_module(
+    ROOT / "orchestrate-task-cycle" / "scripts" / "output_delta_contract.py",
+    "domain_default_output_delta",
+)
+gt_conflict = load_module(
+    ROOT / "orchestrate-task-cycle" / "scripts" / "detect_gt_constraint_conflict.py",
+    "domain_default_gt_conflict",
+)
+
+
+LEGACY_METRIC_KEYS = {
+    "event_named_ratio",
+    "proper_noun_character_ratio",
+    "coreference_resolved_ratio",
+    "causal_edge_count",
+    "windows_covered",
+}
+
+
+def run_loopback(root: Path, *extra: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            str(LOOPBACK_SCRIPT),
+            "--root",
+            str(root),
+            "--cycle-id",
+            "cycle-domain-default",
+            "--task-id",
+            "task-domain-default",
+            "--artifact-family",
+            "primary_output",
+            "--semantic-signature",
+            "generic_output",
+            *extra,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+    )
+
+
+def test_generic_quality_gates_do_not_inherit_domain_metrics(tmp_path: Path) -> None:
+    assert loopback.QUALITY_DELTA_KEYS == ()
+    assert loopback.FRONTIER_CHECK_KEYS == set()
+    assert loopback.LADDER_RANK == {}
+    assert progress_loop.QUALITY_DELTA_KEYS == ()
+    assert loopback.infer_ladder_rung("domain-specific capability wording") is None
+    assert loopback.normalize_ladder_rung("adapter-rung-a") == "adapter_rung_a"
+
+    direct_gate = loopback.coverage_quality_delta_gate(
+        {"quality_score": 1},
+        {},
+        0,
+        1e-9,
+    )
+    progress_gate = progress_loop.coverage_quality_delta_gate(
+        {
+            "quality_vector": {"quality_score": 1},
+            "previous_quality_vector": {"quality_score": 0},
+        }
+    )
+    contract_gate = output_delta.quality_delta_gate(
+        {"quality_score": 1},
+        {"quality_score": 0},
+    )
+
+    for gate in (direct_gate, progress_gate, contract_gate):
+        assert gate["status"] == "not_evaluated"
+        assert gate["quality_delta_pass"] is False
+        assert gate["current_quality_vector"] == {}
+        assert not (LEGACY_METRIC_KEYS & set(gate["current_quality_vector"]))
+
+    proc = run_loopback(tmp_path)
+    assert proc.returncode == 2
+    packet = json.loads(proc.stdout)
+    serialized = json.dumps(packet, sort_keys=True)
+    assert packet["quality_delta_policy"]["supplied"] is False
+    assert packet["coverage_quality_delta_gate"]["status"] == "not_evaluated"
+    assert packet["high_water_mark"] == {"ever_provider_dispatch": False}
+    assert not any(metric in serialized for metric in LEGACY_METRIC_KEYS)
+
+
+def test_explicit_adapter_policy_supplies_metric_keys_and_aliases(tmp_path: Path) -> None:
+    policy = {
+        "keys": ["quality_score"],
+        "aliases": {"quality_score": ["score_alias"]},
+    }
+    direct_gate = loopback.coverage_quality_delta_gate(
+        {"score_alias": 2},
+        {"quality_score": 1},
+        0,
+        1e-9,
+        policy,
+    )
+    progress_gate = progress_loop.coverage_quality_delta_gate(
+        {
+            "quality_vector": {"score_alias": 2},
+            "previous_quality_vector": {"quality_score": 1},
+            "quality_delta_policy": policy,
+        }
+    )
+    contract_gate = output_delta.quality_delta_gate(
+        {"score_alias": 2},
+        {"quality_score": 1},
+        quality_delta_policy=policy,
+    )
+    for gate in (direct_gate, progress_gate, contract_gate):
+        assert gate["status"] == "pass"
+        assert gate["improved_fields"] == ["quality_score"]
+        assert gate["current_quality_vector"] == {"quality_score": 2.0}
+
+    adapter = tmp_path / "domain_adapter.py"
+    adapter.write_text(
+        "\n".join(
+            [
+                "def quality_vector(**kwargs):",
+                "    return {'quality_vector': {'score_alias': 2, 'current_output_fingerprint': 'fp-generic'}}",
+                "def quality_delta_policy(**kwargs):",
+                "    return {'keys': ['quality_score'], 'aliases': {'quality_score': ['score_alias']}}",
+                "def substance_metrics(**kwargs):",
+                "    return {'substance_metrics': {'output_rows': 1}}",
+                "def facet_root_map(**kwargs):",
+                "    return {'generic_output': 'generic_output'}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    proc = run_loopback(tmp_path, "--domain-adapter", str(adapter))
+    assert proc.returncode == 0, proc.stderr
+    packet = json.loads(proc.stdout)
+    assert packet["quality_delta_policy"] == {
+        "aliases": {"quality_score": ["quality_score", "score_alias"]},
+        "keys": ["quality_score"],
+        "supplied": True,
+    }
+    assert packet["coverage_quality_delta_gate"]["quality_delta_pass"] is True
+    assert packet["high_water_mark"]["quality_score"] == 2.0
+
+
+def test_explicit_adapter_can_restore_legacy_domain_metrics_and_ladder() -> None:
+    keys = [
+        "event_named_ratio",
+        "proper_noun_character_ratio",
+        "coreference_resolved_ratio",
+        "causal_edge_count",
+        "windows_covered",
+    ]
+    policy = {
+        "keys": keys,
+        "aliases": {
+            "causal_edge_count": ["causal_or_temporal_edge_count"],
+            "windows_covered": ["source_windows_covered"],
+        },
+    }
+    gate = loopback.coverage_quality_delta_gate(
+        {
+            "event_named_ratio": 1,
+            "proper_noun_character_ratio": 1,
+            "coreference_resolved_ratio": 1,
+            "causal_or_temporal_edge_count": 1,
+            "source_windows_covered": 1,
+        },
+        {},
+        0,
+        1e-9,
+        policy,
+    )
+    assert gate["improved_fields"] == keys
+    option = loopback.first_actionable_capability_ladder_option(
+        {
+            "rungs": [
+                {
+                    "rung": "M0_single_work_full_window",
+                    "selected_task_kind": "bounded_extraction",
+                    "satisfied": False,
+                    "actionable": True,
+                }
+            ]
+        }
+    )
+    assert option is not None
+    assert option["rung"] == "M0_single_work_full_window"
+    assert option["selected_task_kind"] == "bounded_extraction"
+
+
+def test_output_delta_contract_requires_explicit_policy(tmp_path: Path) -> None:
+    payload = {
+        "produced_domain_delta": True,
+        "changed_vs_previous": True,
+        "semantic_progress": True,
+        "quality_vector": {"score_alias": 2},
+        "previous_quality_vector": {"quality_score": 1},
+    }
+    generic = output_delta.normalize_provider_result(
+        tmp_path,
+        None,
+        {},
+        payload,
+        "complete",
+    )
+    assert generic["coverage_quality_delta_gate"]["status"] == "not_evaluated"
+
+    adapted = output_delta.normalize_provider_result(
+        tmp_path,
+        None,
+        {
+            "quality_delta_policy": {
+                "keys": ["quality_score"],
+                "aliases": {"quality_score": ["score_alias"]},
+            }
+        },
+        payload,
+        "complete",
+    )
+    assert adapted["coverage_quality_delta_gate"]["status"] == "pass"
+    assert adapted["coverage_quality_delta_gate"]["improved_fields"] == ["quality_score"]
+
+
+def test_generalization_conflict_is_adapter_policy_owned(tmp_path: Path) -> None:
+    goal_dir = tmp_path / ".agent_goal"
+    goal_dir.mkdir()
+    (goal_dir / "final_goal.md").write_text("Generalize across units.\n", encoding="utf-8")
+    task = tmp_path / "task.md"
+    task.write_text("single_unit=true\n", encoding="utf-8")
+    behavior = {"selected_unit_count": 1, "target_unit_count": 3}
+
+    generic = gt_conflict.analyze(tmp_path, task, behavior)
+    assert generic["generalization_policy_supplied"] is False
+    assert generic["generalization_sources"] == []
+    assert generic["status"] == "ok"
+
+    policy = {
+        "generalization": {
+            "required_patterns": ["generalize across units"],
+            "single_unit_patterns": ["single_unit\\s*=\\s*true"],
+            "selected_count_paths": ["selected_unit_count"],
+            "target_count_paths": ["target_unit_count"],
+            "single_unit_flag_paths": ["single_unit"],
+        }
+    }
+    adapted = gt_conflict.analyze(tmp_path, task, behavior, policy)
+    assert adapted["generalization_policy_supplied"] is True
+    assert adapted["status"] == "block"
+    assert adapted["conflicts"][0]["reason"] == "single_unit_invariant_blocks_generalization"
+
+
+def test_global_docs_define_no_fixed_domain_ladder() -> None:
+    paths = [
+        ROOT / "derive-improvement-task" / "SKILL.md",
+        ROOT / "orchestrate-task-cycle" / "references" / "anti-loop-progress-gates.md",
+    ]
+    text = "\n".join(path.read_text(encoding="utf-8") for path in paths)
+    assert "M0_single_work_full_window" not in text
+    assert "M4_unseen_15" not in text
+    assert "corpus-scale ladder" not in text

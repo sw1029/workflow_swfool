@@ -1,0 +1,60 @@
+{
+  "format_version": 1,
+  "artifact_kind": "workflow_mode_profile_registry",
+  "profiles": [
+    {
+      "format_version": 1,
+      "artifact_kind": "workflow_mode_profile",
+      "profile_id": "observation-shadow",
+      "profile_version": 1,
+      "capture": "conversation_projection",
+      "consume": "shadow",
+      "reaction": "observe",
+      "allowed_repairs": [],
+      "required_hook_signatures": [],
+      "required_consumer_ids": [],
+      "local_override": false,
+      "not_goal_truth": true,
+      "not_validation_evidence": true
+    },
+    {
+      "format_version": 1,
+      "artifact_kind": "workflow_mode_profile",
+      "profile_id": "observation-advisory",
+      "profile_version": 1,
+      "capture": "conversation_projection",
+      "consume": "advisory",
+      "reaction": "proposal_only",
+      "allowed_repairs": [],
+      "required_hook_signatures": [],
+      "required_consumer_ids": [
+        "orchestrate-session-audit"
+      ],
+      "local_override": false,
+      "not_goal_truth": true,
+      "not_validation_evidence": true
+    },
+    {
+      "format_version": 1,
+      "artifact_kind": "workflow_mode_profile",
+      "profile_id": "audit-index-repair",
+      "profile_version": 1,
+      "capture": "conversation_projection",
+      "consume": "advisory",
+      "reaction": "derived_metadata_only",
+      "allowed_repairs": [
+        {
+          "operation": "rebuild_index",
+          "target": ".task/session_audit/index.json"
+        }
+      ],
+      "required_hook_signatures": [],
+      "required_consumer_ids": [
+        "orchestrate-session-audit"
+      ],
+      "local_override": false,
+      "not_goal_truth": true,
+      "not_validation_evidence": true
+    }
+  ]
+}

@@ -27,24 +27,33 @@ def _positive_close_claim(target: str, result: dict[str, Any]) -> bool:
     return False
 
 
-def _audit_inputs(result: dict[str, Any], contract_context: Any) -> list[Any]:
-    values: list[Any] = []
+def _audit_inputs(
+    result: dict[str, Any], contract_context: Any
+) -> list[tuple[Any, bool]]:
+    """Return audit values with their caller-context provenance.
 
-    def append(value: Any) -> None:
+    A subskill result is untrusted output and cannot promote its own projected
+    collection to trusted-collector evidence.  The coordinator-owned contract
+    context is the trust boundary for an already collected projection.
+    """
+
+    values: list[tuple[Any, bool]] = []
+
+    def append(value: Any, *, from_contract_context: bool) -> None:
         if value is None:
             return
         if isinstance(value, list):
-            values.extend(value)
+            values.extend((item, from_contract_context) for item in value)
         else:
-            values.append(value)
+            values.append((value, from_contract_context))
 
     if isinstance(contract_context, dict):
         if contract_context.get("artifact_kind") in {ARTIFACT_KIND, "session_audit_collection_projection"}:
-            append(contract_context)
-        append(contract_context.get("session_audit"))
-        append(contract_context.get("session_audits"))
-    append(result.get("session_audit"))
-    append(result.get("session_audits"))
+            append(contract_context, from_contract_context=True)
+        append(contract_context.get("session_audit"), from_contract_context=True)
+        append(contract_context.get("session_audits"), from_contract_context=True)
+    append(result.get("session_audit"), from_contract_context=False)
+    append(result.get("session_audits"), from_contract_context=False)
     return values
 
 
@@ -73,6 +82,7 @@ def _direct_packet_projection(packet: dict[str, Any]) -> dict[str, Any]:
         "integrity_status": packet.get("integrity_status"),
         "consumable": packet.get("consumable"),
         "binding": packet.get("binding"),
+        "source_projection_verified": False,
         "canonical_refs_verified": False,
         "findings": findings,
     }
@@ -128,7 +138,7 @@ class SessionAuditRule(ContractRule):
             )
             return
 
-        for index, value in enumerate(supplied):
+        for index, (value, from_contract_context) in enumerate(supplied):
             if isinstance(value, dict) and value.get("artifact_kind") == ARTIFACT_KIND:
                 errors = validate_session_audit_packet(value)
                 if errors:
@@ -193,7 +203,20 @@ class SessionAuditRule(ContractRule):
                             "truncated_count": value.get("truncated_count"),
                         },
                     )
-                projected_packets.extend(_projection_packets(value))
+                packets = _projection_packets(value)
+                if not from_contract_context:
+                    add(
+                        context.findings,
+                        "block" if required and positive_close else "warn",
+                        "session_audit_collection_projection_untrusted_origin",
+                        "A subskill result cannot self-promote a collection projection to trusted-collector evidence.",
+                        {"audit_index": index},
+                    )
+                    packets = [
+                        {**packet, "source_projection_verified": False}
+                        for packet in packets
+                    ]
+                projected_packets.extend(packets)
                 continue
 
             add(
@@ -217,6 +240,15 @@ class SessionAuditRule(ContractRule):
             capture_status = packet.get("capture_status")
             integrity_status = packet.get("integrity_status")
             consumable = packet.get("consumable") is True
+            source_projection_verified = packet.get("source_projection_verified") is True
+            if required and not source_projection_verified:
+                add(
+                    context.findings,
+                    "block" if positive_close else "warn",
+                    "required_session_audit_source_projection_unverified",
+                    "Caller-required audit must come from the trusted collector after bundled deterministic source-projection validation.",
+                    {"audit_id": audit_id},
+                )
             if required and (capture_status != "complete" or integrity_status == "unverified" or not consumable):
                 add(
                     context.findings,
@@ -233,43 +265,17 @@ class SessionAuditRule(ContractRule):
                 severity = str(finding.get("severity") or "")
                 code = str(finding.get("code") or "session_audit_observation")
                 canonical_ref_hashes = finding.get("canonical_evidence_ref_hashes")
-                canonical_block = (
-                    severity == "block"
-                    and evidence_class in CANONICAL_EVIDENCE_CLASSES
-                    and isinstance(canonical_ref_hashes, list)
-                    and bool(canonical_ref_hashes)
-                )
-                if canonical_block:
-                    binding = packet.get("binding") if isinstance(packet.get("binding"), dict) else {}
-                    refs_verified = packet.get("canonical_refs_verified") is True
-                    bound_to_current = (
-                        refs_verified
-                        and current_task_id is not None
-                        and current_cycle_id is not None
-                        and binding.get("status") == "bound"
-                        and binding.get("task_id") == current_task_id
-                        and binding.get("cycle_id") == current_cycle_id
-                    )
+                if severity == "block" and evidence_class in CANONICAL_EVIDENCE_CLASSES:
                     add(
                         context.findings,
-                        "block" if positive_close and bound_to_current else "warn",
-                        (
-                            "session_audit_unresolved_canonical_finding"
-                            if bound_to_current
-                            else "session_audit_canonical_finding_not_bound_to_current_close"
-                        ),
-                        (
-                            "An unresolved, current-task/cycle canonical audit finding must be resolved before positive close."
-                            if bound_to_current
-                            else "Canonical finding is not independently bound to the current task and cycle; route review without blocking close."
-                        ),
+                        "warn",
+                        "session_audit_cross_source_claim_routes_review",
+                        "A session-owned cross-source claim is advisory until a distinct deterministic comparator contract establishes the relation.",
                         {
                             "audit_id": audit_id,
                             "finding_code": code,
                             "evidence_class": evidence_class,
                             "canonical_evidence_ref_hashes": canonical_ref_hashes,
-                            "packet_binding": binding,
-                            "canonical_refs_verified": refs_verified,
                             "current_task_id": current_task_id,
                             "current_cycle_id": current_cycle_id,
                         },

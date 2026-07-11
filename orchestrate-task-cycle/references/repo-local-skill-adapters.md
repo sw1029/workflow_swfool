@@ -23,6 +23,7 @@ Adapters must not:
 - bypass `$manage-agent-authority`, `.agent_advice` lifecycle rules, validation-set source-class rules, task-pack rules, result-contract gates, or anti-loop gates;
 - prove task completion by themselves;
 - patch repository implementation code outside `$task-md-agent-governance`.
+- define a new canonical workflow mode or phase, self-activate a privileged mode profile, or widen a tracked mode profile's capture, consumption, reaction, or repair capability.
 
 ## Adapter Scan
 
@@ -47,6 +48,8 @@ python3 .codex/skills/<skill-name>/scripts/render_adapter_packet.py --phase <pha
 
 Use a rendered packet only for the phase it names. If no renderer exists, assemble a compact manual packet from metadata and safe summaries.
 
+An adapter may declare hook signatures, phase-scoped consumer probes, or a requested tracked mode-profile ID. The coordinator resolves that request through the global mode-profile registry and independent activation provenance. An ignored repo-local override may only disable capture, lower consumption/reaction authority, remove repairs, or add probes; adapter observations and packets are never activation sources.
+
 Adapters may inform these phases when applicable:
 
 - `validation_set_plan`
@@ -64,6 +67,8 @@ Adapters may expose `code_convention_contract` as compact data. Keep project-spe
 
 Loopback and validation adapters may expose Part F hooks as compact data:
 
+- `quality_delta_policy(**context)`: return `{"keys": [<canonical metric ids>], "aliases": {<canonical id>: [<accepted source-field ids>]}}`. Only listed keys participate in G-COV/high-water updates. Missing or malformed policy leaves G-COV `not_evaluated`; it never activates repository-independent metric defaults.
+- `gt_constraint_policy(**context)`: optionally return `action_specs` plus a `generalization` object. The generalization object owns scope regexes, single-unit regexes, behavior field paths for selected/target counts, unit IDs, flags and streaks, and an optional reason/action ID. Pass the normalized result to `detect_gt_constraint_conflict.py --policy-json`; missing policy disables domain-unit/generalization inference while generic provider/credential conflicts remain available.
 - `verifier_source_paths(gate, **context)`: map an abstract gate/verifier key to repository-owned verifier source paths. If the current change set touches a mapped verifier source, the affected pass is `pass_with_coupled_verifier` and is not consumable as a pass until a later non-coupled run or independent recalculation.
 - `evidence_provenance(metric, **context)`: label each metric or improved field as `independently_verified` or `producer_attested`. Missing per-field provenance is producer-attested when the hook is present; if the hook is absent, keep legacy accounting.
 - `residual_gap_policy(target, **context)`: provide abstract residual-gap comparison inputs such as ratio, threshold, and basis. Keep thresholds and metric definitions inside the adapter; generic workflow skills only consume `marginal_repair`, explicit descope, and next-rung hints.

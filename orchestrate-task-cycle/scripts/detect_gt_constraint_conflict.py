@@ -18,10 +18,10 @@ GT_FILES = (
 )
 
 TASK_CONTEXT_RE = re.compile(
-    r"(approved_exported_openai_credential|provider_terminal|sealed_blocker_families|"
+    r"(provider_terminal|sealed_blocker_families|"
     r"terminally?\s+seal|terminal[-_\s]?blocked\s+pending\s+credential|bounded\s+retry|"
     r"retry/probe|credential[-_\s]dependent|credential\s+blocker|provider\s+credential|"
-    r"openai\s+credential|no[-_\s]?provider|no[-_\s]?env|no[-_\s]?credential|"
+    r"api\s+credential|no[-_\s]?provider|no[-_\s]?env|no[-_\s]?credential|"
     r"credential\s+lookup|authority_policy)",
     re.IGNORECASE,
 )
@@ -41,28 +41,17 @@ OVERRIDE_TIMESTAMP_RE = re.compile(
     re.IGNORECASE,
 )
 OVERRIDE_QUOTE_RE = re.compile(r"(?:원문|quote|quoted|instruction\s+text|지시\s*문구)\s*[:：]\s*([\"'“”‘’`].{10,}[\"'“”‘’`]|.{10,})", re.IGNORECASE)
-GENERALIZATION_RE = re.compile(
-    r"(multi[-_\s]?work|3[-_\s]?work|unseen[-_\s]?(?:10|15|batch)|corpus[-_\s]?scale|"
-    r"generalization|generalize|works?\s*-\s*agnostic|작품[-_\s]?불문|다작품|복수\s*작품)",
-    re.IGNORECASE,
-)
-SINGLE_WORK_RE = re.compile(
-    r"(single[-_\s]?work[-_\s]?id\s*[:=]\s*(?:true|1)|expect_single_work_id\s*[:=]\s*(?:true|1)|selected_work_count\s*[:=]\s*1)",
-    re.IGNORECASE,
-)
-
-
-ACTION_SPECS: dict[str, dict[str, tuple[str, ...]]] = {
+DEFAULT_ACTION_SPECS: dict[str, dict[str, tuple[str, ...]]] = {
     "runtime_env_credential_read": {
         "allowed": (
-            r"reading\s+[`']?\.env[`']?.{0,120}(credential|api\s*key|openai)",
+            r"reading\s+[`']?\.env[`']?.{0,120}(credential|api\s*key)",
             r"\.env.{0,80}(runtime|런타임).{0,80}(read|읽)",
             r"(credential|api\s*key).{0,120}(read|읽).{0,80}\.env",
         ),
         "required": (
-            r"openai\s+api.{0,120}\.env.{0,120}(must|해야|읽어야)",
+            r"provider\s+api.{0,120}\.env.{0,120}(must|해야|읽어야)",
             r"(credential|api\s*key).{0,80}(read|읽).{0,80}(runtime|런타임).{0,80}\.env",
-            r"user-authorized\s+openai.{0,160}credentials\s+read\s+at\s+runtime\s+from\s+[`']?\.env",
+            r"user-authorized\s+provider.{0,160}credentials\s+read\s+at\s+runtime\s+from\s+[`']?\.env",
         ),
         "forbidden": (
             r"do\s+not\s+read\s+[`']?\.env[`']?",
@@ -73,12 +62,12 @@ ACTION_SPECS: dict[str, dict[str, tuple[str, ...]]] = {
             r"\.env.{0,80}(금지|읽지\s+않)",
         ),
     },
-    "bounded_openai_retry_probe": {
+    "bounded_provider_retry_probe": {
         "allowed": (
             r"bounded\s+(retry|probe|retry/probe).{0,160}(expected|required|before|전)",
             r"(retry|probe|retry/probe).{0,160}before\s+terminal",
             r"terminal.{0,120}bounded\s+(retry|probe|retry/probe)",
-            r"단일\s+openai.{0,120}terminal.{0,120}하지\s+않",
+            r"단일\s+provider.{0,120}terminal.{0,120}하지\s+않",
         ),
         "required": (
             r"bounded\s+(retry|probe|retry/probe)\s+is\s+expected\s+before\s+terminal",
@@ -86,22 +75,22 @@ ACTION_SPECS: dict[str, dict[str, tuple[str, ...]]] = {
             r"terminal\s+전\s+bounded\s+(retry|probe|retry/probe|재시도)",
         ),
         "forbidden": (
-            r"do\s+not\s+call\s+(openai|providers?)",
-            r"no\s+openai/provider\s+dispatch",
+            r"do\s+not\s+call\s+providers?",
+            r"no\s+provider\s+dispatch",
             r"provider_dispatch_performed\s*=\s*false",
-            r"(openai|provider).{0,80}(dispatch|call).{0,80}(forbidden|blocked|금지)",
+            r"provider.{0,80}(dispatch|call).{0,80}(forbidden|blocked|금지)",
         ),
     },
-    "openai_provider_dispatch": {
+    "provider_dispatch": {
         "allowed": (
-            r"openai\s+api\s+calls?.{0,160}(allowed|허용)",
+            r"provider\s+api\s+calls?.{0,160}(allowed|허용)",
             r"default\s+policy:\s+[`']?allowed_when_task_requires[`']?",
-            r"openai/external\s+actions\s+that\s+a\s+current\s+task\s+requires",
+            r"provider/external\s+actions\s+that\s+a\s+current\s+task\s+requires",
         ),
         "required": (),
         "forbidden": (
-            r"do\s+not\s+call\s+(openai|providers?)",
-            r"no\s+openai/provider\s+dispatch",
+            r"do\s+not\s+call\s+providers?",
+            r"no\s+provider\s+dispatch",
             r"provider_dispatch_performed\s*=\s*false",
         ),
     },
@@ -226,20 +215,92 @@ def collect_matches(root: Path, path: Path, text: str, action: str, disposition:
     return matches
 
 
-def goal_truth_matches(root: Path) -> list[dict[str, Any]]:
+def string_items(value: Any) -> list[str]:
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def normalize_action_specs(policy: dict[str, Any] | None) -> dict[str, dict[str, tuple[str, ...]]]:
+    specs = {
+        action: {key: tuple(patterns) for key, patterns in dispositions.items()}
+        for action, dispositions in DEFAULT_ACTION_SPECS.items()
+    }
+    supplied = (policy or {}).get("action_specs")
+    if not isinstance(supplied, dict):
+        return specs
+    for action, dispositions in supplied.items():
+        if not isinstance(dispositions, dict):
+            continue
+        action_id = str(action).strip()
+        if not action_id:
+            continue
+        specs[action_id] = {
+            disposition: tuple(string_items(dispositions.get(disposition)))
+            for disposition in ("allowed", "required", "forbidden")
+        }
+    return specs
+
+
+def normalize_generalization_policy(policy: dict[str, Any] | None) -> dict[str, Any]:
+    value = (policy or {}).get("generalization")
+    if not isinstance(value, dict):
+        return {}
+    required_patterns = string_items(value.get("required_patterns") or value.get("scope_patterns"))
+    single_unit_patterns = string_items(value.get("single_unit_patterns"))
+    if not required_patterns:
+        return {}
+    return {
+        "action": str(value.get("action") or "generalization").strip() or "generalization",
+        "required_patterns": required_patterns,
+        "single_unit_patterns": single_unit_patterns,
+        "selected_count_paths": string_items(value.get("selected_count_paths")),
+        "target_count_paths": string_items(value.get("target_count_paths")),
+        "streak_paths": string_items(value.get("streak_paths")),
+        "streak_threshold_paths": string_items(value.get("streak_threshold_paths")),
+        "unit_ids_paths": string_items(value.get("unit_ids_paths")),
+        "single_unit_flag_paths": string_items(value.get("single_unit_flag_paths")),
+        "default_streak_threshold": int_value(value.get("default_streak_threshold")) or 3,
+        "reason": str(value.get("reason") or "single_unit_invariant_blocks_generalization"),
+    }
+
+
+def regex_matches(patterns: list[str], text: str) -> list[re.Match[str]]:
+    matches: list[re.Match[str]] = []
+    for pattern in patterns:
+        try:
+            matches.extend(re.finditer(pattern, text, re.IGNORECASE | re.DOTALL))
+        except re.error:
+            continue
+    return matches
+
+
+def goal_truth_matches(
+    root: Path,
+    action_specs: dict[str, dict[str, tuple[str, ...]]],
+) -> list[dict[str, Any]]:
     matches: list[dict[str, Any]] = []
     for rel in GT_FILES:
         path = root / rel
         if not path.is_file():
             continue
         text = read_text(path)
-        for action, spec in ACTION_SPECS.items():
+        for action, spec in action_specs.items():
             matches.extend(collect_matches(root, path, text, action, "allowed", spec.get("allowed", ())))
             matches.extend(collect_matches(root, path, text, action, "required", spec.get("required", ())))
     return matches
 
 
-def corpus_generalization_sources(root: Path, task_path: Path, task_text: str) -> list[dict[str, Any]]:
+def generalization_sources(
+    root: Path,
+    task_path: Path,
+    task_text: str,
+    policy: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if not policy:
+        return []
     sources: list[dict[str, Any]] = []
     seen: set[tuple[str, int, str]] = set()
 
@@ -250,7 +311,7 @@ def corpus_generalization_sources(root: Path, task_path: Path, task_text: str) -
         seen.add(key)
         sources.append(
             {
-                "action": "corpus_generalization",
+                "action": policy["action"],
                 "disposition": disposition,
                 "path": path_text,
                 "line": line_no,
@@ -263,25 +324,40 @@ def corpus_generalization_sources(root: Path, task_path: Path, task_text: str) -
         if not path.is_file():
             continue
         text = read_text(path)
-        for match in GENERALIZATION_RE.finditer(text):
+        for match in regex_matches(policy["required_patterns"], text):
             line_no, line = line_for_offset(text, match.start())
             add_source(rel_path(root, path), line_no, line, "required_or_implied")
-    for match in GENERALIZATION_RE.finditer(task_text):
+    for match in regex_matches(policy["required_patterns"], task_text):
         line_no, line = line_for_offset(task_text, match.start())
         add_source(rel_path(root, task_path), line_no, line, "task_scope")
     return sources
 
 
-def task_forbidden_matches(root: Path, task_path: Path) -> list[dict[str, Any]]:
+def task_forbidden_matches(
+    root: Path,
+    task_path: Path,
+    action_specs: dict[str, dict[str, tuple[str, ...]]],
+) -> list[dict[str, Any]]:
     text = read_text(task_path)
     matches: list[dict[str, Any]] = []
-    for action, spec in ACTION_SPECS.items():
+    for action, spec in action_specs.items():
         matches.extend(collect_matches(root, task_path, text, action, "forbidden", spec.get("forbidden", ())))
     return matches
 
 
-def relevant_task_context(task_text: str) -> bool:
-    return bool(TASK_CONTEXT_RE.search(task_text))
+def relevant_task_context(
+    task_text: str,
+    action_specs: dict[str, dict[str, tuple[str, ...]]],
+) -> bool:
+    if TASK_CONTEXT_RE.search(task_text):
+        return True
+    patterns = [
+        pattern
+        for spec in action_specs.values()
+        for disposition in ("allowed", "required", "forbidden")
+        for pattern in spec.get(disposition, ())
+    ]
+    return bool(regex_matches(patterns, task_text))
 
 
 def latest_user_override_evidence(task_text: str, forbidden: dict[str, Any]) -> dict[str, Any]:
@@ -362,11 +438,11 @@ def behavior_conflicts(by_action: dict[str, dict[str, list[dict[str, Any]]]], be
         )
     )
     conflicts: list[dict[str, Any]] = []
-    provider_gt = by_action.get("openai_provider_dispatch", {}).get("gt", []) + by_action.get("bounded_openai_retry_probe", {}).get("gt", [])
+    provider_gt = by_action.get("provider_dispatch", {}).get("gt", []) + by_action.get("bounded_provider_retry_probe", {}).get("gt", [])
     if provider_gt and provider_request_count == 0 and not (legitimate_terminal or bounded_retry_evidence):
         conflicts.append(
             {
-                "action": "openai_provider_dispatch",
+                "action": "provider_dispatch",
                 "severity": "block",
                 "reason": "behavior_avoids_goal_truth_provider_path",
                 "observed_behavior": {
@@ -397,106 +473,71 @@ def behavior_conflicts(by_action: dict[str, dict[str, list[dict[str, Any]]]], be
     return conflicts
 
 
-def single_work_generalization_conflicts(
+def single_unit_generalization_conflicts(
     task_text: str,
     behavior: dict[str, Any],
-    generalization_sources: list[dict[str, Any]],
+    sources: list[dict[str, Any]],
+    policy: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    if not generalization_sources:
+    if not sources or not policy:
         return []
-    selected_work_count = int_value(
-        first_present(
-            behavior,
-            (
-                "selected_work_count",
-                "work_count",
-                "output_work_count",
-                "processed_output_validation.output_work_count",
-                "result.selected_work_count",
-            ),
-        )
+    selected_unit_count = int_value(first_present(behavior, tuple(policy["selected_count_paths"])))
+    target_unit_count = int_value(first_present(behavior, tuple(policy["target_count_paths"])))
+    explicit_streak = int_value(first_present(behavior, tuple(policy["streak_paths"])))
+    threshold = (
+        int_value(first_present(behavior, tuple(policy["streak_threshold_paths"])))
+        or policy["default_streak_threshold"]
     )
-    target_work_count = int_value(
-        first_present(
-            behavior,
-            (
-                "target_work_count",
-                "expected_work_count",
-                "scale_ladder.target_work_count",
-                "result.target_work_count",
-            ),
-        )
+    output_unit_ids = list_value(first_present(behavior, tuple(policy["unit_ids_paths"])))
+    single_unit_flag = boolish(
+        first_present(behavior, tuple(policy["single_unit_flag_paths"]))
     )
-    explicit_streak = int_value(
-        first_present(
-            behavior,
-            (
-                "single_work_id_streak",
-                "single_work_id_true_streak",
-                "single_work_only_streak",
-                "result.single_work_id_streak",
-            ),
-        )
+    task_single_unit_language = bool(regex_matches(policy["single_unit_patterns"], task_text))
+    observed_single_unit = (
+        single_unit_flag
+        or task_single_unit_language
+        or selected_unit_count == 1
+        or (len({str(item) for item in output_unit_ids if item is not None}) == 1)
     )
-    threshold = int_value(first_present(behavior, ("single_work_id_streak_threshold", "generalization_streak_threshold"))) or 3
-    output_work_ids = list_value(
-        first_present(
-            behavior,
-            (
-                "output_work_ids",
-                "selected_work_ids",
-                "processed_output_validation.output_work_ids",
-                "result.output_work_ids",
-            ),
-        )
-    )
-    single_work_flag = boolish(
-        first_present(
-            behavior,
-            (
-                "single_work_id",
-                "expect_single_work_id",
-                "result.single_work_id",
-            ),
-        )
-    )
-    task_single_work_language = bool(SINGLE_WORK_RE.search(task_text))
-    observed_single_work = (
-        single_work_flag
-        or task_single_work_language
-        or selected_work_count == 1
-        or (len({str(item) for item in output_work_ids if item is not None}) == 1)
-    )
-    repeated_single_work = (explicit_streak or 0) >= threshold
-    multi_work_expected = (target_work_count or 0) >= 2
-    if not (observed_single_work and (repeated_single_work or multi_work_expected)):
+    repeated_single_unit = (explicit_streak or 0) >= threshold
+    multiple_units_expected = (target_unit_count or 0) >= 2
+    if not (observed_single_unit and (repeated_single_unit or multiple_units_expected)):
         return []
     return [
         {
-            "action": "corpus_generalization",
+            "action": policy["action"],
             "severity": "block",
-            "reason": "single_work_id_invariant_blocks_generalization",
+            "reason": policy["reason"],
             "observed_behavior": {
-                "single_work_id": single_work_flag,
-                "task_single_work_language": task_single_work_language,
-                "selected_work_count": selected_work_count,
-                "target_work_count": target_work_count,
-                "output_work_ids": output_work_ids[:10],
-                "single_work_id_streak": explicit_streak,
+                "single_unit_flag": single_unit_flag,
+                "task_single_unit_language": task_single_unit_language,
+                "selected_unit_count": selected_unit_count,
+                "target_unit_count": target_unit_count,
+                "output_unit_ids": output_unit_ids[:10],
+                "single_unit_streak": explicit_streak,
                 "threshold": threshold,
             },
-            "allowed_or_required_sources": generalization_sources,
+            "allowed_or_required_sources": sources,
             "task_forbidden_sources": [],
         }
     ]
 
 
-def analyze(root: Path, task_path: Path, behavior: dict[str, Any] | None = None) -> dict[str, Any]:
+def analyze(
+    root: Path,
+    task_path: Path,
+    behavior: dict[str, Any] | None = None,
+    policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    behavior = behavior or {}
+    policy = policy or (behavior.get("gt_constraint_policy") if isinstance(behavior.get("gt_constraint_policy"), dict) else {})
+    action_specs = normalize_action_specs(policy)
+    generalization_policy = normalize_generalization_policy(policy)
     task_text = read_text(task_path)
-    task_context_in_scope = relevant_task_context(task_text)
-    gt = goal_truth_matches(root)
-    generalization_sources = corpus_generalization_sources(root, task_path, task_text)
-    forbidden = task_forbidden_matches(root, task_path)
+    task_context_in_scope = relevant_task_context(task_text, action_specs)
+    gt = goal_truth_matches(root, action_specs)
+    scope_sources = generalization_sources(root, task_path, task_text, generalization_policy)
+    forbidden = task_forbidden_matches(root, task_path, action_specs)
 
     by_action: dict[str, dict[str, list[dict[str, Any]]]] = {}
     for item in gt:
@@ -527,8 +568,8 @@ def analyze(root: Path, task_path: Path, behavior: dict[str, Any] | None = None)
                 "task_forbidden_sources": task_items,
             }
         )
-    conflicts.extend(behavior_conflicts(by_action, behavior or {}))
-    conflicts.extend(single_work_generalization_conflicts(task_text, behavior or {}, generalization_sources))
+    conflicts.extend(behavior_conflicts(by_action, behavior))
+    conflicts.extend(single_unit_generalization_conflicts(task_text, behavior, scope_sources, generalization_policy))
 
     status = "ok"
     if any(item["severity"] == "block" for item in conflicts):
@@ -543,14 +584,16 @@ def analyze(root: Path, task_path: Path, behavior: dict[str, Any] | None = None)
         "task_path": rel_path(root, task_path),
         "task_context_in_scope": task_context_in_scope,
         "allowed_or_required_actions": gt,
-        "corpus_generalization_sources": generalization_sources,
+        "gt_constraint_policy_supplied": bool(policy),
+        "generalization_policy_supplied": bool(generalization_policy),
+        "generalization_sources": scope_sources,
         "task_forbidden_actions": forbidden,
         "conflicts": conflicts,
-        "behavior_evidence": behavior or {},
+        "behavior_evidence": behavior,
         "requires_conflict_resolution_task": status == "block",
         "latest_user_override_detected": any(item.get("latest_user_override_detected") for item in conflicts),
         "latest_user_override_citation_verified": any(item.get("latest_user_override_citation_verified") for item in conflicts),
-        "evidence_paths": sorted({item["path"] for item in [*gt, *forbidden]}),
+        "evidence_paths": sorted({item["path"] for item in [*gt, *forbidden, *scope_sources]}),
     }
 
 
@@ -560,6 +603,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--task", default="task.md", help="Task Markdown path, relative to --root unless absolute.")
     parser.add_argument("--behavior-json", help="JSON object or path with safe scalar run behavior.")
     parser.add_argument("--behavior-path", help="Path to JSON with safe scalar run behavior.")
+    parser.add_argument("--policy-json", help="Explicit repository-adapter GT constraint policy JSON object or path.")
     args = parser.parse_args(argv)
 
     root = Path(args.root).resolve()
@@ -567,7 +611,8 @@ def main(argv: list[str] | None = None) -> int:
     if not task_path.is_absolute():
         task_path = root / task_path
     behavior = read_json_arg(root, args.behavior_json) or read_json_arg(root, args.behavior_path)
-    result = analyze(root, task_path, behavior)
+    policy = read_json_arg(root, args.policy_json)
+    result = analyze(root, task_path, behavior, policy)
     json.dump(result, sys.stdout, ensure_ascii=False, indent=2, sort_keys=True)
     sys.stdout.write("\n")
     return 0 if result["status"] != "block" else 2

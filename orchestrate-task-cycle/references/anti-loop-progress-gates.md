@@ -64,6 +64,7 @@ Use this reference when recent task-cycle evidence shows safe but stationary wor
 Gate logic must stay domain-agnostic. A repository may supply a domain adapter to `$audit-cycle-loopback` with `--domain-adapter <path.py>`, `TASK_CYCLE_DOMAIN_ADAPTER_PATH`, or the conventional `.task/domain_adapter.py` path when present. The adapter owns domain-specific paths, metric names, lexicons, thresholds, and artifact interpretation. The workflow consumes only these interfaces:
 
 - `quality_vector(...)`: coverage/quality vector for G-COV.
+- `quality_delta_policy(...)`: optional G-COV metric keys and aliases. Missing policy leaves G-COV `not_evaluated`; generic workflow code does not infer axes from vector field names.
 - `substance_metrics(...)`: primary-output substance vector for G-SUBSTANCE.
 - `corrective_resolution(...)`: corrective/backfill lanes with `attempted/resolved` counts for G-VACUOUS.
 - `facet_root_map(...)`: facet labels mapped to root families for G-FACET.
@@ -331,15 +332,9 @@ Packets should expose `validator_integrity_gate` with `validator_integrity`, `va
 
 ## G-COV Coverage/Quality Delta Gate
 
-When output-delta or loopback evidence includes a high-water mark, require at least one real adapter-supplied coverage or quality axis to improve before measurement work can be promoted. Example axes include:
+When output-delta or loopback evidence includes a high-water mark and an explicit `quality_delta_policy`, require at least one real adapter-supplied coverage or quality axis to improve before measurement work can be promoted. Metric IDs, aliases, and ratio/count meanings remain repository-owned.
 
-- `event_named_ratio`
-- `proper_noun_character_ratio`
-- `coreference_resolved_ratio`
-- `causal_edge_count` or `causal_or_temporal_edge_count`
-- `windows_covered` or an equivalent source-window count
-
-The packet must expose `coverage_quality_delta_gate` with previous/current vectors, `improved_fields`, `quality_delta_pass`, and `status`. If `quality_delta_pass=false`, new validators, oracles, ladder checks, metrics, dashboards, lineage, gap reports, or scalar contracts remain `governance_only` unless independent strict output-delta evidence proves changed semantic primary output. Do not add new domain-specific metric names to this generic skill; put them behind the adapter.
+The packet must expose `coverage_quality_delta_gate` with previous/current vectors, `improved_fields`, `quality_delta_pass`, `evaluation_status`, and `status`. Missing policy yields `not_evaluated`, not an all-zero domain vector. If `quality_delta_pass=false`, new validators, oracles, ladder checks, metrics, dashboards, lineage, gap reports, or scalar contracts remain `governance_only` unless independent strict output-delta evidence proves changed semantic primary output. Do not add domain-specific metric names or aliases to this generic skill.
 
 ## G-SUBSTANCE Output Substance Gate
 
@@ -457,9 +452,9 @@ If `detection_only` repeats for the same `blocker_root_family` at or above the c
 
 ## G-DISPATCH Provider/Scale Duty Gate
 
-When `ever_provider_dispatch=false`, provider request count is zero, and the coverage/quality high-water vector remains all-zero, do not select another surface-only, runner-surface, contract, preflight, locator, or accounting task as `goal_productive`. The packet should expose `provider_scale_dispatch_gate` with `dispatch_required`, `provider_request_count`, `high_water_all_zero`, `allowed_dispositions`, and `status`.
+When an explicit quality-delta policy was evaluated, `ever_provider_dispatch=false`, provider request count is zero, and that policy's high-water vector remains all-zero, do not select another surface-only, runner-surface, contract, preflight, locator, or accounting task as `goal_productive`. Without the policy, fail quiet and do not infer provider duty from absent domain axes. The packet should expose `provider_scale_dispatch_gate` with `dispatch_required`, `provider_request_count`, `high_water_all_zero`, `allowed_dispositions`, and `status`.
 
-If current authority permits bounded dispatch or provider-free scale execution, derive must select real extraction/scale work such as full-window, multi-window, or multi-work execution. If authority, source input, or provider state blocks that work, derive must write `terminal_blocked` or user escalation naming the missing condition. A self-imposed missing runner surface is not a valid terminal blocker when an in-place Class B implementation can create the surface.
+If current authority permits bounded dispatch or provider-free execution, derive must select real adapter/caller-identified output work. If authority, source input, or provider state blocks that work, derive must write `terminal_blocked` or user escalation naming the missing condition. A self-imposed missing runner surface is not a valid terminal blocker when an in-place Class B implementation can create the surface.
 
 ## G4 Behavior-Based GT Conflict Detection
 
@@ -475,7 +470,7 @@ Detect task-vs-GT conflict from behavior booleans, not only task text. Include s
 
 If GT or authority allows or requires a provider/env path but the task/run avoids it with `provider_request_count=0`, `env_file_read=false`, and no legitimate terminal or authority blocker, derive must resolve the contradiction, select an authorized bounded attempt, or terminal/user-escalate. A wording change that still forbids required behavior does not satisfy the gate.
 
-If goal truth or the active task requires corpus/generalization progress and behavior evidence shows `single_work_id:true`, `selected_work_count=1`, or a single-work-only streak for at least the local threshold, report `status:block` with reason `single_work_id_invariant_blocks_generalization`. The next task must implement bounded multi-work execution with `single_work_id` separation or terminal/user-escalate on the exact missing source/authority/provider condition.
+When an explicit repository `gt_constraint_policy.generalization` supplies scope patterns, unit-count fields, unit-ID fields, and a streak threshold, apply that policy to detect a single-unit invariant that contradicts a multi-unit/generalization goal. Without the policy, do not infer domain units, count fields, or generalization vocabulary from task text.
 
 ## G5 Command-Surface Hard Stop
 
@@ -664,17 +659,11 @@ Class A remains blocked while over budget: new `cmd_*`, new versioned wrappers, 
 
 ## Capability Ladder Router
 
-When `goal_productive` is required and no concrete candidate exists, derive the next task from the next unsatisfied capability in the quality vector:
+When `goal_productive` is required and no concrete candidate exists, consume only an explicit adapter `capability_ladder(...)` result or caller-supplied equivalent. Each rung must use an opaque `rung` ID and abstract `selected_task_kind`, and state `satisfied`, `actionable`, authority, local-data, and provider-dependency prerequisites. The generic workflow defines no default rung names, scale, unit counts, or domain order.
 
-1. `M0_single_work_full_window`: one work has full-window coverage with source-backed primary output.
-2. `M1_same_work_reconstruction_measured`: the same work has measured event reconstruction quality.
-3. `M2_three_work`: three distinct works run with `single_work_id` separation preserved and no collapsed cross-work graph.
-4. `M3_unseen_10`: ten unseen works run or are terminal-blocked with precise source/authority/provider evidence.
-5. `M4_unseen_15`: fifteen unseen works run or are terminal-blocked with precise source/authority/provider evidence.
+Promote the first unsatisfied actionable rung as a goal-productive task-pack item only when it can be implemented through an allowed command-surface class and current authority permits its declared prerequisites. A rung passes by adapter-defined G-COV movement or strict changed-and-semantic output-delta evidence, not by oracle existence alone. Missing ladder input fails quiet; derive must use other concrete candidates, explicit output targets, terminal blocking, or user escalation rather than inventing a domain ladder.
 
-Promote the first unsatisfied rung as a goal-productive task-pack item only when it can be implemented through an allowed command-surface class and current authority permits the needed provider/runtime behavior. A rung passes by G-COV quality/coverage delta or strict changed-and-semantic output-delta evidence, not by oracle existence alone.
-
-When G-CHAIN reaches the forced-retarget threshold, this ladder is not optional planning context. The loopback packet must expose the first actionable rung as `forced_selected_task` when authority, local data, and bounded/provider prerequisites allow it. `$derive-improvement-task` may terminal/user-escalate only after recording that no ladder rung or self-inflicted gate correction is actionable.
+When G-CHAIN reaches the forced-retarget threshold and the adapter supplied a ladder, the packet must expose the first actionable rung as `forced_selected_task` when its prerequisites allow it. `$derive-improvement-task` may terminal/user-escalate only after recording that no supplied ladder rung or self-inflicted gate correction is actionable. Without an adapter ladder, preserve generic terminal/selection rules without fabricating one.
 
 ## No-Overclaim Boundaries
 

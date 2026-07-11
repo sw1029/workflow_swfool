@@ -14,6 +14,11 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+AGENT_LOG_SCRIPTS = SCRIPT_DIR.parents[1] / "record-agent-work-log" / "scripts"
+if str(AGENT_LOG_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(AGENT_LOG_SCRIPTS))
+
+from agent_log_integrity import inspect_agent_log_store  # noqa: E402
 from result_contract_lib.session_audit import collect_session_audit_directory  # noqa: E402
 
 
@@ -321,15 +326,14 @@ def collect_issue(root: Path, max_files: int) -> dict[str, Any]:
 
 
 def collect_agent_log(root: Path, max_files: int) -> dict[str, Any]:
-    log_dir = root / ".agent_log"
-    markdown = sorted(log_dir.rglob("*.md")) if log_dir.is_dir() else []
-    jsonl = sorted(log_dir.rglob("*.jsonl")) if log_dir.is_dir() else []
+    integrity, markdown, jsonl = inspect_agent_log_store(root)
     return {
-        "directory": file_info(root, log_dir),
+        "directory": integrity["directory"],
         "markdown_count": len(markdown),
         "jsonl_count": len(jsonl),
         "latest_markdown": limited_files(root, markdown, max_files),
         "latest_jsonl": limited_files(root, jsonl, max_files),
+        "integrity": integrity,
     }
 
 

@@ -16,10 +16,9 @@ Required fields:
 - `same_family_micro_hardening_count`
 - `provider_request_count`
 - `quality_vector`
+- `quality_delta_policy`: normalized adapter-owned G-COV keys and aliases. An empty policy means G-COV was not evaluated, not that every domain metric was zero.
 - `quality_vector.quality_signal_confidence`: `high`, `medium`, or `low`
-- `quality_vector.language_context`: work/document-level language resolution summary when available.
-- `quality_vector.extractor_locale_locked`: boolean signal that extractor labels may be locale/length locked.
-- `quality_vector.quality_signal_reasons`: include low-confidence causes such as unrecognized extractor statuses, OCR down-weighting, near-duplicate placeholder clustering, or missing threshold defaults when present.
+- `quality_vector` may carry adapter-owned scalar context and confidence reasons; generic consumers must not interpret domain-specific field names.
 - `previous_accepted_baseline`: baseline source, fingerprint, adapter error if any, and whether the adapter supplied a previous quality vector override.
 - `coverage_quality_delta_reconciliation_gate`: R-GCOV packet comparing loopback G-COV with output-delta G-COV when both exist.
 - `substance_delta_gate`: G-SUBSTANCE packet comparing adapter-supplied substance vectors.
@@ -140,7 +139,7 @@ The D1-D4 fields in this list revise existing acceptance, progress truth-source,
 - `measurement_progress_streak_for_root_key`: bounded exemption counter for the suffix-normalized root key.
 - `measurement_progress_streak_for_root_family`: bounded exemption counter for the normalized root family after facet/version/date/run suffix removal.
 - `measurement_check_ids`: stable check/oracle IDs observed in the current cycle.
-- `measurement_frontiers_observed`: first-observed capability frontiers such as `event_sequence_oracle`, `reconstruction_coverage`, `relation_class_filled`, or `story_vs_narrative_split`.
+- `measurement_frontiers_observed`: first-observed opaque capability frontier IDs supplied by the caller or adapter.
 - `measurement_progress_basis`: introduced check IDs and new frontier observations that justified the exemption.
 - `blocker_signature`: stable current blocker identifier before volatile suffix normalization.
 - `blocker_root_family`: normalized blocker family used to prevent facet-renaming loops.

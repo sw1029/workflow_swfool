@@ -93,9 +93,12 @@ def find_coverage_quality_delta_gate(value: Any) -> dict[str, Any] | None:
     return None
 
 def coverage_gate_pass_value(gate: dict[str, Any]) -> bool | None:
+    status = str(gate.get("status") or "").strip().lower()
+    evaluation_status = str(gate.get("evaluation_status") or "").strip().lower()
+    if status in {"not_evaluated", "not_applicable", "missing"} or evaluation_status == "not_evaluated":
+        return None
     if "quality_delta_pass" in gate:
         return bool_value(gate.get("quality_delta_pass"))
-    status = str(gate.get("status") or "").strip().lower()
     if status in {"pass", "passed", "ok"}:
         return True
     if status in {"block", "blocked", "fail", "failed"}:

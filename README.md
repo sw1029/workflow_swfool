@@ -11,7 +11,11 @@
 - `.agent_goal/*.md`는 장기 목표/권한/규칙의 GT로 취급한다.
 - `.agent_advice/*`는 비-GT 방향성 문서로만 취급한다.
 - `.task/*`, `.agent_log/*`, `.issue/*`, `.schema/*`, `.contract/*`, `.validation/*`는 워크플로우 증거와 추적 상태이다.
-- `.task/session_audit/*`는 원문 본문을 저장하지 않는 선택적 관찰 사이드카이다. GT·검증·진전·완료 증거가 아니며, 세션 감사 부재나 불완전성은 acceptance 또는 caller가 독립적으로 요구하지 않는 한 기존 cycle을 차단하지 않는다.
+- `.agent_log`의 현재 형식은 Markdown 본문과 `index.jsonl`을 `body_sha256`, `content_id`, `record_id`로 결합한다. context/completion collector, task-state index, progress-loop consumer는 공통 no-follow integrity 검사 후에 읽으며, 변조·중복·orphan·missing·symlink는 의미 소비와 색인을 fail-close한다. collector는 진단을 위한 integrity/file metadata만 표면화할 수 있다. legacy 행은 `legacy_unverified`로 읽을 수 있지만 body-integrity 보장은 없다.
+- `logs/codex/*`, `logs/claude-code/*`의 Stop-hook projection과 `.task/session_audit/*`는 선택적 off-chain 관찰 사이드카이다. raw fallback 없이 최소 user/assistant projection만 보존하며 GT·권한·검증·진전·완료 증거가 아니다. 저장소 retention policy가 요구할 때만 해당 local path를 좁게 ignore한다.
+- required session audit는 coordinator-owned collector가 현재 source를 결정론적으로 재검증하고 complete·bound·evaluated-integrity·consumable 조건과 `source_projection_verified=true`를 모두 충족한 경우에만 통과한다. direct/result-owned packet과 packet-owned canonical/cross-source claim은 계속 advisory이며, 별도 comparator contract가 두 입력을 독립적으로 소유해 새 관계를 수립해야 한다.
+- canonical workflow mode는 계속 `normal|bootstrap`뿐이다. 선택적 ModeSpec은 capture/consume/reaction 축을 조합하되 phase·권한·verdict·semantic artifact를 변경하지 않으며, unattended repair는 비-default activation을 거친 `.task/session_audit/index.json` 재생성만 허용한다.
+- domain metric, alias, lexicon, threshold, generalization pattern, capability ladder는 명시적 repo adapter가 소유한다. quality policy가 없으면 domain metric gate는 `not_evaluated`, capability ladder가 없으면 domain rung은 unavailable, GT policy가 없으면 generalization inference는 disabled이다. generic provider/credential 검사는 계속 동작한다.
 - 완료 판정은 `$validate-task-completion`이 담당하며, 실행 성공/로그/대시보드/인덱스만으로 완료를 선언하지 않는다.
 - adapter나 caller가 verifier contract를 요구하는 measurable acceptance는 live verifier가 pass해야 완전하다. required verifier의 `not_evaluated`는 pass가 아니며, full close 대신 verifier follow-up, explicit descope, terminal blocker, user escalation 중 하나로 보존한다.
 - acceptance가 참조하는 gate의 required hook 부재, `pass_with_unobserved_axes`, generation-dependent count key, below-policy residual value per cycle cost는 pass/advance/close 근거가 아니다. hook supply, axis supply, effective key/terminal-outcome fallback, residual descope plus next rung, terminal blocker, user escalation 중 하나로 보존한다.
@@ -28,11 +32,11 @@
 ```mermaid
 flowchart TD
   Start([사용자 요청 또는 cycle 시작])
-  Context["context 수집<br/>README, task.md, .agent_goal, .task, .issue, .schema, .contract, .validation"]
+  Context["context 수집<br/>README, task.md, .agent_goal, .agent_log,<br/>.task, .issue, .schema, .contract, .validation"]
   LedgerInit["$maintain-cycle-ledger<br/>cycle-id, stage.jsonl, current_stage.json, packets/ 초기화<br/>S10 blocker persistence fields 보존"]
   Authority["$manage-agent-authority<br/>권한/외부 호출/검증 우선순위 정책 요약<br/>S8 policy propagation + S5 authority axis"]
   Acceptance["$normalize-acceptance-and-demo<br/>acceptance, non-goals, demo, validation commands 정규화<br/>measurable -> verifier contract when mapped<br/>target_metric_delta movement contract,<br/>scenario coverage, freshness class,<br/>input-generation condition + required hook completeness"]
-  AdapterScan["repo-local skill adapter scan<br/>code_convention_contract, domain/output-delta hooks,<br/>target_required_verifier, target_metric_delta,<br/>goal_axis_map, gate_artifact_compatibility,<br/>policy_consumption_sites, chronic_threshold,<br/>producer_execution_evidence, landed_feature_inventory,<br/>feature_presence_evidence, input_source_lineage,<br/>hook_registry, reason_code_rank, budget hooks 탐색"]
+  AdapterScan["repo-local skill adapter scan<br/>code_convention_contract + consumer-probe declarations,<br/>quality_delta_policy, gt_constraint_policy, capability_ladder,<br/>verifier/metric/axis/compatibility/feature/lineage hooks<br/>missing quality policy => domain metrics not_evaluated"]
   RoutePlan["route_plan<br/>task.md 존재 여부와 cycle 경로 결정"]
 
   NoTask{"task.md 없음?"}
@@ -42,14 +46,14 @@ flowchart TD
   ValPlan["$plan-validation-scope<br/>current_only / affected_chain / full_chain 결정<br/>S9 incompatible gate는 skipped/not_evaluated"]
   ValSetPlan["$build-validation-set-with-agents plan<br/>검증셋 필요 여부, oracle/split/leakage 정책"]
   Governance["$task-md-agent-governance<br/>task.md 구현, worker 위임, repo audit, task_miss 기록"]
-  ResultContract1["$validate-subskill-result-contract<br/>governance/result fields 검사"]
-  AdapterValidate["repo_skill_adapter_validate<br/>발견된 adapter의 load/signature/return contract 검증"]
+  ResultContract1["$validate-subskill-result-contract<br/>result_contract.py facade -> result_contract_lib/rules<br/>governance/result fields와 collector origin 검사"]
+  AdapterValidate["repo_skill_adapter_validate<br/>load/signature/return contract +<br/>consumer_context_conformance 검증"]
   CodeStructure["orchestrate scripts/code_structure_audit.py<br/>구조/컨벤션/semantic modularity audit packet<br/>depth/fan-out는 cohesion/reuse/contract와 결합될 때만 부담"]
-  Run["$run-task-code-and-log<br/>명령 실행, full command_argv, 실패 autopsy,<br/>observed_producer_claim downgrade, .agent_log 기록<br/>long_run_launch 가능"]
+  Run["$run-task-code-and-log<br/>명령 실행, full command_argv, 실패 autopsy,<br/>observed_producer_claim downgrade,<br/>.agent_log v3 content-bound 기록, long_run_launch 가능"]
   Running{"run status = running?"}
   Monitor["$monitor-running-execution<br/>canonical step=run + event_kind long_run_*<br/>PID/log/heartbeat/stop command, expected artifacts,<br/>remaining_validation 추적"]
   Quality["$review-cycle-output-quality<br/>단일 read-only xhigh 출력 품질 리뷰<br/>goal-axis completeness, landed_feature_inventory,<br/>feature_presence_evidence body anchor"]
-  Loopback["$audit-cycle-loopback<br/>semantic_progress, same-family loop, adapter metrics,<br/>3-state gates, verifier contract, count-key hygiene,<br/>gate/artifact compatibility skip, chronic blocker debt,<br/>goal-axis completeness, residual cost ratio,<br/>scenario/argv/blocker/stochastic findings,<br/>feature regression, frozen input, self-resolvable input routing,<br/>anti_loop_provider packet + root-cause ledger"]
+  Loopback["$audit-cycle-loopback<br/>semantic_progress, same-family loop, explicit quality/domain metrics,<br/>3-state gates, verifier contract, count-key hygiene,<br/>gate/artifact compatibility skip, chronic blocker debt,<br/>goal-axis completeness, residual cost ratio,<br/>scenario/argv/blocker/stochastic findings,<br/>feature regression, frozen input, self-resolvable input routing,<br/>anti_loop_provider packet + root-cause ledger"]
   ValSetBuild["$build-validation-set-with-agents build/consume<br/>validation assets 또는 oracle 결과 산출"]
   SchemaPreDerive["$manage-schema-contracts pre-derive<br/>schema/contract 영향, stale contract,<br/>S8 policy propagation debt 확인"]
   Visible["$record-visible-increment<br/>보이는 변화 기록; not_validation_evidence=true"]
@@ -103,7 +107,7 @@ flowchart TD
   Authority["$manage-agent-authority<br/>.agent_goal/agent_authority.md<br/>policy_consumption_sites + authority_axis_classify"]
   SchemaRegistry["$manage-schema-contracts<br/>.schema/.contract registry 정렬<br/>policy_propagation_incomplete debt 기록"]
   AdviceIn["외부 조언 파일 또는 본문"]
-  Advice["$manage-external-advice<br/>raw -> active/deferred/applied/rejected<br/>consumption_state S6, S7-S10 hook advice 정규화"]
+  Advice["$manage-external-advice<br/>raw -> active/deferred/applied/rejected<br/>consumption_state S6, S7-S10 hook advice 정규화<br/>mark-applied -> standard integrity-bound past_advice log"]
   AdvicePacket["active advice packet<br/>not_goal_truth=true"]
   Index["$manage-task-state-index<br/>goal-*, int-*, adv-*, schema-* 링크"]
   Consumers["orchestrate / derive / governance / validate<br/>GT와 비-GT를 분리 소비<br/>additive signal 대신 acceptance/gate/progress key에 반영"]
@@ -267,7 +271,11 @@ flowchart TD
 flowchart TD
   Evidence([어떤 스킬이 artifact 생성])
   Cache["$manage-evidence-cache<br/>fingerprint -> reuse/fresh_required/stale/unsafe_to_reuse"]
-  Log["$record-agent-work-log<br/>.agent_log/YYYY-MM-DD/*.md + index.jsonl"]
+  Log["$record-agent-work-log standard writer<br/>.agent_log Markdown + index.jsonl<br/>body_sha256 / content_id / record_id binding"]
+  LogIntegrity["shared agent_log_integrity gate<br/>no-follow containment + body/index binding<br/>collector/index/progress consumers가 공유"]
+  LogClass{"integrity status"}
+  Legacy["legacy_unverified<br/>읽기 가능; body-integrity 보장 없음"]
+  Invalid["unsafe / invalid<br/>duplicate/orphan/missing/tamper/symlink<br/>integrity metadata only; semantic use/indexing 제외"]
   Ledger["$maintain-cycle-ledger<br/>stage.jsonl/current_stage.json/packets<br/>long-run events remain step=run<br/>S10 blocker persistence fields"]
   TerminalDelta["P5 terminal_delta_record / governance_packet_budget<br/>unchanged_ref(path+hash), input-delta, disposition, streak<br/>recording-cost reduction only"]
   Chronic["S10 chronic_blocker debt<br/>first_seen_generation + consecutive_generation_count<br/>visibility only, not verdict"]
@@ -282,9 +290,11 @@ flowchart TD
   User([사용자에게 결과 보고])
 
   Evidence --> Cache
-  Evidence --> Log
+  Evidence --> Log --> LogIntegrity --> LogClass
   Evidence --> Contract --> Ledger
-  Log --> Index
+  LogClass -- valid --> Index
+  LogClass -- legacy_unverified --> Legacy --> Index
+  LogClass -- unsafe/invalid --> Invalid
   Ledger --> TerminalDelta --> Index
   Ledger --> Chronic --> Index
   Evidence --> Visible --> Ledger
@@ -337,7 +347,9 @@ flowchart TD
   LoopbackCLI["anti_loop_gate_provider.py<br/>legacy CLI/API shim"]
   LoopbackAPI["anti_loop_provider/api.py<br/>export bridge + runtime cache sync"]
   LoopbackEval["anti_loop_provider/evaluator.py<br/>LoopbackEvaluator / evaluate"]
-  AdapterLayer["adapters.py + domain.py + quality.py<br/>domain adapter, quality vector,<br/>facet/root-family normalization,<br/>target movement, gate compatibility,<br/>landed feature/input lineage/self-resolvable hooks"]
+  AdapterPolicy{"explicit quality/domain metric policy supplied?"}
+  AdapterLayer["adapters.py + domain.py + quality.py<br/>adapter-owned quality_delta_policy<br/>metric aliases/axes/thresholds stay repo-local"]
+  GenericOnly["generic contracts only<br/>domain metric gates remain not_evaluated<br/>no global metric fallback"]
   LoopGates["gates + acceptance + verification + blockers<br/>coverage/substance, verifier status,<br/>target movement, scenario coverage, command provenance,<br/>gate compatibility skip, blocker actionability, stochastic feasibility,<br/>feature regression, frozen input, Q1 routing,<br/>failure surface stage, source separation,<br/>adapter and chain stalls"]
   RootCause["root_cause.py + root_cause_runtime.py<br/>hypotheses, repo-owned actionability,<br/>reason_to_attempt, exhaustion and untried repair"]
   LoopRegistry["registry.py<br/>anti-loop registry, root-cause ledger,<br/>sealed blocker families, chronic blocker counters"]
@@ -351,14 +363,70 @@ flowchart TD
   DetectRegistry["progress_loop_detection/registry.py<br/>feature symbol registry + terminal history"]
   DetectPacket["analysis_result.py<br/>loop-breaker packet"]
 
+  GTPolicy{"explicit gt_constraint_policy supplied?"}
+  GTDetector["detect_gt_constraint_conflict.py<br/>adapter-owned generalization regexes/field paths<br/>plus generic provider/credential checks"]
+  GTGeneric["generic provider/credential checks only<br/>generalization inference disabled"]
+  Capability["derive adapter capability_ladder<br/>consume only when explicitly supplied<br/>absent => no domain rung candidate"]
+
   Derive["$derive-improvement-task<br/>next task / terminal blocker / user escalation constraints"]
 
   Inputs --> LoopbackCLI --> LoopbackAPI --> LoopbackEval
-  LoopbackEval --> AdapterLayer --> LoopGates --> LoopPacket
+  LoopbackEval --> AdapterPolicy
+  AdapterPolicy -- yes --> AdapterLayer --> LoopGates --> LoopPacket
+  AdapterPolicy -- no --> GenericOnly --> LoopGates
   LoopbackEval --> RootCause --> LoopRegistry --> LoopPacket
   LoopPacket --> Derive
 
   Inputs --> DetectCLI --> DetectAnalyzer --> DetectEvidence --> DetectGates --> DetectTerminal --> DetectRegistry --> DetectPacket --> Derive
+  Inputs --> GTPolicy
+  GTPolicy -- yes --> GTDetector --> Derive
+  GTPolicy -- no --> GTGeneric --> Derive
+  Inputs --> Capability --> Derive
+```
+
+### Mermaid Flowchart 8: off-chain session observation, ModeSpec, bounded repair
+
+```mermaid
+flowchart TD
+  Registry["tracked mode-profiles.json<br/>capture / consume / reaction"]
+  Activation["activation provenance<br/>default / user_instruction / caller_policy / authority_record<br/>observation cannot self-activate"]
+  Override["repo-local override<br/>capability reduction + probe additions only"]
+  Resolve["mode_profile.py resolve + verify-resolution<br/>canonical normal|bootstrap and phase order unchanged"]
+
+  Stop["optional Codex/Claude Code Stop hook<br/>session_id + absolute transcript_path"]
+  Capture["capture_projection.py<br/>bounded strict UTF-8/JSON + no-follow walk<br/>user/assistant text only; no raw fallback"]
+  Offchain["repo-local off-chain projection<br/>logs/codex or logs/claude-code/session.jsonl<br/>narrow ignore only when retention policy requires"]
+  Inspect["session_audit.py inspect / validate<br/>body-free content-addressed packet"]
+  Collector["coordinator-owned collector<br/>deterministic producer replay + exact source parity<br/>source_projection_verified=true"]
+
+  Direct["direct packet / result-owned projection<br/>packet-owned canonical or cross-source claim"]
+  Advisory["advisory / not_evaluated<br/>no GT, authority, validation, progress,<br/>completion, or verdict upgrade"]
+  Required["caller-required audit satisfied<br/>only by verified collector projection"]
+  Rejected["required audit not satisfied<br/>direct/result-owned, forged, partial,<br/>quarantined, or failed projection"]
+  Comparator["separate deterministic comparator<br/>independently owns compared inputs, relation code,<br/>scalars, binding, and version; establishes a new relation"]
+  Consumers["existing consumers only<br/>context / loopback / validate / issue / derive / report<br/>no session_audit canonical phase"]
+
+  RepairGate{"validated audit-index-repair<br/>with non-default activation?"}
+  Rebuild["auto-rebuild-index<br/>only .task/session_audit/index.json"]
+  Receipt["content-derived repair receipt<br/>resolution/operation/target/index ID<br/>before/after SHA-256"]
+  Owner["semantic/source/task/acceptance/goal/authority change<br/>route to owning governed skill"]
+
+  Registry --> Resolve
+  Activation --> Resolve
+  Override --> Resolve
+  Resolve -- capture enabled --> Stop --> Capture --> Offchain --> Inspect --> Collector
+  Collector -- complete + exact parity --> Advisory
+  Collector -- complete + bound + evaluated integrity + consumable + exact parity + required --> Required --> Consumers
+  Collector -- partial/quarantined/failed --> Advisory
+  Collector -- required but any trust condition fails --> Rejected
+  Direct --> Advisory
+  Direct -. required gate .-> Rejected
+  Advisory -. optional observation .-> Consumers
+  Advisory -. review request only; packet claim stays advisory .-> Comparator --> Consumers
+  Resolve -. consume/reaction ceiling .-> Advisory
+  Resolve --> RepairGate
+  RepairGate -- exact allowlist --> Rebuild --> Receipt --> Consumers
+  RepairGate -- absent or semantic mutation --> Owner
 ```
 
 ## 순수 텍스트 Flowchart
@@ -375,7 +443,7 @@ flowchart TD
         v
 +--------------------------------------------------------------------------------+
 | CONTEXT                                                                        |
-| - README, task.md, .agent_goal, .task, .issue, .schema, .contract 확인          |
+| - README, task.md, .agent_goal, .agent_log, .task, .issue, .schema, .contract  |
 +--------------------------------------------------------------------------------+
         |
         v
@@ -405,10 +473,10 @@ flowchart TD
         |                            +-------------------------------------------+
         v
 +----------------------------+     +---------------------------------------------+
-| repo-local adapter scan    | --> | code_convention_contract                    |
-| adapters and hooks         |     | domain adapter / output-delta / gate hooks  |
-|                             |     | verifier/metric/axis/compatibility hooks    |
-|                             |     | producer/feature/lineage/registry hooks     |
+| repo-local adapter scan    | --> | code convention + consumer-probe declarations|
+| explicit policies/hooks    |     | quality/GT-constraint/capability policies   |
+|                             |     | verifier/metric/axis/feature/lineage hooks   |
+|                             |     | missing quality policy -> metric not_eval   |
 +----------------------------+     +---------------------------------------------+
         |
         v
@@ -439,14 +507,14 @@ flowchart TD
         |
         v
 +----------------------------+     +---------------------------------------------+
-| result contract + structure| --> | validated handoff + structure packet       |
-| field check / code audit   |     | required fields, shard/coupling/depth      |
-|                             |     | depth/fan-out only with cohesion/reuse     |
+| result contract + adapter  | --> | result_contract_lib/rules handoff           |
+| validation + structure     |     | consumer_context_conformance + structure    |
+| field/origin/code audit    |     | depth/fan-out only with cohesion/reuse      |
 +----------------------------+     +---------------------------------------------+
         |
         v
 +----------------------------+     +---------------------------------------------+
-| $run-task-code-and-log     | --> | run result + .agent_log                    |
+| $run-task-code-and-log     | --> | run result + content-bound .agent_log      |
 | command execution          |     | success/running/partial/failed/not_run     |
 | full body-free argv        |     | long_run_launch may only create handoff    |
 +----------------------------+     +---------------------------------------------+
@@ -629,6 +697,7 @@ External advice side path:
 +-------------------------------+      | raw -> active/deferred/applied/rejected|
                                        | workflow advice becomes in-place      |
                                        | acceptance/gate/progress-key revision |
+                                       | applied -> standard past_advice log   |
                                        +----------------------------------------+
                                                      |
                                                      v
@@ -742,7 +811,8 @@ Anti-loop and efficiency inputs into derive:
                                        | $audit-cycle-loopback                  |
                                        | anti_loop_provider package            |
                                        | semantic_progress, root family,        |
-                                       | adapter metrics, effective dispositions|
+                                       | explicit quality/domain metrics,        |
+                                       | effective dispositions                 |
                                        | evaluation_status pass/fail/not_eval   |
                                        | target movement + gate compatibility   |
                                        | failure_surface_stage_gate             |
@@ -846,9 +916,9 @@ Anti-loop and efficiency inputs into derive:
               |
               v
 +-------------------------------+      +----------------------------------------+
-| $run-task-code-and-log        | ---> | run evidence + .agent_log             |
+| $run-task-code-and-log        | ---> | run evidence + content-bound log       |
 | execute specified command     |      | status: success/running/partial/failed|
-| preserve full argv            |      | command_provenance_missing blocks     |
+| preserve full argv            |      | shared integrity inspector before use |
 |                               |      | baseline/reproduction/comparison      |
 +-------------------------------+      +----------------------------------------+
               |
@@ -978,11 +1048,21 @@ Anti-loop and efficiency inputs into derive:
               |
               v
 +-------------------------------+      +----------------------------------------+
-| $record-agent-work-log        | ---> | .agent_log/YYYY-MM-DD/*.md            |
-| factual intent/work/result/   |      | .agent_log/index.jsonl                |
-| shortcomings                  |      | log-* IDs when indexed                |
+| $record-agent-work-log        | ---> | .agent_log Markdown + index.jsonl     |
+| standard v3 writer            |      | body_sha256/content_id/record_id      |
+| factual intent/work/result    |      | immutable body/index binding          |
 +-------------------------------+      +----------------------------------------+
               |
+              v
++-------------------------------+      +----------------------------------------+
+| shared agent_log_integrity    | ---> | valid -> normal consumption           |
+| no-follow + path containment  |      | legacy_unverified -> readable,        |
+| duplicate/orphan/missing/     |      |   no body-integrity guarantee         |
+| tamper/symlink inspection     |      | unsafe/invalid -> integrity metadata  |
+|                               |      | only; semantic use/indexing blocked   |
++-------------------------------+      +----------------------------------------+
+              |
+              | valid or legacy_unverified only
               v
 +-------------------------------+      +----------------------------------------+
 | $manage-task-state-index      | ---> | .task/index.jsonl + index.md          |
@@ -1027,75 +1107,197 @@ Anti-loop and efficiency inputs into derive:
 
 ```text
 +----------------------------------------+
-| inputs                                 |
-| registry/artifact paths/changed files  |
-| runner validation/output delta         |
-| failure autopsy/gate state JSON        |
-| scenario/argv/blocker/stochastic JSON  |
-| long-run event history + Part P/Q data |
+| shared inputs                          |
+| registry/artifacts/changed files       |
+| run/output/failure/gate evidence       |
+| scenario/argv/blocker/stochastic data  |
+| long-run history + Part P/Q evidence   |
 +----------------------------------------+
           |                                      |
+          | anti-loop branch                     | progress branch
           v                                      v
 +----------------------------------+   +----------------------------------+
 | anti_loop_gate_provider.py       |   | detect_progress_loop.py          |
-| legacy CLI/API shim              |   | legacy CLI shim                  |
+| -> anti_loop_provider/api.py     |   | -> progress_loop_detection/cli.py|
+| -> evaluator.py                  |   | -> ProgressLoopAnalyzer          |
 +----------------------------------+   +----------------------------------+
           |                                      |
           v                                      v
-+----------------------------------+   +----------------------------------+
-| anti_loop_provider/api.py        |   | progress_loop_detection/cli.py   |
-| export bridge/runtime caches     |   | argparse/constant registry check |
-+----------------------------------+   +----------------------------------+
-          |                                      |
-          v                                      v
-+----------------------------------+   +----------------------------------+
-| evaluator.py                     |   | analysis.py                      |
-| LoopbackEvaluator/evaluate       |   | ProgressLoopAnalyzer mixins      |
-+----------------------------------+   +----------------------------------+
-          |                                      |
-          v                                      v
-+----------------------------------+   +----------------------------------+
-| adapters/domain/quality          |   | evidence/fingerprints/normalizers|
-| quality vectors, root families   |   | evidence items, root axis/key    |
-| feature/input-lineage hooks      |   | feature symbols, input deltas     |
-+----------------------------------+   +----------------------------------+
-          |                                      |
-          v                                      v
-+----------------------------------+   +----------------------------------+
-| gates/acceptance/verification    |   | output/input/validator gates     |
-| scenario/argv/blocker/stochastic |   | terminal/provider gates          |
-| feature/frozen-input/Q1 routes   |   | quiescence/escalation            |
-| blockers/chain/root_cause        |   | reason-code repair constraints   |
-| failure surface stage gate       |   | provenance/repair constraints    |
-+----------------------------------+   +----------------------------------+
-          |                                      |
-          v                                      v
-+----------------------------------+   +----------------------------------+
-| registry/root-cause ledger       |   | progress symbol registry         |
-| sealed blocker families          |   | loop-breaker result packet       |
-+----------------------------------+   +----------------------------------+
-          |                                      |
-          +-------------------+------------------+
-                              |
-                              v
-                 +-----------------------------+
-                 | derive-improvement-task     |
-                 | task/terminal/escalation    |
-                 | constraints                 |
-                 +-----------------------------+
+    +--------------------------+      +----------------------------------+
+    | explicit quality/domain  |      | evidence/fingerprint/normalizer  |
+    | metric policy ?          |      | -> output/input/validator gates  |
+    +--------------------------+      | -> terminal/provider gates       |
+      | yes              | no         | -> progress symbol registry      |
+      v                  v            | -> loop-breaker packet           |
++----------------+ +----------------+ +----------------------------------+
+| adapter-owned  | | generic only   |                 |
+| quality_delta  | | domain axes,   |                 |
+| policy/aliases | | metric gates   |                 |
+| axes/thresholds| | not_evaluated  |                 |
++----------------+ +----------------+                 |
+      |                  |                            |
+      +---------+--------+                            |
+                v                                     |
++----------------------------------+                  |
+| gates/acceptance/verification    |                  |
+| scenario/argv/blocker/stochastic |                  |
+| feature/frozen-input/Q1 routes   |                  |
+| root cause + sealed families     |                  |
+| no global metric fallback        |                  |
++----------------------------------+                  |
+                |                                     |
+                +------------------+------------------+
+                                   v
+                      +-----------------------------+
+                      | loop/progress packets       |
+                      +-----------------------------+
+
+GT constraint side path:
+
++-------------------------------+
+| explicit gt_constraint_policy?|
++-------------------------------+
+  | yes                                      | no
+  v                                          v
++-------------------------------+  +-------------------------------------------+
+| detect_gt_constraint_conflict |  | generic provider/credential checks only   |
+| adapter generalization regex/ |  | generalization inference disabled         |
+| field paths + generic checks  |  +-------------------------------------------+
++-------------------------------+
+  |                                          |
+  +----------------------+-------------------+
+                         |
+                         v
+               +-------------------------+
+               | GT conflict packet      |
+               +-------------------------+
+
+Capability side path:
+
++-------------------------------+
+| explicit capability_ladder ?  |
++-------------------------------+
+  | yes                                      | no
+  v                                          v
++-------------------------------+  +-------------------------------------------+
+| adapter-owned domain rung     |  | no domain rung candidate                  |
+| candidate for derive          |  | no global ladder fallback                 |
++-------------------------------+  +-------------------------------------------+
+  |                                          |
+  +----------------------+-------------------+
+                         |
+                         v
+               +-----------------------------+
+               | derive-improvement-task     |
+               | consumes loop/progress/GT   |
+               | and optional rung packets   |
+               +-----------------------------+
+```
+
+### Text Flowchart 8: off-chain session observation, ModeSpec, bounded repair
+
+```text
+Capture and trust lane:
+
++-------------------------------+
+| optional Codex/Claude Stop    |
+| session_id + transcript_path  |
++-------------------------------+
+              |
+              v
++-------------------------------+
+| capture_projection.py         |
+| strict bounded JSON/no-follow |
+| user/assistant text only      |
+| no raw fallback               |
++-------------------------------+
+              |
+              v
++-------------------------------+
+| repo-local off-chain log      |
+| narrow-ignore only when the   |
+| repository policy requires it |
++-------------------------------+
+              |
+              v
++-------------------------------+
+| session_audit inspect/validate|
+| body-free addressed packet    |
++-------------------------------+
+              |
+              v
++-------------------------------+      +----------------------------------------+
+| coordinator-owned collector   | ---> | deterministic producer replay         |
+| current source + packet       |      | exact source-projection parity         |
++-------------------------------+      +----------------------------------------+
+              |
+              v
+        +-----------------------------+
+        | complete + bound +          |
+        | evaluated integrity +       |
+        | consumable + exact parity?  |
+        +-----------------------------+
+          | yes                                      | no
+          v                                          v
++-------------------------------+        +---------------------------------------+
+| non-GT advisory observation   |        | advisory/quarantine only              |
+| required audit gate may pass  |        | required audit gate rejects it        |
+| but no verdict is upgraded    |        +---------------------------------------+
++-------------------------------+
+              |
+              v
++-------------------------------+
+| existing phases may consume   |
+| no session-audit phase added  |
++-------------------------------+
+
+Direct/result-owned packets remain advisory and cannot satisfy required audit.
+Packet-owned canonical or cross-source claims also remain advisory; a separate
+deterministic comparator must independently own both inputs, relation code, scalars,
+binding, and version to establish a new relation.
+
+Mode and bounded-repair lane:
+
++-------------------------------+      +----------------------------------------+
+| tracked mode-profiles.json    | <--- | default: non-privileged profiles only |
+| capture/consume/reaction axes |      | user/caller/authority: required/repair|
+|                               |      | reducing local override only          |
+|                               |      | observation cannot self-activate      |
++-------------------------------+      +----------------------------------------+
+              |
+              v
++-------------------------------+
+| mode_profile.py resolve/verify|
+| normal|bootstrap unchanged    |
+| no phase/authority/verdict or |
+| semantic mutation             |
++-------------------------------+
+              |
+              v
+        +-----------------------------+
+        | exact repair allowlist and  |
+        | non-default activation?     |
+        +-----------------------------+
+          | yes                                      | no
+          v                                          v
++-------------------------------+        +---------------------------------------+
+| auto-rebuild-index            |        | route semantic/source/task/goal/      |
+| .task/session_audit/index.json|        | authority change to owning skill      |
+| before/after hash receipt     |        +---------------------------------------+
++-------------------------------+
 ```
 
 ### 스킬별 빠른 참조
 
 ```text
 orchestrate-task-cycle
-  context -> ledger -> authority -> task bootstrap when absent -> adapter scan -> acceptance/verifier/scenario/freshness/target-movement contracts -> validation-scope plan -> validation-set plan -> governance/result contract -> adapter validation -> code-structure audit -> run or long-run branch -> review/loopback or monitor -> validation-set/visible/gap/profile evidence -> validation-scope finalize + pre-validation index -> validate current task -> issue reconciliation -> schema/derive/index only when promotion is allowed -> commit -> dashboard/report -> closeout
+  context -> ledger -> authority -> task bootstrap when absent -> adapter scan -> acceptance/verifier/scenario/freshness/target-movement contracts -> validation-scope plan -> validation-set plan -> governance/result contract -> adapter validation including consumer-context conformance -> code-structure audit -> run or long-run branch -> review/loopback or monitor -> validation-set/visible/gap/profile evidence -> validation-scope finalize + pre-validation index -> validate current task -> issue reconciliation -> schema/derive/index only when promotion is allowed -> commit -> dashboard/report -> closeout; ModeSpec/session observation remains an optional non-canonical sidecar
 
 maintain-cycle-ledger
   cycle init -> stage append -> packet link -> preserve terminal_delta_record/unchanged_ref and S10 blocker persistence fields when supplied -> dashboard/final_report render support
 
 validate-subskill-result-contract
-  subskill result -> required fields including long-run detail, command_argv, scenario/blocker/stochastic gates -> warn/block -> ledger event -> downstream warnings
+  subskill result -> result_contract.py facade + result_contract_lib/rules -> required fields including long-run detail, command_argv, scenario/blocker/stochastic gates and trusted collector origin -> warn/block -> ledger event -> downstream warnings
 
 manage-agent-goal
   user goal/conventions -> preserve/merge -> final_goal.md + conventions.md
@@ -1119,10 +1321,10 @@ manage-schema-contracts
   goal schema contract + source/interfaces -> contract surfaces -> S8 policy_propagation_incomplete debt, Part P/Q `adapter_hook_debt`/`unenforced`, and code_convention_contract visibility when consumers attempted hooks -> versions/causal map -> .schema/.contract updates
 
 manage-external-advice
-  raw advice -> normalize active advice -> in-place workflow revisions without GT upgrade, including S6 consumption_state and S7-S10 hook advice -> audit stale/dead/degenerate claims -> apply/defer/reject -> adv-* links
+  raw advice -> normalize active advice -> in-place workflow revisions without GT upgrade, including S6 consumption_state and S7-S10 hook advice -> audit stale/dead/degenerate claims -> apply/defer/reject -> standard integrity-bound past_advice work log -> adv-* links
 
 derive-improvement-task
-  context + agents + gates -> respect allowed dispositions, verifier debt, target-metric movement debt, policy propagation debt, gate compatibility skip, chronic blocker debt, long-run pending state, scenario/argv/blocker/stochastic repair, count-key hygiene, goal-axis completeness, residual cost, global invariant keys, Part P/Q feature/freshness/frozen-input/provenance/primary-reason constraints -> one next task/task_pack/terminal blocker -> archive old task -> write task.md -> index
+  context + agents + gates -> respect allowed dispositions, verifier debt, target-metric movement debt, policy propagation debt, gate compatibility skip, chronic blocker debt, long-run pending state, scenario/argv/blocker/stochastic repair, count-key hygiene, goal-axis completeness, residual cost, global invariant keys, Part P/Q feature/freshness/frozen-input/provenance/primary-reason constraints, and explicit adapter capability ladder when supplied -> one next task/task_pack/terminal blocker -> archive old task -> write task.md -> index; no global domain ladder fallback
 
 task-doctor
   explicit doctor instruction -> read rules/task/advice -> archive old task -> rewrite task/task_pack while preserving verifier/hook/axis/cost/global residuals -> reconcile schema/index/issue -> optional commit
@@ -1158,7 +1360,7 @@ build-validation-set-with-agents
   task/evidence -> plan/build/refresh/consume/block -> .validation assets and result packet
 
 run-task-code-and-log
-  requested command -> execute/profile scope -> full body-free command_argv or command_provenance_missing -> safe_failure_autopsy if needed -> .agent_log and run evidence, including long_run_launch handoff when authorized
+  requested command -> execute/profile scope -> full body-free command_argv or command_provenance_missing -> safe_failure_autopsy if needed -> content-bound .agent_log v3 and run evidence, including long_run_launch handoff when authorized
 
 monitor-running-execution
   running run evidence -> heartbeat/status/artifact check -> step=run long_run_monitor event -> running/completed_pending_validation/stale/missing_details/not_running without success promotion
@@ -1167,10 +1369,13 @@ review-cycle-output-quality
   output artifacts -> one read-only qualitative reviewer -> quality/output-delta/no-overclaim/goal-axis packet, landed_feature_inventory and feature_presence_evidence body checks when supplied
 
 audit-cycle-loopback
-  run/review/output-delta/failure-autopsy/adapter -> anti_loop_provider evaluator -> 3-state gates, gate_artifact_compatibility skip, chronic blocker counters, failure surface stage, root-cause ledger, reason_to_attempt, target_required_verifier, scenario/argv/blocker/stochastic findings, feature regression, frozen input lineage, self-resolvable input routing, count-key hygiene, goal-axis completeness, residual cost, global invariant high-water -> derive constraints
+  run/review/output-delta/failure-autopsy/explicit quality policy -> anti_loop_provider evaluator -> 3-state gates, adapter-owned domain metrics/aliases/thresholds, gate_artifact_compatibility skip, chronic blocker counters, failure surface stage, root-cause ledger, reason_to_attempt, target_required_verifier, scenario/argv/blocker/stochastic findings, feature regression, frozen input lineage, self-resolvable input routing, count-key hygiene, goal-axis completeness, residual cost, global invariant high-water -> derive constraints; missing quality policy leaves domain metric gates not_evaluated
 
 audit-session-governance
-  repo-local Codex/Claude Code JSONL -> strict body-free projection/quarantine -> content-addressed non-authoritative packet -> optional context/loopback/validate/issue/derive/report observation; deterministic index rebuild only, no semantic auto-repair
+  Stop-hook descriptor -> bounded no-follow capture_projection.py user/assistant projection -> session_audit inspect -> trusted collector deterministic source replay/parity -> complete/bound/evaluated-integrity/consumable verified projection may satisfy caller-required audit without upgrading a verdict; direct/result-owned packets and their semantic claims stay advisory, a separate comparator independently establishes any new relation, and verified ModeSpec may rebuild only .task/session_audit/index.json with a before/after-hash receipt
+
+mode_profile.py
+  tracked capture/consume/reaction profile + default activation for non-privileged profiles or user/caller/authority activation for required/repair behavior + reducing local override -> resolve/verify content-derived ModeSpec -> preserve normal|bootstrap phases and authority/verdict ceilings -> allow only exact audit-index rebuild or route change to owning governed skill
 
 validate-task-completion
   evidence bundle -> completion gates -> required verifier/hook pass + target_metric_delta movement + observed goal axes + scenario coverage + command provenance + blocker actionability + stochastic feasibility + policy/gate warnings + evidence freshness + landed feature inheritance + adapter hook provenance + frozen input lineage + long-run pending check + count-key hygiene + residual cost ratio + structure global effect -> validation_verdict + progress_verdict -> validation report
@@ -1179,10 +1384,10 @@ manage-evidence-cache
   fingerprints -> reuse/fresh_required/stale/unsafe_to_reuse -> owning validator decides
 
 manage-task-state-index
-  artifacts -> append-only IDs/links/audit -> .task/index.jsonl + index.md
+  artifacts -> shared agent_log integrity inspection -> valid or legacy_unverified discovery only -> append-only IDs/links/audit -> .task/index.jsonl + index.md
 
 record-agent-work-log
-  factual notes -> normalized log -> .agent_log entry -> optional task-state link
+  factual notes -> v3 body/index content binding -> shared no-follow integrity inspection -> valid or legacy_unverified consumers; tamper/symlink/duplicate/orphan/missing state blocks semantic consumption/indexing while collectors may expose integrity/file metadata
 
 record-visible-increment
   before/after evidence -> visible delta artifact -> not validation evidence
@@ -1197,10 +1402,13 @@ render-cycle-dashboard
   cycle ledger -> Korean dashboard with canonical tokens and blockers
 
 anti_loop_gate_provider.py / anti_loop_provider/
-  legacy entrypoint -> api export bridge -> evaluator -> adapters/domain/quality -> gates/root_cause/registry -> anti_loop_progress_gate packet
+  legacy entrypoint -> api export bridge -> evaluator -> explicit quality/domain metric policy then adapters/domain/quality, or generic domain-metric not_evaluated path when absent -> gates/root_cause/registry -> anti_loop_progress_gate packet
 
 detect_progress_loop.py / progress_loop_detection/
   legacy entrypoint -> CLI -> ProgressLoopAnalyzer -> evidence/fingerprints/normalizers -> output/input/validator gates -> terminal quiescence/escalation -> loop-breaker packet
+
+detect_gt_constraint_conflict.py
+  generic provider/credential checks + optional repo-owned gt_constraint_policy -> adapter generalization regex/field-path inference when supplied; absent policy disables generalization inference without changing generic checks
 
 safe_failure_autopsy.py
   logs/adapters -> execution_stage_ladder + post_failure_diagnostics + gate_selfcheck -> failure class, next_failure_stage, safe scalar diagnostics

@@ -8,6 +8,7 @@ import contextlib
 import datetime as dt
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -839,8 +840,11 @@ def load_json(path: Path) -> tuple[Any, bytes]:
     if data is None:
         raise AuditError("JSON artifact exceeds size limit")
     try:
-        return json.loads(data.decode("utf-8", errors="strict")), data
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return json.loads(
+            data.decode("utf-8", errors="strict"),
+            object_pairs_hook=strict_json_object,
+        ), data
+    except (UnicodeDecodeError, json.JSONDecodeError, DuplicateKeyError) as exc:
         raise AuditError(f"invalid strict JSON artifact: {exc}") from exc
 
 
@@ -896,6 +900,89 @@ def rebuild_index(root_raw: str | Path) -> tuple[dict[str, Any], Path]:
     return index, output
 
 
+def _load_mode_resolution_validator() -> Any:
+    script = (
+        Path(__file__).resolve().parents[2]
+        / "orchestrate-task-cycle"
+        / "scripts"
+        / "mode_profile.py"
+    )
+    if script.is_symlink() or not script.is_file():
+        raise AuditError("tracked mode-profile validator is unavailable")
+    spec = importlib.util.spec_from_file_location(
+        "_session_audit_mode_profile_validator",
+        script,
+    )
+    if spec is None or spec.loader is None:
+        raise AuditError("tracked mode-profile validator cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        raise AuditError("tracked mode-profile validator failed to load") from exc
+    validator = getattr(module, "validate_resolution", None)
+    if not callable(validator):
+        raise AuditError("tracked mode-profile resolution validator is missing")
+    return validator
+
+
+def auto_rebuild_index(
+    root_raw: str | Path,
+    resolution_raw: str | Path,
+) -> tuple[dict[str, Any], Path]:
+    """Perform the sole unattended repair under a validated mode resolution."""
+
+    root = root_path(root_raw)
+    resolution_path, _ = safe_file(root, resolution_raw)
+    resolution_value, _ = load_json(resolution_path)
+    try:
+        resolution = _load_mode_resolution_validator()(resolution_value)
+    except (OSError, ValueError) as exc:
+        raise AuditError(f"mode resolution is invalid: {exc}") from exc
+    effective = resolution.get("effective_profile")
+    repairs = effective.get("allowed_repairs") if isinstance(effective, dict) else None
+    if (
+        resolution.get("activation_source") == "default"
+        or resolution.get("repair_receipt_required") is not True
+        or resolution.get("allowed_effects", {}).get("derived_metadata_repair_allowed") is not True
+        or repairs
+        != [
+            {
+                "operation": "rebuild_index",
+                "target": ".task/session_audit/index.json",
+            }
+        ]
+    ):
+        raise AuditError("mode resolution does not authorize exact audit-index repair")
+
+    index_path = root / ".task" / "session_audit" / "index.json"
+    before_sha256: str | None = None
+    if index_path.exists() or index_path.is_symlink():
+        mode = index_path.lstat().st_mode
+        if stat.S_ISLNK(mode) or not stat.S_ISREG(mode):
+            raise AuditError("session-audit index target is unsafe")
+        before_sha256 = digest(index_path.read_bytes())
+
+    index, output = rebuild_index(root)
+    after_sha256 = digest(output.read_bytes())
+    receipt: dict[str, Any] = {
+        "format_version": 1,
+        "artifact_kind": "workflow_mode_repair_receipt",
+        "status": "complete",
+        "resolution_id": resolution["resolution_id"],
+        "activation_source": resolution["activation_source"],
+        "operation": "rebuild_index",
+        "target": ".task/session_audit/index.json",
+        "before_sha256": before_sha256,
+        "after_sha256": after_sha256,
+        "index_id": index["index_id"],
+        "not_goal_truth": True,
+        "not_validation_evidence": True,
+    }
+    receipt["receipt_id"] = derived_id("repair-receipt", receipt)
+    return receipt, output
+
+
 def cli_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -912,6 +999,9 @@ def cli_parser() -> argparse.ArgumentParser:
     validate_cmd.add_argument("--packet", required=True)
     index_cmd = commands.add_parser("rebuild-index")
     index_cmd.add_argument("--root", required=True)
+    auto_index_cmd = commands.add_parser("auto-rebuild-index")
+    auto_index_cmd.add_argument("--root", required=True)
+    auto_index_cmd.add_argument("--mode-resolution", required=True)
     return parser
 
 
@@ -940,6 +1030,13 @@ def main(argv: list[str] | None = None) -> int:
                 "errors": errors,
             }, sort_keys=True, separators=(",", ":")))
             return 0 if not errors else 2
+        if args.command == "auto-rebuild-index":
+            receipt, output = auto_rebuild_index(
+                args.root,
+                args.mode_resolution,
+            )
+            print(json.dumps({**receipt, "output": str(output)}, sort_keys=True, separators=(",", ":")))
+            return 0
         index, output = rebuild_index(args.root)
         print(json.dumps({
             "index_id": index["index_id"],

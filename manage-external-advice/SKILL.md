@@ -80,7 +80,7 @@ Do not infer blocker families, hook wiring, or verification success from advice 
 
 4. Apply or reject advice.
    - Use `mark-applied` only after the advice directive has been incorporated into `task.md`, candidate tasks, schema/design records, implementation notes, or otherwise retired by durable evidence.
-   - `mark-applied` writes a `past_advice` `.agent_log` entry and moves the normalized advice to `.agent_advice/applied/`.
+   - `mark-applied` writes a content-bound `past_advice` entry through `$record-agent-work-log` and moves the normalized advice to `.agent_advice/applied/`; do not create orphan Markdown outside `.agent_log/index.jsonl`.
    - Use `defer` when the advice is plausible but cannot be applied yet; record the missing evidence, prerequisite, or pending user decision.
    - Use `reject` when a conflict makes the advice unsuitable; record the conflict source and keep the raw artifact.
 

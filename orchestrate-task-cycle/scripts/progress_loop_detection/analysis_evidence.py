@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from collections import Counter
-import json
 from pathlib import Path
+import sys
 from typing import Any
 
 from .constants import *
@@ -14,12 +13,21 @@ from .dispositions import *
 from .gates import *
 from .evidence import *
 
+AGENT_LOG_SCRIPTS = Path(__file__).resolve().parents[3] / "record-agent-work-log" / "scripts"
+if str(AGENT_LOG_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(AGENT_LOG_SCRIPTS))
+
+from agent_log_integrity import inspect_agent_log_store  # noqa: E402
+
 def candidate_files(root: Path) -> list[Path]:
-    groups = [root / ".task" / "validation", root / ".task" / "task_miss", root / ".agent_log", root / ".issue"]
+    groups = [root / ".task" / "validation", root / ".task" / "task_miss", root / ".issue"]
     files: list[Path] = []
     for group in groups:
         if group.is_dir():
             files.extend(path for path in group.rglob("*") if path.is_file() and path.suffix.lower() in {".md", ".json", ".jsonl"})
+    log_integrity, log_markdown, _ = inspect_agent_log_store(root)
+    if log_integrity["status"] in {"valid", "legacy_unverified"}:
+        files.extend(log_markdown)
     if (root / "task.md").is_file():
         files.append(root / "task.md")
     return sorted(files, key=lambda path: path.stat().st_mtime if path.exists() else 0, reverse=True)

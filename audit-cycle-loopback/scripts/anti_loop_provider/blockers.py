@@ -6,27 +6,10 @@ def normalize_ladder_rung(value: Any) -> str | None:
     text = str(value or "").strip().lower().replace("-", "_")
     if not text:
         return None
-    text = RUNG_ALIASES.get(text, text)
-    return text if text in LADDER_RANK else None
+    return re.sub(r"[^a-z0-9_.:]+", "_", text).strip("_")[:160] or None
 
 def infer_ladder_rung(*values: Any) -> str | None:
-    text = " ".join(scalar_strings(list(values))).lower().replace("-", "_")
-    if not text:
-        return None
-    if "unseen" in text or "holdout_batch" in text:
-        return "unseen_batch"
-    if "reconstruction" in text:
-        return "reconstruction"
-    if "pov" in text or "focalization" in text or "timeline" in text:
-        return "pov_timeline"
-    if "causal" in text or "temporal" in text or "story_order" in text:
-        return "causal_temporal"
-    if "coref" in text or "coreference" in text or "mention_map" in text:
-        return "entity_coref"
-    if "multi_window" in text or "multi window" in text:
-        return "multi_window"
-    if "single_window" in text or "single window" in text:
-        return "single_window"
+    # Generic workflow code cannot infer a domain ladder from free text.
     return None
 
 def first_named_value(values: list[Any], keys: set[str]) -> str | None:
@@ -52,11 +35,6 @@ def blocker_mutation_kind(
             return "repeat"
         return "facet_rename"
     if curr_root and prev_root and curr_root != prev_root:
-        return "forward_mutation"
-    prev_rung = normalize_ladder_rung(prev.get("blocker_ladder_rung")) or infer_ladder_rung(prev_signature)
-    curr_rank = LADDER_RANK.get(curr_rung or "")
-    prev_rank = LADDER_RANK.get(prev_rung or "")
-    if curr_rank is not None and prev_rank is not None and curr_rank > prev_rank:
         return "forward_mutation"
     if curr_signature and prev_signature and curr_signature == prev_signature:
         return "repeat"

@@ -98,8 +98,7 @@ Use finding severity `warn` or `block` and evidence classes:
 
 - `transcript_observation` for directly observed parser/capture properties.
 - `absence_unknown` for missing observations.
-- `cross_source_mismatch` only after an independent canonical comparison.
-- `canonical_fact` only from the canonical owner.
+- `cross_source_mismatch` and `canonical_fact` only as legacy/advisory labels in this packet. A separate comparator contract owns any actionable relation or canonical fact.
 
 The bundled log-only producer emits only `transcript_observation` and
 `absence_unknown`. Keep messages fixed. Include only line numbers, counts, bounded
@@ -122,7 +121,17 @@ Only `complete`, evaluated-integrity packets with `bound` binding may set
 means validation or completion passed.
 
 Before consumption, validate the closed schema, content-derived ID, source snapshot,
-non-authority flags, capture state, and binding state.
+non-authority flags, capture state, and binding state. The trusted collector must also
+re-run the bundled producer validator and require an exact deterministic projection of
+the current source. Its body-free projection records
+`source_projection_verified=true`; a directly supplied packet never inherits that
+collector provenance and cannot satisfy caller-required audit.
+
+Treat packet-owned `cross_source_mismatch` and `canonical_fact` values as advisory
+legacy observations. A separate deterministic comparator contract must own the
+compared inputs, relation code, expected and observed scalars, binding, and comparator
+version before any semantic mismatch can affect close. Verifying only a canonical
+artifact path and hash does not establish that relation.
 
 Never produce from this packet alone:
 
@@ -135,17 +144,32 @@ Never produce from this packet alone:
 
 ## Stop-hook compatibility
 
-Consume `logs/<tool>/<session-id>.jsonl` only after the existing stop-hook logger has
-finished writing it. Keep the logger's fail-open session behavior separate from this
-auditor's strict parser: a recognized slim projection may become `complete`, while a
-verbatim fallback containing raw, tool, reasoning, metadata, mixed, or malformed lines
-must be quarantined instead of being silently treated as a clean projection.
+Use the bundled `scripts/capture_projection.py` as the optional Stop-hook producer.
+Pass the repository root and tool explicitly on argv; pass the hook's safe
+`session_id` and absolute `transcript_path` in its stdin JSON object. The producer
+strictly bounds and decodes both inputs, rejects duplicate JSON keys, unsupported
+schema versions, traversal, non-regular files, and symlinks in any source or output
+path component. It rebuilds a minimal tool-native JSONL schema from user/assistant
+text blocks only. It never retains raw lines, reasoning, tool arguments/results,
+images, provider metadata, system/developer injections, or a verbatim fallback.
+
+The producer atomically overwrites only `logs/<tool>/<safe-session>.jsonl`. Capture
+mode writes nothing to stdout. Every logging failure reports a body-free diagnostic
+to stderr, exits zero, and leaves any previous projection unchanged so the optional
+hook cannot alter the agent session. Consume the projection only after that write has
+completed, and keep this fail-quiet capture behavior separate from the auditor's
+strict packet validation.
 
 Do not add semantic comparison or repair work to the stop hook. Run inspection and any
 cross-source review asynchronously so logging latency or failure cannot alter the agent
 session. The source log still contains conversation text and remains sensitive even
 though the audit packet is body-free; retention, access control, and deletion policy for
 `logs/` are separate operational controls.
+
+When repository policy keeps these artifacts off-chain, prefer the narrow root-anchored
+ignore entries `/logs/codex/`, `/logs/claude-code/`, and `/.task/session_audit/` over a
+broad `logs/` or `.task/` rule. Ignore rules do not remove already tracked paths from
+the Git index; index changes require a separate reviewed operation.
 
 ## Privacy
 

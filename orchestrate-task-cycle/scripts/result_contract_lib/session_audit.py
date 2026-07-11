@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import functools
 import hashlib
+import importlib.util
 import json
 import re
 from pathlib import Path
@@ -369,6 +371,58 @@ def verify_packet_source(root: Path, packet: dict[str, Any]) -> list[dict[str, A
     return errors
 
 
+@functools.lru_cache(maxsize=1)
+def _bundled_projection_validator() -> Any:
+    """Load the tracked producer validator that owns projection semantics."""
+
+    script = (
+        Path(__file__).resolve().parents[3]
+        / "audit-session-governance"
+        / "scripts"
+        / "session_audit.py"
+    )
+    if script.is_symlink() or not script.is_file():
+        raise RuntimeError("bundled session-audit validator is unavailable")
+    spec = importlib.util.spec_from_file_location(
+        "_bundled_session_audit_projection_validator", script
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("bundled session-audit validator cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    validator = getattr(module, "validate_packet", None)
+    if not callable(validator):
+        raise RuntimeError("bundled session-audit validator has no validate_packet")
+    return validator
+
+
+def verify_deterministic_source_projection(
+    root: Path, packet: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Require exact parity with the bundled body-free source projection."""
+
+    try:
+        validator = _bundled_projection_validator()
+        producer_errors = validator(packet, root, verify_source=True)
+    except Exception:  # Fail closed if the tracked validator cannot execute.
+        return [
+            {
+                "code": "session_audit_source_projection_validator_unavailable",
+                "path": "source",
+                "detail": "bundled deterministic source-projection validation was unavailable",
+            }
+        ]
+    if producer_errors:
+        return [
+            {
+                "code": "session_audit_source_projection_mismatch",
+                "path": "source",
+                "detail": "packet does not match the bundled deterministic source projection",
+            }
+        ]
+    return []
+
+
 def verify_canonical_evidence_refs(root: Path, packet: dict[str, Any]) -> list[dict[str, Any]]:
     errors: list[dict[str, Any]] = []
     source = packet.get("source") if isinstance(packet.get("source"), dict) else {}
@@ -445,6 +499,7 @@ def project_valid_packet(packet: dict[str, Any], file_metadata: dict[str, Any]) 
             for key in ("status", "cycle_id", "task_id")
             if key in binding
         },
+        "source_projection_verified": True,
         "canonical_refs_verified": True,
         "consumable": packet.get("consumable"),
         "not_goal_truth": packet.get("not_goal_truth"),
@@ -678,6 +733,9 @@ def collect_session_audit_directory(root: Path, max_files: int) -> dict[str, Any
             _add(errors, "session_audit_filename_mismatch", "audit_id", "packet filename must equal its content-derived audit_id")
         if not errors and isinstance(packet, dict):
             errors.extend(verify_packet_source(root, packet))
+        if not errors and isinstance(packet, dict):
+            errors.extend(verify_deterministic_source_projection(root, packet))
+        if not errors and isinstance(packet, dict):
             errors.extend(verify_canonical_evidence_refs(root, packet))
         if errors:
             base["invalid_packets"].append(_invalid_projection(metadata, "invalid", errors))
@@ -739,6 +797,7 @@ def sanitize_collection_summary(value: Any, max_packets: int | None = None) -> d
                 "capture_mode",
                 "capture_status",
                 "integrity_status",
+                "source_projection_verified",
                 "canonical_refs_verified",
                 "consumable",
                 "not_goal_truth",
@@ -856,6 +915,7 @@ PROJECTION_PACKET_FIELDS = {
     "capture_status",
     "integrity_status",
     "binding",
+    "source_projection_verified",
     "canonical_refs_verified",
     "consumable",
     "not_goal_truth",
@@ -961,6 +1021,13 @@ def validate_collection_projection(value: Any) -> list[dict[str, Any]]:
             _add(errors, "session_audit_repair_class_invalid", f"{path}.repair_class", "repair class is outside the closed vocabulary")
         if packet.get("not_goal_truth") is not True or packet.get("not_validation_evidence") is not True:
             _add(errors, "session_audit_projection_truth_flags_invalid", path, "projected packet truth flags are invalid")
+        if packet.get("source_projection_verified") is not True:
+            _add(
+                errors,
+                "session_audit_source_projection_not_verified",
+                path,
+                "collector projection must assert bundled deterministic source validation",
+            )
         if packet.get("canonical_refs_verified") is not True:
             _add(errors, "session_audit_canonical_refs_not_verified", path, "collector projection must assert independent canonical-ref verification")
         if not isinstance(packet.get("consumable"), bool) or not isinstance(packet.get("auto_repair_allowed"), bool):

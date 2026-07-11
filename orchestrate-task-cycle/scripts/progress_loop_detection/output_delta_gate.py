@@ -8,6 +8,78 @@ from .values import *
 from .io_utils import *
 from .provider import *
 
+
+def _quality_policy_items(value: Any) -> list[str]:
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def normalize_quality_delta_policy(value: Any) -> dict[str, Any]:
+    if isinstance(value, (list, tuple, set)):
+        raw_keys = value
+        raw_aliases: Any = {}
+    elif isinstance(value, dict):
+        raw_keys = (
+            value.get("keys")
+            or value.get("quality_delta_keys")
+            or value.get("metric_keys")
+            or value.get("axes")
+            or []
+        )
+        raw_aliases = (
+            value.get("aliases")
+            or value.get("quality_metric_aliases")
+            or value.get("metric_aliases")
+            or {}
+        )
+    else:
+        raw_keys = []
+        raw_aliases = {}
+    keys = list(dict.fromkeys(_quality_policy_items(raw_keys)))
+    aliases: dict[str, list[str]] = {}
+    for key in keys:
+        supplied = _quality_policy_items(raw_aliases.get(key)) if isinstance(raw_aliases, dict) else []
+        aliases[key] = list(dict.fromkeys([key, *supplied]))
+    return {"keys": keys, "aliases": aliases, "supplied": bool(keys)}
+
+
+def quality_delta_policy_from_value(value: dict[str, Any]) -> dict[str, Any]:
+    policy = first_mapping(
+        value,
+        (
+            "quality_delta_policy",
+            "output_delta.quality_delta_policy",
+            "output_delta_gate.quality_delta_policy",
+            "anti_loop_progress_gate.quality_delta_policy",
+            "result.quality_delta_policy",
+            "result.anti_loop_progress_gate.quality_delta_policy",
+        ),
+    )
+    if policy:
+        return normalize_quality_delta_policy(policy)
+    keys = first_value(
+        value,
+        (
+            "quality_delta_keys",
+            "output_delta.quality_delta_keys",
+            "anti_loop_progress_gate.quality_delta_keys",
+            "result.quality_delta_keys",
+        ),
+    )
+    aliases = first_mapping(
+        value,
+        (
+            "quality_metric_aliases",
+            "output_delta.quality_metric_aliases",
+            "anti_loop_progress_gate.quality_metric_aliases",
+            "result.quality_metric_aliases",
+        ),
+    )
+    return normalize_quality_delta_policy({"keys": keys or [], "aliases": aliases})
+
 def output_delta_gate(value: dict[str, Any], observed: dict[str, Any] | None = None) -> dict[str, Any]:
     produced = first_value(
         value,
@@ -127,24 +199,26 @@ def coverage_quality_delta_gate(value: dict[str, Any]) -> dict[str, Any]:
     )
     if not quality:
         return {}
+    policy = quality_delta_policy_from_value(value)
+
     def metric(mapping: dict[str, Any], key: str) -> float:
-        aliases = {
-            "causal_edge_count": ("causal_edge_count", "causal_or_temporal_edge_count", "causal_temporal_edge_count"),
-            "windows_covered": ("windows_covered", "source_windows_covered", "window_count", "selected_source_window_count"),
-        }
-        for candidate in aliases.get(key, (key,)):
+        for candidate in policy["aliases"].get(key, [key]):
             if candidate in mapping:
                 return float_number(mapping.get(candidate)) or 0.0
         return 0
 
-    current = {key: metric(quality, key) for key in QUALITY_DELTA_KEYS}
-    previous_values = {key: metric(previous, key) for key in QUALITY_DELTA_KEYS}
-    improved = [key for key in QUALITY_DELTA_KEYS if current[key] > previous_values[key]]
+    keys = policy["keys"]
+    current = {key: metric(quality, key) for key in keys}
+    previous_values = {key: metric(previous, key) for key in keys}
+    improved = [key for key in keys if current[key] > previous_values[key]]
     return {
         "gate": "G-COV",
         "quality_delta_pass": bool(improved),
         "improved_fields": improved,
         "current_quality_vector": current,
         "previous_quality_vector": previous_values,
-        "status": "pass" if improved else "block",
+        "quality_delta_policy": policy,
+        "quality_delta_policy_supplied": policy["supplied"],
+        "evaluation_status": "evaluated" if keys else "not_evaluated",
+        "status": "pass" if improved else ("block" if keys else "not_evaluated"),
     }

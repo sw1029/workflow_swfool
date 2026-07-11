@@ -35,7 +35,7 @@ def provider_scale_dispatch_gate(value: dict[str, Any], coverage_gate: dict[str,
     )
     provider_count = provider_count or 0
     current = coverage_gate.get("current_quality_vector") if isinstance(coverage_gate.get("current_quality_vector"), dict) else {}
-    current_all_zero = bool(current) and all((number_value(current.get(key)) or 0) <= 0 for key in QUALITY_DELTA_KEYS)
+    current_all_zero = bool(current) and all((number_value(metric_value) or 0) <= 0 for metric_value in current.values())
     previous_all_zero = boolish(coverage_gate.get("previous_high_water_all_zero") or coverage_gate.get("high_water_all_zero"))
     dispatch_required = provider_count == 0 and previous_all_zero and current_all_zero
     return {

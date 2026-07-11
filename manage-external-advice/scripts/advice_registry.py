@@ -11,6 +11,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
+AGENT_LOG_SCRIPTS = Path(__file__).resolve().parents[2] / "record-agent-work-log" / "scripts"
+if str(AGENT_LOG_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(AGENT_LOG_SCRIPTS))
+
+from write_agent_log import write_log  # noqa: E402
+
 
 ADVICE_DIR = ".agent_advice"
 SENSITIVE_PATTERNS = re.compile(r"(api[_-]?key|secret|token|password|credential|private[_-]?key)", re.IGNORECASE)
@@ -628,22 +634,35 @@ def update_advice_status(path: Path, status: str) -> None:
 
 
 def write_past_advice_log(root: Path, item: dict[str, Any], evidence: str, note: str) -> str:
-    log_dir = root / ".agent_log" / dt.datetime.now().strftime("%Y-%m-%d")
-    log_dir.mkdir(parents=True, exist_ok=True)
-    path = log_dir / f"{stamp()}-past_advice-{slugify(str(item.get('title') or item.get('advice_id')))}.md"
-    lines = [
-        "# past_advice",
-        "",
-        f"- advice_id: {item.get('advice_id')}",
-        f"- title: {item.get('title')}",
-        f"- previous_path: {item.get('path')}",
-        f"- raw_source_path: {item.get('raw_source_path')}",
-        f"- evidence: {evidence}",
-        f"- note: {note or 'applied or retired through manage-external-advice'}",
-        f"- timestamp: {now_iso()}",
-    ]
-    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
-    return rel_path(root, path)
+    advice_id = str(item.get("advice_id") or "unknown-advice")
+    title = str(item.get("title") or advice_id)
+    previous_path = str(item.get("path") or "unknown")
+    raw_source_path = str(item.get("raw_source_path") or "unknown")
+    result = write_log(
+        argparse.Namespace(
+            root=str(root),
+            title=f"past_advice: {title}",
+            status="informational",
+            intent=f"Record durable retirement of external advice {advice_id}.",
+            work=(
+                f"Applied or retired advice from {previous_path}; "
+                f"raw source reference: {raw_source_path}."
+            ),
+            result=f"Advice lifecycle evidence: {evidence}",
+            shortcomings=note or "No additional shortcomings recorded.",
+            agent_note=["Created by manage-external-advice through the integrity-bound work-log writer."],
+            command=[],
+            changed_file=[previous_path],
+            follow_up=[],
+            tag=["past_advice", advice_id],
+            retention_class="governance-history",
+            archive_reference=None,
+            retention_exclusion_reason=None,
+            sensitivity="internal",
+            actor="manage-external-advice",
+        )
+    )
+    return rel_path(root, Path(result["path"]))
 
 
 def cmd_mark_applied(args: argparse.Namespace) -> None:

@@ -26,6 +26,7 @@ class CoverageQualityDeltaGate(DispositionGate):
             context.get('previous_high_water', {}),
             int(context.get('provider_request_count') or 0),
             float(context.get('epsilon') or 1e-9),
+            context.get('quality_delta_policy'),
         )
 
 

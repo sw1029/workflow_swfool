@@ -14,16 +14,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from typing import Any
-
 
 REGISTRY_REL_PATH = ".task/anti_loop/family_progress_registry.jsonl"
 ROOT_CAUSE_LEDGER_REL_PATH = ".task/anti_loop/root_cause_ledger.jsonl"
 SCHEMA_VERSION = "anti-loop-progress-gate-v1"
-LEGACY_QUALITY_MODULE_NAME = "novel_kg_quality_metrics.py"
 DOMAIN_ADAPTER_ENV = "TASK_CYCLE_DOMAIN_ADAPTER_PATH"
 DEFAULT_DOMAIN_ADAPTER_REL_PATH = ".task/domain_adapter.py"
-LEGACY_QUALITY_ENV = "NOVEL_KG_QUALITY_METRICS_PATH"
 DISPOSITION_UNIVERSE = {"goal_productive", "consolidation", "terminal_blocked", "user_escalation"}
 SAFETY_VALVES = {"terminal_blocked", "user_escalation"}
 CONSOLIDATION_STREAK_CAP_DEFAULT = 2
@@ -38,13 +34,10 @@ HOOK_DEMAND_THRESHOLD_DEFAULT = 2
 ENVELOPE_THAW_STREAK_CAP_DEFAULT = 2
 ROOT_CAUSE_LEDGER_MAX_ROWS_PER_FAMILY_DEFAULT = 200
 ROOT_STEERING_DOC_NAMES = {"task_advice.md", "skill_advice.md", "task_doctor_steering.md"}
-QUALITY_DELTA_KEYS = (
-    "event_named_ratio",
-    "proper_noun_character_ratio",
-    "coreference_resolved_ratio",
-    "causal_edge_count",
-    "windows_covered",
-)
+# Domain quality axes are adapter-owned.  The empty tuple is retained as a
+# compatibility export for callers that imported the old constant, but generic
+# repositories must not inherit any metric names from this package.
+QUALITY_DELTA_KEYS: tuple[str, ...] = ()
 ROOT_KEY_KEYS = {"root_key", "semantic_root_key", "loop_root_key"}
 IDEMPOTENT_REPLAY_KEYS = (
     "measurement_progress",
@@ -62,6 +55,7 @@ IDEMPOTENT_REPLAY_KEYS = (
     "root_key",
     "previous_high_water_mark",
     "coverage_quality_delta_gate",
+    "quality_delta_policy",
     "coverage_quality_delta_reconciliation_gate",
     "substance_metrics",
     "substance_delta_gate",
@@ -187,12 +181,9 @@ IDEMPOTENT_REPLAY_KEYS = (
     "authoritative_semantic_progress",
     "findings",
 )
-FRONTIER_CHECK_KEYS = {
-    "event_sequence_oracle",
-    "reconstruction_coverage",
-    "relation_class_filled",
-    "story_vs_narrative_split",
-}
+# Compatibility exports only. Frontier IDs and ladder ordering are supplied by
+# callers/adapters instead of inferred from domain vocabulary.
+FRONTIER_CHECK_KEYS: set[str] = set()
 CHECK_ID_KEYS = {
     "check_id",
     "check_ids",
@@ -215,27 +206,8 @@ BLOCKER_SIGNATURE_KEYS = {
     "failed_reason",
     "failure_reason",
 }
-LADDER_RANK = {
-    "single_window": 0,
-    "multi_window": 1,
-    "entity_coref": 2,
-    "causal_temporal": 3,
-    "pov_timeline": 4,
-    "reconstruction": 5,
-    "unseen_batch": 6,
-}
-RUNG_ALIASES = {
-    "single_window_sweep": "single_window",
-    "multi_window_sweep": "multi_window",
-    "coreference": "entity_coref",
-    "entity_coreference": "entity_coref",
-    "causal_temporal_edge": "causal_temporal",
-    "temporal_causal": "causal_temporal",
-    "timeline": "pov_timeline",
-    "pov": "pov_timeline",
-    "rich_profiles": "pov_timeline",
-    "reconstruction_oracle": "reconstruction",
-}
+LADDER_RANK: dict[str, int] = {}
+RUNG_ALIASES: dict[str, str] = {}
 VOLATILE_KEYS = {
     "created_at",
     "updated_at",
@@ -250,7 +222,7 @@ VOLATILE_KEYS = {
 }
 FACET_SUFFIX_RE = re.compile(
     r"([_.:/|-])(?:v\d+|ver\d+|version\d+|facet|variant|case|mode|phase|stage|"
-    r"vocab|pov|timing|typing|schema|contract|gate|metric|oracle|validator|lineage|"
+    r"vocab|timing|typing|schema|contract|gate|metric|oracle|validator|lineage|"
     r"coverage|preflight|handoff|packet|dashboard|report|field|scalar|check|review|surface)$",
     re.IGNORECASE,
 )

@@ -155,7 +155,7 @@
           "IGNORECASE"
         ],
         "kind": "regex",
-        "pattern": "([_.:/|-])(?:v\\d+|ver\\d+|version\\d+|facet|variant|case|mode|phase|stage|vocab|pov|timing|typing|schema|contract|gate|metric|oracle|validator|lineage|coverage|preflight|handoff|packet|dashboard|report|field|scalar|check|review|surface)$"
+        "pattern": "([_.:/|-])(?:v\\d+|ver\\d+|version\\d+|facet|variant|case|mode|phase|stage|vocab|timing|typing|schema|contract|gate|metric|oracle|validator|lineage|coverage|preflight|handoff|packet|dashboard|report|field|scalar|check|review|surface)$"
       },
       "kind": "regex",
       "name": "FACET_SUFFIX_RE",
@@ -533,11 +533,6 @@
       ],
       "expected": {
         "items": [
-          "event_named_ratio",
-          "proper_noun_character_ratio",
-          "coreference_resolved_ratio",
-          "causal_edge_count",
-          "windows_covered"
         ],
         "kind": "tuple"
       },
@@ -567,7 +562,7 @@
           {
             "items": [
               "source_to_llm_output_execution",
-              "openai|provider|credential|dispatch|llm|api|source[-_ ]?backed|provider[-_ ]?neutral.*(?:kg|validation[-_ ]?set|oracle|quality)"
+              "provider|credential|dispatch|llm|api|source[-_ ]?backed|provider[-_ ]?neutral.*(?:kg|validation[-_ ]?set|oracle|quality)"
             ],
             "kind": "tuple"
           },
