@@ -11,50 +11,53 @@ from typing import Any
 
 ORDER = [
     "context",
-    "ledger_init",
     "authority",
+    "repo_skill_adapter_scan",
     "acceptance",
     "route_plan",
+    "validation_scope_plan",
     "validation_set_plan",
     "governance",
     "result_contract",
+    "repo_skill_adapter_validate",
     "ledger_append",
     "code_structure_audit",
     "run",
     "qualitative_review",
     "loopback_audit",
     "validation_set_build",
-    "schema_pre_derive",
     "visible_increment",
+    "repo_skill_gap_analysis",
+    "cycle_efficiency_profile",
+    "validation_scope_finalize",
+    "index_pre_validate",
+    "validate",
+    "issue",
+    "schema_pre_derive",
     "derive",
     "schema_post_derive",
     "index",
-    "validate",
-    "issue",
     "commit",
     "dashboard",
     "report",
     "closeout_commit",
 ]
 
+# Every normal-cycle transition consumes the complete ordered prefix. A phase may
+# still be explicitly skipped/not-applicable when its owning contract allows it,
+# but it cannot silently disappear from the ledger.
 TRANSITION_REQUIREMENTS = {
-    "pre_validation_set_plan": ["context", "ledger_init", "authority", "acceptance", "route_plan"],
-    "pre_governance": ["context", "ledger_init", "authority", "acceptance", "route_plan"],
-    "pre_code_structure_audit": ["context", "ledger_init", "authority", "acceptance", "route_plan", "governance", "result_contract"],
-    "pre_run": ["context", "ledger_init", "authority", "acceptance", "route_plan", "governance", "result_contract", "code_structure_audit"],
-    "pre_qualitative_review": ["context", "ledger_init", "authority", "governance", "code_structure_audit", "run"],
-    "pre_loopback_audit": ["context", "ledger_init", "authority", "governance", "code_structure_audit", "run", "qualitative_review"],
-    "pre_validation_set_build": ["context", "ledger_init", "authority", "validation_set_plan", "governance", "code_structure_audit", "run", "qualitative_review", "loopback_audit"],
-    "pre_schema_pre_derive": ["context", "ledger_init", "authority", "governance", "code_structure_audit", "run", "qualitative_review", "loopback_audit", "validation_set_build"],
-    "pre_derive": ["context", "ledger_init", "authority", "governance", "code_structure_audit", "run", "qualitative_review", "loopback_audit", "validation_set_build", "schema_pre_derive", "visible_increment"],
-    "pre_schema_post_derive": ["context", "ledger_init", "authority", "derive"],
-    "pre_index": ["context", "ledger_init", "authority", "derive", "schema_post_derive"],
-    "pre_validate": ["context", "ledger_init", "authority", "governance", "code_structure_audit", "run", "derive", "schema_post_derive", "index"],
-    "pre_issue": ["context", "ledger_init", "authority", "validate"],
-    "pre_commit": ["context", "ledger_init", "authority", "validate", "issue"],
-    "pre_dashboard": ["context", "ledger_init", "authority", "validate", "commit"],
-    "pre_report": ["context", "ledger_init", "authority", "validate", "dashboard"],
-    "pre_closeout_commit": ["context", "ledger_init", "authority", "validate", "dashboard", "report"],
+    f"pre_{step}": ORDER[:index]
+    for index, step in enumerate(ORDER)
+}
+
+# Missing-task initialization is deliberately smaller than a normal task cycle.
+# It creates exactly one initial task and indexes it without manufacturing
+# acceptance, execution, validation, issue, promotion, or reporting evidence.
+BOOTSTRAP_ORDER = ["context", "authority", "schema_pre_derive", "derive", "schema_post_derive", "index"]
+BOOTSTRAP_TRANSITION_REQUIREMENTS = {
+    **{f"pre_{step}": BOOTSTRAP_ORDER[:index] for index, step in enumerate(BOOTSTRAP_ORDER)},
+    "bootstrap_complete": BOOTSTRAP_ORDER,
 }
 
 TERMINAL_OK = {"complete", "completed", "ok", "passed", "partial", "not_applicable", "skipped"}
@@ -88,6 +91,24 @@ SUPPORTED_AGENT_MODELS = {str(item) for item in MODEL_EFFORT_POLICY["models"].va
 CODE_WORKER_MODEL = str(MODEL_EFFORT_POLICY["tiers"]["2"]["model"])
 SUPPORTED_AGENT_EFFORTS = {str(item) for item in MODEL_EFFORT_POLICY["supported_efforts"]}
 ROUTING_ENFORCEMENT_VALUES = {str(item) for item in MODEL_EFFORT_POLICY["result_enforcement_values"]}
+
+ROUTING_REQUIRED_TARGETS = {
+    "governance",
+    "validation_set_plan",
+    "qualitative_review",
+    "loopback_audit",
+    "validation_set_build",
+    "schema_pre_derive",
+    "derive",
+    "schema_post_derive",
+    "index",
+    "validate",
+    "issue",
+    "commit",
+    "closeout_commit",
+}
+SUBSTANTIVE_BOOTSTRAP_STATUSES = {"complete", "completed", "ok", "passed"}
+PLACEHOLDER_IDS = {"", "unknown", "none", "null", "n/a", "na", "not_applicable", "pending", "todo"}
 
 
 def load_json_arg(value: str | None) -> dict[str, Any]:
@@ -511,24 +532,171 @@ def step_event(stage: dict[str, Any], step: str) -> dict[str, Any]:
     return {}
 
 
-def validate(context: dict[str, Any], stage: dict[str, Any], transition: str) -> dict[str, Any]:
-    findings: list[dict[str, Any]] = []
+def real_identifier(value: Any) -> str:
+    candidate = str(value or "").strip()
+    return candidate if candidate.lower() not in PLACEHOLDER_IDS else ""
 
-    required = TRANSITION_REQUIREMENTS.get(transition, [])
+
+def explicit_task_absent(context: dict[str, Any]) -> bool:
+    task_md = context.get("task_md")
+    if isinstance(task_md, dict) and task_md.get("exists") is False:
+        return True
+    task_state = context.get("task_state")
+    if isinstance(task_state, dict):
+        nested = task_state.get("task_md")
+        if isinstance(nested, dict) and nested.get("exists") is False:
+            return True
+    return context.get("task_md_exists") is False
+
+
+def bootstrap_binding_findings(stage: dict[str, Any]) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for step in BOOTSTRAP_ORDER:
+        status = status_for_step(stage, step)
+        if status not in SUBSTANTIVE_BOOTSTRAP_STATUSES:
+            add(
+                findings,
+                "block",
+                "bootstrap_substantive_step_missing",
+                f"Bootstrap completion requires substantive `{step}` completion; N/A, skipped, partial, and missing rows cannot close initialization.",
+                {"step": step, "status": status},
+            )
+
+    authority_event = step_event(stage, "authority")
+    if not real_identifier(
+        authority_event.get("authority_policy")
+        or authority_event.get("effective_authority_policy")
+        or authority_event.get("authority_policy_source")
+    ):
+        add(findings, "block", "bootstrap_authority_evidence_missing", "Bootstrap authority must record a concrete policy or policy source.")
+
+    derive_event = step_event(stage, "derive")
+    derive_mode = str(derive_event.get("derive_mode") or derive_event.get("mode") or "").strip().lower()
+    if derive_mode != "initial_init":
+        add(findings, "block", "bootstrap_derive_mode_invalid", "Bootstrap derive must set `derive_mode: initial_init`.", {"derive_mode": derive_mode or None})
+    next_task_id = real_identifier(derive_event.get("next_task_id"))
+    if not next_task_id:
+        add(findings, "block", "bootstrap_next_task_id_missing", "Bootstrap derive must create one real next_task_id.")
+    if "task.md" not in text_blob(derive_event):
+        add(findings, "block", "bootstrap_task_md_binding_missing", "Bootstrap derive must bind the new task ID to a concrete task.md path/artifact.")
+
+    schema_post_event = step_event(stage, "schema_post_derive")
+    schema_next_task_id = real_identifier(schema_post_event.get("next_task_id"))
+    if next_task_id and schema_next_task_id and schema_next_task_id != next_task_id:
+        add(
+            findings,
+            "block",
+            "bootstrap_schema_task_id_mismatch",
+            "Post-derive schema reconciliation must bind to the task created by initial_init.",
+            {"derive_next_task_id": next_task_id, "schema_next_task_id": schema_next_task_id},
+        )
+
+    index_event = step_event(stage, "index")
+    indexed_task_id = real_identifier(index_event.get("task_id") or index_event.get("next_task_id") or index_event.get("indexed_task_id"))
+    if not indexed_task_id:
+        add(findings, "block", "bootstrap_index_task_id_missing", "Bootstrap index must record the created task ID.")
+    elif next_task_id and indexed_task_id != next_task_id:
+        add(
+            findings,
+            "block",
+            "bootstrap_index_task_id_mismatch",
+            "Bootstrap index task ID must match initial_init next_task_id.",
+            {"derive_next_task_id": next_task_id, "indexed_task_id": indexed_task_id},
+        )
+    index_blob = text_blob(index_event)
+    if not any(marker in index_blob for marker in (".task/index", "index.jsonl", "index.md")):
+        add(findings, "block", "bootstrap_index_binding_missing", "Bootstrap index must cite a concrete .task/index artifact or path.")
+    return findings
+
+
+def validate(
+    context: dict[str, Any],
+    stage: dict[str, Any],
+    transition: str,
+    routing: dict[str, Any] | None = None,
+    workflow_mode: str = "normal",
+) -> dict[str, Any]:
+    findings: list[dict[str, Any]] = []
+    # `stage` is the accumulated ledger/order state.  A newly rendered routing
+    # packet belongs to the transition target and must not be inferred from an
+    # older completed event (for example governance while entering derive).
+    routing_source = routing if isinstance(routing, dict) else {}
+
+    if workflow_mode not in {"normal", "bootstrap"}:
+        raise ValueError(f"unsupported workflow mode: {workflow_mode}")
+    requirements = BOOTSTRAP_TRANSITION_REQUIREMENTS if workflow_mode == "bootstrap" else TRANSITION_REQUIREMENTS
+    active_order = BOOTSTRAP_ORDER if workflow_mode == "bootstrap" else ORDER
+    target_step = transition.removeprefix("pre_")
+    if workflow_mode == "normal" and target_step in ROUTING_REQUIRED_TARGETS and not routing_source:
+        add(
+            findings,
+            "block",
+            "current_target_routing_packet_missing",
+            "Agent-bearing normal-cycle transitions require an explicit current-target routing packet; accumulated stage routing is never reused.",
+            {"target": target_step},
+        )
+    required = requirements.get(transition, [])
+    if transition not in requirements:
+        add(
+            findings,
+            "block",
+            "transition_not_allowed_for_workflow_mode",
+            f"`{transition}` is not allowed in `{workflow_mode}` workflow mode.",
+            {"allowed_transitions": sorted(requirements)},
+        )
     for step in required:
         if not completed(stage, step):
             add(findings, "block", "ordering_required_step_missing", f"{transition} requires completed step `{step}`.", {"step_status": status_for_step(stage, step)})
 
-    completed_steps = [step for step in ORDER if completed(stage, step)]
+    completed_steps = [step for step in active_order if completed(stage, step)]
     if completed_steps:
-        latest_idx = max(ORDER.index(step) for step in completed_steps)
-        for earlier in ORDER[:latest_idx]:
+        latest_idx = max(active_order.index(step) for step in completed_steps)
+        for earlier in active_order[:latest_idx]:
             if earlier in {"schema_pre_derive", "schema_post_derive"}:
                 continue
             if not completed(stage, earlier) and earlier in required:
                 add(findings, "block", "ordering_gap", f"Later step completed before required `{earlier}` was complete.", {"completed_steps": completed_steps})
 
-    if transition in {"pre_loopback_audit", "pre_validation_set_build", "pre_schema_pre_derive", "pre_derive", "pre_schema_post_derive", "pre_validate", "pre_report", "pre_closeout_commit"}:
+    if workflow_mode == "bootstrap" and transition == "bootstrap_complete":
+        if not explicit_task_absent(context):
+            add(
+                findings,
+                "block",
+                "bootstrap_task_absent_premise_missing",
+                "Bootstrap completion requires explicit context evidence that task.md was absent when the transaction began.",
+            )
+        findings.extend(bootstrap_binding_findings(stage))
+
+    if target_step in ORDER:
+        target_index = ORDER.index(target_step)
+        reason_fields = {
+            "repo_skill_adapter_scan": ("adapter_scan_skipped_reason",),
+            "validation_scope_plan": ("validation_scope_skipped_reason",),
+            "repo_skill_adapter_validate": ("adapter_validation_skipped_reason",),
+            "repo_skill_gap_analysis": ("gap_analysis_skipped_reason",),
+            "cycle_efficiency_profile": ("profile_skipped_reason",),
+            "validation_scope_finalize": ("validation_scope_skipped_reason",),
+            "index_pre_validate": ("index_skipped_reason",),
+        }
+        for step, extra_fields in reason_fields.items():
+            if ORDER.index(step) >= target_index:
+                continue
+            event = step_event(stage, step)
+            status = status_for_step(stage, step)
+            if status not in {"skipped", "not_applicable", "blocked", "failed"}:
+                continue
+            reason = event.get("reason") or event.get("blockers")
+            if not reason:
+                reason = next((event.get(field) for field in extra_fields if event.get(field)), None)
+            if not reason:
+                add(
+                    findings,
+                    "block",
+                    f"{step}_status_reason_missing",
+                    f"Skipped/not-applicable/blocked `{step}` requires a concrete reason.",
+                )
+
+    if transition in {"pre_loopback_audit", "pre_validation_set_build", "pre_visible_increment", "pre_repo_skill_gap_analysis", "pre_cycle_efficiency_profile", "pre_validation_scope_finalize", "pre_index_pre_validate", "pre_validate", "pre_issue", "pre_schema_pre_derive", "pre_derive", "pre_schema_post_derive", "pre_index", "pre_commit", "pre_report", "pre_closeout_commit"}:
         review_event = step_event(stage, "qualitative_review")
         review_status = status_for_step(stage, "qualitative_review")
         if review_status in {"skipped", "not_applicable", "blocked", "failed"} and not (
@@ -544,7 +712,7 @@ def validate(context: dict[str, Any], stage: dict[str, Any], transition: str) ->
                 "Skipped/not-applicable/blocked qualitative output review requires a concrete reason.",
             )
 
-    if transition in {"pre_governance", "pre_run", "pre_loopback_audit", "pre_validation_set_build", "pre_schema_pre_derive", "pre_derive", "pre_validate", "pre_report", "pre_closeout_commit"}:
+    if transition in {"pre_governance", "pre_repo_skill_adapter_validate", "pre_run", "pre_loopback_audit", "pre_validation_set_build", "pre_visible_increment", "pre_repo_skill_gap_analysis", "pre_cycle_efficiency_profile", "pre_validation_scope_finalize", "pre_index_pre_validate", "pre_validate", "pre_issue", "pre_schema_pre_derive", "pre_derive", "pre_schema_post_derive", "pre_index", "pre_commit", "pre_report", "pre_closeout_commit"}:
         plan_event = step_event(stage, "validation_set_plan")
         plan_status = status_for_step(stage, "validation_set_plan")
         if plan_status in {"skipped", "not_applicable", "blocked", "failed"} and not (
@@ -555,7 +723,7 @@ def validate(context: dict[str, Any], stage: dict[str, Any], transition: str) ->
         ):
             add(findings, "block", "validation_set_plan_status_reason_missing", "Skipped/not-applicable/blocked validation_set_plan requires a concrete reason.")
 
-    if transition in {"pre_run", "pre_qualitative_review", "pre_loopback_audit", "pre_validation_set_build", "pre_schema_pre_derive", "pre_derive", "pre_validate", "pre_report", "pre_closeout_commit"}:
+    if transition in {"pre_run", "pre_qualitative_review", "pre_loopback_audit", "pre_validation_set_build", "pre_visible_increment", "pre_repo_skill_gap_analysis", "pre_cycle_efficiency_profile", "pre_validation_scope_finalize", "pre_index_pre_validate", "pre_validate", "pre_issue", "pre_schema_pre_derive", "pre_derive", "pre_schema_post_derive", "pre_index", "pre_commit", "pre_report", "pre_closeout_commit"}:
         structure_event = step_event(stage, "code_structure_audit")
         structure_status = status_for_step(stage, "code_structure_audit")
         if structure_status in {"skipped", "not_applicable", "blocked", "failed"} and not (
@@ -566,7 +734,7 @@ def validate(context: dict[str, Any], stage: dict[str, Any], transition: str) ->
         ):
             add(findings, "block", "code_structure_audit_status_reason_missing", "Skipped/not-applicable/blocked code_structure_audit requires a concrete reason.")
 
-    if transition in {"pre_validation_set_build", "pre_schema_pre_derive", "pre_derive", "pre_validate", "pre_report", "pre_closeout_commit"}:
+    if transition in {"pre_validation_set_build", "pre_visible_increment", "pre_repo_skill_gap_analysis", "pre_cycle_efficiency_profile", "pre_validation_scope_finalize", "pre_index_pre_validate", "pre_validate", "pre_issue", "pre_schema_pre_derive", "pre_derive", "pre_schema_post_derive", "pre_index", "pre_commit", "pre_report", "pre_closeout_commit"}:
         loopback_event = step_event(stage, "loopback_audit")
         loopback_status = status_for_step(stage, "loopback_audit")
         if loopback_status in {"skipped", "not_applicable", "blocked", "failed"} and not (
@@ -576,7 +744,7 @@ def validate(context: dict[str, Any], stage: dict[str, Any], transition: str) ->
         ):
             add(findings, "block", "loopback_audit_status_reason_missing", "Skipped/not-applicable/blocked loopback_audit requires a concrete reason.")
 
-    if transition in {"pre_schema_pre_derive", "pre_derive", "pre_validate", "pre_report", "pre_closeout_commit"}:
+    if transition in {"pre_visible_increment", "pre_repo_skill_gap_analysis", "pre_cycle_efficiency_profile", "pre_validation_scope_finalize", "pre_index_pre_validate", "pre_validate", "pre_issue", "pre_schema_pre_derive", "pre_derive", "pre_schema_post_derive", "pre_index", "pre_commit", "pre_report", "pre_closeout_commit"}:
         build_event = step_event(stage, "validation_set_build")
         build_status = status_for_step(stage, "validation_set_build")
         if build_status in {"skipped", "not_applicable", "blocked", "failed"} and not (
@@ -587,23 +755,23 @@ def validate(context: dict[str, Any], stage: dict[str, Any], transition: str) ->
         ):
             add(findings, "block", "validation_set_build_status_reason_missing", "Skipped/not-applicable/blocked validation_set_build requires a concrete reason.")
 
-    if transition in {"pre_derive", "pre_schema_post_derive", "pre_validate", "pre_report", "pre_closeout_commit"}:
+    if transition in {"pre_derive", "pre_schema_post_derive", "pre_index", "pre_commit", "pre_report", "pre_closeout_commit"}:
         schema_event = step_event(stage, "schema_pre_derive")
         schema_status = status_for_step(stage, "schema_pre_derive")
         if schema_status in {"skipped", "not_applicable"} and not (schema_event.get("reason") or schema_event.get("schema_skipped_reason")):
             add(findings, "block", "schema_pre_derive_skipped_without_reason", "Skipped pre-derive schema refresh requires a reason.")
 
-    if transition in {"pre_validate", "pre_issue", "pre_commit", "pre_dashboard", "pre_report", "pre_closeout_commit"}:
+    if transition in {"pre_schema_post_derive", "pre_index", "pre_commit", "pre_dashboard", "pre_report", "pre_closeout_commit"}:
         derive_status = status_for_step(stage, "derive")
         derive_event = step_event(stage, "derive")
         if derive_status in {"pending", "deferred", "blocked", "failed"} and not (
             derive_event.get("reason") or derive_event.get("derive_pending_reason") or derive_event.get("blockers")
         ):
             add(findings, "block", "derive_pending_reason_missing", "Deferred/blocked derivation requires a pending or blocker reason.")
-        if transition in {"pre_validate", "pre_report", "pre_closeout_commit"} and derive_status is None:
+        if transition in {"pre_schema_post_derive", "pre_index", "pre_commit", "pre_report", "pre_closeout_commit"} and derive_status is None:
             add(findings, "warn", "derive_status_missing", "Derive status is missing; validation/report should explain whether next-task derivation completed, was deferred, or was skipped.")
 
-    if transition in {"pre_derive", "pre_schema_post_derive", "pre_validate", "pre_report", "pre_closeout_commit"}:
+    if transition in {"pre_derive", "pre_schema_post_derive", "pre_index", "pre_commit", "pre_report", "pre_closeout_commit"}:
         terminal_blocker = first_value(stage, "terminal_blocker", "packet.terminal_blocker", "result.terminal_blocker", "derive.terminal_blocker")
         new_input_kinds = list_value(
             first_value(
@@ -1097,14 +1265,15 @@ def validate(context: dict[str, Any], stage: dict[str, Any], transition: str) ->
             add(findings, "warn", "external_advice_misclassified_as_gt", "External advice must be reported separately from `.agent_goal` GT.", {"used_advice": used_advice, "used_goal_truth": stage_gt})
 
     blob = text_blob(stage)
-    if "gpt-5.3-codex-spark" in blob or "spark worker" in blob or "spark workers" in blob:
+    routing_blob = text_blob(routing_source)
+    if "gpt-5.3-codex-spark" in routing_blob or "spark worker" in routing_blob or "spark workers" in routing_blob:
         add(findings, "warn", "stale_worker_model", "Stale Spark worker routing detected. Delegated agents must use the tier policy.")
-    worker_model = first_value(stage, "routing.code_worker_model", "worker.model", "code_worker_model")
+    worker_model = first_value(routing_source, "routing.code_worker_model", "worker.model", "code_worker_model")
     if worker_model and str(worker_model) != CODE_WORKER_MODEL:
         add(findings, "warn", "noncanonical_worker_model", f"Code-writing worker model must remain Tier 2/3 `{CODE_WORKER_MODEL}`.", {"worker_model": worker_model})
 
     requested_model = first_value(
-        stage,
+        routing_source,
         "requested_model",
         "agent_routing.requested_model",
         "routing.requested_model",
@@ -1112,7 +1281,7 @@ def validate(context: dict[str, Any], stage: dict[str, Any], transition: str) ->
         "worker.requested_model",
     )
     policy_id = first_value(
-        stage,
+        routing_source,
         "policy_id",
         "agent_routing.policy_id",
         "routing.policy_id",
@@ -1120,7 +1289,7 @@ def validate(context: dict[str, Any], stage: dict[str, Any], transition: str) ->
         "worker.policy_id",
     )
     requested_effort = first_value(
-        stage,
+        routing_source,
         "requested_reasoning_effort",
         "agent_routing.requested_reasoning_effort",
         "routing.requested_reasoning_effort",
@@ -1128,7 +1297,7 @@ def validate(context: dict[str, Any], stage: dict[str, Any], transition: str) ->
         "worker.requested_reasoning_effort",
     )
     routing_tier = first_value(
-        stage,
+        routing_source,
         "routing_tier",
         "agent_routing.routing_tier",
         "routing.routing_tier",
@@ -1136,7 +1305,7 @@ def validate(context: dict[str, Any], stage: dict[str, Any], transition: str) ->
         "worker.routing_tier",
     )
     routing_reason_codes = first_value(
-        stage,
+        routing_source,
         "routing_reason_codes",
         "agent_routing.routing_reason_codes",
         "routing.routing_reason_codes",
@@ -1144,7 +1313,7 @@ def validate(context: dict[str, Any], stage: dict[str, Any], transition: str) ->
         "worker.routing_reason_codes",
     )
     routing_signals = first_value(
-        stage,
+        routing_source,
         "routing_signals",
         "agent_routing.routing_signals",
         "routing.routing_signals",
@@ -1152,7 +1321,7 @@ def validate(context: dict[str, Any], stage: dict[str, Any], transition: str) ->
         "worker.routing_signals",
     )
     routing_signal_evidence = first_value(
-        stage,
+        routing_source,
         "routing_signal_evidence",
         "agent_routing.routing_signal_evidence",
         "routing.routing_signal_evidence",
@@ -1160,7 +1329,7 @@ def validate(context: dict[str, Any], stage: dict[str, Any], transition: str) ->
         "worker.routing_signal_evidence",
     )
     routing_violations = first_value(
-        stage,
+        routing_source,
         "routing_violations",
         "agent_routing.routing_violations",
         "routing.routing_violations",
@@ -1168,14 +1337,14 @@ def validate(context: dict[str, Any], stage: dict[str, Any], transition: str) ->
         "worker.routing_violations",
     )
     final_direction_ownership = first_value(
-        stage,
+        routing_source,
         "final_direction_ownership",
         "agent_routing.final_direction_ownership",
         "routing.final_direction_ownership",
         "worker.final_direction_ownership",
     )
     routing_enforcement = first_value(
-        stage,
+        routing_source,
         "routing_enforcement",
         "agent_routing.routing_enforcement",
         "routing.routing_enforcement",
@@ -1183,16 +1352,16 @@ def validate(context: dict[str, Any], stage: dict[str, Any], transition: str) ->
     )
     routing_applicability = str(
         first_value(
-            stage,
+            routing_source,
             "agent_routing_applicability",
             "agent_routing.applicability",
             "routing.agent_routing_applicability",
         )
         or ""
     ).lower()
-    actual_model = first_value(stage, "actual_model", "agent_routing.actual_model", "routing.actual_model", "worker.actual_model")
+    actual_model = first_value(routing_source, "actual_model", "agent_routing.actual_model", "routing.actual_model", "worker.actual_model")
     actual_effort = first_value(
-        stage,
+        routing_source,
         "actual_reasoning_effort",
         "agent_routing.actual_reasoning_effort",
         "routing.actual_reasoning_effort",
@@ -1200,7 +1369,7 @@ def validate(context: dict[str, Any], stage: dict[str, Any], transition: str) ->
     )
     profile_id = str(
         first_value(
-            stage,
+            routing_source,
             "profile_id",
             "agent_routing.profile_id",
             "routing.profile_id",
@@ -1225,14 +1394,14 @@ def validate(context: dict[str, Any], stage: dict[str, Any], transition: str) ->
         "routing_signal_evidence": routing_signal_evidence or {},
         "routing_violations": routing_violations or [],
         "final_direction_ownership": final_direction_ownership,
-        "max_escalation_reason": first_value(stage, "max_escalation_reason", "agent_routing.max_escalation_reason", "routing.max_escalation_reason"),
-        "prior_tier5_unresolved": first_value(stage, "prior_tier5_unresolved", "agent_routing.prior_tier5_unresolved", "routing.prior_tier5_unresolved"),
-        "prior_tier5_evidence": first_value(stage, "prior_tier5_evidence", "agent_routing.prior_tier5_evidence", "routing.prior_tier5_evidence"),
-        "agent_count": first_value(stage, "agent_count", "agent_routing.agent_count", "routing.agent_count", "review_agent_count"),
+        "max_escalation_reason": first_value(routing_source, "max_escalation_reason", "agent_routing.max_escalation_reason", "routing.max_escalation_reason"),
+        "prior_tier5_unresolved": first_value(routing_source, "prior_tier5_unresolved", "agent_routing.prior_tier5_unresolved", "routing.prior_tier5_unresolved"),
+        "prior_tier5_evidence": first_value(routing_source, "prior_tier5_evidence", "agent_routing.prior_tier5_evidence", "routing.prior_tier5_evidence"),
+        "agent_count": first_value(routing_source, "agent_count", "agent_routing.agent_count", "routing.agent_count", "review_agent_count"),
     }
     if profile_id or routing_tier or requested_model or requested_effort:
         route_target = transition.removeprefix("pre_")
-        supplied_route_target = str(first_value(stage, "target", "step") or "")
+        supplied_route_target = str(first_value(routing_source, "target", "step") or "")
         if supplied_route_target and supplied_route_target != route_target:
             add(
                 findings,
@@ -1303,6 +1472,13 @@ def validate(context: dict[str, Any], stage: dict[str, Any], transition: str) ->
     execution_status = str(first_value(stage, "execution_status", "run_log.status") or "").lower()
     validation_verdict = str(first_value(stage, "validation_verdict", "validation.verdict") or "").lower()
     startup_sufficient = bool(first_value(stage, "startup_evidence_satisfies_success", "run_log.startup_evidence_satisfies_success"))
+    if transition == "pre_issue" and not validation_verdict:
+        add(
+            findings,
+            "block",
+            "pre_issue_missing_validation_verdict",
+            "Issue lifecycle handling requires the current-task completion validation verdict.",
+        )
     if execution_status == "running" and not startup_sufficient:
         if validation_verdict in {"complete", "passed", "success"} or any(word in blob for word in ("running success", "execution success")):
             add(findings, "block", "running_misclassified_success", "`running` execution was classified as success without explicit startup/heartbeat success criteria.")
@@ -1334,6 +1510,14 @@ def validate(context: dict[str, Any], stage: dict[str, Any], transition: str) ->
                 "block",
                 "long_run_pending_final_output_phase",
                 "Pending long-running execution cannot advance to final-output-dependent review, loopback, validation-set build, schema refresh, or derive; record a partial handoff and resume through monitor/harvest.",
+                {"pending_long_runs": pending_summary},
+            )
+        if transition == "pre_validate":
+            add(
+                findings,
+                "warn",
+                "long_run_pending_partial_validation_only",
+                "Pending long-running execution permits only a partial handoff validation; pass/advanced and downstream derive or promotion remain blocked until harvest validation.",
                 {"pending_long_runs": pending_summary},
             )
         if transition in {"pre_issue", "pre_commit", "pre_report", "pre_closeout_commit"}:
@@ -1392,19 +1576,30 @@ def validate(context: dict[str, Any], stage: dict[str, Any], transition: str) ->
     elif findings:
         status = "warn"
 
-    return {"status": status, "transition": transition, "findings": findings}
+    return {"status": status, "transition": transition, "workflow_mode": workflow_mode, "findings": findings}
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Validate an orchestrate-task-cycle phase transition.")
     parser.add_argument("--context", default="-", help="Cycle context JSON path, or '-' for stdin.")
     parser.add_argument("--stage", help="Optional stage/status JSON path.")
-    parser.add_argument("--transition", default="pre_report", choices=sorted(TRANSITION_REQUIREMENTS), help="Transition to validate.")
+    parser.add_argument(
+        "--routing-json",
+        help="Optional current target routing packet JSON path/string; kept separate from accumulated --stage ordering state.",
+    )
+    parser.add_argument("--workflow-mode", choices=("normal", "bootstrap"), default="normal")
+    parser.add_argument(
+        "--transition",
+        default="pre_report",
+        choices=sorted(set(TRANSITION_REQUIREMENTS) | set(BOOTSTRAP_TRANSITION_REQUIREMENTS)),
+        help="Transition to validate.",
+    )
     args = parser.parse_args(argv)
 
     context = load_json_arg(args.context)
     stage = load_json_arg(args.stage) if args.stage else {}
-    result = validate(context, stage, args.transition)
+    routing = load_json_arg(args.routing_json) if args.routing_json else None
+    result = validate(context, stage, args.transition, routing, args.workflow_mode)
     json.dump(result, sys.stdout, ensure_ascii=False, indent=2, sort_keys=True)
     sys.stdout.write("\n")
     return 0 if result["status"] != "block" else 2

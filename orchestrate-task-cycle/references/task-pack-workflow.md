@@ -39,6 +39,7 @@ User-language render:
 ```
 
 The JSON is authoritative. The Markdown render is for scanability and must use the user's requested reporting language when known.
+`pack_id` is one path-safe token, the JSON filename must equal `<pack_id>.json`, and every CLI-supplied pack path must resolve under `.task/task_pack` without parent or symlink escape.
 
 ## JSON Shape
 
@@ -298,6 +299,11 @@ Allowed item statuses:
 - `terminal_blocked`
 - `superseded`
 
+At most one item may be `promoted` or `in_progress`. While one exists, `next`
+returns `status: in_flight` and no executable `next_item`; the following queued
+item remains visible only as planning state until the in-flight item is
+consumed or otherwise closed.
+
 ## Scope Fidelity
 
 When a pack item derives from an external advice, steering document, issue, or user directive with a measurable target, record the directive-to-item mapping in `scope_fidelity`. This is provenance for later completion validation; it is not goal truth and does not grant authority.
@@ -334,6 +340,15 @@ When a measurable item is marked `consumed`, its `result` must include an `accep
   "evidence_paths": []
 }
 ```
+
+Every consumed item, measurable or not, must also preserve two distinct
+hash-bound transactions: `promotion` proves the preceding task authorized the
+item and stores an immutable task snapshot under `.task/task_pack/task_snapshots/`;
+`completion` proves the promoted task itself reached a terminal run, complete/pass
+validation with no blockers, and same-task issue reconciliation. Use
+`mark-consumed` with run/validation/issue packet paths and SHA-256 values,
+`--validation-evidence-path`, and `--completion-evidence-path`; directly changing
+an item from planned to consumed is invalid.
 
 If `target_met=false`, completion is valid only with `explicit_descope_decision=true` plus a still-open `residual_item_id`. If `acceptance_diluted=true`, do not mark the item `consumed`; validation must report `partial` and preserve the residual target.
 
@@ -398,6 +413,24 @@ If the item result has nonzero `surface_field_defect_matrix` counts, preserve pr
 ```text
 scripts/task_pack_queue.py --root . apply-mutation --plan <derive-pack-plan.json> --render --language <user-language>
 ```
+
+For promotion, write the new `task.md` only after the prior task has an
+authoritative validation result, then record the transition with the same
+helper using `pack_disposition: promote_next_item`. The plan must include
+`item_id`, the new `task_id` and `task_path`, `validated_task_id`,
+`validation_verdict`, `run_report_path`/`run_report_sha256`,
+`validation_report_path`/`validation_report_sha256`,
+`validation_evidence_paths`, `issue_packet_path`/`issue_packet_sha256`,
+`reason`, and `evidence_paths`. The referenced packets and every evidence path
+must be existing workspace-relative files. The helper verifies their hashes,
+task binding, terminal run state, complete/pass validation with no blockers,
+and current-task issue reconciliation (including a reasoned no-op) before it
+advances the queue. It refuses partial/failed validation, pending long runs,
+paths outside `.task/task_pack` for pack storage, symlink escapes, and
+promotion metadata recorded before the new task file exists.
+The helper also refuses a second promotion while another item is in flight,
+rejects blocking result-contract envelopes/findings, snapshots the exact new
+task bytes, and writes Markdown renders atomically without following symlinks.
 
 Allowed `pack_disposition` values:
 

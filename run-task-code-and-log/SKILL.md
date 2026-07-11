@@ -124,9 +124,10 @@ When task-state IDs are available, link the run evidence and log entry through `
 After execution, call the `$record-agent-work-log` writer script in the current workspace:
 
 ```bash
-python3 /home/swfool/.codex/skills/record-agent-work-log/scripts/write_agent_log.py \
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts/write_agent_log.py" \
   --root . \
   --title "run task code" \
+  --status completed \
   --intent "..." \
   --work "..." \
   --result "..." \
@@ -136,12 +137,12 @@ python3 /home/swfool/.codex/skills/record-agent-work-log/scripts/write_agent_log
   --tag "task-code"
 ```
 
-Add `--changed-file`, `--follow-up`, and additional `--command` values when relevant.
+Choose `--status completed|partial|blocked|failed|informational` from the factual execution outcome; do not infer `completed` from process startup or a non-empty log. Add `--changed-file`, `--follow-up`, and additional `--command` values when relevant.
 
 For failed pre-execution gate runs with a safe gate artifact, add the bounded gate artifact and repository-owned confirmation when known:
 
 ```bash
-python3 /home/swfool/.codex/skills/run-task-code-and-log/scripts/safe_failure_autopsy.py \
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/run-task-code-and-log/scripts/safe_failure_autopsy.py" \
   --stderr-path path/to/stderr.log \
   --exit-code 1 \
   --execution-stage-ladder-json .task/cycle/cycle-YYYYMMDD-HHMMSS/packets/execution_stage_ladder.json \

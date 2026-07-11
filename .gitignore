@@ -5,3 +5,6 @@
 /codex-skills-beginner-guide-and-skills-20260627.zip
 /codex-skills-beginner-guide-ko.md
 __pycache__
+*.py[cod]
+.pytest_cache/
+.ruff_cache/

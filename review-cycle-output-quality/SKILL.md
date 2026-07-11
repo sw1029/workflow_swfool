@@ -18,6 +18,7 @@ The caller should invoke it after `$run-task-code-and-log` returns execution evi
 - Keep the reviewer read-only. It may inspect task outputs, generated artifacts, logs, validation bundles, `.task/`, `.agent_log/`, `.schema/`, `.contract/`, `.issue/`, `.agent_advice/`, and source/output artifacts named by task/run evidence when authority permits.
 - Do not let the reviewer edit implementation files, workflow artifacts, task state, issue state, schema records, commits, or advice lifecycle files.
 - Do not read `.env`, credentials, private keys, raw secrets, or unrelated personal data. Do not persist raw provider prompts/responses/source bodies unless the task policy explicitly allows bounded local evidence.
+- Do not pass raw/slim session transcripts or session-audit packet bodies as review artifacts. Session governance remains a separate noncanonical sidecar consumed at context/loopback/validation/issue/derive/report, not qualitative output evidence.
 - When inspecting copyrighted or sensitive source/output content, summarize findings and store paths, hashes, counts, IDs, bounded span refs, and brief non-sensitive snippets only when safe.
 - If no output artifact is available, content access is prohibited, or delegation is unavailable, return a structured `blocked`, `partial`, or `not_applicable` result instead of inventing qualitative evidence.
 

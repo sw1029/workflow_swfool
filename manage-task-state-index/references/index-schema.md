@@ -4,16 +4,20 @@
 
 Each `.task/index.jsonl` line is one JSON object. Treat the file as append-only.
 
+Current writers emit `format_version: 2` and `schema_version: 1`. Readers accept legacy rows with either field absent as version 1. Reject malformed JSON, non-object rows, invalid field shapes, unknown lifecycle statuses, and versions newer than the current reader before appending anything.
+
 Required fields:
 
 - `event`: `upsert` or `link`.
 - `id`: stable artifact ID.
 - `updated_at`: local ISO-8601 timestamp.
+- `format_version`: event serialization format; required on new rows.
+- `schema_version`: event field contract; required on new rows.
 
 Common `upsert` fields:
 
 - `type`: `task`, `task_pack`, `past_task`, `candidate_task`, `task_miss`, `agent_log`, `execution`, `audit`, `validation`, `goal`, `goal_prompt`, `interview`, `environment`, `external_advice`, `issue`, `issue_resolution`, `issue_map`, `schema_contract`, or `schema_map`.
-- `status`: lifecycle status such as `active`, `candidate`, `applied`, `open`, `blocked`, `in_progress`, `resolved`, `closed`, `archived`, `deleted`, `passed`, `partial`, or `failed`.
+- `status`: one of the closed vocabulary `active`, `applied`, `archived`, `blocked`, `candidate`, `closed`, `complete`, `completed`, `deferred`, `deleted`, `deprecated`, `failed`, `in_progress`, `informational`, `logged`, `needs_review`, `not_applicable`, `obsolete`, `open`, `partial`, `partially_resolved`, `passed`, `raw`, `rejected`, `resolved`, `running`, `skipped`, `stale`, `superseded`, or `terminal_blocked`.
 - `path`: workspace-relative artifact path.
 - `title`: short human-readable label.
 - `parent_id`: optional owning task or parent artifact ID.
@@ -23,6 +27,18 @@ Common `upsert` fields:
 - `note`: concise factual note.
 
 Lifecycle fields use the existing `fields` object: `record_class` (`mutable_alias` or `immutable_snapshot`), `snapshot_digest`, `snapshot_path`, `canonical_id`, and optional `alias_path`. Historical records compare only to their own immutable snapshot body/digest. Active switches return `lifecycle_transition_result` with ordered booleans for previous snapshot preservation, previous active supersede, new canonical add, alias update, link update, and index render.
+
+Treat `partially_resolved` as an active residual-bearing lifecycle state. It preserves the owning workflow's unresolved remainder and must not be normalized to `resolved` by substring matching.
+
+## Stable Path and Replacement Contract
+
+- `scan` keeps the current ID when artifact type and workspace-relative path are unchanged. A digest, title, status, or bounded-field change appends an update event to that ID.
+- A new explicit `--id` or `add --replace` declares semantic replacement. Append the new canonical record, mark prior active same-path records `superseded`, and add reciprocal `supersedes` / `superseded_by` links.
+- Never create multiple non-closed IDs for an ordinary same-path edit. When legacy duplicate active records are encountered during a stable update, retain one canonical ID and supersede the others.
+
+## Durability Contract
+
+Use workspace-local `.task/index.lock` for every JSONL or Markdown mutation. While holding the lock, validate the complete existing JSONL, prepare all related events, durably flush a same-directory temporary file, atomically replace `index.jsonl`, and atomically regenerate `index.md`. A malformed or unsupported ledger must remain byte-for-byte unchanged. Empty registries report `not_evaluated_no_artifacts`; they are not success or completion evidence.
 
 Relationship object:
 

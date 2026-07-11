@@ -50,11 +50,12 @@ Do not define identifier surfaces, meaning floors, regeneration commands, storag
    - Read caller-supplied Part Q provenance fields when present: `adapter_hook`, `domain_meaning_owner`, `defined_hooks`, `hook_registry_status`, `provenance_unverifiable`, and `fabricated_provenance_label`.
    - Read caller-supplied S7/S11 target-movement fields when present: `target_metric_delta`, `metric`, `before`, `after`, `moved`, `artifact_class`, `artifact_class_unverified`, `movement_unverified`, `measurement_without_movement`, `movement_on_fixture_only`, and `required_artifact_class`.
    - Read actual-truth and source-separation fields when present: `truth_basis`, `body_projection_fingerprint`, `recomputed_fields`, `source_artifact_ids`, `current_artifact_id`, `report_body_divergence`, `verification_input_ids`, `producer_input_ids`, `verified_artifact_ids`, `input_fingerprints`, and `evidence_provenance`.
+   - When the caller supplies session governance, consume only the validated privacy-safe packet from [$audit-session-governance](../audit-session-governance/SKILL.md). Never inspect raw/slim transcript text as validation evidence. Treat missing, incomplete, quarantined, or transcript-only capture as advisory/`not_evaluated` unless acceptance or the caller independently declared it required.
    - Read adapter consumer conformance rows when present. Required consumer IDs are project-owned; every required row must be external probe evidence with `consumer_context_id`, `adapter_loaded`, `required_hook_callable`, `hook_signature_compatible`, `return_contract_valid`, and `probe_evidence_id`. Adapter self-attestation and repository-root import are insufficient.
    - Use the bundled collector for a compact inventory:
 
      ```bash
-     python3 /home/swfool/.codex/skills/validate-task-completion/scripts/collect_completion_evidence.py --root . --include-git
+     python3 "${CODEX_HOME:-$HOME/.codex}/skills/validate-task-completion/scripts/collect_completion_evidence.py" --root . --include-git
      ```
 
 2. Ensure task-state traceability.
@@ -214,6 +215,7 @@ Do not define identifier surfaces, meaning floors, regeneration commands, storag
    - `failed`: implementation is absent, required execution fails, audit finds blocking defects, severe task_miss remains open, or the task cannot be safely validated.
    - If ID audit finds high-severity broken links, multiple active tasks, missing validation/run/audit evidence links, or unsafe candidate/miss deletion ambiguity, cap the verdict at `partial` or `failed` depending on whether the missing traceability blocks the task objective.
    - Separately decide `progress_verdict` and emit the unique close-time `authoritative_progress_verdict`. `$audit-cycle-loopback` owns the earlier `authoritative_semantic_progress`; validation may preserve or downgrade that verdict but never upgrade `false` or a hard stop to `advanced`.
+   - A session-audit finding may downgrade or block only when it identifies an unresolved cross-source mismatch bound to independent canonical evidence. It cannot create pass/completion/progress, expand authority, or validate itself as required for close.
      - `advanced`: the task unlocked a new execution/readiness/goal state, supplied or validated previously missing evidence, produced useful dataset/KG artifacts, improved qualitative output, or materially reduced an active blocker, and the evidence includes `terminal_outcome_changed=true` or strict observed `changed_vs_previous=true` plus `semantic_progress=true`.
      - `safety_only`: the task passed by proving fail-closed, no-live, non-dispatchable, or guardrail behavior without supplying source-backed evidence, producing dataset/KG artifacts, advancing readiness, or reducing the final-goal blocker.
      - `no_progress`: the task produced no new durable evidence or repeated already-proven safety checks without a new blocker-state transition.

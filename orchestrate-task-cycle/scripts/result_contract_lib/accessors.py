@@ -6,6 +6,49 @@ from pathlib import Path
 from typing import Any
 
 
+# These fields use an empty container to state an observed zero/none result.
+# Treating an explicit empty list/dict as missing forces callers to invent
+# sentinel values such as ``["none"]``, which then become false blockers or
+# evidence.  Fields that require substantive evidence intentionally stay out
+# of this set.
+EMPTY_CONTAINER_IS_VALUE = {
+    "blockers",
+    "changed_files",
+    "changed_files_scanned",
+    "commands",
+    "changed_surfaces",
+    "direction_recommendations",
+    "direct_read_scope",
+    "escalation_reasons",
+    "findings",
+    "artifacts",
+    "blocker_taxonomy_delta",
+    "delta_types",
+    "issue_ids",
+    "no_overclaim_flags",
+    "oversize_files",
+    "progress_axes",
+    "planned_changed_files",
+    "actual_changed_files",
+    "rationale",
+    "required_commands",
+    "reused_prerequisites",
+    "qualitative_findings",
+    "reviewed_artifacts",
+    "responsibility_clusters",
+    "responsibility_split_plan",
+    "routing_signals",
+    "routing_signal_evidence",
+    "routing_violations",
+    "semantic_refactor_plan",
+    "semantic_structure_findings",
+    "surface_counts",
+    "tracked_artifacts",
+    "used_advice",
+    "used_goal_truth",
+}
+
+
 def load_json(path_value: str | None) -> dict[str, Any]:
     if not path_value or path_value == "-":
         raw = sys.stdin.read()
@@ -143,6 +186,8 @@ def has_value(data: dict[str, Any], field: str) -> bool:
         if value is None:
             continue
         if isinstance(value, (list, dict)) and not value:
+            if field in EMPTY_CONTAINER_IS_VALUE:
+                return True
             continue
         if isinstance(value, str) and not value.strip():
             continue
@@ -290,5 +335,3 @@ def command_summary_omitted(value: Any, command_context: bool = False) -> bool:
     if isinstance(value, str):
         return command_context and "..." in value
     return False
-
-

@@ -2,13 +2,22 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import hashlib
 import json
+import os
 import re
 import sys
+import tempfile
+import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback keeps thread safety only.
+    fcntl = None  # type: ignore[assignment]
 
 
 PREFIXES = {
@@ -33,7 +42,55 @@ PREFIXES = {
     "issue_map": "issue-map",
 }
 
-NON_ACTIVE_STATUSES = {"deleted", "obsolete", "resolved", "applied", "superseded", "closed", "archived"}
+INDEX_FORMAT_VERSION = 2
+INDEX_SCHEMA_VERSION = 1
+SUPPORTED_EVENT_KINDS = {"upsert", "link"}
+LIFECYCLE_STATUSES = {
+    "active",
+    "applied",
+    "archived",
+    "blocked",
+    "candidate",
+    "closed",
+    "complete",
+    "completed",
+    "deferred",
+    "deleted",
+    "deprecated",
+    "failed",
+    "in_progress",
+    "informational",
+    "logged",
+    "needs_review",
+    "not_applicable",
+    "obsolete",
+    "open",
+    "partial",
+    "partially_resolved",
+    "passed",
+    "raw",
+    "rejected",
+    "resolved",
+    "running",
+    "skipped",
+    "stale",
+    "superseded",
+    "terminal_blocked",
+}
+NON_ACTIVE_STATUSES = {
+    "applied",
+    "archived",
+    "closed",
+    "deleted",
+    "deprecated",
+    "obsolete",
+    "rejected",
+    "resolved",
+    "superseded",
+}
+
+_THREAD_LOCKS: dict[str, threading.RLock] = {}
+_THREAD_LOCKS_GUARD = threading.Lock()
 
 
 def now_iso() -> str:
@@ -92,31 +149,146 @@ def markdown_path(root: Path) -> Path:
     return task_dir(root) / "index.md"
 
 
+def lock_path(root: Path) -> Path:
+    return task_dir(root) / "index.lock"
+
+
 def immutable_snapshot_path(root: Path, item_id: str, source_path: Path) -> Path:
     suffix = source_path.suffix or ".txt"
     return task_dir(root) / "snapshots" / f"{item_id}{suffix}"
 
 
-def ensure_index(root: Path) -> None:
+def _thread_lock(root: Path) -> threading.RLock:
+    key = str(root.resolve())
+    with _THREAD_LOCKS_GUARD:
+        return _THREAD_LOCKS.setdefault(key, threading.RLock())
+
+
+@contextlib.contextmanager
+def index_lock(root: Path) -> Iterator[None]:
+    root = root.resolve()
+    with _thread_lock(root):
+        task_dir(root).mkdir(parents=True, exist_ok=True)
+        with lock_path(root).open("a+b") as handle:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _fsync_directory(path: Path) -> None:
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def atomic_write_bytes(path: Path, payload: bytes, mode: int = 0o644) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, mode)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        _fsync_directory(path.parent)
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def atomic_write_text(path: Path, text: str, mode: int = 0o644) -> None:
+    atomic_write_bytes(path, text.encode("utf-8"), mode=mode)
+
+
+def _ensure_index_unlocked(root: Path) -> None:
     task_dir(root).mkdir(parents=True, exist_ok=True)
     if not jsonl_path(root).exists():
-        jsonl_path(root).touch()
+        atomic_write_bytes(jsonl_path(root), b"")
 
 
-def load_events(root: Path) -> list[dict[str, Any]]:
-    ensure_index(root)
+def ensure_index(root: Path) -> None:
+    with index_lock(root):
+        _ensure_index_unlocked(root)
+
+
+def _version(value: Any, *, field: str, line_no: int, source: Path, default: int) -> int:
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"Invalid {field} in {source} line {line_no}: expected a positive integer")
+    return value
+
+
+def validate_event(event: Any, line_no: int, source: Path) -> dict[str, Any]:
+    if not isinstance(event, dict):
+        raise ValueError(f"Malformed task-state JSONL {source} line {line_no}: expected a JSON object")
+    event_kind = event.get("event")
+    if event_kind not in SUPPORTED_EVENT_KINDS:
+        raise ValueError(f"Malformed task-state JSONL {source} line {line_no}: unsupported event {event_kind!r}")
+    for field in ("id", "updated_at"):
+        if not isinstance(event.get(field), str) or not event[field].strip():
+            raise ValueError(f"Malformed task-state JSONL {source} line {line_no}: missing non-empty {field}")
+    format_version = _version(event.get("format_version"), field="format_version", line_no=line_no, source=source, default=1)
+    schema_version = _version(event.get("schema_version"), field="schema_version", line_no=line_no, source=source, default=1)
+    if format_version > INDEX_FORMAT_VERSION:
+        raise ValueError(
+            f"Unsupported task-state format_version {format_version} in {source} line {line_no}; "
+            f"maximum supported is {INDEX_FORMAT_VERSION}"
+        )
+    if schema_version > INDEX_SCHEMA_VERSION:
+        raise ValueError(
+            f"Unsupported task-state schema_version {schema_version} in {source} line {line_no}; "
+            f"maximum supported is {INDEX_SCHEMA_VERSION}"
+        )
+    status = event.get("status")
+    if status is not None and status not in LIFECYCLE_STATUSES:
+        raise ValueError(f"Malformed task-state JSONL {source} line {line_no}: unsupported lifecycle status {status!r}")
+    if "fields" in event and not isinstance(event.get("fields"), dict):
+        raise ValueError(f"Malformed task-state JSONL {source} line {line_no}: fields must be an object")
+    if "links" in event:
+        links = event.get("links")
+        if not isinstance(links, list):
+            raise ValueError(f"Malformed task-state JSONL {source} line {line_no}: links must be a list")
+        for link in links:
+            if not isinstance(link, dict) or not isinstance(link.get("rel"), str) or not isinstance(link.get("id"), str):
+                raise ValueError(f"Malformed task-state JSONL {source} line {line_no}: invalid relationship object")
+    return event
+
+
+def _load_events_unlocked(root: Path) -> list[dict[str, Any]]:
+    _ensure_index_unlocked(root)
     events: list[dict[str, Any]] = []
-    with jsonl_path(root).open("r", encoding="utf-8") as handle:
+    source = jsonl_path(root)
+    with source.open("r", encoding="utf-8") as handle:
         for line_no, line in enumerate(handle, start=1):
             if not line.strip():
                 continue
             try:
                 event = json.loads(line)
             except json.JSONDecodeError as exc:
-                raise SystemExit(f"Invalid JSON in {jsonl_path(root)} line {line_no}: {exc}") from exc
-            if isinstance(event, dict):
-                events.append(event)
+                raise ValueError(f"Malformed task-state JSONL {source} line {line_no}: {exc}") from exc
+            events.append(validate_event(event, line_no, source))
     return events
+
+
+def load_events(root: Path) -> list[dict[str, Any]]:
+    with index_lock(root):
+        return _load_events_unlocked(root)
 
 
 def merge_state(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -191,16 +363,69 @@ def find_existing_id(state: dict[str, dict[str, Any]], item_type: str, path: str
     return None
 
 
+def path_records(
+    state: dict[str, dict[str, Any]],
+    item_type: str,
+    path: str,
+    *,
+    active_only: bool = False,
+) -> list[tuple[str, dict[str, Any]]]:
+    records = [
+        (item_id, item)
+        for item_id, item in state.items()
+        if item.get("type") == item_type
+        and item.get("path") == path
+        and (not active_only or item.get("status") not in NON_ACTIVE_STATUSES)
+    ]
+    return sorted(
+        records,
+        key=lambda pair: (str(pair[1].get("updated_at") or pair[1].get("created_at") or ""), pair[0]),
+        reverse=True,
+    )
+
+
+def stable_path_id(state: dict[str, dict[str, Any]], item_type: str, path: str) -> str | None:
+    active = path_records(state, item_type, path, active_only=True)
+    if active:
+        return active[0][0]
+    records = path_records(state, item_type, path)
+    return records[0][0] if records else None
+
+
 def make_id(item_type: str, title: str, path: str) -> str:
     prefix = PREFIXES.get(item_type, slugify(item_type, "item"))
     label = title or Path(path).stem or item_type
     return f"{prefix}-{id_stamp()}-{slugify(label, item_type)}"
 
 
+def versioned_event(event: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **event,
+        "format_version": INDEX_FORMAT_VERSION,
+        "schema_version": INDEX_SCHEMA_VERSION,
+    }
+
+
+def _append_events_unlocked(root: Path, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    existing = _load_events_unlocked(root)
+    del existing  # Reading first is the fail-closed integrity gate.
+    versioned = [versioned_event(event) for event in events]
+    for offset, event in enumerate(versioned, start=1):
+        validate_event(event, offset, jsonl_path(root))
+    payload = jsonl_path(root).read_bytes()
+    if payload and not payload.endswith(b"\n"):
+        payload += b"\n"
+    payload += b"".join(
+        (json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
+        for event in versioned
+    )
+    atomic_write_bytes(jsonl_path(root), payload)
+    return versioned
+
+
 def append_event(root: Path, event: dict[str, Any]) -> None:
-    ensure_index(root)
-    with jsonl_path(root).open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+    with index_lock(root):
+        _append_events_unlocked(root, [event])
 
 
 def escape_md(value: Any) -> str:
@@ -208,8 +433,8 @@ def escape_md(value: Any) -> str:
     return text.replace("|", "\\|").replace("\n", " ")
 
 
-def rebuild_markdown(root: Path) -> dict[str, Any]:
-    state = merge_state(load_events(root))
+def _rebuild_markdown_unlocked(root: Path, events: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    state = merge_state(events if events is not None else _load_events_unlocked(root))
     groups: dict[str, list[dict[str, Any]]] = {}
     for item in state.values():
         groups.setdefault(str(item.get("type", "unknown")), []).append(item)
@@ -218,7 +443,9 @@ def rebuild_markdown(root: Path) -> dict[str, Any]:
         "# Task State Index",
         "",
         f"- Generated: {now_iso()}",
-        f"- Canonical JSONL: `.task/index.jsonl`",
+        "- Canonical JSONL: `.task/index.jsonl`",
+        f"- Format version: {INDEX_FORMAT_VERSION}",
+        f"- Schema version: {INDEX_SCHEMA_VERSION}",
         f"- Artifact count: {len(state)}",
         "",
     ]
@@ -252,8 +479,18 @@ def rebuild_markdown(root: Path) -> dict[str, Any]:
             )
         lines.append("")
 
-    markdown_path(root).write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
-    return {"index_md": rel_path(root, markdown_path(root)), "artifact_count": len(state)}
+    atomic_write_text(markdown_path(root), "\n".join(lines).rstrip() + "\n")
+    return {
+        "index_md": rel_path(root, markdown_path(root)),
+        "artifact_count": len(state),
+        "format_version": INDEX_FORMAT_VERSION,
+        "schema_version": INDEX_SCHEMA_VERSION,
+    }
+
+
+def rebuild_markdown(root: Path) -> dict[str, Any]:
+    with index_lock(root):
+        return _rebuild_markdown_unlocked(root)
 
 
 def upsert_item(
@@ -267,179 +504,212 @@ def upsert_item(
     links: list[dict[str, str]] | None = None,
     fields: dict[str, str] | None = None,
     note: str | None = None,
+    replace_existing: bool | None = None,
 ) -> dict[str, Any]:
-    path = root / path_value
-    digest = sha256_file(path)
-    state = merge_state(load_events(root))
-    title = title or read_title(path)
-    lifecycle_transition_result: dict[str, Any] | None = None
-    transition_links: list[dict[str, str]] = []
-    previous_active_aliases = [
-        (existing_id, existing)
-        for existing_id, existing in state.items()
-        if item_type == "task"
-        and path_value == "task.md"
-        and existing.get("type") == "task"
-        and existing.get("path") == path_value
-        and existing.get("status") == "active"
-        and digest
-        and existing.get("content_sha256") != digest
-    ]
-    provided_item_id = item_id is not None
-    item_id = item_id or find_existing_id(state, item_type, path_value, digest) or make_id(item_type, title, path_value)
-    if not provided_item_id:
-        base_id = item_id
-        suffix = 2
-        while item_id in state and (
-            state[item_id].get("type") != item_type
-            or state[item_id].get("path") != path_value
-            or (digest and state[item_id].get("content_sha256") != digest)
-        ):
-            item_id = f"{base_id}-{suffix}"
-            suffix += 1
-    timestamp = now_iso()
-    if previous_active_aliases and not provided_item_id:
-        lifecycle_transition_result = {
-            "previous_snapshot_preserved": False,
-            "previous_active_superseded": False,
-            "new_canonical_id_added": False,
-            "mutable_alias_updated": False,
-            "links_updated": False,
-            "index_rendered": False,
-            "atomic": False,
-        }
-        for previous_id, previous in previous_active_aliases:
-            append_event(
-                root,
-                {
-                    "event": "upsert",
-                    "id": previous_id,
-                    "updated_at": timestamp,
-                    "fields": {
-                        "record_class": "immutable_snapshot",
-                        "snapshot_digest": previous.get("content_sha256"),
-                        "snapshot_path": (previous.get("fields") or {}).get("snapshot_path"),
-                        "alias_path": path_value,
-                        "canonical_id": previous_id,
-                    },
-                },
-            )
-            lifecycle_transition_result["previous_snapshot_preserved"] = True
-            append_event(
-                root,
-                {
-                    "event": "upsert",
-                    "id": previous_id,
-                    "status": "superseded",
-                    "updated_at": timestamp,
-                },
-            )
-            lifecycle_transition_result["previous_active_superseded"] = True
-        fields = dict(fields or {})
-        fields.update({"record_class": "mutable_alias", "snapshot_digest": digest or "", "canonical_id": item_id})
-        transition_links = list(links or []) + [{"rel": "supersedes", "id": previous_id} for previous_id, _ in previous_active_aliases]
-        links = None
-    if item_type == "task" and path_value == "task.md" and path.is_file():
-        snapshot_path = immutable_snapshot_path(root, item_id, path)
-        snapshot_path.parent.mkdir(parents=True, exist_ok=True)
-        if not snapshot_path.exists():
-            snapshot_path.write_bytes(path.read_bytes())
-        fields = dict(fields or {})
-        fields.update(
-            {
-                "record_class": "mutable_alias",
-                "snapshot_digest": digest or "",
-                "snapshot_path": rel_path(root, snapshot_path),
-                "canonical_id": item_id,
-                "alias_path": path_value,
-            }
+    root = root.resolve()
+    if status not in LIFECYCLE_STATUSES:
+        raise ValueError(f"Unsupported lifecycle status: {status!r}")
+    with index_lock(root):
+        state = merge_state(_load_events_unlocked(root))
+        path = root / path_value
+        digest = sha256_file(path)
+        title = title or read_title(path)
+        timestamp = now_iso()
+        active_records = path_records(state, item_type, path_value, active_only=True)
+        provided_item_id = item_id is not None
+        explicit_replacement = bool(
+            provided_item_id
+            and active_records
+            and all(existing_id != item_id for existing_id, _ in active_records)
         )
-    event = {
-        "event": "upsert",
-        "id": item_id,
-        "type": item_type,
-        "status": status,
-        "path": path_value,
-        "title": title,
-        "updated_at": timestamp,
-        "content_sha256": digest,
-    }
-    if item_id not in state:
-        event["created_at"] = timestamp
-    if parent_id:
-        event["parent_id"] = parent_id
-    if links:
-        event["links"] = links
-    if fields:
-        event["fields"] = fields
-    if note:
-        event["note"] = note
-    append_event(root, event)
-    if lifecycle_transition_result is not None:
-        lifecycle_transition_result["new_canonical_id_added"] = True
-        alias_event = {
+        legacy_task_replacement = bool(
+            replace_existing is None
+            and not provided_item_id
+            and item_type == "task"
+            and path_value == "task.md"
+            and digest
+            and any(existing.get("content_sha256") != digest for _, existing in active_records)
+        )
+        semantic_replacement = bool(replace_existing) or explicit_replacement or legacy_task_replacement
+
+        if semantic_replacement and not provided_item_id:
+            item_id = make_id(item_type, title, path_value)
+        elif not semantic_replacement:
+            item_id = item_id or stable_path_id(state, item_type, path_value) or make_id(item_type, title, path_value)
+        assert item_id is not None
+
+        if explicit_replacement and item_id in state:
+            raise ValueError(f"Replacement id {item_id!r} must be new")
+        if replace_existing and provided_item_id and any(existing_id == item_id for existing_id, _ in active_records):
+            raise ValueError("--replace requires a new explicit id or no --id")
+
+        if provided_item_id and item_id in state:
+            existing = state[item_id]
+            if existing.get("type") != item_type:
+                raise ValueError(f"Explicit id {item_id!r} already belongs to another artifact")
+            if existing.get("path") != path_value and replace_existing is not False:
+                raise ValueError(f"Explicit id {item_id!r} already belongs to another artifact path")
+        if not provided_item_id:
+            base_id = item_id
+            suffix = 2
+            while item_id in state and (
+                semantic_replacement
+                or state[item_id].get("type") != item_type
+                or state[item_id].get("path") != path_value
+            ):
+                item_id = f"{base_id}-{suffix}"
+                suffix += 1
+
+        superseded_records = [
+            (existing_id, existing)
+            for existing_id, existing in active_records
+            if existing_id != item_id
+        ]
+        lifecycle_transition_result: dict[str, Any] | None = None
+        if semantic_replacement and superseded_records:
+            lifecycle_transition_result = {
+                "previous_snapshot_preserved": True,
+                "previous_active_superseded": False,
+                "new_canonical_id_added": False,
+                "mutable_alias_updated": False,
+                "links_updated": False,
+                "index_rendered": False,
+                "atomic": False,
+                "replacement_reason": "explicit_id" if explicit_replacement else "semantic_replacement",
+            }
+
+        outgoing: list[dict[str, Any]] = []
+        for previous_id, previous in superseded_records:
+            previous_fields = previous.get("fields") if isinstance(previous.get("fields"), dict) else {}
+            if item_type == "task" and path_value == "task.md":
+                snapshot_value = previous_fields.get("snapshot_path")
+                snapshot_exists = bool(snapshot_value and (root / str(snapshot_value)).is_file())
+                if lifecycle_transition_result is not None and not snapshot_exists:
+                    lifecycle_transition_result["previous_snapshot_preserved"] = False
+                outgoing.append(
+                    {
+                        "event": "upsert",
+                        "id": previous_id,
+                        "updated_at": timestamp,
+                        "fields": {
+                            **previous_fields,
+                            "record_class": "immutable_snapshot",
+                            "snapshot_digest": previous.get("content_sha256"),
+                            "snapshot_path": snapshot_value,
+                            "alias_path": path_value,
+                            "canonical_id": previous_id,
+                        },
+                    }
+                )
+            outgoing.extend(
+                [
+                    {
+                        "event": "upsert",
+                        "id": previous_id,
+                        "status": "superseded",
+                        "updated_at": timestamp,
+                    },
+                    {
+                        "event": "link",
+                        "id": previous_id,
+                        "updated_at": timestamp,
+                        "links": [{"rel": "superseded_by", "id": item_id}],
+                    },
+                ]
+            )
+        if lifecycle_transition_result is not None:
+            lifecycle_transition_result["previous_active_superseded"] = True
+
+        merged_fields = dict(fields or {})
+        event_links = list(links or [])
+        if superseded_records:
+            event_links.extend({"rel": "supersedes", "id": previous_id} for previous_id, _ in superseded_records)
+
+        if item_type == "task" and path_value == "task.md" and path.is_file():
+            snapshot = immutable_snapshot_path(root, item_id, path)
+            # Stable IDs track ordinary edits; explicit/semantic replacement creates a new immutable body.
+            atomic_write_bytes(snapshot, path.read_bytes())
+            merged_fields.update(
+                {
+                    "record_class": "mutable_alias",
+                    "snapshot_digest": digest or "",
+                    "snapshot_path": rel_path(root, snapshot),
+                    "canonical_id": item_id,
+                    "alias_path": path_value,
+                }
+            )
+
+        event: dict[str, Any] = {
             "event": "upsert",
             "id": item_id,
+            "type": item_type,
+            "status": status,
+            "path": path_value,
+            "title": title,
             "updated_at": timestamp,
-            "fields": {
-                "record_class": "mutable_alias",
-                "snapshot_digest": digest,
-                "snapshot_path": (fields or {}).get("snapshot_path"),
-                "canonical_id": item_id,
-                "alias_path": path_value,
-            },
+            "content_sha256": digest,
         }
-        append_event(root, alias_event)
-        lifecycle_transition_result["mutable_alias_updated"] = True
-        for previous_id, _ in previous_active_aliases:
-            append_event(
-                root,
+        if item_id not in state:
+            event["created_at"] = timestamp
+        if parent_id:
+            event["parent_id"] = parent_id
+        if event_links:
+            event["links"] = event_links
+        if merged_fields:
+            event["fields"] = merged_fields
+        if note:
+            event["note"] = note
+        outgoing.append(event)
+
+        versioned = _append_events_unlocked(root, outgoing)
+        rebuild = _rebuild_markdown_unlocked(root)
+        if lifecycle_transition_result is not None:
+            lifecycle_transition_result.update(
                 {
-                    "event": "link",
-                    "id": previous_id,
-                    "updated_at": timestamp,
-                    "links": [{"rel": "superseded_by", "id": item_id}],
-                },
+                    "new_canonical_id_added": True,
+                    "mutable_alias_updated": True,
+                    "links_updated": True,
+                    "index_rendered": True,
+                }
             )
-        if transition_links:
-            append_event(
-                root,
-                {"event": "link", "id": item_id, "updated_at": timestamp, "links": transition_links},
+            lifecycle_transition_result["atomic"] = all(
+                lifecycle_transition_result[field]
+                for field in (
+                    "previous_snapshot_preserved",
+                    "previous_active_superseded",
+                    "new_canonical_id_added",
+                    "mutable_alias_updated",
+                    "links_updated",
+                    "index_rendered",
+                )
             )
-        lifecycle_transition_result["links_updated"] = True
-    rebuild = rebuild_markdown(root)
-    if lifecycle_transition_result is not None:
-        lifecycle_transition_result["index_rendered"] = True
-        lifecycle_transition_result["atomic"] = all(
-            lifecycle_transition_result[field]
-            for field in (
-                "previous_snapshot_preserved",
-                "previous_active_superseded",
-                "new_canonical_id_added",
-                "mutable_alias_updated",
-                "links_updated",
-                "index_rendered",
-            )
-        )
-    return {"id": item_id, "event": event, "lifecycle_transition_result": lifecycle_transition_result, **rebuild}
+        return {
+            "id": item_id,
+            "event": next(item for item in versioned if item.get("id") == item_id and item.get("type") == item_type),
+            "lifecycle_transition_result": lifecycle_transition_result,
+            "duplicate_active_paths_repaired": len(superseded_records) if not semantic_replacement else 0,
+            **rebuild,
+        }
 
 
 def infer_miss_status(path: Path) -> str:
     name = path.name.lower()
     if "deleted" in name:
         return "deleted"
+    if "partially_resolved" in name or "partially-resolved" in name:
+        return "partially_resolved"
     if "resolved" in name:
         return "resolved"
     try:
         text = path.read_text(encoding="utf-8", errors="replace").lower()
     except OSError:
         return "open"
+    if "partially_resolved" in text or "partially-resolved" in text or "status: partial" in text:
+        return "partially_resolved"
     if "resolved_delete" in text or "deleted" in text:
         return "deleted"
     if "resolved_archive" in text or "resolved" in text:
         return "resolved"
-    if "partially_resolved" in text:
-        return "partially_resolved"
     if "obsolete_scope" in text or "obsolete" in text:
         return "obsolete"
     return "open"
@@ -810,10 +1080,8 @@ def scan_artifacts(root: Path) -> dict[str, Any]:
     def maybe_upsert(item_type: str, path_value: str, status: str, title: str) -> None:
         nonlocal state
         digest = sha256_file(root / path_value)
-        if find_existing_id(state, item_type, path_value, digest):
-            return
         fields = None
-        item_id = None
+        item_id = stable_path_id(state, item_type, path_value)
         if item_type in {"schema_contract", "schema_map"}:
             fields = extract_schema_fields(root / path_value)
         elif item_type == "task_pack":
@@ -840,7 +1108,27 @@ def scan_artifacts(root: Path) -> dict[str, Any]:
                     if existing.get("type") == "external_advice" and existing_fields.get("advice_id") == advice_id:
                         item_id = existing_id
                         break
-        result = upsert_item(root, item_type, path_value, status, title=title, item_id=item_id, fields=fields)
+        existing = state.get(item_id) if item_id else None
+        existing_fields = existing.get("fields") if isinstance(existing, dict) and isinstance(existing.get("fields"), dict) else {}
+        if (
+            existing
+            and existing.get("path") == path_value
+            and existing.get("content_sha256") == digest
+            and existing.get("status") == status
+            and existing.get("title") == title
+            and all(existing_fields.get(key) == value for key, value in (fields or {}).items())
+        ):
+            return
+        result = upsert_item(
+            root,
+            item_type,
+            path_value,
+            status,
+            title=title,
+            item_id=item_id,
+            fields=fields,
+            replace_existing=False,
+        )
         added.append(result["event"])
         state = merge_state(load_events(root))
 
@@ -848,7 +1136,35 @@ def scan_artifacts(root: Path) -> dict[str, Any]:
         maybe_upsert(item_type, path_value, status, title)
 
     rebuild = rebuild_markdown(root)
-    return {"indexed_events": len(added), "events": added, **rebuild}
+    return {
+        "indexed_events": len(added),
+        "events": added,
+        "scan_evidence_status": "evaluated" if discover_standard_artifacts(root) else "not_evaluated_no_artifacts",
+        **rebuild,
+    }
+
+
+def link_item(
+    root: Path,
+    source_id: str,
+    links: list[dict[str, str]],
+    note: str | None = None,
+) -> dict[str, Any]:
+    root = root.resolve()
+    with index_lock(root):
+        state = merge_state(_load_events_unlocked(root))
+        if source_id not in state:
+            raise ValueError(f"Unknown source id: {source_id}")
+        event: dict[str, Any] = {
+            "event": "link",
+            "id": source_id,
+            "links": links,
+            "updated_at": now_iso(),
+        }
+        if note:
+            event["note"] = note
+        versioned = _append_events_unlocked(root, [event])[0]
+        return {"id": source_id, "event": versioned, **_rebuild_markdown_unlocked(root)}
 
 
 def add_issue(
@@ -1010,8 +1326,11 @@ def audit_index(root: Path) -> dict[str, Any]:
     ]
     historical_debt = [issue for issue in issues if issue not in current_surface_blockers]
     return {
+        "format_version": INDEX_FORMAT_VERSION,
+        "schema_version": INDEX_SCHEMA_VERSION,
         "workspace": str(root),
         "audited_at": now_iso(),
+        "audit_evidence_status": "evaluated" if events or discover_standard_artifacts(root) else "not_evaluated_no_artifacts",
         "event_count": len(events),
         "artifact_count": len(state),
         "counts_by_type": counts_by_type,
@@ -1025,7 +1344,7 @@ def audit_index(root: Path) -> dict[str, Any]:
 def write_audit_report(root: Path, audit: dict[str, Any]) -> Path:
     report_dir = task_dir(root) / "id_audit"
     report_dir.mkdir(parents=True, exist_ok=True)
-    report_path = report_dir / f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-id-consistency-audit.md"
+    report_path = report_dir / f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S-%f')}-id-consistency-audit.md"
     lines = [
         "# ID Consistency Audit",
         "",
@@ -1054,7 +1373,7 @@ def write_audit_report(root: Path, audit: dict[str, Any]) -> Path:
             )
     else:
         lines.append("- None")
-    report_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    atomic_write_text(report_path, "\n".join(lines).rstrip() + "\n")
     return report_path
 
 
@@ -1105,8 +1424,8 @@ def summarize_audit(audit: dict[str, Any], focus_paths: list[str], limit: int = 
 
 def cmd_init(args: argparse.Namespace) -> None:
     root = Path(args.root).resolve()
-    ensure_index(root)
-    print(json.dumps({"ok": True, **rebuild_markdown(root)}, ensure_ascii=False, indent=2))
+    result = rebuild_markdown(root)
+    print(json.dumps({"initialized": True, "evidence_status": "not_evaluated", **result}, ensure_ascii=False, indent=2))
 
 
 def cmd_scan(args: argparse.Namespace) -> None:
@@ -1127,25 +1446,18 @@ def cmd_add(args: argparse.Namespace) -> None:
         links=parse_links(args.link),
         fields=parse_key_value(args.field),
         note=args.note,
+        replace_existing=args.replace,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 def cmd_link(args: argparse.Namespace) -> None:
     root = Path(args.root).resolve()
-    state = merge_state(load_events(root))
-    if args.source_id not in state:
-        raise SystemExit(f"Unknown source id: {args.source_id}")
-    event = {
-        "event": "link",
-        "id": args.source_id,
-        "links": parse_links(args.link),
-        "updated_at": now_iso(),
-    }
-    if args.note:
-        event["note"] = args.note
-    append_event(root, event)
-    print(json.dumps({"id": args.source_id, "event": event, **rebuild_markdown(root)}, ensure_ascii=False, indent=2))
+    try:
+        result = link_item(root, args.source_id, parse_links(args.link), args.note)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 def cmd_rebuild(args: argparse.Namespace) -> None:
@@ -1192,13 +1504,14 @@ def build_parser() -> argparse.ArgumentParser:
     add_parser = subparsers.add_parser("add", help="Append an upsert event for one artifact.")
     add_parser.add_argument("--type", required=True, help="Artifact type.")
     add_parser.add_argument("--path", required=True, help="Workspace-relative artifact path.")
-    add_parser.add_argument("--status", required=True, help="Lifecycle status.")
+    add_parser.add_argument("--status", required=True, choices=sorted(LIFECYCLE_STATUSES), help="Lifecycle status.")
     add_parser.add_argument("--title", help="Short title.")
     add_parser.add_argument("--id", help="Explicit artifact ID.")
     add_parser.add_argument("--parent-id", help="Parent artifact ID.")
     add_parser.add_argument("--link", action="append", default=[], help="Relationship in rel:id or rel=id form.")
     add_parser.add_argument("--field", action="append", default=[], help="Structured metadata as key=value.")
     add_parser.add_argument("--note", help="Concise factual note.")
+    add_parser.add_argument("--replace", action="store_true", help="Create a new semantic artifact ID and supersede the active same-path record.")
     add_parser.set_defaults(func=cmd_add)
 
     link_parser = subparsers.add_parser("link", help="Append relationship links to an existing artifact.")

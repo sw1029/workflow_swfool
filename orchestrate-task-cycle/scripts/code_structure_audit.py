@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import argparse
 import ast
-from collections import Counter, defaultdict
+from collections import defaultdict
 import json
 import re
 import subprocess
@@ -455,7 +455,11 @@ def semantic_findings(
         if item.get("mechanical_naming_signals")
     ]
     if mechanical_paths:
-        mechanical_severity = "refactor_required" if mechanical_shard_count else convention_severity
+        # Mechanical names are only an enforced refactor gate when the
+        # repository supplied a convention contract.  Without that owner
+        # contract this remains visible, warn-only evidence; the generic
+        # scanner must not invent a project naming policy.
+        mechanical_severity = "refactor_required" if mechanical_shard_count and enforced else "warn"
         findings.append(
             {
                 "code": "mechanical_or_versioned_naming_detected",
@@ -644,7 +648,10 @@ def audit(
         "raw_source_persisted": False,
         "scanned_file_details": scanned,
         "skipped_files": [item for item in records if item.get("scan_status") != "scanned"],
-        "evidence_paths": ["stdout:code_structure_audit", "/home/swfool/.codex/skills/orchestrate-task-cycle/references/code-structure-audit.md"],
+        "evidence_paths": [
+            "stdout:code_structure_audit",
+            (Path(__file__).resolve().parents[1] / "references" / "code-structure-audit.md").as_posix(),
+        ],
     }
 
 

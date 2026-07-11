@@ -36,6 +36,9 @@ When normalized acceptance or caller packets provide Part K lineage/comparison f
 
 - Treat `.agent_goal/*.md` as goal truth only when actually used. Treat `.agent_advice/` as non-GT direction evidence and record disposition.
 - Preserve source class. Never promote `test_fixture`, `synthetic_fixture`, `sampled_real_metadata`, or `local_dataset_candidate` into `sampled_real_positive_evidence` or `real_reviewed_work` without explicit admissible evidence.
+- Keep schema-v2 source bindings executable. For local evidence, store a root-relative `source_ref`, lowercase SHA-256 `source_hash`, and `source_binding_type: local_file`; validation rehashes the current bytes and rejects traversal or symlink escape. Keep remote/opaque locators candidate-only unless an explicit `authoritative_attestation` binding supplies authority, attestation, and matching digest fields.
+- Bind every completed deterministic result to canonical item and oracle-definition hashes, and re-execute its current predicate during validation. Cover every required non-executed item/oracle pair with an accepted `human_reviewed`, `authoritative: true` label carrying reviewer and evidence references, or keep the set non-consumable.
+- Claim scenario coverage only from a `premise_satisfied: true` item whose expected and observed terminal states match, whose root-local evidence path/hash verifies, and whose named oracle predicate explicitly observes both terminal-state fields or is authoritatively adjudicated with them. Put false-premise or unavailable cases in `scenario_uncovered`, not `scenario_coverage`.
 - Do not persist raw body text, provider bodies, full source text, private content, or large copyrighted excerpts in durable validation artifacts. Store locators, hashes, spans, and bounded snippets only when authority permits.
 - Default agent-generated semantic sets to `quality_tier: candidate` or `silver`; set `not_gold: true` unless human-reviewed evidence or a fully deterministic authoritative oracle proves otherwise.
 - Do not pass sealed holdout labels to implementation workers. If true sealing is impossible in a shared workspace, report `sealed_holdout_status: quasi_sealed` or `not_sealed`.
@@ -47,11 +50,14 @@ When normalized acceptance or caller packets provide Part K lineage/comparison f
 2. Decide route: `not_applicable`, `plan`, `build`, `refresh`, `consume`, or `blocked_or_candidate_only`.
 3. In `plan` mode, write or return only public evaluation criteria: task family, failure taxonomy, source-class boundary, oracle feasibility, split policy, leakage policy, and label visibility policy.
 4. In `plan` mode, for every `acceptance_scenarios` record, state the required premise-satisfying input class, expected terminal state, and acceptable evidence source (`fixture` or `live_run`). If no admissible premise-satisfying input can be created, return `scenario_uncovered` and the missing condition.
-5. In `build` mode, sample source-linked candidate items, run independent labeler passes when semantic labels are needed, adjudicate disagreements, prefer deterministic/executable oracles, create splits, run leakage checks, and freeze a root hash. For scenario items, mark `premise_satisfied=true` only when the fixture/run inputs actually meet the predicate.
+5. In `build` mode, sample source-linked candidate items, run independent labeler passes when semantic labels are needed, adjudicate disagreements, prefer deterministic/executable oracles, and create splits. Treat `scripts/build_validation_set.py` output as a schema-v2 candidate scaffold, not a completed set. Pass plan-provided oracle/split manifests when items name custom oracle IDs.
 6. In `consume` mode, run existing deterministic oracles and report pass/fail counts by failure taxonomy, split, source class, oracle type, and scenario coverage when applicable.
 7. In `plan`, `build`, or `consume` mode for Part K contracts, report whether each lineage/comparison fixture covers the intended contract class: expectation rebaseline, parity-axis coverage, gating-axis adoption rejection, resolution restoration, or duplicate-key divergence. Do not claim task completion from the fixture; hand the result to `$validate-task-completion`.
-8. Validate artifacts with `scripts/validate_validation_set.py`; if a root is produced, write it with `scripts/freeze_validation_set_root.py`.
-9. Return a compact result packet with required fields and no-overclaim flags.
+8. Run `scripts/leakage_check.py`, then execute deterministic oracles with `scripts/run_validation_oracles.py --root <root> --set-root <set-root>`. This writes the manifest-bound `oracle_results.json` with artifact hashes, per-pair item/predicate hashes, exact required/executed/unsupported counts, and unsupported-pair enumeration. A stdout-only direct oracle run is diagnostic and is not consumable evidence.
+9. Promote only with `scripts/finalize_validation_set.py`. The finalizer revalidates source bindings, leakage, splits, current oracle results, counts, and no-overclaim state; it atomically records deterministic finalization provenance and changes the status to `complete`. Directly editing manifest status cannot create a consumable set.
+10. Validate the completed artifacts with `scripts/validate_validation_set.py`. Keep empty or unevaluated work as `candidate_only`, `partial`, or blocked; never mark it `complete`. Versionless legacy manifests remain readable as `migration_required`, but cannot be consumed or frozen.
+11. Freeze only non-blocked schema-v2 artifacts with `scripts/freeze_validation_set_root.py`, then verify the persisted binding with `scripts/verify_validation_set_root.py`. Treat either command's nonzero result as a blocker for consumption. Any integrity finding must yield `status: block` and `readiness: blocked`.
+12. Return a compact result packet with required fields and no-overclaim flags.
 
 ## Result Packet
 
@@ -69,6 +75,8 @@ Return these fields when applicable:
 - `oracle_type_distribution`
 - `split_manifest_path`
 - `oracle_manifest_path`
+- `oracle_results_path`
+- `finalization_record`
 - `leakage_report_path`
 - `disagreement_report_path`
 - `validation_set_root_path`
@@ -92,7 +100,7 @@ Return these fields when applicable:
 
 If `validation_set_status` is blocked, include `blocked_reason` and the exact missing source/authority/oracle condition. If `quality_tier` is `gold`, include human-reviewed or fully deterministic authoritative evidence.
 
-For scenario coverage, include `acceptance_scenario_id`, `premise_satisfied`, `expected_terminal_state`, `observed_terminal_state`, `evidence_path`, and `oracle_id`. If a changed or generated test asserts a non-expected terminal state for a premise-satisfying input, set `acceptance_inversion_candidate=true` for `$validate-task-completion`; do not hide it behind overall green status.
+For scenario coverage, include `acceptance_scenario_id`, `premise_satisfied`, `expected_terminal_state`, `observed_terminal_state`, root-relative `evidence_path`, `evidence_sha256`, and `oracle_id`. If a changed or generated test asserts a non-expected terminal state for a premise-satisfying input, set `acceptance_inversion_candidate=true` for `$validate-task-completion`; do not hide it behind overall green status.
 
 If a producer artifact or `observed_producer_claim` reports a residual blocker that directly contradicts the scenario's expected terminal state, copy only the scalar blocker summary into the scenario item as `acceptance_inversion_candidate=true` plus evidence path. Do not treat the producer report as authoritative coverage; use it to force scenario review or code/contract repair.
 
@@ -110,8 +118,10 @@ Read [label-adjudication.md](references/label-adjudication.md) before using mult
 
 Use these scripts when their operation applies:
 
-- `scripts/build_validation_set.py`: package bounded candidate JSONL into a validation-set directory.
+- `scripts/build_validation_set.py`: create a schema-v2 candidate scaffold; accept plan-provided oracle/split manifests and reject unresolved custom oracle references.
 - `scripts/validate_validation_set.py`: validate contract fields and no-overclaim guardrails.
-- `scripts/run_validation_oracles.py`: run simple deterministic oracle manifests over item records.
-- `scripts/leakage_check.py`: detect duplicate IDs, duplicate source hashes, missing label targets, and forbidden raw-body fields.
-- `scripts/freeze_validation_set_root.py`: hash manifest/items/labels/oracles/splits/leakage reports into a root file.
+- `scripts/run_validation_oracles.py`: run deterministic oracle manifests over item records and persist content-bound results plus required/executed/unsupported pair coverage; return `not_evaluated`, never pass, when no runnable item-oracle pairs exist.
+- `scripts/leakage_check.py`: detect duplicate IDs, duplicate source hashes, missing label targets, and forbidden raw-body fields; return `not_evaluated` for an empty item set.
+- `scripts/finalize_validation_set.py`: deterministically revalidate and atomically promote a schema-v2 candidate to `complete` with finalization provenance.
+- `scripts/freeze_validation_set_root.py`: fail closed, then hash manifest/items/labels/oracle manifest/oracle results/splits/leakage into a schema-v2 root file.
+- `scripts/verify_validation_set_root.py`: recompute every bound hash and the canonical root digest, revalidate the set, and reject missing, changed, or escaping paths.

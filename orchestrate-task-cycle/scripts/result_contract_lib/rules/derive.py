@@ -60,6 +60,40 @@ class DeriveRule(TargetContractRule):
         require_context_field = context.require_context_field
         explicit_report_key_divergence = context.get("explicit_report_key_divergence", False)
         auto_report_key_divergences = context.get("auto_report_key_divergences", [])
+        pending_long_runs = context.get("pending_long_runs", [])
+        pending_selected_kind = selected_task_kind_value(result)
+        pending_selected_source = str(value_for(result, "selected_task_source") or "").strip().lower()
+        pending_allowed_kinds = {
+            "long_run_monitor",
+            "long_run_harvest",
+            "long_run_finalize",
+            "terminal_blocked",
+            "terminal_blocker",
+            "user_escalation",
+        }
+        derive_mode = str(first_present(result, ["derive_mode", "mode", "derive.mode", "result.derive_mode"]) or "").strip().lower()
+        ordinary_derive = derive_mode != "initial_init" and not (
+            pending_selected_kind in pending_allowed_kinds or pending_selected_source == "terminal_blocked"
+        )
+        if ordinary_derive and not context.get("long_run_state_checked", False):
+            add(
+                findings,
+                "block",
+                "long_run_state_not_checked",
+                "Ordinary derivation requires explicit proof that current long-run state was checked.",
+            )
+        if pending_long_runs and ordinary_derive:
+            add(
+                findings,
+                "block",
+                "pending_long_run_ordinary_derive",
+                "Pending long-running execution permits only monitor/harvest/finalize or terminal/user-escalation derivation.",
+                {
+                    "pending_long_runs": pending_long_runs,
+                    "selected_task_kind": pending_selected_kind or None,
+                    "selected_task_source": pending_selected_source or None,
+                },
+            )
         status = str(value_for(result, "status") or "").lower()
         if status in {"deferred", "pending", "blocked", "failed"} and not has_value(result, "derive_pending_reason") and not has_value(result, "blockers"):
             add(findings, "block" if mode == "block" else "warn", "derive_pending_reason_missing", "Deferred or blocked derivation requires a pending/blocker reason.")

@@ -31,7 +31,18 @@ class QualitativeReviewRule(TargetContractRule):
             ],
         )
         delegation_unavailable = delegation_unavailable_reason is not None
-        if reviewer_count_value != 1 and not (review_status in {"blocked", "not_applicable"} and delegation_unavailable):
+        review_na_reason = first_present(
+            result,
+            [
+                "reason",
+                "review_skipped_reason",
+                "qualitative_review_pending_reason",
+                "reviewer_delegation_unavailable_reason",
+                "blockers",
+            ],
+        )
+        reasoned_no_review = review_status in {"blocked", "not_applicable"} and non_empty(review_na_reason)
+        if reviewer_count_value != 1 and not (reviewer_count_value == 0 and reasoned_no_review):
             add(
                 findings,
                 "block" if mode == "block" else "warn",
@@ -122,6 +133,7 @@ class QualitativeReviewRule(TargetContractRule):
             )
         if review_status in {"blocked", "not_applicable"} and not (
             delegation_unavailable
+            or non_empty(result.get("reason"))
             or has_value(result, "review_skipped_reason")
             or has_value(result, "qualitative_review_pending_reason")
             or has_value(result, "blockers")

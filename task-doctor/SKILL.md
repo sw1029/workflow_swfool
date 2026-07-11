@@ -102,7 +102,7 @@ When reviewing a terminal or escalation request, require the existing loopback r
    - Use a task pack only when the explicit direction contains an ordered sequence or when a single doctored task would lose important sequencing context. Otherwise write only `task.md`.
    - Do not create multiple active task packs. Update the named/active pack, or mark the old pack `superseded` before creating a replacement.
    - If active advice was used, decide whether it is incorporated into the new task, deferred for later implementation, or rejected because it conflicts with user instruction, GT, authority, or repository facts.
-   - Do not write a replacement task that forbids a `.agent_goal` allowed or required provider/credential action unless the new task explicitly resolves the conflict or cites a newer explicit user instruction that supersedes the GT with a verifiable source. A bare phrase such as "latest user instruction" is not enough; include a timestamp or log/transcript path plus the quoted instruction text, or keep the prior supersession/authority state and ask the user for confirmation.
+   - Do not write a replacement task that forbids a `.agent_goal` allowed or required provider/credential action unless the new task explicitly resolves the conflict or cites a newer explicit user instruction that supersedes the GT with a verifiable source. A bare phrase such as "latest user instruction" is not enough. When caller authority permits quoting, supply the exact bounded user quote separately and bind it to the validated privacy-safe [$audit-session-governance](../audit-session-governance/SKILL.md) packet's event/hash/timestamp reference; require an explicit `integrity_status` and preserve its limitations. The packet itself contains no quote or message body, and a raw transcript path or transcript-only observation is insufficient. The quote supports provenance only and cannot by itself expand authority. Otherwise keep the prior supersession/authority state and ask the user for confirmation.
    - Do not write a replacement task whose progress case depends only on self-declared `produced_domain_delta=true`; require observed output evidence, legitimate provider-terminal evidence, consolidation, or explicit terminal/user escalation.
    - Do not write a replacement task whose progress case depends on `observed_producer_claim` or any producer self-reported `goal_productive`, `advanced`, or `effective_progress_kind` label. Preserve such labels only as trace evidence and require adapter/output-delta/validation truth.
    - Do not write a replacement task whose progress case depends on `producer_attested_fields` or `attested_only_movement`. Preserve those fields as trace evidence and require `independently_verified` adapter/output-delta/validation truth.
@@ -246,8 +246,8 @@ When reviewing a terminal or escalation request, require the existing loopback r
    - Validate and render the pack with:
 
      ```bash
-     python3 /home/swfool/.codex/skills/orchestrate-task-cycle/scripts/task_pack_queue.py --root . validate
-     python3 /home/swfool/.codex/skills/orchestrate-task-cycle/scripts/task_pack_queue.py --root . render --language <language>
+     python3 "${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/scripts/task_pack_queue.py" --root . validate
+     python3 "${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/scripts/task_pack_queue.py" --root . render --language <language>
      ```
 
    - If validation reports a blocking pack-schema issue, fix the pack before continuing to index or commit.

@@ -8,15 +8,30 @@ import sys
 from pathlib import Path
 from typing import Any
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from result_contract_lib.session_audit import sanitize_collection_summary  # noqa: E402
+
 
 TARGETS = {
+    "repo_skill_adapter_scan",
+    "acceptance",
+    "validation_scope_plan",
     "governance",
     "validation_set_plan",
+    "repo_skill_adapter_validate",
     "code_structure_audit",
     "run",
     "qualitative_review",
     "loopback_audit",
     "validation_set_build",
+    "visible_increment",
+    "repo_skill_gap_analysis",
+    "cycle_efficiency_profile",
+    "validation_scope_finalize",
+    "index_pre_validate",
     "schema_pre_derive",
     "derive",
     "schema_post_derive",
@@ -24,6 +39,7 @@ TARGETS = {
     "validate",
     "issue",
     "commit",
+    "dashboard",
     "report",
     "closeout_commit",
 }
@@ -35,6 +51,7 @@ OUTPUT_DELTA_CONTRACT_CANDIDATES = (
 
 MODEL_EFFORT_PROFILE_PATH = Path(__file__).resolve().parents[1] / "references" / "model-effort-profiles.json"
 MODEL_EFFORT_ROUTER_PATH = Path(__file__).resolve().parent / "model_effort_router.py"
+ROUTING_REFERENCE_PATH = Path(__file__).resolve().parents[1] / "references" / "workflow-routing.md"
 
 
 def load_model_effort_router() -> Any:
@@ -259,14 +276,23 @@ def counts(context: dict[str, Any]) -> dict[str, Any]:
         "external_advice_active": deep_get(context, "external_advice", "active_count") or 0,
         "validation_set_count": deep_get(context, "validation_assets", "sets", "count") or 0,
         "cycle_validation_set_count": deep_get(context, "task_state", "validation_set", "count") or 0,
+        "session_audit_count": deep_get(context, "session_audit", "valid_count") or 0,
     }
 
 
-def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> dict[str, Any]:
+def packet_for(
+    target: str,
+    context: dict[str, Any],
+    stage: dict[str, Any],
+    workflow_mode: str = "normal",
+) -> dict[str, Any]:
     gt = goal_truth(context)
     available_gt = available_goal_truth(context)
     authority = authority_policy(stage)
-    route = lambda profile_id: routing_profile(profile_id, routing_request_for(profile_id, context, stage))
+
+    def route(profile_id: str) -> dict[str, Any]:
+        return routing_profile(profile_id, routing_request_for(profile_id, context, stage))
+
     base: dict[str, Any] = {
         "target": target,
         "workspace": context.get("workspace"),
@@ -277,7 +303,7 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
         "used_advice": active_advice(context),
         "advice_not_goal_truth": True,
         "context_counts": counts(context),
-        "routing_reference": "/home/swfool/.codex/skills/orchestrate-task-cycle/references/workflow-routing.md",
+        "routing_reference": str(ROUTING_REFERENCE_PATH),
         "model_effort_policy": {
             "policy_id": MODEL_EFFORT_POLICY["policy_id"],
             "policy_path": str(MODEL_EFFORT_PROFILE_PATH),
@@ -309,10 +335,86 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
     output_delta_packet = output_delta_contract_packet(context)
     if output_delta_packet:
         base["output_delta_contract_packet"] = output_delta_packet
+    session_audit = sanitize_collection_summary(context.get("session_audit"), max_packets=12)
+    if session_audit:
+        base["session_audit"] = session_audit
     active_pack = deep_get(context, "task_state", "task_pack", "active_pack")
     if isinstance(active_pack, dict) and active_pack:
         base["task_pack_packet"] = active_pack
-    if target == "governance":
+    if target == "repo_skill_adapter_scan":
+        base.update(
+            {
+                "skill": "$orchestrate-task-cycle",
+                "mode": "metadata_only",
+                "routing": {"phase": "pre-acceptance repo-local adapter discovery", "agent_routing_applicability": "deterministic_only"},
+                "required_inputs": [
+                    "cycle_id",
+                    "workspace `.codex/skills/*/SKILL.md` frontmatter",
+                    "optional adapter.manifest.json metadata",
+                    "optional adapter packet renderer existence",
+                    "previous adapter validation status when available",
+                ],
+                "required_outputs": [
+                    "step: repo_skill_adapter_scan",
+                    "cycle_id",
+                    "adapter_scan_status",
+                    "adapter_count including explicit zero",
+                    "repo_skill_adapter_packet with IDs, paths, statuses, renderer availability, and non-GT warning",
+                    "blockers including explicit []",
+                    "evidence_paths",
+                ],
+                "forbidden_bypasses": ["loading long adapter bodies during metadata scan", "treating adapters as GT or authority"],
+            }
+        )
+    elif target == "acceptance":
+        base.update(
+            {
+                "skill": "$normalize-acceptance-and-demo",
+                "routing": {"phase": "task-bound acceptance normalization after adapter scan", "agent_routing_applicability": "deterministic_only"},
+                "required_inputs": [
+                    "active task.md created before this normal cycle",
+                    "authority_policy",
+                    "repo_skill_adapter_packet and acceptance-relevant adapter hooks",
+                    "active non-GT advice packet when present",
+                    "schema/contract summaries",
+                ],
+                "required_outputs": [
+                    "step: acceptance",
+                    "acceptance_id",
+                    "task_id",
+                    "acceptance_status",
+                    "acceptance_provenance.source_task_id matching task_id",
+                    "acceptance_provenance.source_task_path",
+                    "acceptance_provenance.source_task_fingerprint",
+                    "acceptance_criteria and preserved measurable encodings",
+                    "blockers including explicit []",
+                    "evidence_paths",
+                ],
+                "forbidden_bypasses": ["normalizing acceptance before task.md exists", "reusing acceptance from another task fingerprint"],
+            }
+        )
+    elif target == "validation_scope_plan":
+        base.update(
+            {
+                "skill": "$plan-validation-scope",
+                "mode": "pre_change_plan",
+                "routing": {"phase": "planned change-surface validation scope", "agent_routing_applicability": "deterministic_only"},
+                "required_inputs": ["task.md", "acceptance packet", "planned touch surfaces", "adapter gate/artifact compatibility when supplied"],
+                "required_outputs": [
+                    "step: validation_scope_plan",
+                    "task_id",
+                    "mode: plan",
+                    "validation_profile",
+                    "profile_floor and profile_changed",
+                    "planned_changed_files and explicit empty actual_changed_files",
+                    "changed_surfaces and surface_counts",
+                    "required_commands and reused_prerequisites",
+                    "escalation_reasons, rationale, finalized: false, and findings",
+                    "evidence_paths",
+                ],
+            }
+        )
+    elif target == "governance":
         base.update(
             {
                 "skill": "$task-md-agent-governance",
@@ -349,7 +451,7 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                     "label_visibility": "public criteria only; sealed labels must not be exposed to implementation workers",
                 },
                 "required_inputs": [
-                    "task.md or initial_init context",
+                    "active task.md; initial_init must finish in a separate bootstrap transaction",
                     "authority_policy",
                     "available_goal_truth and used_goal_truth",
                     "active non-GT external advice packet when present",
@@ -360,6 +462,7 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                     "normalized acceptance_scenarios when scenario-shaped acceptance exists",
                 ],
                 "required_outputs": [
+                    "step: validation_set_plan",
                     "task_id",
                     "validation_set_need",
                     "task_family",
@@ -372,6 +475,31 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                     "evidence_paths",
                     "used_advice or advice disposition rationale when active advice is in scope",
                 ],
+            }
+        )
+    elif target == "repo_skill_adapter_validate":
+        base.update(
+            {
+                "skill": "$orchestrate-task-cycle applying $skill-creator validation rules",
+                "mode": "post_governance_adapter_validation",
+                "routing": {"phase": "validate changed repo-local adapters before consumption", "agent_routing_applicability": "deterministic_only"},
+                "required_inputs": [
+                    "governance changed_files",
+                    "repo_skill_adapter_packet",
+                    "changed `.codex/skills/` paths or explicit no-change evidence",
+                    "$skill-creator quick_validate.py when available",
+                    "adapter-local representative checks when scripts changed",
+                ],
+                "required_outputs": [
+                    "step: repo_skill_adapter_validate",
+                    "task_id",
+                    "adapter_validation_status",
+                    "adapter_change_count including explicit zero",
+                    "adapter_validation_count including explicit zero",
+                    "blockers including explicit []",
+                    "evidence_paths",
+                ],
+                "forbidden_bypasses": ["consuming an invalid changed adapter", "patching adapter files from the validation phase"],
             }
         )
     elif target == "code_structure_audit":
@@ -556,19 +684,12 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                     "acceptance_scenarios from validation_set_plan or normalized acceptance when present",
                 ],
                 "required_outputs": [
+                    "step: validation_set_build",
                     "task_id",
-                    "validation_set_id",
                     "validation_set_status",
-                    "quality_tier",
-                    "not_gold",
-                    "item_count",
-                    "label_count",
-                    "oracle_count",
-                    "source_class_distribution",
-                    "oracle_manifest_path",
-                    "split_manifest_path",
-                    "leakage_report_path",
-                    "validation_set_root_path",
+                    "when built: validation_set_id, quality_tier, not_gold, item_count, label_count, oracle_count, source_class_distribution",
+                    "when built: oracle_manifest_path, split_manifest_path, leakage_report_path, validation_set_root_path",
+                    "when not_applicable/skipped: concrete reason and no fabricated manifest/root paths",
                     "scenario_coverage, scenario_uncovered, and acceptance_inversion_candidate when scenario-shaped acceptance is in scope",
                     "evidence_paths",
                     "used_advice or advice disposition rationale when active advice is in scope",
@@ -578,6 +699,123 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                     "fixture or metadata promotion to sampled-real evidence",
                     "gold claim without human-reviewed or deterministic authoritative evidence",
                     "sealed holdout label exposure to implementation workers",
+                ],
+            }
+        )
+    elif target == "visible_increment":
+        base.update(
+            {
+                "skill": "$record-visible-increment",
+                "routing": {
+                    "phase": "post-evidence visible-delta recording",
+                    "agent_routing_applicability": "deterministic_only",
+                    "validation_boundary": "context only; never validation evidence",
+                },
+                "required_inputs": [
+                    "cycle_id and current/completed task_id",
+                    "implementation/run/schema evidence already produced",
+                    "output-delta result when an output-delta contract exists",
+                    "changed files and user-visible artifact paths",
+                ],
+                "required_outputs": [
+                    "step: visible_increment",
+                    "cycle_id",
+                    "task_id",
+                    "status: recorded",
+                    "summary",
+                    "delta_types including explicit [] or none",
+                    "changed_files and artifacts including explicit []",
+                    "not_validation_evidence: true",
+                    "blockers including explicit []",
+                    "evidence_paths",
+                ],
+                "forbidden_bypasses": [
+                    "using the visible-increment record as validation evidence",
+                    "claiming advanced progress from metadata-only or workflow-only output",
+                ],
+            }
+        )
+    elif target == "repo_skill_gap_analysis":
+        base.update(
+            {
+                "skill": "$orchestrate-task-cycle",
+                "mode": "pre_derive_gap_analysis",
+                "routing": {"phase": "repo-local reusable capability gap analysis", "agent_routing_applicability": "deterministic_only"},
+                "required_inputs": [
+                    "current-cycle task_miss and friction evidence",
+                    "repo_skill_adapter_packet and adapter validation result",
+                    "run/review/loopback/validation-set evidence",
+                ],
+                "required_outputs": [
+                    "step: repo_skill_gap_analysis",
+                    "task_id",
+                    "gap_analysis_status",
+                    "gap_count including explicit zero",
+                    "repo_skill_gap_packet with select/defer/reject recommendation",
+                    "blockers including explicit []",
+                    "evidence_paths",
+                ],
+            }
+        )
+    elif target == "cycle_efficiency_profile":
+        base.update(
+            {
+                "skill": "$profile-cycle-efficiency",
+                "routing": {"phase": "pre-validation and pre-derive efficiency profile", "agent_routing_applicability": "deterministic_only"},
+                "required_inputs": ["cycle ledger", "run IDs", "output-delta/loopback evidence", "task-pack and blocker-family scope"],
+                "required_outputs": [
+                    "step: cycle_efficiency_profile",
+                    "task_id",
+                    "status",
+                    "cycle_fixed_cost",
+                    "cycle_cost_basis",
+                    "execution_starvation when applicable",
+                    "recommendation",
+                    "blockers including explicit []",
+                    "evidence_paths",
+                ],
+            }
+        )
+    elif target == "validation_scope_finalize":
+        base.update(
+            {
+                "skill": "$plan-validation-scope",
+                "mode": "post_change_finalize",
+                "routing": {"phase": "final validation scope from actual changed files", "agent_routing_applicability": "deterministic_only"},
+                "required_inputs": [
+                    "validation_scope_plan manifest",
+                    "governance actual changed_files",
+                    "code_structure_audit validation_scope_delta",
+                    "run/review/loopback/validation-set evidence",
+                ],
+                "required_outputs": [
+                    "step: validation_scope_finalize",
+                    "task_id",
+                    "mode: finalize",
+                    "validation_profile",
+                    "profile_floor and profile_changed",
+                    "planned_changed_files and actual_changed_files",
+                    "changed_surfaces and surface_counts",
+                    "required_commands and reused_prerequisites",
+                    "escalation_reasons, rationale, finalized: true, and findings",
+                    "evidence_paths",
+                ],
+            }
+        )
+    elif target == "index_pre_validate":
+        base.update(
+            {
+                "skill": "$manage-task-state-index",
+                "mode": "pre_validation_snapshot",
+                "routing": {"phase": "pre-validation traceability snapshot", "agent_routing_applicability": "deterministic_only"},
+                "required_inputs": ["current task and cycle artifacts", "run/review/loopback evidence", "final validation-scope manifest"],
+                "required_outputs": [
+                    "step: index_pre_validate",
+                    "task_id",
+                    "index_status",
+                    "index_snapshot_id",
+                    "blockers including explicit []",
+                    "evidence_paths",
                 ],
             }
         )
@@ -591,6 +829,8 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                     "implementation_edits": "forbidden",
                 },
                 "required_inputs": [
+                    "current-task validation result",
+                    "issue lifecycle packet",
                     "implementation summary",
                     "execution evidence or running startup evidence",
                     "qualitative output review result when available",
@@ -615,7 +855,9 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                     "max_requires": "Tier 5 Sol/xhigh ran first, prior_tier5_unresolved=true, prior_tier5_evidence, one agent, and max_escalation_reason",
                 },
                 "required_inputs": [
-                    "completed task evidence or initial_init context",
+                    "validated completed-task evidence",
+                    "validation result for the current task",
+                    "issue lifecycle packet for the current task and its blockers",
                     "authority_policy",
                     "used_goal_truth",
                     ".task/task_miss",
@@ -634,7 +876,7 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                     "active non-GT external advice packet when present",
                 ],
                 "selection_rules": [
-                    "consume the next safe task-pack item by promotion when an active pack is applicable",
+                    "consume/promote the next safe task-pack item only after current-task validation and issue handling",
                     "insert or reorder task-pack items only with new evidence, repeated blocker signature, missing positive input delta, or terminal blocker evidence",
                     "prefer blocker-state-transition tasks",
                     "batch adjacent no-live micro-contracts",
@@ -690,6 +932,11 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                     ".schema/.contract records",
                 ],
                 "required_outputs": ["next_task_id", "schema_status", "evidence_paths", "planned contract paths", "needs_review items"],
+                "terminal_or_skipped_outputs": [
+                    "schema_status: terminal|terminal_blocked|skipped|not_applicable|blocked|deferred",
+                    "concrete reason",
+                    "no fabricated next_task_id",
+                ],
             }
         )
     elif target == "index":
@@ -706,7 +953,8 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                     "agent logs",
                     "schema/contract artifacts",
                     "validation set manifests, roots, oracles, splits, leakage reports, and cycle-local validation_set artifacts",
-                    "validation and run artifacts",
+                    "pre-validation index snapshot and validation result",
+                    "derive and schema-post-derive artifacts",
                     "cycle ledger",
                 ],
                 "required_outputs": ["index_status", "audit verdict", "high-severity ID blockers"],
@@ -727,13 +975,15 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                     "qualitative output review result or not_applicable/blocker reason",
                     "validation set build/consume result or not_applicable/blocker reason",
                     "task_miss status",
-                    "issue status",
                     "schema/contract status",
+                    "final validation-scope manifest based on actual changed files",
+                    "pre-validation task-state index snapshot",
+                    "cycle-efficiency profile",
                     "validation set artifact status and not_gold/quality_tier when relevant",
                     "task-state audit",
                     "advice application/rejection/defer status when task referenced advice",
-                    "Part J gates from validation-set, run, loopback, and derive packets when present",
-                    "Part K gates from acceptance, run, loopback, derive, report, and validation-set packets when present",
+                    "Part J gates from validation-set, run, and loopback packets when present",
+                    "Part K gates from acceptance, run, loopback, report, and validation-set packets when present",
                 ],
                 "required_outputs": [
                     "validation_verdict",
@@ -758,9 +1008,19 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                     "progress_verdict",
                     "remaining blockers",
                     "run/log/miss evidence",
-                    "new active task.md by default",
+                    "current task.md that was just validated",
                 ],
-                "required_outputs": ["issue_status", "created/updated/closed issue paths", "blocker links"],
+                "required_outputs": [
+                    "issue_packet_id",
+                    "task_id",
+                    "issue_status",
+                    "issue_provenance.source_task_id matching task_id",
+                    "issue_provenance.validation_id or validation_report_path",
+                    "durable issue ID/path/URL for lifecycle mutations",
+                    "resolution evidence for close/resolve",
+                    "blockers including explicit []",
+                    "evidence_paths",
+                ],
             }
         )
     elif target == "commit":
@@ -791,6 +1051,40 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                     "commit_hash and commit_subject when created",
                     "commit_skipped_reason when skipped/blocked/failed",
                     "evidence_paths",
+                ],
+            }
+        )
+    elif target == "dashboard":
+        base.update(
+            {
+                "skill": "$render-cycle-dashboard",
+                "routing": {
+                    "agent_routing_applicability": "deterministic_only",
+                    "phase": "post-commit ledger snapshot before report",
+                },
+                "required_inputs": [
+                    "stage.jsonl with explicit canonical step/status rows",
+                    "current_stage.json snapshot when present",
+                    "current task/completed task/next task IDs",
+                    "validation and progress verdicts/axes",
+                    "issue and commit results",
+                    "blockers, changed files, artifact/evidence paths",
+                ],
+                "required_outputs": [
+                    "step: dashboard",
+                    "task_id",
+                    "dashboard_status",
+                    "event_count and explicit current_stage_event_count",
+                    "snapshot_status",
+                    "validation_verdict and progress_verdict",
+                    "blockers including explicit []",
+                    "dashboard_path",
+                    "evidence_paths",
+                ],
+                "fail_closed": [
+                    "malformed ledger JSON is an error, never a skipped row",
+                    "noncanonical or incomplete event envelopes remain visible in a separate section",
+                    "dashboard never upgrades validation or progress truth",
                 ],
             }
         )
@@ -842,6 +1136,39 @@ def packet_for(target: str, context: dict[str, Any], stage: dict[str, Any]) -> d
                     "commit_hash and commit_subject when created",
                     "commit_skipped_reason when skipped/blocked/failed",
                     "evidence_paths",
+                ],
+            }
+        )
+    if target == "derive" and workflow_mode == "bootstrap":
+        base.update(
+            {
+                "mode": "initial_init",
+                "workflow_mode": "bootstrap",
+                "task": "task.md absent",
+                "required_inputs": [
+                    "task-absent context packet",
+                    "authority_policy and used_goal_truth",
+                    ".agent_goal goal architecture/theory/schema-contract evidence when present",
+                    ".task/task_miss, candidate_task, and task_pack evidence when relevant",
+                    "pre-derive schema reconciliation result or explicit skipped/not-applicable reason",
+                ],
+                "selection_rules": [
+                    "derive exactly one initial task.md",
+                    "write the required Execution Environment section",
+                    "skip past_task archival because no prior task exists",
+                    "do not emit acceptance, governance, run, validation, issue, promotion, commit, dashboard, or report evidence",
+                    "finish schema-post-derive and index, then close the bootstrap transaction",
+                    "start a fresh normal cycle from context and repo_skill_adapter_scan",
+                ],
+                "required_outputs": [
+                    "step: derive",
+                    "derive_mode: initial_init",
+                    "next_task_id",
+                    "selected_task_source: standalone",
+                    "progress_kind",
+                    "semantic_signature",
+                    "evidence_paths",
+                    "no fabricated completed_task_id",
                 ],
             }
         )
@@ -910,12 +1237,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--target", required=True, choices=sorted(TARGETS))
     parser.add_argument("--context", help="Cycle context JSON path, or '-' for stdin.")
     parser.add_argument("--stage", help="Optional stage/status JSON path.")
+    parser.add_argument("--workflow-mode", choices=("normal", "bootstrap"), default="normal")
     parser.add_argument("--format", choices=("markdown", "json"), default="markdown")
     args = parser.parse_args(argv)
 
     context = load_json(args.context)
     stage = load_json(args.stage)
-    packet = packet_for(args.target, context, stage)
+    packet = packet_for(args.target, context, stage, args.workflow_mode)
     if args.format == "json":
         json.dump(packet, sys.stdout, ensure_ascii=False, indent=2, sort_keys=True)
         sys.stdout.write("\n")

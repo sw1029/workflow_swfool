@@ -19,6 +19,7 @@ RUN_DIR_THRESHOLD = 100
 PROCESSED_CANDIDATE_THRESHOLD = 200
 VERSIONED_FAMILY_THRESHOLD = 12
 TRACE_LABEL_RE = re.compile(r"(?:^|[-_:])(cycle|task|run|gen|generation|v)[-_:]?(?:\d+|[0-9a-f]{6,})|20\d{6,}", re.IGNORECASE)
+CYCLE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -107,10 +108,27 @@ def same_family_scope(event: dict[str, Any], scope: dict[str, str]) -> bool:
 
 
 def collect_events(root: Path, cycle_id: str | None) -> list[dict[str, Any]]:
+    resolved_root = root.resolve()
+    cycle_root = (resolved_root / ".task" / "cycle").resolve(strict=False)
+    try:
+        cycle_root.relative_to(resolved_root)
+    except ValueError as exc:
+        raise ValueError("cycle profile ledger root escapes the workspace through a symlink") from exc
     if cycle_id:
-        return read_jsonl(root / ".task" / "cycle" / cycle_id / "stage.jsonl")
+        if not CYCLE_ID_PATTERN.fullmatch(cycle_id):
+            raise ValueError("cycle_id must be one path-safe token of at most 128 characters")
+        cycle_path = (cycle_root / cycle_id).resolve(strict=False)
+        try:
+            cycle_path.relative_to(cycle_root)
+        except ValueError as exc:
+            raise ValueError("cycle profile path escapes .task/cycle through a symlink") from exc
+        return read_jsonl(cycle_path / "stage.jsonl")
     events: list[dict[str, Any]] = []
-    for path in sorted((root / ".task" / "cycle").glob("*/stage.jsonl")) if (root / ".task" / "cycle").is_dir() else []:
+    for path in sorted(cycle_root.glob("*/stage.jsonl")) if cycle_root.is_dir() else []:
+        try:
+            path.resolve().relative_to(cycle_root)
+        except ValueError as exc:
+            raise ValueError("cycle profile ledger path escapes .task/cycle through a symlink") from exc
         events.extend(read_jsonl(path))
     return events
 
@@ -196,7 +214,12 @@ def artifact_sprawl_budget(root: Path) -> dict[str, Any]:
     }
 
 
-def analyze(root: Path, events: list[dict[str, Any]], index_records: list[dict[str, Any]]) -> dict[str, Any]:
+def analyze(
+    root: Path,
+    events: list[dict[str, Any]],
+    index_records: list[dict[str, Any]],
+    task_id: str | None = None,
+) -> dict[str, Any]:
     latest_scope = family_scope(events[-1]) if events else family_scope({})
     profile_scope_unverified = not all(latest_scope.values())
     scoped_events = [event for event in events if same_family_scope(event, latest_scope)] if not profile_scope_unverified else []
@@ -383,7 +406,11 @@ def analyze(root: Path, events: list[dict[str, Any]], index_records: list[dict[s
     if "hypothesis_exhausted" in codes:
         recommendations.append("stop_with_blocker")
     recommendation = recommendations[0] if recommendations else "continue"
+    effective_task_id = task_id or str(first_present(events[-1], ("task_id", "owner_task_id")) or "") if events else (task_id or "")
     return {
+        "format_version": 1,
+        "step": "cycle_efficiency_profile",
+        "task_id": effective_task_id or None,
         "status": "warn" if any(item["severity"] == "warn" for item in findings) else "ok",
         "event_count": len(events),
         "progress_counts": dict(Counter(progress_values)),
@@ -416,6 +443,8 @@ def analyze(root: Path, events: list[dict[str, Any]], index_records: list[dict[s
         "findings": findings,
         "recommendation": recommendation,
         "recommendations": recommendations or ["continue"],
+        "blockers": [item for item in findings if item.get("severity") == "block"],
+        "evidence_paths": ["stdout:cycle_efficiency_profile"],
     }
 
 
@@ -423,10 +452,16 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Profile task-cycle efficiency from ledger/index evidence.")
     parser.add_argument("--root", default=".")
     parser.add_argument("--cycle-id")
+    parser.add_argument("--task-id", required=True, help="Canonical task ID for the formal cycle_efficiency_profile envelope.")
     args = parser.parse_args(argv)
 
     root = Path(args.root).resolve()
-    output = analyze(root, collect_events(root, args.cycle_id), read_jsonl(root / ".task" / "index.jsonl"))
+    output = analyze(
+        root,
+        collect_events(root, args.cycle_id),
+        read_jsonl(root / ".task" / "index.jsonl"),
+        args.task_id,
+    )
     json.dump(output, sys.stdout, ensure_ascii=False, indent=2, sort_keys=True)
     sys.stdout.write("\n")
     return 0

@@ -9,6 +9,10 @@ description: "Normalize task acceptance criteria and demo evidence before govern
 
 Use this skill to turn an active `task.md` into a concise acceptance packet that code-writing and validation steps can follow.
 
+Use `scripts/acceptance_identity.py` to bind the final packet to the exact active task revision. The helper emits a deterministic `acceptance_id` plus `acceptance_provenance.source_task_id`, root-relative `source_task_path`, and SHA-256 `source_task_fingerprint`. It refuses a missing/empty task, task-ID mismatch, workspace path escape, semantically empty criteria, inconsistent status/blocker state, and a final packet without explicit criteria, blockers, status, and evidence paths.
+
+Use the closed `acceptance_status` vocabulary `normalized | partial | blocked | needs_review`; acceptance normalization is not completion validation and therefore never emits `complete` or `passed`.
+
 ## Domain Adapter Contract
 
 Prefer repository-owned adapter or caller-packet definitions for proxy criteria and evidence freshness. The normalizer may consume:
@@ -22,8 +26,8 @@ Do not hardcode proxy names, new-behavior definitions, sample thresholds, freshn
 
 ## Workflow
 
-1. Read only workflow-level task context: `task.md`, authority summary, non-GT advice packet, schema/contract summaries, and existing cycle ledger.
-2. Extract acceptance criteria, non-goals, expected visible/demo surfaces, required validation commands, and forbidden shortcuts.
+1. Confirm that an indexed active `task.md` exists. If it does not, stop normalization and let the orchestrator finish the separate `initial_init` bootstrap transaction; begin a new normal cycle after the task exists. Read only workflow-level task context: `task.md`, its active task ID, authority summary, non-GT advice packet, schema/contract summaries, and existing cycle ledger.
+2. Extract acceptance criteria, non-goals, expected visible/demo surfaces, required validation commands, and forbidden shortcuts. Every criterion must be a non-empty string or a structured object containing a substantive value; placeholder entries such as `null`, `{}`, `[]`, or whitespace-only text are not criteria.
 3. For each measurable criterion, preserve the encoding source before summarizing it:
    - Copy quantities, counts, run counts, row counts, rates, percentages, disjointness requirements, and relation predicates into `acceptance.quantifiers` without reinterpretation.
    - Tag `acceptance.evidence_kind` as `live_run`, `derived_artifact`, `code_contract`, or `report_only`. If the original text requires execution, dispatch, or a newly observed run, tag only `live_run` and set `required_new_run_id=true`.
@@ -59,12 +63,14 @@ Do not hardcode proxy names, new-behavior definitions, sample thresholds, freshn
 22. When `unreachable_within_cycle=true` implies a long-run launch and the adapter/caller supplies `harvest_gate_inventory`, attach `harvest_contract_preflight` to the launch acceptance. Preserve non-degradable `lane_incompatible`, `scale_incompatible`, and `contract_conflict` findings. If any are present, require repair/mitigation before launch or explicit `harvest_risk_accepted=true`; do not silently consume launch acceptance.
 23. When acceptance creates or changes a validation predicate, floor, inclusion check, required output class, or producer directive, preserve `validation_predicate_contract`, `producer_directives`, and `mutually_unsatisfiable_contract` when supplied. A mutually unsatisfiable pair must be repaired in the same task or kept as residual scope.
 24. Mark unclear, missing, or unverifiable criteria as blockers or assumptions rather than silently widening scope.
-25. Save the normalized packet under `.task/cycle/<cycle-id>/packets/acceptance.md` when a cycle ledger exists.
+25. Before handoff, run `acceptance_identity.py --root . --task-id <active-task-id> --task-path task.md --packet-json <draft.json> --final --output .task/cycle/<cycle-id>/packets/acceptance.json`. Save a human-readable view as `acceptance.md` when useful, but treat the bound JSON as the result-contract and ledger source. A later task edit invalidates the fingerprint and requires renormalization.
 26. Pass the packet to `$task-md-agent-governance`, `$plan-validation-scope`, and `$build-validation-set-with-agents` when `acceptance_scenarios`, Part M harvest preflight, or comparison/adoption validation fixtures are needed.
 
 ## Guardrails
 
 - Do not add new product requirements that are not implied by the task, goal truth, or active non-GT advice.
+- Do not normalize acceptance before an active task exists, and do not reuse an acceptance packet whose task ID/path/fingerprint no longer matches the active task revision.
+- Do not finalize a packet with semantically empty criterion entries. `normalized` requires no blockers, while `blocked` and `needs_review` require at least one concrete blocker.
 - Do not edit implementation files.
 - Do not treat demo evidence as validation evidence unless the task explicitly defines it as the validation command.
 - Do not hardcode project-specific metric names, capacities, work counts, model limits, hardware limits, file paths, or thresholds in this skill. Keep them behind `min_envelope_for` or project-owned contracts, and fail quiet when that hook is absent.

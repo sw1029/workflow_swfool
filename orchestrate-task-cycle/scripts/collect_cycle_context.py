@@ -10,6 +10,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from result_contract_lib.session_audit import collect_session_audit_directory  # noqa: E402
+
 
 GT_FILES = [
     "final_goal.md",
@@ -449,6 +455,7 @@ def collect(root: Path, include_git: bool, max_files: int) -> dict[str, Any]:
         "task_state": collect_task(root, max_files),
         "issue": collect_issue(root, max_files),
         "agent_log": collect_agent_log(root, max_files),
+        "session_audit": collect_session_audit_directory(root, max_files),
         "external_advice": collect_external_advice(root, max_files),
         "validation_assets": collect_validation_assets(root, max_files),
         "schema": collect_contract_dir(root, ".schema", max_files),

@@ -494,15 +494,19 @@ def test_renderer_preserves_context_max_evidence() -> None:
 
 
 def test_transition_validator_accepts_terra_and_warns_on_legacy_worker() -> None:
+    terra_routing = {"routing": {"code_worker_model": "gpt-5.6-terra"}}
+    legacy_routing = {"routing": {"code_worker_model": "gpt-5.5"}}
     terra = validate_cycle_transition.validate(
         {},
-        {"routing": {"code_worker_model": "gpt-5.6-terra"}},
+        terra_routing,
         "pre_governance",
+        terra_routing,
     )
     legacy = validate_cycle_transition.validate(
         {},
-        {"routing": {"code_worker_model": "gpt-5.5"}},
+        legacy_routing,
         "pre_governance",
+        legacy_routing,
     )
 
     assert "noncanonical_worker_model" not in finding_codes(terra)
@@ -517,7 +521,7 @@ def test_transition_validator_binds_profile_to_target() -> None:
         requested_reasoning_effort="xhigh",
     )
 
-    result = validate_cycle_transition.validate({}, stage, "pre_governance")
+    result = validate_cycle_transition.validate({}, stage, "pre_governance", stage)
 
     assert "target_profile_mismatch" in finding_codes(result)
 
@@ -531,7 +535,7 @@ def test_transition_validator_does_not_trust_supplied_target() -> None:
         requested_reasoning_effort="xhigh",
     )
 
-    result = validate_cycle_transition.validate({}, stage, "pre_governance")
+    result = validate_cycle_transition.validate({}, stage, "pre_governance", stage)
 
     assert "routing_target_transition_mismatch" in finding_codes(result)
     assert "target_profile_mismatch" in finding_codes(result)
@@ -543,7 +547,7 @@ def test_transition_validator_rejects_actual_max_deviation() -> None:
         actual_reasoning_effort="max",
     )
 
-    result = validate_cycle_transition.validate({}, stage, "pre_governance")
+    result = validate_cycle_transition.validate({}, stage, "pre_governance", stage)
 
     assert "actual_effort_route_mismatch" in finding_codes(result)
 

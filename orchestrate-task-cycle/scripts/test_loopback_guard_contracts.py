@@ -98,7 +98,14 @@ def test_task_pack_scope_fidelity_allows_explicit_descope_with_open_residual() -
 
     findings = task_pack_queue.validate_pack(base_pack([narrowed, residual]))
 
-    assert not any(finding.get("severity") == "block" for finding in findings)
+    unrelated_provenance_codes = {
+        "promotion_provenance_missing",
+        "completion_provenance_missing",
+    }
+    assert not any(
+        finding.get("severity") == "block" and finding.get("code") not in unrelated_provenance_codes
+        for finding in findings
+    )
 
 
 def test_task_pack_blocks_consumed_item_with_required_verifier_not_evaluated() -> None:
@@ -1551,6 +1558,12 @@ def test_cycle_ledger_records_unchanged_ref_for_duplicate_artifact() -> None:
         root = Path(tmp)
         artifact = root / "packet.json"
         artifact.write_text(json.dumps({"same": True}, sort_keys=True), encoding="utf-8")
+        cycle_ledger.init_cycle(root, "cycle-1", "task-1", "test")
+        cycle_ledger.append_event(
+            root,
+            "cycle-1",
+            {"step": "context", "status": "complete", "task_id": "task-1"},
+        )
         first = cycle_ledger.append_event(
             root,
             "cycle-1",
@@ -1662,6 +1675,12 @@ def test_validate_transition_blocks_pending_long_run_derive() -> None:
 def test_cycle_ledger_accepts_long_run_monitor_as_run_step() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
+        cycle_ledger.init_cycle(root, "cycle-long-1", "task-long-run", "test")
+        cycle_ledger.append_event(
+            root,
+            "cycle-long-1",
+            {"step": "context", "status": "complete", "task_id": "task-long-run"},
+        )
         result = cycle_ledger.append_event(
             root,
             "cycle-long-1",
@@ -1807,6 +1826,12 @@ def test_repeated_terminal_tuple_latches_without_full_cycle() -> None:
     assert state["suppress_full_cycle"] is True
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
+        cycle_ledger.init_cycle(root, "cycle-terminal", "task-terminal", "test")
+        cycle_ledger.append_event(
+            root,
+            "cycle-terminal",
+            {"step": "context", "status": "complete", "task_id": "task-terminal"},
+        )
         first = cycle_ledger.append_event(root, "cycle-terminal", {**previous, "step": "report", "status": "complete"})
         second = cycle_ledger.append_event(root, "cycle-terminal", {**current, "step": "report", "status": "complete"})
         rows = cycle_ledger.read_events(root, "cycle-terminal")
@@ -1814,7 +1839,10 @@ def test_repeated_terminal_tuple_latches_without_full_cycle() -> None:
         restart_dir_exists = (root / ".task" / "cycle" / "cycle-terminal-restart").exists()
     assert first.get("event_suppressed") is not True
     assert second["event_suppressed"] is True
-    assert len(rows) == 1
+    assert len(rows) == 3
+    assert rows[-1]["event_kind"] == "terminal_latch_observation"
+    assert rows[-1]["compact_observation"] is True
+    assert rows[-1]["unchanged_terminal_ref"] == rows[-2]["event_id"]
     assert restart["cycle_suppressed"] is True
     assert not restart_dir_exists
 

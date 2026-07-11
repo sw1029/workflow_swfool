@@ -26,26 +26,32 @@ FIELD_ORDER = [
 
 STAGE_ORDER = [
     "context",
-    "ledger_init",
     "authority",
+    "repo_skill_adapter_scan",
     "acceptance",
     "route_plan",
+    "validation_scope_plan",
     "validation_set_plan",
     "governance",
     "result_contract",
+    "repo_skill_adapter_validate",
     "ledger_append",
     "code_structure_audit",
     "run",
     "qualitative_review",
     "loopback_audit",
     "validation_set_build",
-    "schema_pre_derive",
     "visible_increment",
+    "repo_skill_gap_analysis",
+    "cycle_efficiency_profile",
+    "validation_scope_finalize",
+    "index_pre_validate",
+    "validate",
+    "issue",
+    "schema_pre_derive",
     "derive",
     "schema_post_derive",
     "index",
-    "validate",
-    "issue",
     "commit",
     "dashboard",
     "report",
@@ -131,6 +137,24 @@ def all_events(context: dict[str, Any], stage: dict[str, Any]) -> list[dict[str,
     return deduped
 
 
+def report_evidence_paths(
+    context: dict[str, Any],
+    stage: dict[str, Any],
+    *results: dict[str, Any],
+) -> list[str]:
+    paths = ["stdout:assemble_cycle_report"]
+    sources = list(results) + all_events(context, stage)
+    for source in sources:
+        values = source.get("evidence_paths") if isinstance(source, dict) else None
+        if not isinstance(values, list):
+            continue
+        for value in values:
+            path = str(value).strip()
+            if path and path not in paths:
+                paths.append(path)
+    return paths
+
+
 def long_run_events(context: dict[str, Any], stage: dict[str, Any]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for event in all_events(context, stage):
@@ -173,16 +197,16 @@ def event_value(stage: dict[str, Any], field: str, preferred_steps: tuple[str, .
 
 
 def goal_truth(context: dict[str, Any], stage: dict[str, Any], validation: dict[str, Any]) -> list[str]:
-    for value in (
-        stage.get("used_goal_truth"),
-        deep_get(stage, "packet", "used_goal_truth"),
-        validation.get("used_goal_truth"),
-        deep_get(context, "cycle_state", "used_goal_truth"),
-        deep_get(context, "agent_goal", "used_goal_truth"),
-    ):
-        listed = list_value(value)
-        if listed:
-            return listed
+    containers = [
+        (stage, "used_goal_truth"),
+        (stage.get("packet") if isinstance(stage.get("packet"), dict) else {}, "used_goal_truth"),
+        (validation, "used_goal_truth"),
+        (deep_get(context, "cycle_state") if isinstance(deep_get(context, "cycle_state"), dict) else {}, "used_goal_truth"),
+        (deep_get(context, "agent_goal") if isinstance(deep_get(context, "agent_goal"), dict) else {}, "used_goal_truth"),
+    ]
+    for container, key in containers:
+        if key in container and isinstance(container.get(key), list):
+            return list_value(container.get(key))
     event_used: list[str] = []
     for event in all_events(context, stage):
         event_used.extend(list_value(event.get("used_goal_truth")))
@@ -201,7 +225,7 @@ def advice_docs(context: dict[str, Any], stage: dict[str, Any], validation: dict
         validation.get("used_advice"),
         event_value(stage, "used_advice", ("report", "validate", "derive", "commit", "closeout_commit")),
     ):
-        if isinstance(value, list) and value:
+        if isinstance(value, list):
             docs: list[str] = []
             for item in value:
                 if isinstance(item, dict) and item.get("path"):
@@ -210,14 +234,11 @@ def advice_docs(context: dict[str, Any], stage: dict[str, Any], validation: dict
                     docs.append(item)
             if docs:
                 return docs
-    files = deep_get(context, "external_advice", "active_files")
-    if not isinstance(files, list):
-        return []
-    docs: list[str] = []
-    for item in files:
-        if isinstance(item, dict) and item.get("path"):
-            docs.append(f"{item.get('path')}: {item.get('title', 'external advice')}")
-    return docs
+            # An explicit empty list means that active advice was not used.
+            # Active inventory belongs in context, not in the report's
+            # ``used_advice`` surface.
+            return []
+    return []
 
 
 def model_effort_routing_lines(context: dict[str, Any], stage: dict[str, Any]) -> list[str]:
@@ -359,15 +380,25 @@ def progress_axes(validation: dict[str, Any], stage: dict[str, Any]) -> list[str
 def command_results(validation: dict[str, Any], stage: dict[str, Any]) -> list[str]:
     commands = (
         validation.get("commands")
+        or validation.get("validation_commands")
         or stage.get("commands")
+        or stage.get("validation_commands")
         or deep_get(stage, "validation", "commands")
+        or deep_get(stage, "validation", "validation_commands")
         or event_value(stage, "commands", ("report", "run", "validate"))
+        or event_value(stage, "validation_commands", ("report", "run", "validate"))
     )
     if isinstance(commands, list):
         rendered = []
         for command in commands:
             if isinstance(command, dict):
-                rendered.append(f"{command.get('command', 'unknown')}: {command.get('result') or command.get('status') or 'unknown'}")
+                command_value = command.get("command") or command.get("cmd") or command.get("argv") or "unknown"
+                if isinstance(command_value, list):
+                    command_value = " ".join(str(value) for value in command_value)
+                status = command.get("result") or command.get("status")
+                if status is None and isinstance(command.get("exit_code"), int):
+                    status = "passed" if command["exit_code"] == 0 else f"failed(exit_code={command['exit_code']})"
+                rendered.append(f"{command_value}: {status or 'unknown'}")
             else:
                 rendered.append(str(command))
         return rendered
@@ -376,24 +407,56 @@ def command_results(validation: dict[str, Any], stage: dict[str, Any]) -> list[s
     return ["not_run"]
 
 
+def command_result_passed(value: str) -> bool:
+    lowered = value.strip().lower()
+    if any(token in lowered for token in ("failed", "failure", "error", "blocked", "not passed", "not_run", "unknown", "exit_code=1", "exit 1")):
+        return False
+    return any(
+        token in lowered
+        for token in (
+            ": pass",
+            ": passed",
+            ": ok",
+            ": success",
+            ": complete",
+            ": completed",
+            " exit_code=0",
+            " exit 0",
+            " passed",
+        )
+    )
+
+
 def is_resolved_blocker(text: str) -> bool:
     lowered = text.lower()
     return any(term in lowered for term in ("status: resolved", "status: closed", "status: deleted", "/resolved/", "/closed/", "resolved:", "closed:"))
 
 
 def blockers(context: dict[str, Any], stage: dict[str, Any], validation: dict[str, Any], progress: dict[str, Any]) -> list[str]:
-    explicit = (
-        validation.get("blockers")
-        or validation.get("blocking_findings")
-        or stage.get("blockers")
-        or event_value(stage, "blockers", ("report", "validate", "closeout_commit"))
-    )
-    if isinstance(explicit, list) and explicit:
+    explicit: Any = None
+    explicit_present = False
+    for container, key in (
+        (validation, "blockers"),
+        (validation, "blocking_findings"),
+        (stage, "blockers"),
+    ):
+        if key in container:
+            explicit = container.get(key)
+            explicit_present = True
+            break
+    if not explicit_present:
+        event_explicit = event_value(stage, "blockers", ("report", "validate", "closeout_commit"))
+        if event_explicit is not None:
+            explicit = event_explicit
+            explicit_present = True
+    if explicit_present and isinstance(explicit, list):
         rendered = [str(item) for item in explicit if not is_resolved_blocker(str(item))]
         for line in long_run_status_lines(context, stage):
             if any(status in line for status in ("running", "launching", "completed_pending_validation", "stale", "not_running")):
                 rendered.append(f"long_run_pending: {line}")
         return rendered
+    if explicit_present:
+        return []
     event_blockers: list[str] = []
     for event in all_events(context, stage):
         event_blockers.extend(list_value(event.get("blockers")))
@@ -422,6 +485,138 @@ def blockers(context: dict[str, Any], stage: dict[str, Any], validation: dict[st
         if any(status in line for status in ("running", "launching", "completed_pending_validation", "stale", "not_running")):
             found.append(f"long_run_pending: {line}")
     return found[:8]
+
+
+def report_input_findings(stage: dict[str, Any], validation: dict[str, Any]) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for source_name, container, field in (
+        ("validation", validation, "blockers"),
+        ("validation", validation, "blocking_findings"),
+        ("stage", stage, "blockers"),
+    ):
+        if field in container and not isinstance(container.get(field), list):
+            findings.append(
+                {
+                    "severity": "block",
+                    "code": "invalid_report_blockers_input",
+                    "message": f"{source_name}.{field} must be an explicit JSON list.",
+                }
+            )
+    for event in stage_events(stage):
+        if "blockers" in event and not isinstance(event.get("blockers"), list):
+            findings.append(
+                {
+                    "severity": "block",
+                    "code": "invalid_report_blockers_input",
+                    "message": f"ledger event {event.get('event_id') or event.get('step') or 'unknown'} has non-list blockers.",
+                }
+            )
+    return findings
+
+
+def completion_evidence_findings(
+    *,
+    stage: dict[str, Any],
+    validation: dict[str, Any],
+    commit: dict[str, Any],
+    task_id: str,
+    next_task_id: str,
+    commands: list[str],
+    axes: list[str],
+    evidence_paths: list[str],
+) -> list[dict[str, Any]]:
+    missing: list[str] = []
+    if task_id in {"", "unknown-task", "none", "null"}:
+        missing.append("task_id")
+    terminal_sources = {"terminal_blocked", "user_escalation", "final_goal_complete"}
+    selected_source = str(stage.get("selected_task_source") or event_value(stage, "selected_task_source", ("derive", "report")) or "")
+    if next_task_id in {"", "unknown-task", "none", "null"} and selected_source not in terminal_sources:
+        missing.append("next_task_id_or_terminal_disposition")
+    if not commands or not all(command_result_passed(value) for value in commands):
+        missing.append("validation_commands")
+    if not axes or axes == ["not_recorded"]:
+        missing.append("progress_axes")
+    if not any(path != "stdout:assemble_cycle_report" for path in evidence_paths):
+        missing.append("validation_evidence_paths")
+    closure_records = report_closure_records(stage, commit)
+    successful_closure_statuses = {
+        "issue": {"closed", "complete", "completed", "created", "not_applicable", "open", "reopened", "resolved", "skipped", "tracked", "updated"},
+        "derive": {"complete", "completed", "not_applicable", "ok", "pass", "passed", "skipped", "success"},
+        "commit": {"committed", "complete", "completed", "created", "not_applicable", "pass", "passed", "skipped", "success"},
+        "dashboard": {"complete", "completed", "ok", "pass", "passed", "rendered", "success", "warn"},
+    }
+    for step in ("issue", "derive", "commit", "dashboard"):
+        candidates = [record for record in closure_records if record.get("step") == step]
+        if step == "commit" and any(record.get("source") == "commit_input" for record in candidates):
+            candidates = [record for record in candidates if record.get("source") == "commit_input"]
+        if not candidates:
+            missing.append(f"{step}_closure")
+            continue
+        task_bound = [record for record in candidates if str(record.get("task_id") or "") == task_id]
+        if not task_bound:
+            missing.append(f"{step}_closure_task_binding")
+            continue
+        successful = [
+            record
+            for record in task_bound
+            if str(record.get("status") or "").lower() in successful_closure_statuses[step]
+        ]
+        if not successful:
+            missing.append(f"{step}_closure_status")
+            continue
+        if step == "commit" and any(
+            str(record.get("status") or "").lower() in {"skipped", "not_applicable"}
+            and not str(record.get("reason") or "").strip()
+            for record in successful
+        ):
+            missing.append("commit_closure_reason")
+    if not isinstance(validation.get("blockers"), list):
+        missing.append("validation_blockers_contract")
+    if not missing:
+        return []
+    return [
+        {
+            "severity": "block",
+            "code": "report_completion_evidence_incomplete",
+            "message": "complete_verified lacks substantive current-task validation and close-phase evidence.",
+            "missing": missing,
+        }
+    ]
+
+
+def report_closure_records(stage: dict[str, Any], commit: dict[str, Any]) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for event in stage_events(stage):
+        step = str(event.get("step") or "")
+        if step not in {"issue", "derive", "commit", "dashboard"}:
+            continue
+        records.append(
+            {
+                "step": step,
+                "task_id": event.get("completed_task_id") or event.get("task_id"),
+                "status": event.get("commit_status")
+                or event.get("issue_status")
+                or event.get("dashboard_status")
+                or event.get("status"),
+                "reason": event.get("commit_skipped_reason") or event.get("reason"),
+                "source": "ledger_event",
+            }
+        )
+    if commit:
+        records.append(
+            {
+                "step": "commit",
+                "task_id": commit.get("completed_task_id") or commit.get("task_id"),
+                "status": commit.get("commit_status") or commit.get("status"),
+                "reason": commit.get("commit_skipped_reason") or commit.get("reason"),
+                "source": "commit_input",
+            }
+        )
+    return records
+
+
+def report_closure_steps(stage: dict[str, Any], commit: dict[str, Any]) -> set[str]:
+    return {str(record.get("step")) for record in report_closure_records(stage, commit) if record.get("step")}
 
 
 def task_line(context: dict[str, Any], validation: dict[str, Any], stage: dict[str, Any]) -> str:
@@ -495,23 +690,69 @@ def assemble(
     closeout_commit: dict[str, Any],
 ) -> dict[str, Any]:
     validation_value = validation_verdict(validation, stage)
+    report_validation_value = "passed" if validation_value == "complete" else validation_value
     progress_value = progress_verdict(validation, stage, progress)
     blocker_list = blockers(context, stage, validation, progress)
-    complete = validation_value == "passed" and progress_value == "advanced" and not blocker_list
+    report_findings = report_input_findings(stage, validation)
+    completion_candidate = (
+        validation_value in {"complete", "passed", "pass", "success"}
+        and progress_value == "advanced"
+        and not blocker_list
+        and not report_findings
+    )
+    used_goal_truth = goal_truth(context, stage, validation)
+    used_advice = advice_docs(context, stage, validation)
+    routing_lines = model_effort_routing_lines(context, stage)
+    routing_summary = routing_lines or ["not_recorded"]
+    changed = changed_files(context, stage, validation, commit)
+    commands = command_results(validation, stage)
+    axes = progress_axes(validation, stage)
+    evidence_paths = report_evidence_paths(context, stage, validation, progress, commit, closeout_commit)
+    task_id = (
+        validation.get("completed_task_id")
+        or stage.get("completed_task_id")
+        or validation.get("task_id")
+        or stage.get("task_id")
+        or "unknown-task"
+    )
+    next_task_id = (
+        stage.get("next_task_id")
+        or deep_get(stage, "derive", "next_task_id")
+        or event_value(stage, "next_task_id", ("report", "derive", "validate", "commit"))
+        or "unknown-task"
+    )
+    selected_task_source = str(stage.get("selected_task_source") or event_value(stage, "selected_task_source", ("derive", "report")) or "")
+    closure_records = report_closure_records(stage, commit)
+    closure_steps = sorted(report_closure_steps(stage, commit))
+    if completion_candidate:
+        report_findings.extend(
+            completion_evidence_findings(
+                stage=stage,
+                validation=validation,
+                commit=commit,
+                task_id=task_id,
+                next_task_id=next_task_id,
+                commands=commands,
+                axes=axes,
+                evidence_paths=evidence_paths,
+            )
+        )
+    complete = completion_candidate and not report_findings
+    completion_status = "complete_verified" if complete else "not_complete"
     fields = {
-        "기준 GT": goal_truth(context, stage, validation) or ["없음"],
-        "비-GT 방향성 문서": advice_docs(context, stage, validation) or ["없음"],
+        "기준 GT": used_goal_truth or ["없음"],
+        "비-GT 방향성 문서": used_advice or ["없음"],
         "주 진행 skill": ["$orchestrate-task-cycle"],
-        "모델/effort 라우팅": model_effort_routing_lines(context, stage) or ["not_recorded"],
+        "모델/effort 라우팅": routing_summary,
         "수행한 task": [task_line(context, validation, stage)],
-        "변경한 파일": changed_files(context, stage, validation, commit) or ["없음"],
-        "실행한 검증": command_results(validation, stage),
-        "validation verdict": [validation_value],
+        "변경한 파일": changed or ["없음"],
+        "실행한 검증": commands,
+        "validation verdict": [report_validation_value],
         "progress verdict": [progress_value],
-        "progress axes": progress_axes(validation, stage),
+        "progress axes": axes,
         "남은 blocker": blocker_list or ["없음"],
         "다음 task/방향성": [next_task_line(context, stage)],
-        "완료 여부": ["complete_verified" if complete else "not_complete"],
+        "완료 여부": [completion_status],
     }
     extra: dict[str, Any] = {}
     if validation.get("report_path"):
@@ -523,7 +764,33 @@ def assemble(
         extra["implementation_commit"] = commit
     if closeout_commit:
         extra["closeout_commit"] = closeout_commit
-    return {"fields": fields, "extra": extra, "field_order": FIELD_ORDER}
+    # Preserve the human-facing ``fields`` object while also returning the
+    # canonical report result-contract envelope.  Callers can now validate
+    # the assembler output directly without a hidden translation step.
+    return {
+        "format_version": 1,
+        "step": "report",
+        "used_goal_truth": used_goal_truth,
+        "used_advice": used_advice,
+        "model_effort_routing": routing_summary,
+        "task_id": task_id,
+        "changed_files": changed,
+        "commands": commands,
+        "validation_verdict": report_validation_value,
+        "progress_verdict": progress_value,
+        "blockers": blocker_list,
+        "progress_axes": axes,
+        "next_task_id": next_task_id,
+        "selected_task_source": selected_task_source,
+        "closure_steps": closure_steps,
+        "closure_records": closure_records,
+        "completion_status": completion_status,
+        "report_findings": report_findings,
+        "evidence_paths": evidence_paths,
+        "fields": fields,
+        "extra": extra,
+        "field_order": FIELD_ORDER,
+    }
 
 
 def render_markdown(report: dict[str, Any]) -> str:

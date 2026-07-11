@@ -18,4 +18,6 @@ Use independent labelers only when deterministic or executable oracles cannot fu
 - `needs_human_review`: cannot be resolved without human judgment.
 - `blocked`: source, authority, or evidence gap prevents labeling.
 
-Use `human_reviewed` label type only when a human actually reviewed the label.
+Use `human_reviewed` label type only when a human actually reviewed the label. Record a bounded `human_reviewer_ref` and at least one `evidence_refs` entry; without both, do not use the human-reviewed claim or gold tier.
+
+To satisfy a required item/oracle pair that the deterministic runner cannot execute, additionally require `label_status: accepted`, JSON boolean `authoritative: true`, and `oracle_ids` naming that exact oracle. One adjudication covers only its explicit item/oracle pairs.

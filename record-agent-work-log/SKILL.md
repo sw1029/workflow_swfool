@@ -13,6 +13,8 @@ The main agent owns the final record. The subagent, when used, only rewrites and
 
 When a task-state index exists, link the new `.agent_log` entry through `$manage-task-state-index`. If no ID context exists, write the log normally.
 
+Keep session capture separate. `.agent_log` may cite a validated privacy-safe `$audit-session-governance` packet ID/path and summarize its finding, but it must not contain raw/slim transcript bodies or treat session observation as validation, progress, completion, or authority evidence.
+
 ## Domain Adapter Contract
 
 Work logs may consume this optional Part O hook only as retention metadata:
@@ -38,18 +40,24 @@ Do not hardcode retention periods, packet-size thresholds, or archive locations.
    - Use the bundled script for deterministic filenames and JSONL indexing:
 
      ```bash
-     python3 /home/swfool/.codex/skills/record-agent-work-log/scripts/write_agent_log.py \
+     python3 "${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts/write_agent_log.py" \
        --root . \
        --title "short title" \
+       --status informational \
        --intent "..." \
        --work "..." \
        --result "..." \
-       --shortcomings "..."
+       --shortcomings "..." \
+       --retention-class unspecified \
+       --sensitivity unspecified
      ```
 
-   - The script creates `.agent_log/YYYY-MM-DD/HHMMSS-title.md` and appends `.agent_log/index.jsonl`.
+   - The script requires an explicit status from `completed`, `partial`, `blocked`, `failed`, or `informational`; it never defaults an omitted status to completed.
+   - The script creates a collision-safe `.agent_log/YYYY-MM-DD/HHMMSSffffff-title-token.md` with a stable `log_id`, then appends `.agent_log/index.jsonl` under a workspace-local lock.
    - Use `--agent-note` for the normalization subagent's concise review, `--command`, `--changed-file`, `--follow-up`, and `--tag` as needed.
+   - Record `--retention-class`, optional `--archive-reference` / `--retention-exclusion-reason`, and `--sensitivity public|internal|confidential|restricted|unspecified`. These fields are hygiene metadata, not completion evidence.
    - If `record_retention_policy` is supplied, record only opaque retention metadata in the log or index; do not remove required record sections or provenance while writing the log.
+   - Validate existing JSONL before writing. New rows carry `format_version` and `schema_version`; legacy versionless rows remain readable, while malformed or future-version JSONL fails closed before a log is published.
 
 4. Update task-state IDs when possible.
    - After the log file is written, run `$manage-task-state-index` `scan`.
@@ -70,9 +78,14 @@ Every log entry must include these sections:
 ```text
 # <title>
 
+- Log ID:
 - Timestamp:
 - Status:
 - Workspace:
+- Retention class:
+- Archive reference:
+- Retention exclusion reason:
+- Sensitivity:
 
 ## Task Intent
 ...
@@ -95,7 +108,9 @@ Keep entries factual. Do not make the record more successful than the evidence s
 ## Guardrails
 
 - Do not overwrite existing log files. Create a new timestamped entry.
-- Do not use `.agent_log` for secrets, credentials, private keys, raw tokens, or full sensitive transcripts.
+- Do not infer success or completion from empty intent/work/result/shortcomings. Require all four to be explicitly non-empty and require the caller to choose the status.
+- Serialize log publication and index replacement through `.agent_log/index.lock`; keep filenames and IDs collision-safe under concurrent writers.
+- Do not use `.agent_log` for secrets, credentials, private keys, raw tokens, or raw/slim transcript bodies. Store session capture only through `$audit-session-governance`; cite its validated privacy-safe packet rather than copying the packet or transcript body.
 - Do not let the normalization subagent write files; only the main agent runs the writer script.
 - Do not let an ID insight agent normalize the log or write files; it can only recommend task-state links.
 - Do not record claims of tests passing, commits, deployments, or file edits unless they actually happened.

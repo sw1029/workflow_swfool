@@ -9,7 +9,7 @@ description: "Monitor long-running task executions recorded by `$run-task-code-a
 
 Use this skill to keep long-running execution state explicit while preserving the rule that `running` is not `success`.
 
-Use `/home/swfool/.codex/skills/orchestrate-task-cycle/scripts/monitor_running_execution.py` for deterministic checks.
+Use `${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/scripts/monitor_running_execution.py` for deterministic checks.
 
 ## Workflow
 
@@ -21,12 +21,14 @@ Use `/home/swfool/.codex/skills/orchestrate-task-cycle/scripts/monitor_running_e
 6. Check process, tmux session, log heartbeat, and expected completion artifacts only when safe and local.
 7. Append a monitor event to the cycle ledger as `step: run` with `event_kind: long_run_monitor`; do not create a noncanonical `monitor` phase.
 8. Report `running`, `completed_pending_validation`, `stale`, `missing_details`, or `not_running`.
+9. The orchestrator may finalize validation scope and run `$validate-task-completion` only to produce an honest `partial` or `failed` handoff for the current cycle. Preserve the same `run_id` and pending blocker; this partial validation is not permission to promote/derive a successor, close an issue, or create an implementation/closeout commit.
 
 ## Guardrails
 
 - Do not kill a process unless the user or task explicitly requested it.
 - Do not mark completion unless final success criteria are met by evidence.
 - Do not proceed to final-output-dependent derivation or commits from `running` alone.
+- Do not block partial handoff validation merely because terminal output is pending; block only pass/advanced/close consumption and successor promotion until harvest/final validation completes.
 - Do not treat `completed_pending_validation` as success; it only means harvest validation should consume the terminal artifacts.
 - Do not mark a cycle-unreachable target complete from long-run launch, startup, or heartbeat evidence. Preserve harvest validation, throughput/scale evidence, or explicit descope/terminal/escalation.
 - Do not let a monitor task switch silently invalidate or redefine terminal harvest expectations. Preserve launch-manifest anchors and any explicit `harvest_risk_accepted` decision.

@@ -9,13 +9,13 @@ description: "Validate result contracts from `$orchestrate-task-cycle` subskills
 
 Use this skill as a stage gate between orchestration phases. It checks whether the previous owning skill returned enough structured evidence for the coordinator to continue.
 
-Use `/home/swfool/.codex/skills/orchestrate-task-cycle/scripts/result_contract.py` for deterministic validation.
+Use `${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/scripts/result_contract.py` for deterministic validation.
 
-`result_contract.py` is the stable CLI and `validate(target, result, mode)` facade. Reusable implementation lives under `scripts/result_contract_lib/`: `RuleContext` and the abstract `ContractRule`/`TargetContractRule` hierarchy own the extension contract, `RuleRegistry` composes ordered rules, common modules own configuration/access/integrity/task-routing helpers, and `rules/` owns one target-specific validator class per result family. Add or test a target rule through the registry instead of expanding the facade.
+`result_contract.py` is the stable CLI and `validate(target, result, mode, context=None)` facade. Supply `--context`/`context` when long-run ledger state is in scope; `launching`, `running`, and `completed_pending_validation` independently block pass/advanced validation and ordinary derive. Reusable implementation lives under `scripts/result_contract_lib/`: `RuleContext` and the abstract `ContractRule`/`TargetContractRule` hierarchy own the extension contract, `RuleRegistry` composes ordered rules, common modules own configuration/access/integrity/task-routing helpers, and `rules/` owns one target-specific validator class per result family. Add or test a target rule through the registry instead of expanding the facade.
 
 ## Workflow
 
-1. Choose the target: `governance`, `validation_set_plan`, `run`, `qualitative_review`, `validation_set_build`, `schema_pre_derive`, `derive`, `schema_post_derive`, `index`, `validate`, `issue`, `commit`, `report`, or `closeout_commit`.
+1. Choose the target: `repo_skill_adapter_scan`, `acceptance`, `validation_scope_plan`, `validation_set_plan`, `governance`, `repo_skill_adapter_validate`, `code_structure_audit`, `run`, `qualitative_review`, `loopback_audit`, `validation_set_build`, `visible_increment`, `repo_skill_gap_analysis`, `cycle_efficiency_profile`, `validation_scope_finalize`, `index_pre_validate`, `validate`, `issue`, `schema_pre_derive`, `derive`, `schema_post_derive`, `index`, `commit`, `dashboard`, `report`, or `closeout_commit`.
 2. Validate the owning skill result in `warn` mode by default.
 3. Treat a missing or mismatched top-level canonical `step` as a ledger-envelope warning. Use `block` mode, or pass an explicit `--step <canonical-step>` to `$maintain-cycle-ledger`, before using the result JSON directly as a ledger event.
 4. Use `block` mode when missing fields would corrupt the cycle transition, especially final report fields, `running` execution details, task-pack promotion provenance, candidate deletion, issue closure, or commit creation.
@@ -32,6 +32,9 @@ Use `/home/swfool/.codex/skills/orchestrate-task-cycle/scripts/result_contract.p
 - `blockers` as an explicit list, using an empty list when no blockers remain.
 - `evidence_paths` for run, schema, index, validation, issue, commit, dashboard, and report stages.
 - For `qualitative_review`, require reviewer routing, reviewed artifacts, direct read scope, qualitative findings, direction recommendations, output-delta handoff fields, blocker taxonomy delta, no-overclaim flags, and evidence paths. Do not accept a main-coordinator substitute as the reviewer; when reviewer delegation is unavailable, require a blocked, partial, or not-applicable result with `reviewer_delegation_unavailable_reason`.
+- Explicit empty arrays are valid observed-zero values for N/A qualitative review fields. `validation_set_build` in `not_applicable`/`skipped` state requires a concrete reason but no fabricated manifest paths. Terminal/skipped `schema_post_derive` requires a concrete reason but no fabricated `next_task_id`.
+- `visible_increment` must be a formal packet with `not_validation_evidence: true`; it never substitutes for validation evidence.
+- When validated session-audit context is present, require the closed `$audit-session-governance` packet schema, a content-derived audit ID, a current repository-local source snapshot, both cycle and task identifiers for `bound`, and body-free hash references. Treat it as non-GT and non-validation observation only. An optional missing, malformed, incomplete, quarantined, unbound, or transcript-only packet warns and fails quiet; it blocks a positive close only when independently required by caller/acceptance, or when an unresolved cross-source/canonical mismatch is bound to the current task and cycle with independent canonical references.
 - For `validation_set_plan` and `validation_set_build`, require scenario coverage fields when the acceptance packet supplied `acceptance_scenarios`: each scenario must be `covered`, `scenario_uncovered`, or blocked with a missing premise-satisfying input reason.
 - For `run`, require `command_argv` for live executions, or explicit `command_provenance_missing=true`. A summarized command string is not enough for baseline/reproduction eligibility.
 - For `run`, `validate`, or any gate/validator result that returns blockers, require actionable blocker fields when the result claims the blocker is actionable or resolved: violated relation, observed scalar values, expected relation, or minimum input delta. For multi-input relation failures, preserve abstract input-key names and any `authorization_contract_repair_candidate`. Otherwise preserve `blocker_opacity`.
@@ -52,6 +55,7 @@ Use `/home/swfool/.codex/skills/orchestrate-task-cycle/scripts/result_contract.p
 - For `advanced`, require the close owner's `authoritative_progress_verdict: advanced` and verify it does not upgrade loopback's `authoritative_semantic_progress=false` or any hard stop. Actual body truth, report convergence, artifact class, freshness/current lane, required consumer contexts, and verifier completeness must all be evaluated and satisfied when required.
 - Treat consumer-context conformance as external probe evidence. A root import, hook-name string, metric name, or adapter self-attestation is not wiring evidence; required rows need `consumer_context_id`, `adapter_loaded`, `required_hook_callable`, `hook_signature_compatible`, `return_contract_valid`, and `probe_evidence_id`.
 - `commit_role`, `commit_status`, and `evidence_paths` for commit results.
+- For `dashboard`, require ledger/current snapshot counts, snapshot status, task ID, validation/progress verdicts, explicit blockers, dashboard path, and evidence paths. Malformed ledger JSON is blocking; a stale/missing derived snapshot must remain visible and cannot use unqualified `dashboard_status: rendered`.
 - `commit_hash` and `commit_subject` for created commits; `commit_skipped_reason` for skipped, blocked, or failed commits.
 - `task_pack_status`, `task_pack_path`, and `task_pack_item_id` or `promoted_item_id` when derivation or reporting promotes the next task from `.task/task_pack/`.
 - `has_supplied_input_delta` plus `supplied_input_artifact_paths` or `produced_domain_delta=true` when a derive result relies on positive input delta.
@@ -68,6 +72,7 @@ Use `/home/swfool/.codex/skills/orchestrate-task-cycle/scripts/result_contract.p
 
 - Do not infer success from missing data.
 - Do not use this skill to override an owning skill verdict.
+- Do not let a session-audit packet supply message bodies, self-require its own completeness, upgrade any verdict, establish authority, close an issue, or authorize semantic repair. Only deterministic `.task/session_audit/index.json` reconstruction may be auto-repairable.
 - Do not let green tests satisfy a missing `acceptance_scenario_gate`.
 - Do not let summarized commands or `...` satisfy command provenance.
 - Do not treat opaque blockers as actionable contract evidence.

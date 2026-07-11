@@ -1,0 +1,4 @@
+interface:
+  display_name: "Audit Session Governance"
+  short_description: "Audit session logs without promoting workflow truth"
+  default_prompt: "Use $audit-session-governance to normalize a session log and audit it against governed workflow evidence."

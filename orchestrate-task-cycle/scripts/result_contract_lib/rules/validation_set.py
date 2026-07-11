@@ -85,6 +85,40 @@ class ValidationSetRule(TargetContractRule):
                 f"`{target}` scenario_uncovered=true requires the missing premise-satisfying input condition.",
             )
         if target == "validation_set_build":
+            build_status = str(value_for(result, "validation_set_status") or "").strip().lower()
+            if build_status in {"not_applicable", "skipped"}:
+                reason = first_present(
+                    result,
+                    [
+                        "validation_set_not_applicable_reason",
+                        "validation_set_skipped_reason",
+                        "reason",
+                        "blockers",
+                    ],
+                )
+                if not non_empty(reason):
+                    add(
+                        findings,
+                        "block" if mode == "block" else "warn",
+                        "validation_set_build_na_reason_missing",
+                        "N/A or skipped validation-set build requires a concrete reason; artifact paths must remain absent rather than fabricated.",
+                    )
+                return
+            for field in (
+                "validation_set_id",
+                "quality_tier",
+                "not_gold",
+                "item_count",
+                "oracle_manifest_path",
+                "split_manifest_path",
+                "leakage_report_path",
+                "validation_set_root_path",
+            ):
+                context.require_context_field(
+                    field,
+                    "validation_set_build_artifact_field_missing",
+                    f"Non-N/A validation-set build requires `{field}`.",
+                )
             quality_tier = str(value_for(result, "quality_tier") or "").lower()
             if quality_tier == "gold":
                 human_reviewed = positive_count(value_for(result, "human_reviewed_count"))

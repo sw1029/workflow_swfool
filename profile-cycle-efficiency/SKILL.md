@@ -11,7 +11,7 @@ Use this skill to find avoidable orchestration cost without weakening validation
 
 When residual-gap policy is in scope, this skill is also the default source for the G4 denominator. Pass cycle fixed-cost evidence to `$derive-improvement-task` so residual repair can be ranked by value per cycle cost. If cost evidence is missing, downstream skills use denominator `1` and preserve legacy F3. Repeated unchanged ledger artifacts should be represented as `unchanged_ref(path+hash)` and subtracted from the fixed-cost denominator instead of counted as fresh packet work.
 
-Use `/home/swfool/.codex/skills/orchestrate-task-cycle/scripts/profile_cycle_efficiency.py`.
+Use `${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/scripts/profile_cycle_efficiency.py --task-id <canonical-task-id>`. The helper directly emits the formal `cycle_efficiency_profile` envelope (`step`, task, status, cost basis, recommendation, blockers, and evidence paths).
 
 When a task pack or blocker family has no fresh run id for the recent-cycle window, default `4` unless adapter/config evidence supplies a different window, expose `execution_starvation=true`. This is not a new hard gate; it is a derive ranking input that raises execution-producing candidates above another guard, verifier, contract, lineage, or report candidate while preserving safety, authority, and terminal constraints.
 
@@ -36,6 +36,7 @@ When profile inputs depend on an adapter, consume the same external `consumer_co
 ## Guardrails
 
 - Do not lower required validation scope when changed surfaces justify it.
+- Accept only a path-safe `--cycle-id` token and resolve ledger inputs under the workspace `.task/cycle` directory; reject parent or symlink escape before profiling.
 - Do not replace `$derive-improvement-task` task selection.
 - Do not treat efficiency findings as proof of task completion.
 - Do not treat metadata-only measurements as primary-output progress when the output-delta contract reports `produced_domain_delta: false`.

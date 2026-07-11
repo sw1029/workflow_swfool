@@ -4,6 +4,18 @@ from ..base import RuleContext, TargetContractRule
 from ..common import add, has_value, value_for
 
 
+COMMIT_STATUSES = {
+    "blocked",
+    "committed",
+    "created",
+    "failed",
+    "not_applicable",
+    "passed",
+    "skipped",
+    "success",
+}
+
+
 class CommitRule(TargetContractRule):
     """Validate implementation and closeout commit evidence."""
 
@@ -21,7 +33,15 @@ class CommitRule(TargetContractRule):
         role = str(value_for(result, "commit_role") or value_for(result, "role") or "").lower()
         expected_role = "closeout" if target == "closeout_commit" else "implementation"
         if role and role != expected_role:
-            add(findings, "warn", "commit_role_mismatch", f"`{target}` expected `commit_role: {expected_role}`.", {"commit_role": role})
+            add(findings, "block" if mode == "block" else "warn", "commit_role_mismatch", f"`{target}` expected `commit_role: {expected_role}`.", {"commit_role": role})
+        if status and status not in COMMIT_STATUSES:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "unknown_commit_status",
+                "Commit status must use the documented closed lifecycle vocabulary.",
+                {"commit_status": status, "allowed": sorted(COMMIT_STATUSES)},
+            )
         if status in {"created", "committed", "success", "passed"} and not commit_hash:
             add(findings, "block" if mode == "block" else "warn", "commit_hash_missing", "Created commit result is missing `commit_hash`.")
         if status in {"created", "committed", "success", "passed"} and not commit_subject:

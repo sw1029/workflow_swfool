@@ -3,35 +3,46 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import fcntl
 import hashlib
 import json
+import os
+import re
 import sys
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 
 DEFAULT_STEPS = [
     "context",
-    "ledger_init",
     "authority",
+    "repo_skill_adapter_scan",
     "acceptance",
     "route_plan",
+    "validation_scope_plan",
     "validation_set_plan",
     "governance",
     "result_contract",
+    "repo_skill_adapter_validate",
     "ledger_append",
     "code_structure_audit",
     "run",
     "qualitative_review",
     "loopback_audit",
     "validation_set_build",
-    "schema_pre_derive",
     "visible_increment",
+    "repo_skill_gap_analysis",
+    "cycle_efficiency_profile",
+    "validation_scope_finalize",
+    "index_pre_validate",
+    "validate",
+    "issue",
+    "schema_pre_derive",
     "derive",
     "schema_post_derive",
     "index",
-    "validate",
-    "issue",
     "commit",
     "dashboard",
     "report",
@@ -40,7 +51,13 @@ DEFAULT_STEPS = [
 
 CANONICAL_STEPS = set(DEFAULT_STEPS)
 
+LEDGER_FORMAT_VERSION = 1
+SUPPORTED_LEDGER_FORMAT_VERSIONS = {0, LEDGER_FORMAT_VERSION}
+CYCLE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+EVENT_ID_PATTERN = re.compile(r"^[^\x00-\x20/\\]{1,255}$")
+
 MIN_FIELDS = [
+    "format_version",
     "cycle_id",
     "event_id",
     "step",
@@ -79,11 +96,33 @@ MIN_FIELDS = [
 STAGE_STATUS_NORMALIZATION = {
     "success": "complete",
     "succeeded": "complete",
+    "block": "blocked",
+}
+
+TERMINAL_OBSERVATION_FIELDS = {
+    "event_id",
+    "step",
+    "status",
+    "reason",
+    "task_id",
+    "terminal_justified",
+    "terminal_outcome_key",
+    "terminal_outcome_family_key",
+    "input_state_fingerprint",
+    "authority_state_fingerprint",
+    "input_delta",
+    "material_delta",
+    "required_missing_input_count",
+    "authority_policy",
+    "authority_policy_source",
+    "created_at",
 }
 
 
 def normalize_stage_status(value: Any) -> str:
-    raw = str(value).strip().lower() if value is not None else "complete"
+    if value is None or not str(value).strip():
+        raise ValueError("stage event requires an explicit non-empty `status`")
+    raw = str(value).strip().lower()
     return STAGE_STATUS_NORMALIZATION.get(raw, raw)
 
 
@@ -98,11 +137,26 @@ def truthy_delta(value: Any) -> bool:
 
 
 def now_iso() -> str:
-    return dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    return dt.datetime.now().astimezone().isoformat(timespec="microseconds")
 
 
 def default_cycle_id() -> str:
-    return "cycle-" + dt.datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
+    stamp = dt.datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
+    return f"cycle-{stamp}-{uuid.uuid4().hex}"
+
+
+def validate_cycle_id(cycle_id: str) -> str:
+    value = str(cycle_id or "").strip()
+    if not CYCLE_ID_PATTERN.fullmatch(value):
+        raise ValueError("cycle_id must be 1-128 path-safe letters, digits, dots, underscores, or hyphens")
+    return value
+
+
+def validate_event_id(event_id: Any) -> str:
+    value = str(event_id or "").strip()
+    if not EVENT_ID_PATTERN.fullmatch(value):
+        raise ValueError("event_id must be a non-empty path-free token of at most 255 characters")
+    return value
 
 
 def rel_path(root: Path, path: Path) -> str:
@@ -113,7 +167,18 @@ def rel_path(root: Path, path: Path) -> str:
 
 
 def cycle_dir(root: Path, cycle_id: str) -> Path:
-    return root / ".task" / "cycle" / cycle_id
+    resolved_root = root.resolve()
+    cycle_root = (resolved_root / ".task" / "cycle").resolve(strict=False)
+    try:
+        cycle_root.relative_to(resolved_root)
+    except ValueError as exc:
+        raise ValueError("cycle ledger root escapes the workspace, including through a symlink") from exc
+    path = (cycle_root / validate_cycle_id(cycle_id)).resolve(strict=False)
+    try:
+        path.relative_to(cycle_root)
+    except ValueError as exc:
+        raise ValueError("cycle directory escapes .task/cycle, including through a symlink") from exc
+    return path
 
 
 def ledger_path(root: Path, cycle_id: str) -> Path:
@@ -122,6 +187,83 @@ def ledger_path(root: Path, cycle_id: str) -> Path:
 
 def current_stage_path(root: Path, cycle_id: str) -> Path:
     return cycle_dir(root, cycle_id) / "current_stage.json"
+
+
+def initialization_path(root: Path, cycle_id: str) -> Path:
+    return cycle_dir(root, cycle_id) / "initialization.json"
+
+
+def read_initialization_metadata(root: Path, cycle_id: str) -> dict[str, Any]:
+    path = initialization_path(root, cycle_id)
+    if not path.is_file():
+        raise ValueError(f"cycle `{cycle_id}` must be initialized before stage append")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"malformed cycle initialization metadata: {path}") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"cycle initialization metadata must be a JSON object: {path}")
+    if str(value.get("cycle_id") or "") != cycle_id:
+        raise ValueError(f"cycle initialization metadata does not match cycle `{cycle_id}`")
+    return value
+
+
+def ledger_lock_path(root: Path, cycle_id: str) -> Path:
+    return cycle_dir(root, cycle_id) / ".ledger.lock"
+
+
+def fsync_directory(path: Path) -> None:
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+@contextmanager
+def ledger_lock(root: Path, cycle_id: str, *, exclusive: bool):
+    directory = cycle_dir(root, cycle_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    lock_path = ledger_lock_path(root, cycle_id)
+    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    with os.fdopen(descriptor, "a+b", closefd=True) as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}")
+    try:
+        with temporary.open("x", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        fsync_directory(path.parent)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def durable_append_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existed = path.exists()
+    payload = (json.dumps(value, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
+    with path.open("ab") as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    if not existed:
+        fsync_directory(path.parent)
 
 
 def load_json_value(value: str | None) -> dict[str, Any]:
@@ -169,15 +311,12 @@ def artifact_path(root: Path, artifact: str) -> Path:
 
 
 def prior_artifact_refs(root: Path, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    del root  # Historical hashes are immutable event evidence; never re-hash their paths.
     refs: list[dict[str, Any]] = []
     for event in events:
         for ref in event.get("artifact_refs") or []:
             if isinstance(ref, dict) and ref.get("path") and ref.get("sha256"):
-                refs.append(ref)
-        for artifact in normalize_list(event.get("artifacts")):
-            if not artifact:
-                continue
-            refs.append({"path": artifact, "sha256": file_sha256(artifact_path(root, artifact))})
+                refs.append({"path": str(ref["path"]), "sha256": str(ref["sha256"])})
     return refs
 
 
@@ -185,11 +324,36 @@ def annotate_artifact_refs(root: Path, event: dict[str, Any], previous_events: l
     previous = prior_artifact_refs(root, previous_events)
     artifact_refs: list[dict[str, Any]] = []
     unchanged_refs: list[dict[str, str]] = []
-    for artifact in normalize_list(event.get("artifacts")):
+    artifacts = normalize_list(event.get("artifacts"))
+    supplied_refs = event.get("artifact_refs") if isinstance(event.get("artifact_refs"), list) else []
+    if not artifacts:
+        for supplied in supplied_refs:
+            if not isinstance(supplied, dict) or not supplied.get("path") or not supplied.get("sha256"):
+                raise ValueError("supplied artifact_refs require non-empty path and sha256")
+            supplied_path = str(supplied["path"])
+            supplied_hash = str(supplied["sha256"])
+            current_hash = file_sha256(artifact_path(root, supplied_path))
+            if current_hash != supplied_hash:
+                raise ValueError(f"supplied artifact_ref hash does not match current artifact: {supplied_path}")
+            ref: dict[str, Any] = {"path": supplied_path, "sha256": current_hash, "exists": True}
+            prior = next(
+                (
+                    item
+                    for item in reversed(previous)
+                    if item.get("sha256") == current_hash and item.get("path") == supplied_path
+                ),
+                None,
+            )
+            if prior:
+                ref["unchanged_ref"] = {"path": supplied_path, "sha256": current_hash}
+                unchanged_refs.append(ref["unchanged_ref"])
+            artifact_refs.append(ref)
+    for artifact in artifacts:
         digest = file_sha256(artifact_path(root, artifact))
         if not digest:
+            artifact_refs.append({"path": artifact, "sha256": None, "exists": False})
             continue
-        ref: dict[str, Any] = {"path": artifact, "sha256": digest}
+        ref: dict[str, Any] = {"path": artifact, "sha256": digest, "exists": True}
         prior = next(
             (
                 item
@@ -197,32 +361,65 @@ def annotate_artifact_refs(root: Path, event: dict[str, Any], previous_events: l
                 if item.get("sha256") == digest and item.get("path") == artifact
             ),
             None,
-        ) or next((item for item in reversed(previous) if item.get("sha256") == digest), None)
+        )
         if prior and prior.get("path") and prior.get("sha256"):
             ref["unchanged_ref"] = {"path": str(prior["path"]), "sha256": str(prior["sha256"])}
             unchanged_refs.append(ref["unchanged_ref"])
         artifact_refs.append(ref)
-    if artifact_refs:
-        event["artifact_refs"] = artifact_refs
-    if unchanged_refs:
-        event["unchanged_refs"] = unchanged_refs
+    event["artifact_refs"] = artifact_refs
+    event["unchanged_refs"] = unchanged_refs
 
 
 def make_event_id(cycle_id: str, step: str, created_at: str, event: dict[str, Any]) -> str:
-    basis = json.dumps({k: v for k, v in event.items() if k != "event_id"}, ensure_ascii=False, sort_keys=True)
-    digest = hashlib.sha256(basis.encode("utf-8")).hexdigest()[:10]
+    del event
     stamp = created_at.replace(":", "").replace("-", "").split("+")[0]
-    return f"{cycle_id}-{step}-{stamp}-{digest}"
+    return f"{cycle_id}-{step}-{stamp}-{uuid.uuid4().hex}"
+
+
+def request_fingerprint(cycle_id: str, event: dict[str, Any]) -> str:
+    normalized = dict(event)
+    normalized["cycle_id"] = cycle_id
+    normalized["step"] = str(normalized.get("step") or "").strip()
+    normalized["status"] = normalize_stage_status(normalized.get("status"))
+    for field in ("changed_files", "artifacts", "blockers"):
+        if field in normalized:
+            normalized[field] = normalize_list(normalized.get(field))
+    for field in (
+        "format_version",
+        "created_at",
+        "artifact_refs",
+        "unchanged_refs",
+        "request_fingerprint",
+        "source_status",
+    ):
+        normalized.pop(field, None)
+    canonical = json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def complete_event(cycle_id: str, event: dict[str, Any]) -> dict[str, Any]:
     event = dict(event)
+    cycle_id = validate_cycle_id(cycle_id)
+    claimed_cycle_id = event.get("cycle_id")
+    if claimed_cycle_id is not None and str(claimed_cycle_id) != cycle_id:
+        raise ValueError(f"stage event cycle_id `{claimed_cycle_id}` does not match ledger cycle `{cycle_id}`")
+    supplied_version = event.get("format_version")
+    if supplied_version is not None and (
+        isinstance(supplied_version, bool)
+        or not isinstance(supplied_version, int)
+        or supplied_version not in (0, LEDGER_FORMAT_VERSION)
+    ):
+        raise ValueError(f"unsupported ledger format_version: {supplied_version}")
     created_at = str(event.get("created_at") or now_iso())
     step = str(event.get("step") or "unknown")
     raw_status = event.get("status")
-    event.setdefault("cycle_id", cycle_id)
-    event.setdefault("created_at", created_at)
-    event.setdefault("event_id", make_event_id(cycle_id, step, created_at, event))
+    event["format_version"] = LEDGER_FORMAT_VERSION
+    event["cycle_id"] = cycle_id
+    event["created_at"] = created_at
+    if event.get("event_id") is None:
+        event["event_id"] = validate_event_id(make_event_id(cycle_id, step, created_at, event))
+    else:
+        event["event_id"] = validate_event_id(event.get("event_id"))
     event["status"] = normalize_stage_status(raw_status)
     if raw_status is not None and event["status"] != str(raw_status).strip().lower():
         event.setdefault("source_status", str(raw_status).strip().lower())
@@ -242,8 +439,27 @@ def complete_event(cycle_id: str, event: dict[str, Any]) -> dict[str, Any]:
     return event
 
 
-def validate_event_step(event: dict[str, Any], allow_noncanonical_step: bool) -> dict[str, Any]:
+def validate_event_envelope(
+    cycle_id: str,
+    event: dict[str, Any],
+    allow_noncanonical_step: bool,
+) -> dict[str, Any]:
     event = dict(event)
+    cycle_id = validate_cycle_id(cycle_id)
+    claimed_cycle_id = event.get("cycle_id")
+    if claimed_cycle_id is not None and str(claimed_cycle_id) != cycle_id:
+        raise ValueError(f"stage event cycle_id `{claimed_cycle_id}` does not match ledger cycle `{cycle_id}`")
+    supplied_version = event.get("format_version")
+    if supplied_version is not None and (
+        isinstance(supplied_version, bool)
+        or not isinstance(supplied_version, int)
+        or supplied_version not in (0, LEDGER_FORMAT_VERSION)
+    ):
+        raise ValueError(f"unsupported ledger format_version: {supplied_version}")
+    raw_status = event.get("status")
+    event["status"] = normalize_stage_status(raw_status)
+    if event["status"] != str(raw_status).strip().lower():
+        event.setdefault("source_status", str(raw_status).strip().lower())
     raw_step = event.get("step")
     step = str(raw_step).strip() if raw_step is not None else ""
     if not step:
@@ -253,6 +469,8 @@ def validate_event_step(event: dict[str, Any], allow_noncanonical_step: bool) ->
         if not allow_noncanonical_step:
             raise ValueError(f"noncanonical stage step `{step}` requires --allow-noncanonical-step")
         event["noncanonical_step"] = True
+    if event.get("event_id") is not None:
+        event["event_id"] = validate_event_id(event.get("event_id"))
     return event
 
 
@@ -287,6 +505,7 @@ def terminal_latch_state(previous_events: list[dict[str, Any]], event: dict[str,
             "suppress_full_cycle": True,
             "terminal_latch_streak": int(previous.get("terminal_latch_streak") or 1) + 1,
             "unchanged_terminal_ref": previous.get("event_id"),
+            "terminal_latch_source_cycle_id": previous.get("cycle_id"),
         }
     if material_delta and any(row.get("quiescent_terminal_latched") for row in previous_events):
         transition = event.get("lifecycle_transition_result") if isinstance(event.get("lifecycle_transition_result"), dict) else {}
@@ -299,22 +518,64 @@ def terminal_latch_state(previous_events: list[dict[str, Any]], event: dict[str,
     return {"terminal_latch_status": "observed", "quiescent_terminal_latched": False, "terminal_latch_streak": 1}
 
 
-def read_events(root: Path, cycle_id: str) -> list[dict[str, Any]]:
+def compact_terminal_observation(event: dict[str, Any], latch: dict[str, Any]) -> dict[str, Any]:
+    compact = {field: event[field] for field in TERMINAL_OBSERVATION_FIELDS if field in event}
+    compact.update(latch)
+    compact["event_kind"] = "terminal_latch_observation"
+    compact["compact_observation"] = True
+    compact["reason"] = str(event.get("reason") or "quiescent terminal observation")
+    compact["artifacts"] = []
+    compact["changed_files"] = []
+    compact["blockers"] = []
+    return compact
+
+
+def validate_stored_event(value: Any, cycle_id: str, line_no: int) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"ledger line {line_no} must contain a JSON object")
+    version = value.get("format_version", 0)
+    if isinstance(version, bool) or not isinstance(version, int) or version not in SUPPORTED_LEDGER_FORMAT_VERSIONS:
+        raise ValueError(f"unsupported ledger format_version {version!r} on line {line_no}")
+    if str(value.get("cycle_id") or "") != cycle_id:
+        raise ValueError(f"ledger line {line_no} cycle_id does not match directory cycle `{cycle_id}`")
+    if not str(value.get("step") or "").strip():
+        raise ValueError(f"ledger line {line_no} lacks a non-empty step")
+    if not str(value.get("status") or "").strip():
+        raise ValueError(f"ledger line {line_no} lacks a non-empty status")
+    validate_event_id(value.get("event_id"))
+    return value
+
+
+def read_events_unlocked(root: Path, cycle_id: str) -> list[dict[str, Any]]:
     path = ledger_path(root, cycle_id)
     if not path.is_file():
         return []
     events: list[dict[str, Any]] = []
+    seen_event_ids: set[str] = set()
     with path.open("r", encoding="utf-8", errors="replace") as handle:
-        for line in handle:
+        for line_no, line in enumerate(handle, start=1):
             if not line.strip():
                 continue
             try:
                 value = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(value, dict):
-                events.append(value)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"malformed ledger JSON on line {line_no}: {exc}") from exc
+            event = validate_stored_event(value, cycle_id, line_no)
+            event_id = str(event["event_id"])
+            if event_id in seen_event_ids:
+                raise ValueError(f"duplicate ledger event_id `{event_id}` on line {line_no}")
+            seen_event_ids.add(event_id)
+            events.append(event)
     return events
+
+
+def read_events(root: Path, cycle_id: str) -> list[dict[str, Any]]:
+    cycle_id = validate_cycle_id(cycle_id)
+    path = ledger_path(root, cycle_id)
+    if not path.is_file():
+        return []
+    with ledger_lock(root, cycle_id, exclusive=False):
+        return read_events_unlocked(root, cycle_id)
 
 
 def read_all_cycle_events(root: Path) -> list[dict[str, Any]]:
@@ -324,10 +585,17 @@ def read_all_cycle_events(root: Path) -> list[dict[str, Any]]:
         return events
     for path in sorted(cycle_root.glob("*/stage.jsonl")):
         events.extend(read_events(root, path.parent.name))
-    return events
+    return sorted(
+        events,
+        key=lambda event: (
+            str(event.get("created_at") or ""),
+            str(event.get("cycle_id") or ""),
+            int(event.get("ledger_sequence") or 0),
+        ),
+    )
 
 
-def write_current(root: Path, cycle_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
+def write_current_unlocked(root: Path, cycle_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
     latest_by_step: dict[str, dict[str, Any]] = {}
     malformed_events: list[dict[str, Any]] = []
     for event in events:
@@ -338,11 +606,12 @@ def write_current(root: Path, cycle_id: str, events: list[dict[str, Any]]) -> di
             malformed_events.append(event)
     latest = events[-1] if events else {}
     status = "empty"
-    if any(str(event.get("status")).lower() in {"blocked", "failed", "block"} for event in events):
+    if any(str(event.get("status")).lower() in {"blocked", "failed"} for event in latest_by_step.values()):
         status = "blocked"
     elif latest:
         status = str(latest.get("status") or "unknown")
     current = {
+        "format_version": LEDGER_FORMAT_VERSION,
         "cycle_id": cycle_id,
         "updated_at": now_iso(),
         "status": status,
@@ -353,39 +622,99 @@ def write_current(root: Path, cycle_id: str, events: list[dict[str, Any]]) -> di
         "event_count": len(events),
     }
     path = current_stage_path(root, cycle_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(current, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    atomic_write_text(path, json.dumps(current, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
     return current
 
 
+def write_current(root: Path, cycle_id: str, events: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    cycle_id = validate_cycle_id(cycle_id)
+    with ledger_lock(root, cycle_id, exclusive=True):
+        stored_events = read_events_unlocked(root, cycle_id)
+        effective_events = stored_events if ledger_path(root, cycle_id).is_file() else list(events or [])
+        return write_current_unlocked(root, cycle_id, effective_events)
+
+
+def duplicate_event(previous_events: list[dict[str, Any]], event: dict[str, Any], fingerprint: str) -> dict[str, Any] | None:
+    event_id = event.get("event_id")
+    if event_id is None:
+        return None
+    existing = next((row for row in previous_events if row.get("event_id") == event_id), None)
+    if existing is None:
+        return None
+    existing_fingerprint = existing.get("request_fingerprint")
+    if existing_fingerprint == fingerprint:
+        return existing
+    if existing_fingerprint is None:
+        comparable = dict(event)
+        for key in ("format_version", "created_at", "artifact_refs", "unchanged_refs"):
+            comparable.pop(key, None)
+        if all(existing.get(key) == value for key, value in comparable.items()):
+            return existing
+    raise ValueError(f"event_id `{event_id}` already exists with different content")
+
+
 def append_event(root: Path, cycle_id: str, event: dict[str, Any], allow_noncanonical_step: bool = False) -> dict[str, Any]:
-    directory = cycle_dir(root, cycle_id)
-    (directory / "packets").mkdir(parents=True, exist_ok=True)
+    cycle_id = validate_cycle_id(cycle_id)
+    event = validate_event_envelope(cycle_id, event, allow_noncanonical_step)
+    fingerprint = request_fingerprint(cycle_id, event)
     path = ledger_path(root, cycle_id)
-    previous_events = read_events(root, cycle_id)
-    event = validate_event_step(event, allow_noncanonical_step)
-    latch = terminal_latch_state(previous_events, event)
-    event.update(latch)
-    if latch.get("suppress_full_cycle"):
-        current = write_current(root, cycle_id, previous_events)
+    with ledger_lock(root, cycle_id, exclusive=True):
+        initialization = read_initialization_metadata(root, cycle_id)
+        previous_events = read_events_unlocked(root, cycle_id)
+        step = str(event.get("step") or "").strip()
+        if not previous_events:
+            if step != "context":
+                raise ValueError("the first canonical stage event must be `context`")
+            initialized_task_id = initialization.get("task_id")
+            context_task_id = event.get("task_id")
+            allow_missing_task = initialization.get("allow_missing_task_for_bootstrap") is True
+            if initialized_task_id is not None:
+                if str(context_task_id or "").strip() != str(initialized_task_id):
+                    raise ValueError("context task_id must match initialization task_id")
+            elif not allow_missing_task:
+                raise ValueError("missing initialization task_id is allowed only for an explicit bootstrap transaction")
+            elif context_task_id is not None and str(context_task_id).strip():
+                raise ValueError("task-absent bootstrap context must not invent a task_id")
+            elif not (
+                event.get("task_absent") is True
+                or event.get("task_md_exists") is False
+                or (
+                    isinstance(event.get("task_md"), dict)
+                    and event["task_md"].get("exists") is False
+                )
+            ):
+                raise ValueError("bootstrap context must explicitly record task.md absence")
+        elif str(previous_events[0].get("step") or "") != "context":
+            raise ValueError("cycle ledger is invalid: first canonical stage event is not `context`")
+        (cycle_dir(root, cycle_id) / "packets").mkdir(parents=True, exist_ok=True)
+        duplicate = duplicate_event(previous_events, event, fingerprint)
+        if duplicate is not None:
+            current = write_current_unlocked(root, cycle_id, previous_events)
+            return {
+                "event": duplicate,
+                "event_duplicate": True,
+                "current_stage": current,
+                "ledger_path": rel_path(root, path),
+                "current_stage_path": rel_path(root, current_stage_path(root, cycle_id)),
+            }
+
+        latch = terminal_latch_state(previous_events, event)
+        full_event_suppressed = bool(latch.get("suppress_full_cycle"))
+        event_to_write = compact_terminal_observation(event, latch) if full_event_suppressed else {**event, **latch}
+        event_to_write["request_fingerprint"] = fingerprint
+        event_to_write["ledger_sequence"] = len(previous_events) + 1
+        completed = complete_event(cycle_id, event_to_write)
+        annotate_artifact_refs(root, completed, previous_events)
+        durable_append_json(path, completed)
+        current = write_current_unlocked(root, cycle_id, previous_events + [completed])
         return {
-            "event": {
-                "cycle_id": cycle_id,
-                "step": event.get("step"),
-                "created_at": now_iso(),
-                **latch,
-            },
-            "event_suppressed": True,
+            "event": completed,
+            "event_suppressed": full_event_suppressed,
+            "observation_appended": full_event_suppressed,
             "current_stage": current,
             "ledger_path": rel_path(root, path),
             "current_stage_path": rel_path(root, current_stage_path(root, cycle_id)),
         }
-    completed = complete_event(cycle_id, event)
-    annotate_artifact_refs(root, completed, previous_events)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(completed, ensure_ascii=False, sort_keys=True) + "\n")
-    current = write_current(root, cycle_id, previous_events + [completed])
-    return {"event": completed, "current_stage": current, "ledger_path": rel_path(root, path), "current_stage_path": rel_path(root, current_stage_path(root, cycle_id))}
 
 
 def init_cycle(
@@ -394,34 +723,76 @@ def init_cycle(
     task_id: str | None,
     reason: str,
     terminal_state: dict[str, Any] | None = None,
+    allow_missing_task_for_bootstrap: bool = False,
 ) -> dict[str, Any]:
     if terminal_state:
         latch = terminal_latch_state(read_all_cycle_events(root), terminal_state)
         if latch.get("suppress_full_cycle"):
+            source_cycle_id = validate_cycle_id(str(latch.get("terminal_latch_source_cycle_id") or ""))
+            observation = dict(terminal_state)
+            observation.pop("cycle_id", None)
+            observation.setdefault("step", "report")
+            observation.setdefault("status", "complete")
+            observation_result = append_event(root, source_cycle_id, observation)
             return {
                 "cycle_suppressed": True,
                 "reason": "quiescent_terminal_latched",
                 **latch,
+                "observation_cycle_id": source_cycle_id,
+                "observation_result": observation_result,
             }
-    cycle_id = cycle_id or default_cycle_id()
+    cycle_id = validate_cycle_id(cycle_id or default_cycle_id())
+    if task_id is None and not allow_missing_task_for_bootstrap:
+        raise ValueError("task_id is required unless allow_missing_task_for_bootstrap is explicitly enabled")
+    if task_id is not None and allow_missing_task_for_bootstrap:
+        raise ValueError("allow_missing_task_for_bootstrap is valid only when task_id is absent")
     directory = cycle_dir(root, cycle_id)
     (directory / "packets").mkdir(parents=True, exist_ok=True)
-    if not ledger_path(root, cycle_id).exists():
-        ledger_path(root, cycle_id).write_text("", encoding="utf-8")
-    result = append_event(
-        root,
-        cycle_id,
-        {
-            "step": "ledger_init",
-            "status": "complete",
-            "reason": reason or "cycle ledger initialized",
-            "task_id": task_id,
-            "artifacts": [rel_path(root, ledger_path(root, cycle_id)), rel_path(root, current_stage_path(root, cycle_id))],
-        },
-    )
-    result["cycle_id"] = cycle_id
-    result["cycle_dir"] = rel_path(root, directory)
-    return result
+    metadata_path = initialization_path(root, cycle_id)
+    expected_reason = str(reason or "cycle ledger initialized")
+    with ledger_lock(root, cycle_id, exclusive=True):
+        existing_metadata: dict[str, Any] | None = None
+        if metadata_path.is_file():
+            try:
+                loaded = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"malformed cycle initialization metadata: {metadata_path}") from exc
+            if isinstance(loaded, dict):
+                existing_metadata = loaded
+        if existing_metadata is not None:
+            if (
+                existing_metadata.get("task_id") != task_id
+                or str(existing_metadata.get("reason") or "") != expected_reason
+                or existing_metadata.get("allow_missing_task_for_bootstrap", False) is not allow_missing_task_for_bootstrap
+            ):
+                raise ValueError(f"cycle `{cycle_id}` is already initialized with different task or reason")
+            metadata = existing_metadata
+            cycle_existing = True
+        else:
+            metadata = {
+                "format_version": LEDGER_FORMAT_VERSION,
+                "cycle_id": cycle_id,
+                "initialized_at": now_iso(),
+                "task_id": task_id,
+                "reason": expected_reason,
+                "storage_bootstrap_only": True,
+                "first_canonical_step": "context",
+                "allow_missing_task_for_bootstrap": allow_missing_task_for_bootstrap,
+            }
+            atomic_write_text(metadata_path, json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+            cycle_existing = False
+        events = read_events_unlocked(root, cycle_id)
+        current = write_current_unlocked(root, cycle_id, events)
+    return {
+        "cycle_id": cycle_id,
+        "cycle_dir": rel_path(root, directory),
+        "cycle_existing": cycle_existing,
+        "initialization": metadata,
+        "initialization_path": rel_path(root, metadata_path),
+        "current_stage": current,
+        "ledger_path": rel_path(root, ledger_path(root, cycle_id)),
+        "current_stage_path": rel_path(root, current_stage_path(root, cycle_id)),
+    }
 
 
 def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
@@ -454,6 +825,7 @@ def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
         )
     latest = events[-1] if events else {}
     return {
+        "format_version": LEDGER_FORMAT_VERSION,
         "cycle_id": latest.get("cycle_id") if latest else None,
         "event_count": len(events),
         "latest_status": latest.get("status") if latest else None,
@@ -532,6 +904,7 @@ def main(argv: list[str] | None = None) -> int:
     init_p = sub.add_parser("init", help="Initialize a cycle ledger.")
     init_p.add_argument("--cycle-id")
     init_p.add_argument("--task-id")
+    init_p.add_argument("--allow-missing-task-for-bootstrap", action="store_true")
     init_p.add_argument("--reason", default="cycle ledger initialized")
     init_p.add_argument("--terminal-state-json", help="Optional terminal state used to suppress an unchanged full-cycle restart.")
 
@@ -574,7 +947,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     root = Path(args.root).resolve()
     if args.command == "init":
-        result = init_cycle(root, args.cycle_id, args.task_id, args.reason, load_json_value(args.terminal_state_json))
+        result = init_cycle(
+            root,
+            args.cycle_id,
+            args.task_id,
+            args.reason,
+            load_json_value(args.terminal_state_json),
+            args.allow_missing_task_for_bootstrap,
+        )
     elif args.command == "append":
         event = load_json_value(args.event_json)
         for attr, key in (
@@ -613,15 +993,14 @@ def main(argv: list[str] | None = None) -> int:
         summary = summarize(read_events(root, args.cycle_id))
         if args.write_dashboard:
             dashboard = cycle_dir(root, args.cycle_id) / "dashboard.md"
-            dashboard.parent.mkdir(parents=True, exist_ok=True)
-            dashboard.write_text(render_markdown(summary), encoding="utf-8")
+            atomic_write_text(dashboard, render_markdown(summary))
             summary["dashboard_path"] = rel_path(root, dashboard)
         if args.format == "markdown":
             sys.stdout.write(render_markdown(summary))
             return 0
         result = summary
     else:
-        result = write_current(root, args.cycle_id, read_events(root, args.cycle_id))
+        result = write_current(root, args.cycle_id)
 
     json.dump(result, sys.stdout, ensure_ascii=False, indent=2, sort_keys=True)
     sys.stdout.write("\n")

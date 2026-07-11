@@ -11,9 +11,13 @@ Use this skill to keep implementation issues explicit during repository task cyc
 
 This skill manages issue state and traceability. It must not implement code fixes. Code changes belong to `$task-md-agent-governance`; execution or resolution evidence belongs to `$run-task-code-and-log`; commits belong to `$repo-change-commit`.
 
+Use the closed result `issue_status` vocabulary `created | updated | open | tracked | partial | blocked | failed | reopened | resolved | closed | skipped | not_applicable`. Do not invent completion-like aliases.
+
 For local issue file structure and fields, read [issue-format.md](references/issue-format.md). For the issue-fit analysis agent used by `$derive-improvement-task`, read [issue-agent-prompts.md](references/issue-agent-prompts.md).
 
 When a task validation reports `progress_verdict: safety_only` or `no_progress`, preserve that distinction in the issue update. Do not describe a still-open issue as substantively advanced merely because a no-live/fail-closed guardrail passed.
+
+When session governance is available, consume only a validated privacy-safe packet from [$audit-session-governance](../audit-session-governance/SKILL.md). An independently referenced canonical mismatch may support opening or updating an issue; transcript-only observation, capture absence, quarantine, or an incomplete packet cannot establish resolution, authority, or a blocker by itself unless acceptance/caller independently required the audit.
 
 ## Workflow
 
@@ -21,7 +25,7 @@ When a task validation reports `progress_verdict: safety_only` or `no_progress`,
    - Read `task.md`, `.task/index.md`, `.task/index.jsonl`, `.task/task_miss/`, `.agent_log/`, `.agent_goal/`, `.schema/`, `.contract/`, and `.issue/` when present.
    - Run `$manage-task-state-index` `scan` when `.task/`, `.issue/`, `.agent_log/`, or `task.md` exists.
    - Determine the operation: open/track a new issue, update an existing issue, resolve/close an issue, sync issue state, or audit issue traceability.
-   - Default in `$orchestrate-task-cycle` is to track the newly written active `task.md` after `$validate-task-completion`.
+   - Default in `$orchestrate-task-cycle` is to reconcile the just-validated current task before `$derive-improvement-task` creates or promotes a successor. Return issue IDs, blocker state, and evidence paths so derivation can make an authoritative next-task decision.
 
 2. Choose the issue backend.
    - Check whether the current directory is inside a Git worktree with `git rev-parse --is-inside-work-tree`.
@@ -34,6 +38,7 @@ When a task validation reports `progress_verdict: safety_only` or `no_progress`,
    - Derive the issue title from the active `task.md` objective or validation blocker.
    - Include goal fit, task ID, validation status, issue source, expected branch/worktree, acceptance criteria, and links to task_miss, validation, schema/contract, and agent log evidence when known.
    - Include progress status when known (`advanced`, `safety_only`, `no_progress`, or `regressed`) and the remaining blocker-state transition required to move the issue forward.
+   - For a session-audit finding, cite the validated packet and independent canonical references, not transcript text. Route semantic/source/task/acceptance repair through the owning governed skill; issue management records the work but does not apply it.
    - Before reopening or reactivating an issue in a quiesced or exhausted blocker family, inspect the latest loopback/progress-loop evidence for `terminal_quiescence_gate`, `quiescence_untried_reconcile`, `hypothesis_exhausted`, and `.task/anti_loop/root_cause_ledger.jsonl`. Reopen only when the issue supplies a concrete input delta, authority change, external-state change, or verified unexhausted repair path.
    - For GitHub-backed issues, create or update a local mirror under `.issue/open/` or `.issue/git/` containing the remote URL, issue number, branch, worktree path, and task links.
    - For local-only issues, create `.issue/open/YYYYMMDD-HHMMSS-<slug>.md` using [issue-format.md](references/issue-format.md).
@@ -69,13 +74,14 @@ When a task validation reports `progress_verdict: safety_only` or `no_progress`,
 
 ## Orchestrated Cycle Behavior
 
-When called by `$orchestrate-task-cycle` after `$validate-task-completion`:
+When called by `$orchestrate-task-cycle` after `$validate-task-completion` and before `$derive-improvement-task`:
 
-- Track the newly active `task.md` by default, because `$derive-improvement-task` may already have replaced the completed task with the next task.
+- Reconcile the validated current task and its existing issues before any successor task is written or promoted. Do not assume `task.md` has already been replaced.
 - If validation is `partial` or `failed`, also create or update an issue for validation blockers and link it to the completed task evidence.
 - If validation is `complete` but `progress_verdict` is `safety_only` or `no_progress`, keep the relevant issue open and record the remaining blocker-state transition; do not treat the issue as resolved.
 - If a prior issue is quiesced or its root-cause hypothesis budget is exhausted, do not reopen it silently. Record `quiescence_override` with the supplied input-delta evidence, or keep it blocked/closed and route the next cycle to terminal/user escalation.
 - If validation is `complete` and a prior issue is proven resolved, use `$run-task-code-and-log` evidence before closing or archiving it.
+- Return `issue_status`, explicit `issue_ids` (an empty list when no issue applies), `blockers`, and `evidence_paths`. `$derive-improvement-task` consumes that packet; the post-derive task-state index links the selected successor to any carried issue.
 - Do not commit issue files directly; leave commit classification and staging to `$repo-change-commit`.
 
 ## Git Integration

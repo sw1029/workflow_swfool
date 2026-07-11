@@ -11,6 +11,7 @@
 - `.agent_goal/*.md`는 장기 목표/권한/규칙의 GT로 취급한다.
 - `.agent_advice/*`는 비-GT 방향성 문서로만 취급한다.
 - `.task/*`, `.agent_log/*`, `.issue/*`, `.schema/*`, `.contract/*`, `.validation/*`는 워크플로우 증거와 추적 상태이다.
+- `.task/session_audit/*`는 원문 본문을 저장하지 않는 선택적 관찰 사이드카이다. GT·검증·진전·완료 증거가 아니며, 세션 감사 부재나 불완전성은 acceptance 또는 caller가 독립적으로 요구하지 않는 한 기존 cycle을 차단하지 않는다.
 - 완료 판정은 `$validate-task-completion`이 담당하며, 실행 성공/로그/대시보드/인덱스만으로 완료를 선언하지 않는다.
 - adapter나 caller가 verifier contract를 요구하는 measurable acceptance는 live verifier가 pass해야 완전하다. required verifier의 `not_evaluated`는 pass가 아니며, full close 대신 verifier follow-up, explicit descope, terminal blocker, user escalation 중 하나로 보존한다.
 - acceptance가 참조하는 gate의 required hook 부재, `pass_with_unobserved_axes`, generation-dependent count key, below-policy residual value per cycle cost는 pass/advance/close 근거가 아니다. hook supply, axis supply, effective key/terminal-outcome fallback, residual descope plus next rung, terminal blocker, user escalation 중 하나로 보존한다.
@@ -42,6 +43,7 @@ flowchart TD
   ValSetPlan["$build-validation-set-with-agents plan<br/>검증셋 필요 여부, oracle/split/leakage 정책"]
   Governance["$task-md-agent-governance<br/>task.md 구현, worker 위임, repo audit, task_miss 기록"]
   ResultContract1["$validate-subskill-result-contract<br/>governance/result fields 검사"]
+  AdapterValidate["repo_skill_adapter_validate<br/>발견된 adapter의 load/signature/return contract 검증"]
   CodeStructure["orchestrate scripts/code_structure_audit.py<br/>구조/컨벤션/semantic modularity audit packet<br/>depth/fan-out는 cohesion/reuse/contract와 결합될 때만 부담"]
   Run["$run-task-code-and-log<br/>명령 실행, full command_argv, 실패 autopsy,<br/>observed_producer_claim downgrade, .agent_log 기록<br/>long_run_launch 가능"]
   Running{"run status = running?"}
@@ -53,25 +55,31 @@ flowchart TD
   Visible["$record-visible-increment<br/>보이는 변화 기록; not_validation_evidence=true"]
   GapAnalysis["repo_skill_gap_analysis<br/>adapter/skill gap 또는 skill-creator 후보"]
   Profile["$profile-cycle-efficiency<br/>중복 로그, metadata-only 반복, command surface budget 감지"]
+  ScopeFinalize["$plan-validation-scope finalize<br/>실제 changed files로 profile 확정<br/>계획 profile보다 낮출 수 없음"]
+  IndexPre["$manage-task-state-index pre-validate<br/>현재 task/run/validation evidence 색인"]
   Slice["$optimize-task-slice<br/>state_transition, batch, evidence_supply, verifier_completion,<br/>scenario_supply, command_provenance_repair,<br/>feature/freshness/frozen-input repair, consolidation 등 advisory"]
   DeriveNext["$derive-improvement-task<br/>다음 task.md 또는 task_pack/terminal blocker 도출"]
   SchemaPost["$manage-schema-contracts post-derive<br/>새 task/schema/contract 링크 정리"]
   Index["$manage-task-state-index<br/>scan, link, audit; task/candidate/miss/log/schema/issue IDs"]
   Validate["$validate-task-completion<br/>complete / partial / failed + progress_verdict<br/>required verifier pass + target metric movement,<br/>structure global effect 확인<br/>evidence freshness, landed feature inheritance,<br/>adapter hook provenance, frozen input lineage gate"]
   Issue["$manage-implementation-issues<br/>issue open/update/resolve, .issue mirror, GitHub fallback"]
+  Pending{"long-run 결과가 아직 pending?"}
   Commit["$repo-change-commit<br/>coherent implementation/checkpoint commit"]
   Dashboard["$render-cycle-dashboard<br/>한국어 dashboard.md"]
   Report["$maintain-cycle-ledger / assemble_cycle_report.py<br/>한국어 final_report.md"]
   Closeout["$repo-change-commit closeout<br/>report/dashboard/ledger closeout commit"]
   End([cycle 결과 보고])
 
-  Start --> Context --> LedgerInit --> Authority --> Acceptance --> AdapterScan --> RoutePlan --> NoTask
-  NoTask -- yes --> DeriveInitial --> SchemaPreInit --> ValPlan
-  NoTask -- no --> ValPlan
-  ValPlan --> ValSetPlan --> Governance --> ResultContract1 --> CodeStructure --> Run --> Running
-  Running -- yes --> Monitor --> Validate
-  Running -- no --> Quality --> Loopback --> ValSetBuild --> SchemaPreDerive --> Visible --> GapAnalysis --> Profile --> Slice --> DeriveNext --> SchemaPost --> Index --> Validate
-  Validate --> Issue --> Commit --> Dashboard --> Report --> Closeout --> End
+  Start --> Context --> LedgerInit --> Authority --> NoTask
+  NoTask -- yes --> DeriveInitial --> SchemaPreInit --> Context
+  NoTask -- no --> AdapterScan --> Acceptance --> RoutePlan --> ValPlan
+  ValPlan --> ValSetPlan --> Governance --> ResultContract1 --> AdapterValidate --> CodeStructure --> Run --> Running
+  Running -- yes --> Monitor --> ScopeFinalize
+  Running -- no --> Quality --> Loopback --> ValSetBuild --> Visible --> GapAnalysis --> Profile --> ScopeFinalize
+  ScopeFinalize --> IndexPre --> Validate --> Issue --> Pending
+  Pending -- yes --> Dashboard
+  Pending -- no --> SchemaPreDerive --> Slice --> DeriveNext --> SchemaPost --> Index --> Commit --> Dashboard
+  Dashboard --> Report --> Closeout --> End
 ```
 
 ### Mermaid Flowchart 2: goal, authority, interview, advice
@@ -385,41 +393,32 @@ flowchart TD
 +----------------------------+     +---------------------------------------------+
         |
         v
-+----------------------------+     +---------------------------------------------+
-| $normalize-acceptance      | --> | acceptance packet                           |
-| acceptance/non-goal/demo   |     | envelope_floor / deficit_axis when present  |
-| measurable target contract |     | acceptance_verifier_contract when mapped    |
-|                             |     | target_metric_delta movement evidence       |
-|                             |     | required verifier/hook not_evaluated != pass|
-|                             |     | freshness class + input-generation condition|
-+----------------------------+     +---------------------------------------------+
-        |
-        v
-+----------------------------+     +---------------------------------------------+
-| repo-local adapter scan    | --> | code_convention_contract                    |
-| adapters and hooks         |     | domain adapter / output-delta / gate hooks  |
-|                             |     | target_required_verifier, goal_axis_map,    |
-|                             |     | target_metric_delta, gate compatibility,    |
-|                             |     | policy propagation, chronic threshold,      |
-|                             |     | producer execution, feature presence,       |
-|                             |     | input lineage, hook registry, hook debt,    |
-|                             |     | count-key collapse, global_* metrics        |
-+----------------------------+     +---------------------------------------------+
-        |
-        v
       +--------------------+
       | task.md exists ?   |
       +--------------------+
         | yes                                      | no
         v                                          v
 +----------------------------+       +-------------------------------------------+
-| continue active task       |       | $derive-improvement-task initial_init     |
-| 기존 task.md로 진행        |       | initial task.md 생성                       |
-+----------------------------+       +-------------------------------------------+
-        |                                          |
-        +----------------------+-------------------+
-                               |
-                               v
+| continue active task       |       | bootstrap transaction                     |
+| 기존 task.md로 진행        |       | initial_init -> schema reconcile          |
++----------------------------+       | task.md 생성 후 새 cycle의 context로 복귀 |
+        |                            +-------------------------------------------+
+        v
++----------------------------+     +---------------------------------------------+
+| repo-local adapter scan    | --> | code_convention_contract                    |
+| adapters and hooks         |     | domain adapter / output-delta / gate hooks  |
+|                             |     | verifier/metric/axis/compatibility hooks    |
+|                             |     | producer/feature/lineage/registry hooks     |
++----------------------------+     +---------------------------------------------+
+        |
+        v
++----------------------------+     +---------------------------------------------+
+| $normalize-acceptance      | --> | acceptance packet                           |
+| acceptance/non-goal/demo   |     | envelope + verifier/scenario/freshness      |
+| measurable target contract |     | required verifier/hook not_evaluated != pass|
++----------------------------+     +---------------------------------------------+
+        |
+        v
 +----------------------------+     +---------------------------------------------+
 | $plan-validation-scope     | --> | validation_profile                         |
 | changed surfaces classify  |     | current_only / affected_chain / full_chain |
@@ -481,30 +480,23 @@ flowchart TD
         |                                              |
         |                                              v
         |                                +---------------------------------------+
-        |                                | validation build + schema + increment |
+        |                                | output accounting                     |
         |                                | $build-validation-set build/consume   |
-        |                                | $manage-schema-contracts pre-derive   |
         |                                | $record-visible-increment             |
+        |                                | repo_skill_gap_analysis               |
+        |                                | $profile-cycle-efficiency             |
         |                                +---------------------------------------+
         |                                              |
         |                                              v
-        |                                +---------------------------------------+
-        |                                | derive preparation                    |
-        |                                | $profile-cycle-efficiency             |
-        |                                | $optimize-task-slice                  |
-        |                                | verifier_completion when required     |
-        |                                | target metric movement repair         |
-        |                                | policy propagation site repair        |
-        |                                | feature/freshness/frozen-input repair |
-        |                                | hook provenance / primary reason rank |
-        |                                | $derive-improvement-task              |
-        |                                | $manage-schema-contracts post-derive  |
-        |                                | $manage-task-state-index              |
-        |                                +---------------------------------------+
-        |                                              |
         +----------------------+-----------------------+
                                |
                                v
++----------------------------+     +---------------------------------------------+
+| validation scope finalize  | --> | actual changed files, profile floor         |
+| + index_pre_validate       |     | required commands + current evidence index  |
++----------------------------+     +---------------------------------------------+
+        |
+        v
 +----------------------------+     +---------------------------------------------+
 | $validate-task-completion  | --> | validation_verdict + progress_verdict      |
 | final completion gate      |     | complete/partial/failed + progress class   |
@@ -519,8 +511,30 @@ flowchart TD
         |
         v
 +----------------------------+     +---------------------------------------------+
-| issue -> commit -> report  | --> | $manage-implementation-issues              |
-| final workflow closeout    |     | $repo-change-commit                        |
+| $manage-implementation-    | --> | validated current task issue reconciliation |
+| issues                     |     | issue_ids / blockers / evidence_paths       |
++----------------------------+     +---------------------------------------------+
+        |
+        v
+      +----------------------+
+      | long-run pending ?   |
+      +----------------------+
+        | no                                      | yes
+        v                                         |
++----------------------------+                    |
+| derive preparation         |                    |
+| schema pre-derive + slice  |                    |
+| validation/issue/profile   |                    |
+| -> derive -> schema post   |                    |
+| -> final task-state index  |                    |
++----------------------------+                    |
+        |                                         |
+        +---------------------+-------------------+
+                              |
+                              v
++----------------------------+     +---------------------------------------------+
+| commit -> report           | --> | $repo-change-commit or explicit skip       |
+| final workflow closeout    |     | pending은 partial handoff로만 보고         |
 |                            |     | $render-cycle-dashboard / final_report.md  |
 |                            |     | closeout commit                            |
 +----------------------------+     +---------------------------------------------+
@@ -1075,7 +1089,7 @@ Anti-loop and efficiency inputs into derive:
 
 ```text
 orchestrate-task-cycle
-  context -> ledger -> authority with policy propagation -> acceptance/verifier/scenario/freshness/target-movement contracts -> adapter scan including code convention, feature, producer, hook registry, gate compatibility, chronic-threshold hooks -> validation planning -> governance -> code-structure audit -> run or long-run branch -> review/loopback or monitor -> derive/index -> validate gates -> issue -> commit -> dashboard/report -> closeout
+  context -> ledger -> authority -> task bootstrap when absent -> adapter scan -> acceptance/verifier/scenario/freshness/target-movement contracts -> validation-scope plan -> validation-set plan -> governance/result contract -> adapter validation -> code-structure audit -> run or long-run branch -> review/loopback or monitor -> validation-set/visible/gap/profile evidence -> validation-scope finalize + pre-validation index -> validate current task -> issue reconciliation -> schema/derive/index only when promotion is allowed -> commit -> dashboard/report -> closeout
 
 maintain-cycle-ledger
   cycle init -> stage append -> packet link -> preserve terminal_delta_record/unchanged_ref and S10 blocker persistence fields when supplied -> dashboard/final_report render support
@@ -1154,6 +1168,9 @@ review-cycle-output-quality
 
 audit-cycle-loopback
   run/review/output-delta/failure-autopsy/adapter -> anti_loop_provider evaluator -> 3-state gates, gate_artifact_compatibility skip, chronic blocker counters, failure surface stage, root-cause ledger, reason_to_attempt, target_required_verifier, scenario/argv/blocker/stochastic findings, feature regression, frozen input lineage, self-resolvable input routing, count-key hygiene, goal-axis completeness, residual cost, global invariant high-water -> derive constraints
+
+audit-session-governance
+  repo-local Codex/Claude Code JSONL -> strict body-free projection/quarantine -> content-addressed non-authoritative packet -> optional context/loopback/validate/issue/derive/report observation; deterministic index rebuild only, no semantic auto-repair
 
 validate-task-completion
   evidence bundle -> completion gates -> required verifier/hook pass + target_metric_delta movement + observed goal axes + scenario coverage + command provenance + blocker actionability + stochastic feasibility + policy/gate warnings + evidence freshness + landed feature inheritance + adapter hook provenance + frozen input lineage + long-run pending check + count-key hygiene + residual cost ratio + structure global effect -> validation_verdict + progress_verdict -> validation report

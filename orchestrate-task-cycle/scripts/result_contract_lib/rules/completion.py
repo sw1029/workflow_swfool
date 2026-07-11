@@ -17,6 +17,27 @@ class CompletionValidationRule(TargetContractRule):
         findings = context.findings
         validation_verdict = str(value_for(result, "validation_verdict") or "").strip().lower()
         progress_verdict = str(value_for(result, "progress_verdict") or "").strip().lower()
+        pending_long_runs = context.get("pending_long_runs", [])
+        completion_claimed = validation_verdict in {"complete", "completed", "passed", "pass", "success"} or progress_verdict == "advanced"
+        if completion_claimed and not context.get("long_run_state_checked", False):
+            add(
+                findings,
+                "block",
+                "long_run_state_not_checked",
+                "Pass/advanced validation requires explicit proof that current long-run state was checked.",
+            )
+        if pending_long_runs and completion_claimed:
+            add(
+                findings,
+                "block",
+                "pending_long_run_validate_overclaim",
+                "Pending long-running execution can support only partial/not-complete validation until terminal artifacts are harvested and validated.",
+                {
+                    "pending_long_runs": pending_long_runs,
+                    "validation_verdict": validation_verdict or None,
+                    "progress_verdict": progress_verdict or None,
+                },
+            )
         acceptance_diluted = boolish(
             first_present(
                 result,

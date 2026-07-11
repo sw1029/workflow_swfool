@@ -48,7 +48,7 @@ Use stable IDs for all important artifacts:
 - `schema-*`: `.schema/` or `.contract/` schema, module contract, script contract, compatibility note, or needs-review contract.
 - `schema-map-*`: `.schema/index.md`, `.schema/causal_map.md`, `.contract/index.md`, `.contract/causal_map.md`, compatibility map, or contracts JSONL map/history artifact.
 
-Use statuses that match the owning workflow, such as `active`, `superseded`, `candidate`, `applied`, `open`, `partially_resolved`, `resolved`, `deleted`, `obsolete`, `logged`, `passed`, `partial`, and `failed`.
+Use only the closed lifecycle vocabulary documented in [index-schema.md](references/index-schema.md). Keep `partially_resolved` active: it means evidence resolved part of the artifact while an explicit residual remains. Never collapse it to `resolved` because its text contains that substring.
 
 Validation artifacts may also record a separate progress status such as `advanced`, `safety_only`, `no_progress`, or `regressed` in their title, links, or concise metadata. Do not treat progress status as a replacement for validation status.
 
@@ -63,17 +63,19 @@ For the complete event schema and link relationship names, read [index-schema.md
    - Prefer the bundled script:
 
      ```bash
-     python3 /home/swfool/.codex/skills/manage-task-state-index/scripts/task_state_index.py --root . init
+     python3 "${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts/task_state_index.py" --root . init
      ```
 
 2. Discover current artifacts.
    - Scan for `task.md`, `.task/candidate_task/*.md`, `.task/task_pack/*.json`, `.task/task_miss/**/*.md`, `.task/validation/*.md`, `.task/id_audit/*.md`, `.issue/**/*.md`, `.agent_log/**/*.md`, `.agent_goal/*.md`, `.agent_advice/**/*.md`, `.interview/**/*.md`, `.schema/` schema/contract/map artifacts, and `.contract/` auxiliary contract/map artifacts.
    - Assign IDs to artifacts that are not already indexed.
-   - Reuse an ID only when the artifact type, path, and content digest match; a changed `task.md` normally receives a new `task-*` ID.
+   - During `scan`, reuse the stable ID for the same artifact type and path and append an update event when content, title, status, or bounded metadata changes.
+   - Create a new ID only for an explicit semantic replacement: pass a new `--id`, or use `add --replace`. Supersede and cross-link the previous active same-path record in the same locked transaction.
+   - Do not infer semantic replacement from an ordinary digest change. This prevents `scan` from creating `duplicate_active_path` debt itself.
    - When a caller restricts indexing to exact-path add/link, record that restriction in the created/updated artifact note and include the reason global scan/audit was skipped.
 
      ```bash
-     python3 /home/swfool/.codex/skills/manage-task-state-index/scripts/task_state_index.py --root . scan
+     python3 "${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts/task_state_index.py" --root . scan
      ```
 
 3. Add or update a specific artifact when another workflow creates it.
@@ -82,7 +84,7 @@ For the complete event schema and link relationship names, read [index-schema.md
    - Before adding a timestamped log or miss artifact, check whether an existing indexed artifact has the same type, task parent, canonical result path/check path, status, and content digest. If so, reuse/link the existing artifact rather than creating duplicate lifecycle meaning.
 
      ```bash
-     python3 /home/swfool/.codex/skills/manage-task-state-index/scripts/task_state_index.py --root . add \
+     python3 "${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts/task_state_index.py" --root . add \
        --type task \
        --path task.md \
        --status active \
@@ -98,7 +100,7 @@ For the complete event schema and link relationship names, read [index-schema.md
    - Use relationship names such as `derived_from`, `promoted_from_pack`, `pack_for_task`, `inserted_after`, `reordered_by`, `terminal_blocker_for`, `input_delta_for`, `consolidation_candidate_for`, `supersedes`, `produced`, `audit_for`, `run_for`, `miss_for`, `resolves`, `validates`, `issue_for`, `tracks_task`, `derived_from_issue`, `fixes_issue`, `closes_issue`, `resolved_by`, `worktree_for`, `branch_for`, `advice_for`, `incorporated_into`, `applied_by`, `rejected_by`, `superseded_by`, `conflicts_with_goal`, `conflicts_with_authority`, `contract_for`, `schema_for`, `module_contract_for`, `script_contract_for`, `depends_on`, `produces_schema`, `consumes_schema`, `compatible_with`, `breaks_contract`, and `supersedes_contract`.
 
      ```bash
-     python3 /home/swfool/.codex/skills/manage-task-state-index/scripts/task_state_index.py --root . link \
+     python3 "${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts/task_state_index.py" --root . link \
        --source-id task-20260522-213000-example \
        --link produced:miss-20260522-214000-generalization-gap
      ```
@@ -118,13 +120,13 @@ For the complete event schema and link relationship names, read [index-schema.md
    - Use this command for a non-mutating audit:
 
      ```bash
-     python3 /home/swfool/.codex/skills/manage-task-state-index/scripts/task_state_index.py --root . audit
+     python3 "${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts/task_state_index.py" --root . audit
      ```
 
    - Use this command when the audit itself should become a durable artifact:
 
      ```bash
-     python3 /home/swfool/.codex/skills/manage-task-state-index/scripts/task_state_index.py --root . audit --write-report
+     python3 "${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts/task_state_index.py" --root . audit --write-report
      ```
 
    - Use `audit --summary-only --focus-path <path>` for cycle reports that need global counts and current-surface issues without dumping unrelated historical debt. The summary output is not a replacement for full audit evidence when deletion, issue closure, or completion depends on global consistency.
@@ -152,12 +154,14 @@ Use `scripts/task_state_index.py` for deterministic updates:
 
 - `init`: create `.task/index.jsonl` if needed and rebuild `.task/index.md`.
 - `scan`: discover standard artifacts and append missing index events.
-- `add`: append or update one artifact event.
+- `add`: append or update one artifact event; use `--replace` or a new explicit `--id` only for semantic replacement.
 - `link`: append a relationship from one indexed artifact to another.
 - `rebuild`: regenerate `.task/index.md` from `.task/index.jsonl`.
 - `audit`: inspect global ID consistency, broken links, duplicate active paths, stale digests, missing files, active task conflicts, and unindexed standard artifacts. Add `--write-report` to write `.task/id_audit/*.md` and index it as `audit-*`. Add `--summary-only --focus-path <path>` to emit compact counts and focused issues for report packets.
 
 All commands print JSON so the caller can capture IDs and changed paths.
+
+All writers serialize through workspace-local `.task/index.lock`, validate the existing JSONL before mutation, and atomically replace `index.jsonl` and its Markdown view after durable flush. New events carry `format_version` and `schema_version`; legacy versionless events remain readable, while malformed or future-version JSONL fails closed without append. An empty scan/audit is `not_evaluated_no_artifacts`, not success or completion evidence.
 
 ## Guardrails
 

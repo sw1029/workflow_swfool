@@ -10,6 +10,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
+WORKFLOW_SCRIPTS = Path(__file__).resolve().parents[2] / "orchestrate-task-cycle" / "scripts"
+if str(WORKFLOW_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(WORKFLOW_SCRIPTS))
+
+from result_contract_lib.session_audit import collect_session_audit_directory  # noqa: E402
+
 
 def now_iso() -> str:
     return dt.datetime.now().astimezone().isoformat(timespec="seconds")
@@ -76,6 +82,22 @@ def count_jsonl_lines(path: Path) -> int:
             if line.strip():
                 count += 1
     return count
+
+
+def classify_text_status(path: Path, default: str = "open") -> str:
+    name = path.name.lower()
+    parts = {part.lower() for part in path.parts}
+    for status in ("resolved", "closed", "archived", "applied", "deferred", "rejected", "raw"):
+        if status in parts or status in name:
+            return status
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace").lower()
+    except OSError:
+        return default
+    for status in ("failed", "partial", "blocked", "in_progress", "open", "resolved", "closed", "archived", "applied", "deferred", "rejected"):
+        if f"status: {status}" in text:
+            return status
+    return default
 
 
 def classify_miss(path: Path) -> str:
@@ -298,6 +320,7 @@ def collect(root: Path, include_git: bool, max_files: int) -> dict[str, Any]:
         "task_miss": collect_task_miss(root, max_files),
         "issues": collect_issues(root, max_files),
         "agent_log": collect_agent_log(root, max_files),
+        "session_audit": collect_session_audit_directory(root, max_files),
         "agent_goal": collect_agent_goal(root, max_files),
         "external_advice": collect_external_advice(root, max_files),
         "schema_contracts": collect_schema_contracts(root, max_files),

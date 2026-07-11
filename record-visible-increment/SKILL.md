@@ -13,9 +13,9 @@ The artifact is progress context only. It must include `not_validation_evidence:
 
 ## Workflow
 
-1. Identify the cycle ID and completed task ID from the ledger or validation packet.
+1. Identify the cycle ID and completed task ID from the ledger or validation packet; both `--cycle-id` and `--task-id` are required by the formal helper envelope.
 2. Classify the visible delta as one or more of: `cli`, `api`, `workflow_artifact`, `schema_contract`, `dashboard`, `report`, or `none`.
-   - When output artifacts are named and an output-delta contract exists, run `/home/swfool/.codex/skills/orchestrate-task-cycle/scripts/output_delta_contract.py` first and copy `produced_domain_delta`, `metadata_only`, and `effective_progress_kind` into the visible-delta JSON.
+   - When output artifacts are named and an output-delta contract exists, run `${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/scripts/output_delta_contract.py` first and copy `produced_domain_delta`, `metadata_only`, and `effective_progress_kind` into the visible-delta JSON.
    - When loop-breaker evidence includes `observed_output_class`, copy it into the visible-delta JSON and let it override self-declared delta fields for progress wording.
    - When Part L fields are present, copy only scalar/id evidence such as `pass_on_stale_lane`, `decision_metadata_revision`, `axis_starved_by_missing_producer`, `portfolio_quota_exceeded`, `unreachable_within_cycle`, `basis_overclaim`, and `surface_field_defect_matrix` into the visible-delta JSON as context.
    - If the output-delta result is metadata-only or `produced_domain_delta=false`, record the increment as workflow/context progress only. Do not describe it as `advanced`.
@@ -26,6 +26,7 @@ The artifact is progress context only. It must include `not_validation_evidence:
 ## Guardrails
 
 - Always set `not_validation_evidence: true`.
+- Use one path-safe cycle ID token. Keep both outputs under the resolved workspace `.task/delta` directory and write them atomically; reject parent traversal or child/directory symlink redirection.
 - Do not claim a visible delta when the evidence only shows internal planning.
 - Do not let metadata-only, repeated terminal-record, sidecar-only, or workflow-only output satisfy `progress_verdict: advanced`; leave that verdict to `$validate-task-completion` and the observed output-delta gate.
 - Treat annotation fields, report wording, honesty labels, and the same delta already counted as safety/metadata progress as non-semantic. Preserve the existing progress axes and never count one delta in both semantic and metadata/safety categories.
