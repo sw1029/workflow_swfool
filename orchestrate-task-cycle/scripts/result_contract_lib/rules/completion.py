@@ -19,6 +19,61 @@ class CompletionValidationRule(TargetContractRule):
         progress_verdict = str(value_for(result, "progress_verdict") or "").strip().lower()
         pending_long_runs = context.get("pending_long_runs", [])
         completion_claimed = validation_verdict in {"complete", "completed", "passed", "pass", "success"} or progress_verdict == "advanced"
+        index_status = str(
+            first_present(
+                result,
+                [
+                    "index_status",
+                    "pre_validation_index.index_status",
+                    "task_state_index.index_status",
+                    "result.pre_validation_index.index_status",
+                ],
+            )
+            or ""
+        ).strip().lower()
+        projection_status = str(
+            first_present(
+                result,
+                [
+                    "current_projection_status",
+                    "pre_validation_index.current_projection_status",
+                    "task_state_index.current_projection_status",
+                    "result.pre_validation_index.current_projection_status",
+                ],
+            )
+            or ""
+        ).strip().lower()
+        projection_completeness = str(
+            first_present(
+                result,
+                [
+                    "projection_completeness",
+                    "pre_validation_index.projection_completeness",
+                    "task_state_index.projection_completeness",
+                    "result.pre_validation_index.projection_completeness",
+                ],
+            )
+            or ""
+        ).strip().lower()
+        historical_axis = first_present(result, ["historical_index_verdict", "verdict_axes.historical_index_verdict"])
+        historical_status = str(
+            historical_axis.get("status") or historical_axis.get("verdict") or ""
+            if isinstance(historical_axis, dict)
+            else historical_axis or ""
+        ).strip().lower()
+        projection_not_evaluated = projection_status in {"not_evaluated", "missing", "unknown"} or projection_completeness in {"incomplete", "not_evaluated", "missing", "unknown"}
+        if projection_not_evaluated and (index_status in {"pass", "passed", "ok"} or historical_status == "pass" or completion_claimed):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "historical_index_projection_not_evaluated",
+                "Index pass, goal readiness, or completion cannot consume a malformed/incomplete current projection; preserve historical identity as not_evaluated.",
+                {
+                    "index_status": index_status or None,
+                    "current_projection_status": projection_status or None,
+                    "projection_completeness": projection_completeness or None,
+                },
+            )
         if completion_claimed and not context.get("long_run_state_checked", False):
             add(
                 findings,
@@ -261,6 +316,21 @@ class CompletionValidationRule(TargetContractRule):
                 ],
             )
         )
+        self_grounded_axes = set(
+            list_values(
+                first_present(
+                    result,
+                    [
+                        "self_grounded_axes",
+                        "verification_source_separation_gate.self_grounded_axes",
+                        "evidence_provenance_gate.self_grounded_axes",
+                        "anti_loop_progress_gate.self_grounded_axes",
+                    ],
+                )
+            )
+        )
+        independently_verified_field_set = set(list_values(independently_verified_fields))
+        self_grounded_mislabeled_independent = sorted(self_grounded_axes & independently_verified_field_set)
         envelope_thaw_item_required = boolish(
             first_present(
                 result,
@@ -1011,8 +1081,18 @@ class CompletionValidationRule(TargetContractRule):
                 findings,
                 "block" if mode == "block" else "warn",
                 "validate_independent_verification_source_not_disjoint",
-                "`validate` cannot complete from independently_verified evidence unless verification_input_paths are disjoint from verified artifacts or the adapter marks the axis self_grounded.",
+                "`validate` cannot complete from independently_verified evidence unless verification inputs are disjoint from verified artifacts; self-grounded axes remain a separate structural provenance class.",
                 {"independent_source_separation_status": independent_source_status},
+            )
+        if self_grounded_mislabeled_independent and (
+            validation_verdict in {"complete", "passed", "pass"} or progress_verdict == "advanced"
+        ) and not explicit_descope:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "validate_self_grounded_counted_as_independent",
+                "Self-grounded structural axes cannot satisfy source-independent semantic completion or advanced progress.",
+                {"axis_ids": self_grounded_mislabeled_independent},
             )
         if independently_verified_downgraded_fields and progress_verdict == "advanced" and not explicit_descope:
             add(

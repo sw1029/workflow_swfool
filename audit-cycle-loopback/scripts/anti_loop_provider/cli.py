@@ -2,6 +2,62 @@ from __future__ import annotations
 
 from .common import *
 
+def _packet_progress_verdict(packet: dict[str, Any]) -> str:
+    if not bool_value(packet.get("scope_verified")) or str(packet.get("evidence_class") or "") == "not_evaluated":
+        return "not_evaluated"
+    if bool_value(packet.get("authoritative_semantic_progress")):
+        return "advanced"
+    if bool_value(packet.get("hard_stop_required")):
+        return "blocked"
+    return "stalled"
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _build_handoff(packet: dict[str, Any], root: Path, output: Path | None) -> dict[str, Any]:
+    if output is None:
+        return {
+            "handoff_contract_version": 1,
+            "applicability": "missing_required",
+            "applicability_reason": "loopback_packet_not_durably_written",
+        }
+    compatibility_rows = [
+        row for row in packet.get("gate_compatibility_results") or [] if isinstance(row, dict)
+    ]
+    compatible_ids = sorted(
+        str(row.get("gate_id"))
+        for row in compatibility_rows
+        if row.get("gate_id") and row.get("gate_compatibility_status") == "compatible"
+    )
+    incompatible_ids = sorted(
+        str(row.get("gate_id"))
+        for row in compatibility_rows
+        if row.get("gate_id") and row.get("gate_compatibility_status") != "compatible"
+    )
+    return {
+        "handoff_contract_version": 1,
+        "applicability": "required",
+        "packet_ref": rel_path(root, output),
+        "packet_sha256": _file_sha256(output),
+        "artifact_id": packet.get("artifact_id"),
+        "artifact_sha256": packet.get("artifact_sha256"),
+        "artifact_family": packet.get("artifact_family"),
+        "blocker_signature": packet.get("blocker_signature"),
+        "progress_verdict": packet.get("progress_verdict"),
+        "hard_stop": bool_value(packet.get("hard_stop_required")),
+        "terminal_state": packet.get("recommended_disposition"),
+        "allowed_next_action_classes": packet.get("allowed_next_action_classes") or [],
+        "compatible_gate_ids": compatible_ids,
+        "incompatible_gate_ids": incompatible_ids,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Compute a conservative anti-loop progress gate packet.")
     parser.add_argument("--root", default=".")
@@ -14,6 +70,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--provider-request-count", type=int, default=0)
     parser.add_argument("--artifact-path", action="append", default=[])
     parser.add_argument("--artifact-paths-json")
+    parser.add_argument("--artifact-ref-json", help="Path or JSON object containing the exact decision artifact identity, hash, class, lane, and discovery basis.")
     parser.add_argument("--changed-file", action="append", default=[], help="Changed repository file path used for verifier-source coupling checks.")
     parser.add_argument("--changed-files-json", help="Path or JSON list/dict of changed repository files for verifier-source coupling checks.")
     parser.add_argument("--gate-state-json", action="append", default=[], help="Path or JSON containing disposition gates from loop detection or portfolio planning.")
@@ -65,12 +122,30 @@ def main(argv: list[str] | None = None) -> int:
         packet["registry_updated"] = True
     else:
         packet["registry_updated"] = False
+    packet["decision_contract_version"] = 1
+    packet["progress_verdict"] = _packet_progress_verdict(packet)
+    packet["terminal_state"] = packet.get("recommended_disposition")
+    packet["allowed_next_action_classes"] = list(packet.get("effective_allowed_dispositions") or [])
+    if not packet["allowed_next_action_classes"]:
+        packet["allowed_next_action_classes"] = [
+            str(packet.get("recommended_disposition") or ("terminal_blocked" if packet.get("hard_stop_required") else "conservative_hold"))
+        ]
+    packet["required_gate_ids"] = list(packet.get("required_gate_ids") or [])
+    packet["decision_consumed_gate_ids"] = sorted(
+        str(row.get("gate_id"))
+        for row in packet.get("gate_compatibility_results") or []
+        if isinstance(row, dict)
+        and row.get("gate_id")
+        and row.get("gate_compatibility_status") == "compatible"
+    )
+    output: Path | None = None
     if args.output:
         output = Path(args.output)
         if not output.is_absolute():
             output = root / output
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(packet, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    packet["anti_loop_handoff"] = _build_handoff(packet, root, output)
     json.dump(packet, sys.stdout, ensure_ascii=False, indent=2, sort_keys=True)
     sys.stdout.write("\n")
     return 0 if packet.get("evidence_class") == "computed" else 2

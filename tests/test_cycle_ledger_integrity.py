@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -302,6 +303,98 @@ def test_terminal_latch_appends_compact_durable_observations(tmp_path: Path) -> 
     assert restart["observation_result"]["observation_appended"] is True
     assert rows[-1]["terminal_latch_streak"] == 3
     assert not (tmp_path / ".task" / "cycle" / "cycle-restart-not-created").exists()
+
+
+def terminal_transition_receipt(root: Path, *, transaction_id: str = "transaction_A") -> dict[str, Any]:
+    artifacts: dict[str, dict[str, str]] = {}
+    for name in ("seal", "registry", "pack", "index"):
+        path = root / f"{name}_A.json"
+        path.write_text(json.dumps({"artifact_id": f"{name}_A"}) + "\n", encoding="utf-8")
+        artifacts[name] = {
+            "ref": path.name,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        }
+    receipt: dict[str, Any] = {"transaction_id": transaction_id, "artifacts": artifacts}
+    normalized, missing = cycle_ledger.terminal_reopen_contract(receipt)
+    assert missing == ["transaction_sha256"]
+    receipt["transaction_sha256"] = normalized["transaction_sha256"]
+    return receipt
+
+
+def test_v2_terminal_latch_reopens_once_for_content_delta_and_rejects_tampering(tmp_path: Path) -> None:
+    terminal = {
+        "step": "report",
+        "status": "complete",
+        "terminal_justified": True,
+        "terminal_latch_key_version": 2,
+        "terminal_outcome_family_key": "family_F",
+        "blocker_signature": "blocker_A",
+        "input_state_fingerprint": "input_D",
+        "authority_state_fingerprint": "authority_A",
+        "external_state_fingerprint": "external_A",
+    }
+    initialize_with_context(tmp_path, "cycle_C")
+    cycle_ledger.append_event(tmp_path, "cycle_C", terminal)
+    cycle_ledger.append_event(tmp_path, "cycle_C", terminal)
+
+    receipt = terminal_transition_receipt(tmp_path)
+    changed = {
+        **{key: value for key, value in terminal.items() if key not in {"step", "status"}},
+        "material_delta": {"artifact_sha256": "b" * 64},
+        "lifecycle_transition_result": receipt,
+    }
+    reopened = cycle_ledger.init_cycle(tmp_path, "cycle_D", "task-1", "material delta", changed)
+    repeated = cycle_ledger.init_cycle(tmp_path, "cycle_E", "task-1", "same material delta", changed)
+    rows = cycle_ledger.read_events(tmp_path, "cycle_C")
+
+    assert reopened["cycle_id"] == "cycle_D"
+    assert reopened["terminal_reopen_result"]["event"]["terminal_latch_status"] == "reopened"
+    assert repeated["cycle_suppressed"] is True
+    assert not (tmp_path / ".task" / "cycle" / "cycle_E").exists()
+    assert sum(row.get("terminal_latch_status") == "reopened" for row in rows) == 1
+    assert rows[2]["unchanged_ref"]["prior_packet_ref"].endswith(f"#{rows[1]['event_id']}")
+    assert len(rows[2]["unchanged_ref"]["prior_packet_sha256"]) == 64
+
+    tampered_receipt = terminal_transition_receipt(tmp_path, transaction_id="transaction_B")
+    tampered_receipt["artifacts"]["seal"]["sha256"] = "0" * 64
+    normalized, _missing = cycle_ledger.terminal_reopen_contract(tampered_receipt)
+    tampered_receipt["transaction_sha256"] = normalized["transaction_sha256"]
+    tampered = {
+        **changed,
+        "material_delta": {"artifact_sha256": "c" * 64},
+        "lifecycle_transition_result": tampered_receipt,
+    }
+    with pytest.raises(ValueError, match="failed content verification"):
+        cycle_ledger.init_cycle(tmp_path, "cycle_F", "task-1", "tampered delta", tampered)
+    assert not (tmp_path / ".task" / "cycle" / "cycle_F").exists()
+
+
+def test_current_terminal_identity_and_unchanged_refs_fail_closed(tmp_path: Path) -> None:
+    state = cycle_ledger.terminal_latch_state(
+        [],
+        {
+            "terminal_justified": True,
+            "terminal_latch_key_version": 2,
+            "terminal_outcome_family_key": "family_F",
+            "blocker_signature": "blocker_A",
+            "input_state_fingerprint": "input_D",
+            "authority_state_fingerprint": "authority_A",
+        },
+    )
+    assert state["terminal_latch_status"] == "not_evaluated"
+    assert state["terminal_latch_missing_fields"] == ["external_state_fingerprint"]
+
+    initialize_with_context(tmp_path, "cycle-forged-ref")
+    with pytest.raises(ValueError, match="does not match prior authoritative"):
+        cycle_ledger.append_event(
+            tmp_path,
+            "cycle-forged-ref",
+            {
+                "step": "run",
+                "status": "complete",
+                "unchanged_refs": [{"path": "artifact_A.json", "sha256": "a" * 64}],
+            },
+        )
 
 
 def test_concurrent_appends_are_complete_unique_jsonl_records(tmp_path: Path) -> None:

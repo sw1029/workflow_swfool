@@ -72,7 +72,7 @@ class FindingBuilderMixin:
         if self.state["provider_reattempt_records"]:
             findings.append({"severity": "block" if self.strict else "warn", "code": "provider_reattempt_required", "message": "A transient provider failure cannot be treated as provider-terminal while required mitigations remain unexhausted.", "evidence": self.state["provider_reattempt_records"][:5]})
         if self.state["surface_budget"].get("consolidation_candidate_required"):
-            findings.append({"severity": "block", "code": "command_surface_budget_exceeded", "message": "Contract/preflight command surface is over budget while recent progress is metadata-only; derive must register/select consolidation, select goal-productive work, or record terminal state.", "evidence": self.state["surface_budget"]})
+            findings.append({"severity": "warn", "code": "command_surface_budget_exceeded", "message": "Global contract/preflight command-surface debt is dashboard-only until an exact current-family scope proves it can constrain the decision.", "evidence": self.state["surface_budget"]})
         if self.state["provider_scale_dispatch_gate_result"]["dispatch_required"]:
             findings.append({"severity": "block", "code": "provider_scale_dispatch_required", "message": "No provider dispatch occurred and coverage/quality high-water evidence remains all-zero; derive must choose bounded dispatch/scale work if authority permits, or terminal/user-escalate with missing authority/input.", "evidence": self.state["provider_scale_dispatch_gate_result"]})
         if self.state["validator_gate_records"]:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -140,11 +141,15 @@ def test_explicit_adapter_policy_supplies_metric_keys_and_aliases(tmp_path: Path
         assert gate["current_quality_vector"] == {"quality_score": 2.0}
 
     adapter = tmp_path / "domain_adapter.py"
+    artifact = tmp_path / "artifact_A.json"
+    artifact.write_text('{"artifact_id":"artifact_A"}\n', encoding="utf-8")
+    artifact_sha256 = hashlib.sha256(artifact.read_bytes()).hexdigest()
     adapter.write_text(
         "\n".join(
             [
                 "def quality_vector(**kwargs):",
-                "    return {'quality_vector': {'score_alias': 2, 'current_output_fingerprint': 'fp-generic'}}",
+                "    ref = kwargs.get('decision_artifact_ref') or {}",
+                "    return {'quality_vector': {'score_alias': 2, 'current_output_fingerprint': 'fp-generic', 'artifact_id': ref.get('artifact_id'), 'artifact_sha256': ref.get('artifact_sha256')}}",
                 "def quality_delta_policy(**kwargs):",
                 "    return {'keys': ['quality_score'], 'aliases': {'quality_score': ['score_alias']}}",
                 "def substance_metrics(**kwargs):",
@@ -156,7 +161,24 @@ def test_explicit_adapter_policy_supplies_metric_keys_and_aliases(tmp_path: Path
         + "\n",
         encoding="utf-8",
     )
-    proc = run_loopback(tmp_path, "--domain-adapter", str(adapter))
+    proc = run_loopback(
+        tmp_path,
+        "--domain-adapter",
+        str(adapter),
+        "--artifact-path",
+        artifact.name,
+        "--artifact-ref-json",
+        json.dumps(
+            {
+                "artifact_id": "artifact_A",
+                "artifact_class": "primary_output",
+                "artifact_path_or_store_ref": artifact.name,
+                "artifact_sha256": artifact_sha256,
+                "production_lane_identity": "lane_L",
+            },
+            sort_keys=True,
+        ),
+    )
     assert proc.returncode == 0, proc.stderr
     packet = json.loads(proc.stdout)
     assert packet["quality_delta_policy"] == {
@@ -284,3 +306,45 @@ def test_global_docs_define_no_fixed_domain_ladder() -> None:
     assert "M0_single_work_full_window" not in text
     assert "M4_unseen_15" not in text
     assert "corpus-scale ladder" not in text
+
+
+def test_durable_loopback_output_emits_hash_bound_adjacent_handoff(tmp_path: Path) -> None:
+    artifact = tmp_path / "artifact_A.json"
+    artifact.write_text('{"artifact_id":"artifact_A"}\n', encoding="utf-8")
+    artifact_sha256 = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    packet_path = tmp_path / "packet_K.json"
+    proc = run_loopback(
+        tmp_path,
+        "--artifact-family",
+        "family_F",
+        "--artifact-path",
+        artifact.name,
+        "--artifact-ref-json",
+        json.dumps(
+            {
+                "artifact_id": "artifact_A",
+                "artifact_class": "family_F",
+                "artifact_path_or_store_ref": artifact.name,
+                "artifact_sha256": artifact_sha256,
+                "production_lane_identity": "lane_L",
+            },
+            sort_keys=True,
+        ),
+        "--blocker-signature",
+        "blocker_A",
+        "--output",
+        packet_path.name,
+    )
+
+    assert proc.returncode == 2
+    emitted = json.loads(proc.stdout)
+    durable = json.loads(packet_path.read_text(encoding="utf-8"))
+    handoff = emitted["anti_loop_handoff"]
+    assert handoff["handoff_contract_version"] == 1
+    assert handoff["applicability"] == "required"
+    assert handoff["packet_ref"] == packet_path.name
+    assert handoff["packet_sha256"] == hashlib.sha256(packet_path.read_bytes()).hexdigest()
+    assert handoff["artifact_id"] == durable["artifact_id"] == "artifact_A"
+    assert handoff["artifact_sha256"] == durable["artifact_sha256"] == artifact_sha256
+    assert handoff["blocker_signature"] == durable["blocker_signature"] == "blocker_A"
+    assert "anti_loop_handoff" not in durable

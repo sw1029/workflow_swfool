@@ -648,6 +648,98 @@ def validate(
         if not completed(stage, step):
             add(findings, "block", "ordering_required_step_missing", f"{transition} requires completed step `{step}`.", {"step_status": status_for_step(stage, step)})
 
+    if workflow_mode == "normal" and transition == "pre_derive":
+        loopback_event = step_event(stage, "loopback_audit")
+        handoff = loopback_event.get("anti_loop_handoff") or loopback_event.get("anti_loop_progress_handoff")
+        gate_value = loopback_event.get("anti_loop_progress_gate")
+        if not isinstance(handoff, dict) and isinstance(gate_value, dict) and gate_value.get("applicability"):
+            handoff = gate_value
+        handoff_version = (
+            handoff.get("handoff_contract_version")
+            if isinstance(handoff, dict)
+            else gate_value.get("handoff_contract_version")
+            if isinstance(gate_value, dict)
+            else loopback_event.get("handoff_contract_version")
+        )
+        if not isinstance(handoff, dict):
+            explicit_legacy = str(handoff_version).strip() == "0"
+            add(
+                findings,
+                "warn" if explicit_legacy else "block",
+                "pre_derive_anti_loop_handoff_legacy_unbound" if explicit_legacy else "pre_derive_anti_loop_handoff_missing",
+                "Explicit legacy handoff version is unbound; current governed loopback events must emit a hash-bound required handoff before derive."
+                if explicit_legacy
+                else "Current governed loopback event is missing the required hash-bound handoff.",
+            )
+        else:
+            applicability = str(handoff.get("applicability") or "").strip().lower()
+            if str(handoff_version).strip() not in {"0", "1"}:
+                add(
+                    findings,
+                    "block",
+                    "pre_derive_anti_loop_handoff_version_missing_or_invalid",
+                    "Current handoffs require version 1; legacy handoffs require explicit version 0.",
+                )
+            if str(handoff_version).strip() == "0":
+                add(
+                    findings,
+                    "warn",
+                    "pre_derive_anti_loop_handoff_explicit_legacy",
+                    "Explicit legacy handoff is unbound; emit a current hash-bound handoff on the next governed transition.",
+                )
+            elif applicability == "not_applicable":
+                reason = handoff.get("not_applicable_reason") or handoff.get("applicability_reason")
+                derive_mode = str(
+                    handoff.get("derive_mode")
+                    or first_value(stage, "derive_mode", "transition_context.derive_mode", "packet.derive_mode")
+                    or ""
+                ).strip().lower()
+                selected_source = str(
+                    handoff.get("selected_task_source")
+                    or first_value(stage, "selected_task_source", "transition_context.selected_task_source", "packet.selected_task_source")
+                    or ""
+                ).strip().lower()
+                prior_packet = bool(
+                    handoff.get("prior_packet_exists")
+                    or handoff.get("prior_packet_ref")
+                    or first_value(stage, "prior_loopback_packet_ref", "loopback_packet_ref")
+                )
+                if (derive_mode != "initial_init" and selected_source != "standalone") or not reason or prior_packet:
+                    add(
+                        findings,
+                        "block",
+                        "pre_derive_anti_loop_handoff_not_applicable_invalid",
+                        "not_applicable requires a reasoned initial/standalone transition with no prior required loopback packet.",
+                    )
+            elif applicability != "required":
+                add(
+                    findings,
+                    "block",
+                    "pre_derive_anti_loop_handoff_not_required",
+                    "A normal governed post-loopback transition requires applicability=required.",
+                    {"applicability": applicability or None},
+                )
+            if str(handoff_version).strip() == "1" and applicability == "required":
+                required_handoff = (
+                    "packet_ref",
+                    "packet_sha256",
+                    "artifact_id",
+                    "artifact_sha256",
+                    "artifact_family",
+                    "blocker_signature",
+                    "progress_verdict",
+                    "allowed_next_action_classes",
+                )
+                missing_handoff = [field for field in required_handoff if handoff.get(field) in (None, "", [])]
+                if missing_handoff:
+                    add(
+                        findings,
+                        "block",
+                        "pre_derive_anti_loop_handoff_incomplete",
+                        "Normal pre-derive handoff is missing decision identity/action fields.",
+                        {"missing_fields": missing_handoff},
+                    )
+
     completed_steps = [step for step in active_order if completed(stage, step)]
     if completed_steps:
         latest_idx = max(active_order.index(step) for step in completed_steps)
@@ -1206,6 +1298,35 @@ def validate(
                 "packet.loop_breaker_packet.command_surface_budget.consolidation_candidate_required",
             )
         )
+        command_budget_scope = str(
+            first_value(
+                stage,
+                "command_surface_budget.decision_scope",
+                "packet.command_surface_budget.decision_scope",
+                "global_aggregate.decision_scope",
+                "packet.global_aggregate.decision_scope",
+            )
+            or ""
+        ).strip().lower()
+        command_budget_hard_gate_value = first_value(
+            stage,
+            "command_surface_budget.hard_gate",
+            "packet.command_surface_budget.hard_gate",
+            "global_aggregate.hard_gate",
+            "packet.global_aggregate.hard_gate",
+        )
+        command_budget_constrains_value = first_value(
+            stage,
+            "command_surface_budget.constrains_current_family",
+            "packet.command_surface_budget.constrains_current_family",
+            "global_aggregate.constrains_current_family",
+            "packet.global_aggregate.constrains_current_family",
+        )
+        command_budget_constrains_current = (
+            command_budget_scope != "global_dashboard"
+            and (command_budget_hard_gate_value is None or truthy(command_budget_hard_gate_value))
+            and (command_budget_constrains_value is None or truthy(command_budget_constrains_value))
+        )
         consolidation_registered = truthy(
             first_value(
                 stage,
@@ -1215,7 +1336,13 @@ def validate(
                 "packet.command_surface_budget.consolidation_candidate_registered",
             )
         )
-        if command_budget_required and not consolidation_registered and not terminal_blocker and next_progress_kind != "goal_productive":
+        if (
+            command_budget_required
+            and command_budget_constrains_current
+            and not consolidation_registered
+            and not terminal_blocker
+            and next_progress_kind != "goal_productive"
+        ):
             add(
                 findings,
                 "block",

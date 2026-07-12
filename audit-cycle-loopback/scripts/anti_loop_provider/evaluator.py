@@ -20,7 +20,13 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
     prev_count = int((latest or {}).get("micro_hardening_count") or 0)
     prev_fingerprint = (latest or {}).get("current_output_fingerprint")
 
-    paths = load_artifact_paths(root, args.artifact_paths_json, args.artifact_path)
+    paths, decision_artifact_ref = load_artifact_selection(
+        root,
+        args.artifact_paths_json,
+        args.artifact_path,
+        artifact_ref_json=getattr(args, "artifact_ref_json", None),
+        artifact_family=args.artifact_family,
+    )
     changed_files = load_changed_files(
         root,
         getattr(args, "changed_files_json", None),
@@ -38,6 +44,28 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
         load_error=domain_adapter_error,
     )
     hook_demand_events: list[dict[str, Any]] = []
+    gate_compatibility_results: list[dict[str, Any]] = []
+
+    def bind_artifact_gate(
+        gate_id: str,
+        gate: dict[str, Any],
+        *,
+        pass_fields: tuple[str, ...] = (),
+        computed_from_decision_artifact: bool = False,
+    ) -> dict[str, Any]:
+        if computed_from_decision_artifact and decision_artifact_ref.get("artifact_class"):
+            gate = dict(gate)
+            gate.setdefault("required_artifact_class", decision_artifact_ref["artifact_class"])
+        compatibility = gate_artifact_compatibility_result(
+            domain_adapter,
+            gate_id,
+            decision_artifact_ref,
+            gate,
+            root=root,
+            artifact_paths=[rel_path(root, path) for path in paths],
+        )
+        gate_compatibility_results.append(compatibility)
+        return apply_gate_artifact_compatibility(gate, compatibility, pass_fields=pass_fields)
 
     def record_adapter_hook_demand(hook_id: str, affected_gate_id: str, *, decision_relevant_skip: bool) -> None:
         if domain_adapter is None or hasattr(domain_adapter, hook_id):
@@ -57,17 +85,29 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
             return bool(value)
         return True
 
-    quality, evidence_paths, insufficient_reason = (
-        ({}, [], domain_adapter_error)
+    quality, evidence_paths, insufficient_reason, quality_hook_receipt = (
+        (
+            {},
+            [],
+            domain_adapter_error,
+            {
+                "hook_resolved": False,
+                "hook_signature_compatible": False,
+                "invocation_completed": False,
+                "return_contract_valid": False,
+            },
+        )
         if domain_adapter_error
-        else compute_quality(root, paths, domain_adapter)
+        else compute_quality(root, paths, domain_adapter, decision_artifact_ref)
     )
     provider_request_count = max(0, int(args.provider_request_count or 0))
     gate_inputs: list[dict[str, Any]] = []
     if bool_value(adapter_load_gate.get("constrains_disposition")):
         gate_inputs.append({"name": "adapter_wiring_gate", **adapter_load_gate})
     for raw_gate in getattr(args, "gate_state_json", []) or []:
-        gate_inputs.extend(extract_disposition_gates(load_json_value(root, raw_gate)))
+        for gate in extract_disposition_gates(load_json_value(root, raw_gate)):
+            gate_id = str(gate.get("name") or gate.get("gate") or gate.get("gate_id") or "external_gate")
+            gate_inputs.append(bind_artifact_gate(gate_id, gate))
     runner_validation = load_json_value(root, getattr(args, "runner_validation_json", None))
     output_delta = load_json_value(root, getattr(args, "output_delta_json", None))
     quality_delta_policy_value, quality_delta_policy_error = call_adapter(
@@ -91,34 +131,64 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
             }
         )
     consumer_conformance_gate = consumer_context_conformance_gate(runner_validation, output_delta, *gate_inputs)
+    self_consumer_probe_pending = False
+    self_consumer_required = False
+    consumer_id = "audit-cycle-loopback"
     if adapter_registered:
-        consumer_id = "audit-cycle-loopback"
-        probe_basis = f"{consumer_id}|{domain_adapter_path or adapter_expected_path or 'missing'}|{domain_adapter_error or 'loaded'}"
-        probe_row = {
-            "consumer_context_id": consumer_id,
-            "adapter_loaded": domain_adapter is not None,
-            "required_hook_callable": domain_adapter is not None,
-            "hook_signature_compatible": domain_adapter is not None,
-            "return_contract_valid": domain_adapter is not None,
-            "probe_evidence_id": "probe-" + hashlib.sha256(probe_basis.encode("utf-8")).hexdigest()[:16],
-            "status": "pass" if domain_adapter is not None else "not_evaluated",
-        }
+        quality_hook = getattr(domain_adapter, "quality_vector", None) if domain_adapter is not None else None
         required_ids = list(consumer_conformance_gate.get("required_consumer_ids") or [])
-        if consumer_id not in required_ids:
-            required_ids.append(consumer_id)
-        rows = [row for row in consumer_conformance_gate.get("rows") or [] if row.get("consumer_context_id") != consumer_id]
-        rows.append(probe_row)
-        missing_ids = [item for item in consumer_conformance_gate.get("missing_consumer_context_ids") or [] if item != consumer_id]
-        if domain_adapter is None:
-            missing_ids.append(consumer_id)
-        consumer_conformance_gate.update(
-            {
-                "required_consumer_ids": required_ids,
-                "rows": rows,
-                "missing_consumer_context_ids": sorted(set(missing_ids)),
-                "status": "pass" if not missing_ids else "not_evaluated",
-            }
+        self_consumer_required = consumer_id in required_ids
+        self_consumer_probe_pending = self_consumer_required or bool(
+            decision_artifact_ref.get("scope_verified") and callable(quality_hook)
         )
+        artifact_echo_valid = bool(
+            decision_artifact_ref.get("scope_verified")
+            and str(quality.get("artifact_id") or "") == str(decision_artifact_ref.get("artifact_id") or "")
+            and str(quality.get("artifact_sha256") or quality.get("output_sha256") or "").lower()
+            == str(decision_artifact_ref.get("artifact_sha256") or "").lower()
+        )
+        invocation_completed = bool(quality_hook_receipt.get("invocation_completed"))
+        if self_consumer_probe_pending:
+            probe_basis = "|".join(
+                (
+                    consumer_id,
+                    str(domain_adapter_path or adapter_expected_path or "missing"),
+                    str(decision_artifact_ref.get("artifact_id") or "missing"),
+                    str(decision_artifact_ref.get("artifact_sha256") or "missing"),
+                )
+            )
+            probe_sha256 = hashlib.sha256(probe_basis.encode("utf-8")).hexdigest()
+            probe_row = {
+                "consumer_context_id": consumer_id,
+                "hook_id": "quality_vector",
+                "adapter_loaded": domain_adapter is not None,
+                "hook_resolved": bool(quality_hook_receipt.get("hook_resolved")),
+                "required_hook_callable": callable(quality_hook),
+                "hook_signature_compatible": bool(quality_hook_receipt.get("hook_signature_compatible")),
+                "invocation_completed": invocation_completed,
+                "invocation_status": "completed" if invocation_completed else "not_evaluated",
+                "return_contract_valid": bool(quality_hook_receipt.get("return_contract_valid")),
+                "return_contract_status": "pass" if quality_hook_receipt.get("return_contract_valid") else "not_evaluated",
+                "artifact_identity_echo_valid": artifact_echo_valid,
+                "artifact_identity_echo_status": "pass" if artifact_echo_valid else "not_evaluated",
+                "value_consumed_by_decision": False,
+                "decision_consumption_status": "not_evaluated",
+                "probe_evidence_id": "probe-" + probe_sha256[:16],
+                "probe_evidence_ref": f"packet:consumer_context_conformance/{consumer_id}",
+                "probe_evidence_sha256": probe_sha256,
+                "status": "pending_decision_consumption",
+            }
+            if consumer_id not in required_ids:
+                if self_consumer_required:
+                    required_ids.append(consumer_id)
+            rows = [row for row in consumer_conformance_gate.get("rows") or [] if row.get("consumer_context_id") != consumer_id]
+            rows.append(probe_row)
+            consumer_conformance_gate = consumer_context_conformance_gate(
+                {
+                    "required_consumer_ids": required_ids,
+                    "consumer_context_conformance": {"rows": rows},
+                }
+            )
     adapter_load_gate["consumer_context_conformance"] = consumer_conformance_gate
     if bool_value(consumer_conformance_gate.get("missing_consumer_context_ids")):
         adapter_load_gate["status"] = "block"
@@ -362,14 +432,14 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
         candidate_metric_keys=[*quality_delta_policy["keys"], *sorted(numeric_vector(current_substance))],
     )
     evidence_provenance, evidence_provenance_provided = normalize_evidence_provenance(evidence_provenance_value)
-    coverage_gate, independent_coverage_fields, attested_coverage_fields = apply_evidence_provenance_filter(
+    coverage_gate, independent_coverage_fields, attested_coverage_fields, coverage_self_grounded_fields = apply_evidence_provenance_filter(
         coverage_gate,
         improved_key="improved_fields",
         pass_key="quality_delta_pass",
         provenance=evidence_provenance,
         hook_provided=evidence_provenance_provided,
     )
-    substance_gate, independent_substance_fields, attested_substance_fields = apply_evidence_provenance_filter(
+    substance_gate, independent_substance_fields, attested_substance_fields, substance_self_grounded_fields = apply_evidence_provenance_filter(
         substance_gate,
         improved_key="improved_axes",
         pass_key="substance_delta_pass",
@@ -380,21 +450,26 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
         provenance_value=evidence_provenance_value,
         verified_artifact_paths=[rel_path(root, path) for path in paths],
         independently_verified_fields=[*independent_coverage_fields, *independent_substance_fields],
+        self_grounded_fields=[*coverage_self_grounded_fields, *substance_self_grounded_fields],
     )
     downgraded_fields = set(source_separation_gate.get("independently_verified_downgraded_fields") or [])
+    self_grounded_fields = set(source_separation_gate.get("self_grounded_fields") or [])
     if downgraded_fields:
         coverage_downgraded = [field for field in independent_coverage_fields if field in downgraded_fields]
         substance_downgraded = [field for field in independent_substance_fields if field in downgraded_fields]
+        coverage_self_grounded = [field for field in coverage_downgraded if field in self_grounded_fields]
+        substance_self_grounded = [field for field in substance_downgraded if field in self_grounded_fields]
         independent_coverage_fields = [field for field in independent_coverage_fields if field not in downgraded_fields]
         independent_substance_fields = [field for field in independent_substance_fields if field not in downgraded_fields]
-        attested_coverage_fields = sorted(set(attested_coverage_fields + coverage_downgraded))
-        attested_substance_fields = sorted(set(attested_substance_fields + substance_downgraded))
+        attested_coverage_fields = sorted(set(attested_coverage_fields + [field for field in coverage_downgraded if field not in self_grounded_fields]))
+        attested_substance_fields = sorted(set(attested_substance_fields + [field for field in substance_downgraded if field not in self_grounded_fields]))
         if coverage_downgraded:
             coverage_gate["improved_fields"] = independent_coverage_fields
             coverage_gate["quality_delta_pass"] = bool(independent_coverage_fields)
             coverage_gate["status"] = "pass" if independent_coverage_fields else "block"
             coverage_gate["independently_verified_fields"] = independent_coverage_fields
             coverage_gate["producer_attested_fields"] = attested_coverage_fields
+            coverage_gate["self_grounded_fields"] = coverage_self_grounded
             coverage_gate["attested_only_movement"] = bool(attested_coverage_fields and not independent_coverage_fields)
         if substance_downgraded:
             substance_gate["improved_axes"] = independent_substance_fields
@@ -402,21 +477,98 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
             substance_gate["status"] = "pass" if independent_substance_fields else "block"
             substance_gate["independently_verified_fields"] = independent_substance_fields
             substance_gate["producer_attested_fields"] = attested_substance_fields
+            substance_gate["self_grounded_fields"] = substance_self_grounded
             substance_gate["attested_only_movement"] = bool(attested_substance_fields and not independent_substance_fields)
+    coverage_gate = bind_artifact_gate(
+        "coverage_quality_delta_gate",
+        coverage_gate,
+        pass_fields=("quality_delta_pass",),
+        computed_from_decision_artifact=True,
+    )
+    substance_gate = bind_artifact_gate(
+        "substance_delta_gate",
+        substance_gate,
+        pass_fields=("substance_delta_pass",),
+        computed_from_decision_artifact=True,
+    )
+    if not bool_value(coverage_gate.get("decision_contribution_allowed")):
+        coverage_gate["incompatible_or_unverified_observed_fields"] = list(independent_coverage_fields)
+        independent_coverage_fields = []
+    if not bool_value(substance_gate.get("decision_contribution_allowed")):
+        substance_gate["incompatible_or_unverified_observed_fields"] = list(independent_substance_fields)
+        independent_substance_fields = []
+    if self_consumer_probe_pending:
+        invocation_receipt_valid = bool(
+            invocation_completed
+            and quality_hook_receipt.get("return_contract_valid")
+            and artifact_echo_valid
+        )
+        if not invocation_receipt_valid:
+            coverage_gate["consumer_invocation_status"] = "not_evaluated"
+            coverage_gate["decision_contribution_allowed"] = False
+            coverage_gate["quality_delta_pass"] = False
+            coverage_gate["evaluation_status"] = "not_evaluated"
+            coverage_gate["constrains_disposition"] = False
+            independent_coverage_fields = []
+        decision_consumed = bool(
+            invocation_receipt_valid
+            and bool_value(coverage_gate.get("decision_contribution_allowed"))
+        )
+        rows = []
+        for receipt in consumer_conformance_gate.get("rows") or []:
+            if receipt.get("consumer_context_id") != consumer_id:
+                rows.append(receipt)
+                continue
+            receipt = dict(receipt)
+            receipt["value_consumed_by_decision"] = decision_consumed
+            receipt["decision_consumption_status"] = "pass" if decision_consumed else "not_evaluated"
+            receipt["status"] = "pass" if decision_consumed else "not_evaluated"
+            rows.append(receipt)
+        consumer_conformance_gate = consumer_context_conformance_gate(
+            {
+                "required_consumer_ids": consumer_conformance_gate.get("required_consumer_ids") or [],
+                "consumer_context_conformance": {"rows": rows},
+            }
+        )
+        missing_ids = list(consumer_conformance_gate.get("missing_consumer_context_ids") or [])
+        adapter_load_gate["consumer_context_conformance"] = consumer_conformance_gate
+        if missing_ids:
+            adapter_load_gate["status"] = "block"
+            adapter_load_gate["constrains_disposition"] = True
+            adapter_load_gate["adapter_wiring_defect"] = True
+        matching_gate = next(
+            (item for item in gate_inputs if item.get("name") == "adapter_wiring_gate"),
+            None,
+        )
+        if matching_gate is not None:
+            matching_gate.update(adapter_load_gate)
+        elif missing_ids:
+            gate_inputs.append({"name": "adapter_wiring_gate", **adapter_load_gate})
     evidence_gate = evidence_provenance_gate(
         hook_provided=evidence_provenance_provided,
         provenance=evidence_provenance,
         independent_fields=[*independent_coverage_fields, *independent_substance_fields],
         attested_fields=[*attested_coverage_fields, *attested_substance_fields],
         adapter_error=evidence_provenance_error,
+        self_grounded_fields=sorted(self_grounded_fields),
         source_separation_gate=source_separation_gate,
     )
     output_delta_coverage_gate = find_coverage_quality_delta_gate(output_delta)
     coverage_reconciliation_gate = coverage_quality_delta_reconciliation_gate(coverage_gate, output_delta_coverage_gate, args.epsilon)
+    if not bool_value(coverage_gate.get("decision_contribution_allowed")):
+        coverage_reconciliation_gate = apply_gate_artifact_compatibility(
+            coverage_reconciliation_gate,
+            coverage_gate.get("gate_compatibility") or {},
+        )
     coverage_reconciliation_blocks = bool_value(coverage_reconciliation_gate.get("constrains_disposition"))
     if coverage_reconciliation_blocks:
         gate_inputs.append({"name": "coverage_quality_delta_reconciliation_gate", **coverage_reconciliation_gate})
     dispatch_gate = provider_scale_dispatch_gate(prev_high, coverage_gate, provider_request_count)
+    if not bool_value(coverage_gate.get("decision_contribution_allowed")):
+        dispatch_gate = apply_gate_artifact_compatibility(
+            dispatch_gate,
+            coverage_gate.get("gate_compatibility") or {},
+        )
     if bool_value(dispatch_gate.get("constrains_disposition")):
         gate_inputs.append({"name": "provider_scale_dispatch_gate", **dispatch_gate})
     if bool_value(substance_gate.get("constrains_disposition")):
@@ -435,6 +587,12 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
         if corrective_error:
             corrective_value = {"corrective_resolution_error": corrective_error}
     corrective_gate = vacuous_corrective_gate(corrective_value)
+    corrective_gate = bind_artifact_gate(
+        "vacuous_corrective_gate",
+        corrective_gate,
+        pass_fields=("surface_corrective_noop",),
+        computed_from_decision_artifact=True,
+    )
     if bool_value(corrective_gate.get("constrains_disposition")):
         gate_inputs.append({"name": "vacuous_corrective_gate", **corrective_gate})
     acceptance_value = load_json_value(root, getattr(args, "acceptance_reachability_json", None))
@@ -492,6 +650,12 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
             root_key=current_root_key,
         )
     metric_validity_gate = oracle_metric_validity_gate(metric_validity_value)
+    metric_validity_gate = bind_artifact_gate(
+        "oracle_metric_validity_gate",
+        metric_validity_gate,
+        pass_fields=("metric_goal_productive_excluded",),
+        computed_from_decision_artifact=True,
+    )
     if bool_value(metric_validity_gate.get("constrains_disposition")):
         gate_inputs.append({"name": "oracle_metric_validity_gate", **metric_validity_gate})
     adapter_fingerprint_value, adapter_fingerprint_error = call_adapter(
@@ -518,6 +682,12 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
     if structure_error:
         structure_value = {"structure_metrics_error": structure_error}
     structure_gate = structure_metrics_gate(structure_value)
+    structure_gate = bind_artifact_gate(
+        "structure_metrics_gate",
+        structure_gate,
+        pass_fields=("structure_high_water_moved", "global_structure_high_water_moved"),
+        computed_from_decision_artifact=True,
+    )
     measurement_details = measurement_progress_details(
         registry_rows,
         family_key,
@@ -550,6 +720,39 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
         or args.semantic_signature
         or "unknown"
     )
+    input_state_fingerprint = decision_input_state_fingerprint(
+        [runner_validation, output_delta, quality, source_separation_gate, *gate_inputs],
+        decision_artifact_ref,
+    )
+    attempt_identity = content_bound_attempt_identity(
+        args.cycle_id,
+        normalize_root_family_key(args.artifact_family),
+        str(current_blocker_signature).strip().lower(),
+        input_state_fingerprint,
+    )
+    existing_attempt = next(
+        (
+            registry_row
+            for registry_row in reversed(registry_rows)
+            if str(registry_row.get("attempt_identity") or "") == attempt_identity
+        ),
+        None,
+    )
+    registry_label_correction = False
+    if existing_attempt is not None:
+        registry_label_correction = any(
+            str(existing_attempt.get(field) or "") != str(value or "")
+            for field, value in {
+                "family_key": family_key,
+                "root_key": current_root_key,
+                "root_family_key": current_root_family_key,
+                "artifact_family": args.artifact_family,
+                "blocker_signature": current_blocker_signature,
+            }.items()
+        )
+        existing_cycle = existing_attempt
+    elif existing_cycle is not None and existing_cycle.get("attempt_identity"):
+        existing_cycle = None
     blocker_root_family = current_root_family_key if facet_root_map_missing else collapse_root_family(facet_root_map, current_root_key, current_blocker_signature)
     latest_blocker = next((row for row in reversed(registry_rows) if row_root_family(row) == blocker_root_family), latest_terminal_family or latest)
     current_rung = normalize_ladder_rung(args.blocker_rung) or infer_ladder_rung(*blocker_sources)
@@ -560,8 +763,16 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
     force_implementation_cycle = mutation_kind == "forward_mutation" and forward_budget_remaining == 0
     disagreement = validator_disagreement_finding(runner_validation, output_delta)
     substance_delta_pass = bool_value(substance_gate.get("substance_delta_pass"))
+    artifact_decision_evaluated = bool_value(coverage_gate.get("decision_contribution_allowed"))
 
-    if insufficient_reason:
+    if not artifact_decision_evaluated:
+        semantic_progress = False
+        evidence_class = "not_evaluated"
+        high_water = prev_high
+        count = previous_micro_hardening_count_for_count_key(registry_rows, effective_count_key)
+        disposition = "artifact_gate_not_evaluated"
+        hard_stop = False
+    elif insufficient_reason:
         semantic_progress = False
         evidence_class = "insufficient_evidence"
         high_water = prev_high
@@ -597,16 +808,16 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
 
     outcome_changed = terminal_outcome_changed(output_delta, changed_vs_previous, semantic_progress)
     delta_class = observed_delta_class(output_delta, changed_vs_previous, semantic_progress)
-    forward_mutation_vacuous = mutation_kind == "forward_mutation" and not outcome_changed
+    forward_mutation_vacuous = artifact_decision_evaluated and mutation_kind == "forward_mutation" and not outcome_changed
     if forward_mutation_vacuous:
         hard_stop = True
-    if mutation_kind == "forward_mutation" and outcome_changed and not disagreement and not coverage_reconciliation_blocks:
+    if artifact_decision_evaluated and mutation_kind == "forward_mutation" and outcome_changed and not disagreement and not coverage_reconciliation_blocks:
         changed_vs_previous = True
         count = 0
         hard_stop = False
         if disposition in {"conservative_hold", "provider_or_semantic_transition_or_terminal"}:
             disposition = "forward_mutation_goal_productive_candidate"
-    if measurement_progress_allowed:
+    if artifact_decision_evaluated and measurement_progress_allowed:
         hard_stop = False
         if disposition in {"conservative_hold", "provider_or_semantic_transition_or_terminal"}:
             disposition = "measurement_progress_goal_productive_candidate"
@@ -625,12 +836,12 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
         semantic_progress=semantic_progress,
         values=[runner_validation, output_delta, quality, gate_inputs, args.semantic_signature, args.artifact_family],
     )
-    detection_only = task_correction_class == "detection" and not semantic_progress
+    detection_only = artifact_decision_evaluated and task_correction_class == "detection" and not semantic_progress
     detection_streak = detection_only_streak(registry_rows, blocker_root_family, detection_only)
     requires_correction_or_terminal = detection_streak >= args.detection_only_streak_cap and not semantic_progress
     if requires_correction_or_terminal:
         hard_stop = True
-    current_no_goal_distance_delta = not (
+    current_no_goal_distance_delta = artifact_decision_evaluated and not (
         bool_value(coverage_gate.get("quality_delta_pass"))
         or bool_value(substance_gate.get("substance_delta_pass"))
     )
@@ -757,6 +968,12 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
         provenance=evidence_provenance,
         provenance_hook_provided=evidence_provenance_provided,
     )
+    primary_metric_gate = bind_artifact_gate(
+        "primary_metric_gate",
+        primary_metric_gate,
+        pass_fields=("primary_metric_high_water_moved", "primary_metric_stalled"),
+        computed_from_decision_artifact=True,
+    )
     if primary_metric_error:
         primary_metric_gate["adapter_error"] = primary_metric_error
     capability_ladder_value, capability_ladder_error = call_adapter(
@@ -811,7 +1028,12 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
             disposition = "relaxation_or_escalation_required"
     if bool_value(reachability_gate.get("unverifiable_acceptance_contract")):
         hard_stop = True
-        if disposition in {"open", "prefer_provider_or_semantic", "measurement_progress_goal_productive_candidate"}:
+        if disposition in {
+            "open",
+            "prefer_provider_or_semantic",
+            "measurement_progress_goal_productive_candidate",
+            "artifact_gate_not_evaluated",
+        }:
             disposition = "verifier_contract_required"
     if bool_value(metric_validity_gate.get("metric_goal_productive_excluded")):
         hard_stop = True
@@ -931,6 +1153,11 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
                 row.setdefault("findings", []).append(disagreement)
             row["authoritative_semantic_progress"] = False
             row["hard_stop_required"] = True
+        if registry_label_correction:
+            row["registry_idempotent_replay"] = False
+            row["registry_label_correction"] = True
+            row["correction_of_attempt_identity"] = attempt_identity
+            return row, compact_registry([*registry_rows, dict(row)], args.max_rows_per_family), True
         return row, registry_rows, False
     registry_row = dict(row)
     return row, compact_registry([*registry_rows, registry_row], args.max_rows_per_family), True

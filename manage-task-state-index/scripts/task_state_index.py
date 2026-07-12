@@ -20,6 +20,15 @@ if str(AGENT_LOG_SCRIPTS) not in sys.path:
 
 from agent_log_integrity import inspect_agent_log_store  # noqa: E402
 
+TASK_STATE_MIGRATION_SCRIPTS = Path(__file__).resolve().parent
+if str(TASK_STATE_MIGRATION_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(TASK_STATE_MIGRATION_SCRIPTS))
+
+from task_state_migration import (  # noqa: E402
+    load_sealed_events_if_present,
+    validate_current_suffix_event,
+)
+
 try:
     import fcntl
 except ImportError:  # pragma: no cover - Windows fallback keeps thread safety only.
@@ -240,17 +249,30 @@ def _version(value: Any, *, field: str, line_no: int, source: Path, default: int
     return value
 
 
-def validate_event(event: Any, line_no: int, source: Path) -> dict[str, Any]:
+def _infer_legacy_event_kind(event: dict[str, Any]) -> str | None:
+    """Infer only legacy shapes whose discriminator is unambiguous."""
+    if all(isinstance(event.get(field), str) and event[field].strip() for field in ("type", "status", "path")):
+        return "upsert"
+    if isinstance(event.get("links"), list) and not any(field in event for field in ("type", "status", "path")):
+        return "link"
+    return None
+
+
+def normalize_and_validate_event(
+    event: Any,
+    line_no: int,
+    source: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     if not isinstance(event, dict):
         raise ValueError(f"Malformed task-state JSONL {source} line {line_no}: expected a JSON object")
-    event_kind = event.get("event")
-    if event_kind not in SUPPORTED_EVENT_KINDS:
-        raise ValueError(f"Malformed task-state JSONL {source} line {line_no}: unsupported event {event_kind!r}")
-    for field in ("id", "updated_at"):
-        if not isinstance(event.get(field), str) or not event[field].strip():
-            raise ValueError(f"Malformed task-state JSONL {source} line {line_no}: missing non-empty {field}")
-    format_version = _version(event.get("format_version"), field="format_version", line_no=line_no, source=source, default=1)
-    schema_version = _version(event.get("schema_version"), field="schema_version", line_no=line_no, source=source, default=1)
+
+    # Detect the row version before applying the current event discriminator.
+    # Versionless/format-v1 rows are legacy-compatible; current rows must carry
+    # an explicit supported discriminator.
+    raw_format_version = event.get("format_version")
+    raw_schema_version = event.get("schema_version")
+    format_version = _version(raw_format_version, field="format_version", line_no=line_no, source=source, default=1)
+    schema_version = _version(raw_schema_version, field="schema_version", line_no=line_no, source=source, default=1)
     if format_version > INDEX_FORMAT_VERSION:
         raise ValueError(
             f"Unsupported task-state format_version {format_version} in {source} line {line_no}; "
@@ -261,23 +283,168 @@ def validate_event(event: Any, line_no: int, source: Path) -> dict[str, Any]:
             f"Unsupported task-state schema_version {schema_version} in {source} line {line_no}; "
             f"maximum supported is {INDEX_SCHEMA_VERSION}"
         )
-    status = event.get("status")
+
+    legacy_row = raw_format_version is None or format_version < INDEX_FORMAT_VERSION
+    if not legacy_row and raw_schema_version is None:
+        raise ValueError(
+            f"Malformed task-state JSONL {source} line {line_no}: current format requires schema_version"
+        )
+    event_kind = event.get("event")
+    normalized = dict(event)
+    discriminator_inferred = False
+    if event_kind is None and legacy_row:
+        event_kind = _infer_legacy_event_kind(event)
+        if event_kind is not None:
+            normalized["event"] = event_kind
+            discriminator_inferred = True
+    if event_kind not in SUPPORTED_EVENT_KINDS:
+        raise ValueError(f"Malformed task-state JSONL {source} line {line_no}: unsupported event {event_kind!r}")
+    for field in ("id", "updated_at"):
+        if not isinstance(normalized.get(field), str) or not normalized[field].strip():
+            raise ValueError(f"Malformed task-state JSONL {source} line {line_no}: missing non-empty {field}")
+    status = normalized.get("status")
     if status is not None and status not in LIFECYCLE_STATUSES:
         raise ValueError(f"Malformed task-state JSONL {source} line {line_no}: unsupported lifecycle status {status!r}")
-    if "fields" in event and not isinstance(event.get("fields"), dict):
+    if "fields" in normalized and not isinstance(normalized.get("fields"), dict):
         raise ValueError(f"Malformed task-state JSONL {source} line {line_no}: fields must be an object")
-    if "links" in event:
-        links = event.get("links")
+    fields = normalized.get("fields") if isinstance(normalized.get("fields"), dict) else {}
+    if "link_tombstones" in fields:
+        tombstones = fields.get("link_tombstones")
+        if not isinstance(tombstones, list) or any(
+            not isinstance(link, dict) or not isinstance(link.get("rel"), str) or not isinstance(link.get("id"), str)
+            for link in tombstones
+        ):
+            raise ValueError(f"Malformed task-state JSONL {source} line {line_no}: invalid link_tombstones")
+    if "links" in normalized:
+        links = normalized.get("links")
         if not isinstance(links, list):
             raise ValueError(f"Malformed task-state JSONL {source} line {line_no}: links must be a list")
         for link in links:
             if not isinstance(link, dict) or not isinstance(link.get("rel"), str) or not isinstance(link.get("id"), str):
                 raise ValueError(f"Malformed task-state JSONL {source} line {line_no}: invalid relationship object")
-    return event
+    return normalized, {
+        "line_no": line_no,
+        "raw_format_version": format_version,
+        "raw_schema_version": schema_version,
+        "normalized_schema_version": INDEX_SCHEMA_VERSION,
+        "normalized_event_kind": event_kind,
+        "row_identity": normalized.get("id"),
+        "migration_status": "normalized_legacy" if legacy_row else "current",
+        "discriminator_inferred": discriminator_inferred,
+        "malformed_reason": None,
+        "projection_impact": "independent",
+    }
+
+
+def validate_event(event: Any, line_no: int, source: Path) -> dict[str, Any]:
+    normalized, _read_result = normalize_and_validate_event(event, line_no, source)
+    return normalized
+
+
+def _safe_malformed_reason(exc: Exception, source: Path) -> str:
+    """Return a bounded reason code without copying row content or locators."""
+    if isinstance(exc, UnicodeDecodeError):
+        return "invalid_utf8"
+    if isinstance(exc, json.JSONDecodeError):
+        return "malformed_json"
+    message = str(exc).replace(str(source), source.name)
+    if "format_version" in message:
+        return "invalid_or_unsupported_format_version"
+    if "schema_version" in message:
+        return "invalid_or_unsupported_schema_version"
+    if "unsupported event" in message:
+        return "invalid_event_discriminator"
+    if "lifecycle status" in message:
+        return "invalid_lifecycle_status"
+    if "relationship object" in message:
+        return "invalid_relationship_contract"
+    if "expected a JSON object" in message:
+        return "non_object_row"
+    return "invalid_row_contract"
+
+
+def _current_projection_hint(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    return (
+        value.get("type") == "task" and value.get("status") == "active"
+    ) or value.get("path") == "task.md"
+
+
+def _lineage_identities(value: Any) -> list[str]:
+    if not isinstance(value, dict):
+        return []
+    identities = {
+        str(value.get(field)).strip()
+        for field in ("id", "parent_id")
+        if isinstance(value.get(field), str) and str(value.get(field)).strip()
+    }
+    for link in value.get("links") or []:
+        if isinstance(link, dict) and isinstance(link.get("id"), str) and link["id"].strip():
+            identities.add(link["id"].strip())
+    fields = value.get("fields") if isinstance(value.get("fields"), dict) else {}
+    for field in ("canonical_id", "transaction_id"):
+        if isinstance(fields.get(field), str) and fields[field].strip():
+            identities.add(fields[field].strip())
+    return sorted(identities)
+
+
+def _load_events_for_audit_unlocked(root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Read every row for audit while quarantining malformed history.
+
+    Mutation paths continue to use `_load_events_unlocked` and therefore fail
+    closed on any malformed or unsupported row.
+    """
+    _ensure_index_unlocked(root)
+    sealed = load_sealed_events_if_present(root)
+    if sealed is not None:
+        return sealed
+    events: list[dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
+    source = jsonl_path(root)
+    with source.open("rb") as handle:
+        for line_no, raw_line in enumerate(handle, start=1):
+            if not raw_line.strip():
+                continue
+            value: Any = None
+            try:
+                line = raw_line.decode("utf-8")
+                value = json.loads(line)
+                event, result = normalize_and_validate_event(value, line_no, source)
+            except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+                row_identity = value.get("id") if isinstance(value, dict) and isinstance(value.get("id"), str) else None
+                results.append(
+                    {
+                        "line_no": line_no,
+                        "raw_format_version": value.get("format_version", 1) if isinstance(value, dict) else None,
+                        "raw_schema_version": value.get("schema_version", 1) if isinstance(value, dict) else None,
+                        "normalized_schema_version": None,
+                        "normalized_event_kind": None,
+                        "row_identity": row_identity,
+                        "migration_status": "malformed_quarantined",
+                        "malformed_reason": _safe_malformed_reason(exc, source),
+                        "projection_impact": "affected" if row_identity else "unknown",
+                        "_lineage_ids": _lineage_identities(value),
+                        "_current_projection_hint": _current_projection_hint(value),
+                    }
+                )
+                continue
+            events.append(event)
+            results.append(result)
+    return events, results
+
+
+def load_events_for_audit(root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    with index_lock(root):
+        return _load_events_for_audit_unlocked(root)
 
 
 def _load_events_unlocked(root: Path) -> list[dict[str, Any]]:
     _ensure_index_unlocked(root)
+    sealed = load_sealed_events_if_present(root)
+    if sealed is not None:
+        events, _read_results = sealed
+        return [validate_event(event, line_no, jsonl_path(root)) for line_no, event in enumerate(events, start=1)]
     events: list[dict[str, Any]] = []
     source = jsonl_path(root)
     with source.open("r", encoding="utf-8") as handle:
@@ -317,6 +484,17 @@ def merge_state(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
             if key in event and event[key] is not None:
                 current[key] = event[key]
         if isinstance(event.get("fields"), dict):
+            tombstones = event["fields"].get("link_tombstones")
+            if isinstance(tombstones, list):
+                removed = {
+                    (link.get("rel"), link.get("id"))
+                    for link in tombstones
+                    if isinstance(link, dict)
+                }
+                current["links"] = [
+                    link for link in current.setdefault("links", [])
+                    if (link.get("rel"), link.get("id")) not in removed
+                ]
             current.setdefault("fields", {}).update(event["fields"])
         if isinstance(event.get("links"), list):
             seen = {(link.get("rel"), link.get("id")) for link in current.setdefault("links", [])}
@@ -398,6 +576,69 @@ def stable_path_id(state: dict[str, dict[str, Any]], item_type: str, path: str) 
     return records[0][0] if records else None
 
 
+def normalize_bounded_markdown_scalar(value: str) -> str:
+    """Strip one safe, balanced inline-code wrapper from scalar metadata."""
+    normalized = value.strip()
+    if (
+        len(normalized) >= 3
+        and normalized.startswith("`")
+        and normalized.endswith("`")
+        and normalized.count("`") == 2
+        and normalized[1:-1].strip()
+    ):
+        return normalized[1:-1].strip()
+    return normalized
+
+
+def advice_pointer_file(path: Path) -> bool:
+    fields = extract_advice_fields(path)
+    return str(fields.get("not_active_record", "")).casefold() == "true"
+
+
+def select_external_advice_scan_id(
+    root: Path, state: dict[str, dict[str, Any]], path_value: str, advice_id: str,
+) -> tuple[str, list[str]]:
+    """Select canonical advice identity and bounded pointer aliases to retire."""
+    exact = state.get(advice_id)
+    if exact is not None:
+        if exact.get("type") != "external_advice":
+            raise ValueError(
+                f"Canonical advice id {advice_id!r} is already bound to another artifact path"
+            )
+        exact_path = str(exact.get("path") or "")
+        if exact_path != path_value:
+            old_file = root / exact_path
+            if old_file.exists() and not advice_pointer_file(old_file):
+                raise ValueError(
+                    f"Canonical advice id {advice_id!r} is already bound to another artifact path"
+                )
+
+    pointer_aliases: list[str] = []
+    active_cross_path_aliases: list[str] = []
+    for item_id, item in state.items():
+        if item_id == advice_id:
+            continue
+        existing_fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
+        existing_advice_id = normalize_bounded_markdown_scalar(str(existing_fields.get("advice_id") or ""))
+        if not (
+            item.get("type") == "external_advice"
+            and existing_advice_id == advice_id
+            and item.get("path") != path_value
+            and item.get("status") not in NON_ACTIVE_STATUSES
+        ):
+            continue
+        alias_file = root / str(item.get("path") or "")
+        if alias_file.is_file() and advice_pointer_file(alias_file):
+            pointer_aliases.append(item_id)
+        else:
+            active_cross_path_aliases.append(item_id)
+    if active_cross_path_aliases:
+        raise ValueError(
+            f"Canonical advice id {advice_id!r} has an active cross-path alias"
+        )
+    return advice_id, sorted(pointer_aliases)
+
+
 def make_id(item_type: str, title: str, path: str) -> str:
     prefix = PREFIXES.get(item_type, slugify(item_type, "item"))
     label = title or Path(path).stem or item_type
@@ -414,10 +655,11 @@ def versioned_event(event: dict[str, Any]) -> dict[str, Any]:
 
 def _append_events_unlocked(root: Path, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     existing = _load_events_unlocked(root)
-    del existing  # Reading first is the fail-closed integrity gate.
+    known_ids = set(merge_state(existing))
     versioned = [versioned_event(event) for event in events]
     for offset, event in enumerate(versioned, start=1):
         validate_event(event, offset, jsonl_path(root))
+        validate_current_suffix_event(event, known_ids)
     payload = jsonl_path(root).read_bytes()
     if payload and not payload.endswith(b"\n"):
         payload += b"\n"
@@ -511,6 +753,7 @@ def upsert_item(
     fields: dict[str, str] | None = None,
     note: str | None = None,
     replace_existing: bool | None = None,
+    retire_alias_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     root = root.resolve()
     if status not in LIFECYCLE_STATUSES:
@@ -528,6 +771,18 @@ def upsert_item(
             and active_records
             and all(existing_id != item_id for existing_id, _ in active_records)
         )
+        existing_exact = state.get(item_id) if provided_item_id and item_id is not None else None
+        canonical_advice_reactivation = bool(
+            explicit_replacement
+            and item_type == "external_advice"
+            and replace_existing is False
+            and isinstance(fields, dict)
+            and fields.get("advice_id") == item_id
+            and isinstance(existing_exact, dict)
+            and existing_exact.get("type") == "external_advice"
+            and existing_exact.get("path") == path_value
+            and existing_exact.get("status") == "superseded"
+        )
         legacy_task_replacement = bool(
             replace_existing is None
             and not provided_item_id
@@ -544,7 +799,7 @@ def upsert_item(
             item_id = item_id or stable_path_id(state, item_type, path_value) or make_id(item_type, title, path_value)
         assert item_id is not None
 
-        if explicit_replacement and item_id in state:
+        if explicit_replacement and item_id in state and not canonical_advice_reactivation:
             raise ValueError(f"Replacement id {item_id!r} must be new")
         if replace_existing and provided_item_id and any(existing_id == item_id for existing_id, _ in active_records):
             raise ValueError("--replace requires a new explicit id or no --id")
@@ -571,6 +826,17 @@ def upsert_item(
             for existing_id, existing in active_records
             if existing_id != item_id
         ]
+        for alias_id in sorted(set(retire_alias_ids or [])):
+            alias = state.get(alias_id)
+            if (
+                alias_id == item_id
+                or not isinstance(alias, dict)
+                or alias.get("type") != "external_advice"
+                or alias.get("status") in NON_ACTIVE_STATUSES
+            ):
+                raise ValueError(f"Invalid external advice pointer alias retirement: {alias_id!r}")
+            if all(existing_id != alias_id for existing_id, _existing in superseded_records):
+                superseded_records.append((alias_id, alias))
         lifecycle_transition_result: dict[str, Any] | None = None
         if semantic_replacement and superseded_records:
             lifecycle_transition_result = {
@@ -581,8 +847,16 @@ def upsert_item(
                 "links_updated": False,
                 "index_rendered": False,
                 "atomic": False,
-                "replacement_reason": "explicit_id" if explicit_replacement else "semantic_replacement",
+                "replacement_reason": (
+                    "canonical_advice_reactivation"
+                    if canonical_advice_reactivation
+                    else "explicit_id"
+                    if explicit_replacement
+                    else "semantic_replacement"
+                ),
             }
+            if canonical_advice_reactivation:
+                lifecycle_transition_result["canonical_reactivated"] = True
 
         outgoing: list[dict[str, Any]] = []
         for previous_id, previous in superseded_records:
@@ -905,6 +1179,7 @@ def extract_advice_fields(path: Path) -> dict[str, str]:
         "scope",
         "priority",
         "source_label",
+        "not_active_record",
     }
     for raw_line in lines:
         match = re.match(r"^-\s+([A-Za-z0-9_]+):\s*(.*)$", raw_line.rstrip())
@@ -912,7 +1187,7 @@ def extract_advice_fields(path: Path) -> dict[str, str]:
             continue
         key, value = match.groups()
         if key in scalar_keys and value:
-            fields[key] = value.strip()
+            fields[key] = normalize_bounded_markdown_scalar(value)
     return fields
 
 
@@ -934,6 +1209,33 @@ def extract_task_pack_fields(path: Path) -> dict[str, str]:
     if isinstance(items, list):
         fields["item_count"] = str(len(items))
         fields["planned_item_count"] = str(sum(1 for item in items if isinstance(item, dict) and item.get("status") in {"planned", "inserted", "reordered"}))
+        ordered = sorted(
+            (item for item in items if isinstance(item, dict)),
+            key=lambda item: item.get("order") if isinstance(item.get("order"), int) else 10**9,
+        )
+        if ordered:
+            promotion = ordered[0].get("promotion")
+            if isinstance(promotion, dict):
+                for key in ("promotion_origin", "initial_selection_receipt_ref"):
+                    if promotion.get(key) is not None:
+                        fields[f"initial_{key}"] = str(promotion.get(key))
+                receipt = promotion.get("initial_selection_receipt")
+                if isinstance(receipt, dict):
+                    for key in (
+                        "pack_creation_snapshot_ref",
+                        "authority_receipt_ref",
+                        "authority_receipt_sha256",
+                        "authority_mode",
+                        "historical_selection_authority_status",
+                    ):
+                        if receipt.get(key) is not None:
+                            fields[f"initial_{key}"] = str(receipt.get(key))
+                normalization = promotion.get("provenance_normalization")
+                if isinstance(normalization, dict):
+                    fields["initial_normalization_mode"] = str(normalization.get("mode") or "")
+                    fields["initial_historical_authority_verdict"] = str(
+                        normalization.get("historical_authority_verdict") or ""
+                    )
     render_path = path.with_suffix(".md")
     if render_path.is_file():
         fields["render_path"] = render_path.as_posix()
@@ -1007,6 +1309,8 @@ def discover_standard_artifacts(root: Path) -> list[tuple[str, str, str, str]]:
     if advice_dir.is_dir():
         for path in sorted(advice_dir.rglob("*.md")):
             if path.name.lower() == "index.md":
+                continue
+            if advice_pointer_file(path):
                 continue
             artifacts.append(("external_advice", rel_path(root, path), infer_advice_status(path), read_title(path)))
 
@@ -1087,6 +1391,7 @@ def scan_artifacts(root: Path) -> dict[str, Any]:
         nonlocal state
         digest = sha256_file(root / path_value)
         fields = None
+        retire_alias_ids: list[str] = []
         item_id = stable_path_id(state, item_type, path_value)
         if item_type in {"schema_contract", "schema_map"}:
             fields = extract_schema_fields(root / path_value)
@@ -1109,11 +1414,9 @@ def scan_artifacts(root: Path) -> dict[str, Any]:
                 fields["status"] = status
             advice_id = fields.get("advice_id") if fields else None
             if advice_id:
-                for existing_id, existing in state.items():
-                    existing_fields = existing.get("fields") if isinstance(existing.get("fields"), dict) else {}
-                    if existing.get("type") == "external_advice" and existing_fields.get("advice_id") == advice_id:
-                        item_id = existing_id
-                        break
+                item_id, retire_alias_ids = select_external_advice_scan_id(
+                    root, state, path_value, advice_id,
+                )
         existing = state.get(item_id) if item_id else None
         existing_fields = existing.get("fields") if isinstance(existing, dict) and isinstance(existing.get("fields"), dict) else {}
         if (
@@ -1134,6 +1437,7 @@ def scan_artifacts(root: Path) -> dict[str, Any]:
             item_id=item_id,
             fields=fields,
             replace_existing=False,
+            retire_alias_ids=retire_alias_ids,
         )
         added.append(result["event"])
         state = merge_state(load_events(root))
@@ -1193,9 +1497,78 @@ def add_issue(
 
 
 def audit_index(root: Path) -> dict[str, Any]:
-    events = load_events(root)
+    events, read_results = load_events_for_audit(root)
     state = merge_state(events)
     issues: list[dict[str, Any]] = []
+    active_tasks = [
+        item_id
+        for item_id, item in state.items()
+        if item.get("type") == "task" and item.get("status") == "active"
+    ]
+    current_surface_ids = set(active_tasks)
+    while True:
+        prior_size = len(current_surface_ids)
+        for item_id, item in state.items():
+            links = item.get("links") if isinstance(item.get("links"), list) else []
+            if item_id in current_surface_ids:
+                if isinstance(item.get("parent_id"), str) and item.get("parent_id"):
+                    current_surface_ids.add(str(item["parent_id"]))
+                current_surface_ids.update(
+                    str(link.get("id"))
+                    for link in links
+                    if isinstance(link, dict) and isinstance(link.get("id"), str) and link.get("id")
+                )
+            if item.get("parent_id") in current_surface_ids or any(
+                isinstance(link, dict) and link.get("id") in current_surface_ids for link in links
+            ):
+                current_surface_ids.add(item_id)
+        if len(current_surface_ids) == prior_size:
+            break
+
+    malformed_results = [result for result in read_results if result.get("migration_status") == "malformed_quarantined"]
+    legacy_results = [result for result in read_results if result.get("migration_status") == "normalized_legacy"]
+    projection_not_evaluated_ids: set[str] = set()
+    unknown_projection_impact = False
+    for result in malformed_results:
+        lineage_ids = {str(value) for value in result.pop("_lineage_ids", []) if str(value)}
+        current_projection_hint = result.pop("_current_projection_hint", False) is True
+        row_identity = str(result.get("row_identity") or "")
+        if current_projection_hint:
+            result["projection_impact"] = "affected"
+            if row_identity:
+                projection_not_evaluated_ids.add(row_identity)
+            else:
+                unknown_projection_impact = True
+                projection_not_evaluated_ids.update(current_surface_ids)
+        elif not row_identity:
+            result["projection_impact"] = "unknown"
+            unknown_projection_impact = True
+            projection_not_evaluated_ids.update(current_surface_ids)
+        elif row_identity in current_surface_ids or lineage_ids.intersection(current_surface_ids):
+            result["projection_impact"] = "affected"
+            projection_not_evaluated_ids.add(row_identity)
+            projection_not_evaluated_ids.update(lineage_ids.intersection(current_surface_ids))
+        else:
+            result["projection_impact"] = "independent"
+        add_issue(
+            issues,
+            "medium",
+            "malformed_index_row",
+            f"Index row {result.get('line_no')} was quarantined; projection impact is {result['projection_impact']}.",
+            [row_identity] if row_identity else [],
+        )
+
+    current_projection_status = "evaluated"
+    if projection_not_evaluated_ids or (unknown_projection_impact and ((root / "task.md").is_file() or current_surface_ids)):
+        current_projection_status = "not_evaluated"
+        add_issue(
+            issues,
+            "high",
+            "current_projection_not_evaluated",
+            "Malformed index history may affect the current projection; do not consume current traceability as pass.",
+            sorted(projection_not_evaluated_ids),
+            ["task.md"] if not projection_not_evaluated_ids and (root / "task.md").is_file() else [],
+        )
 
     for item_id, item in sorted(state.items()):
         item_type = str(item.get("type", ""))
@@ -1253,11 +1626,6 @@ def audit_index(root: Path) -> dict[str, Any]:
             elif target_id not in state:
                 add_issue(issues, "high", "broken_link", "Artifact links to an unknown id.", [item_id, str(target_id)])
 
-    active_tasks = [
-        item_id
-        for item_id, item in state.items()
-        if item.get("type") == "task" and item.get("status") == "active"
-    ]
     if len(active_tasks) > 1:
         add_issue(issues, "high", "multiple_active_tasks", "More than one task is marked active.", active_tasks)
     if (root / "task.md").is_file() and not active_tasks:
@@ -1322,12 +1690,40 @@ def audit_index(root: Path) -> dict[str, Any]:
     for item in state.values():
         counts_by_type[str(item.get("type", "unknown"))] = counts_by_type.get(str(item.get("type", "unknown")), 0) + 1
 
-    current_blocker_codes = {"current_canonical_id_missing", "multiple_active_tasks", "duplicate_active_path"}
+    current_blocker_codes = {
+        "current_canonical_id_missing",
+        "multiple_active_tasks",
+        "current_projection_not_evaluated",
+    }
     active_ids = set(active_tasks)
+    designated_surface_ids = active_ids | set(active_packs)
+    designated_surface_paths = {
+        (str(state[item_id].get("type", "")), str(state[item_id].get("path", "")))
+        for item_id in designated_surface_ids
+        if item_id in state and state[item_id].get("path")
+    }
+
+    def duplicate_intersects_designated_surface(issue: dict[str, Any]) -> bool:
+        if issue.get("code") != "duplicate_active_path" or current_projection_status != "evaluated":
+            return False
+        issue_ids = {str(item_id) for item_id in issue.get("ids") or []}
+        if issue_ids.intersection(designated_surface_ids):
+            return True
+        return any(
+            (
+                str(state[item_id].get("type", "")),
+                str(state[item_id].get("path", "")),
+            )
+            in designated_surface_paths
+            for item_id in issue_ids
+            if item_id in state
+        )
+
     current_surface_blockers = [
         issue
         for issue in issues
         if issue.get("code") in current_blocker_codes
+        or duplicate_intersects_designated_surface(issue)
         or (issue.get("code") == "broken_link" and active_ids.intersection(issue.get("ids") or []))
     ]
     historical_debt = [issue for issue in issues if issue not in current_surface_blockers]
@@ -1336,7 +1732,28 @@ def audit_index(root: Path) -> dict[str, Any]:
         "schema_version": INDEX_SCHEMA_VERSION,
         "workspace": str(root),
         "audited_at": now_iso(),
-        "audit_evidence_status": "evaluated" if events or discover_standard_artifacts(root) else "not_evaluated_no_artifacts",
+        "audit_evidence_status": (
+            "not_evaluated_current_projection"
+            if current_projection_status == "not_evaluated"
+            else "evaluated"
+            if events or discover_standard_artifacts(root)
+            else "not_evaluated_no_artifacts"
+        ),
+        "current_projection_status": current_projection_status,
+        "projection_completeness": "complete" if not malformed_results else "incomplete",
+        "projection_not_evaluated_ids": sorted(projection_not_evaluated_ids),
+        "legacy_normalized_count": len(legacy_results),
+        "malformed_row_count": len(malformed_results),
+        "raw_row_count": len(read_results),
+        "index_read_results": [
+            {key: value for key, value in result.items() if not key.startswith("_")}
+            for result in read_results
+            if result.get("migration_status") != "current"
+        ][:100],
+        "index_read_results_truncated_count": max(
+            0,
+            len([result for result in read_results if result.get("migration_status") != "current"]) - 100,
+        ),
         "event_count": len(events),
         "artifact_count": len(state),
         "counts_by_type": counts_by_type,
@@ -1415,6 +1832,13 @@ def summarize_audit(audit: dict[str, Any], focus_paths: list[str], limit: int = 
         "audited_at": audit.get("audited_at"),
         "summary_only": True,
         "focus_paths": [path for path in focus_paths if path],
+        "audit_evidence_status": audit.get("audit_evidence_status"),
+        "current_projection_status": audit.get("current_projection_status"),
+        "projection_completeness": audit.get("projection_completeness"),
+        "projection_not_evaluated_ids": audit.get("projection_not_evaluated_ids", []),
+        "legacy_normalized_count": audit.get("legacy_normalized_count", 0),
+        "malformed_row_count": audit.get("malformed_row_count", 0),
+        "raw_row_count": audit.get("raw_row_count", audit.get("event_count")),
         "event_count": audit.get("event_count"),
         "artifact_count": audit.get("artifact_count"),
         "counts_by_type": audit.get("counts_by_type", {}),

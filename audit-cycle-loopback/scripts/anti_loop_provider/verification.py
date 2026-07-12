@@ -6,6 +6,22 @@ def evidence_source_metadata(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}
     source = value.get("evidence_provenance_gate") if isinstance(value.get("evidence_provenance_gate"), dict) else value
+    axis_kinds: dict[str, str] = {}
+    provenance_rows = source.get("evidence_provenance") or source.get("metric_provenance")
+    if isinstance(provenance_rows, dict):
+        for axis_id, row in provenance_rows.items():
+            if isinstance(row, dict):
+                axis_kind = row.get("axis_kind") or row.get("kind")
+                if axis_kind:
+                    axis_kinds[normalize_gate_key(axis_id)] = str(axis_kind).strip().lower()
+    if isinstance(source.get("axis_kinds"), dict):
+        axis_kinds.update(
+            {
+                normalize_gate_key(axis_id): str(axis_kind).strip().lower()
+                for axis_id, axis_kind in source["axis_kinds"].items()
+                if str(axis_kind).strip()
+            }
+        )
     return {
         "verification_input_paths": string_list(
             source.get("verification_input_paths")
@@ -17,6 +33,7 @@ def evidence_source_metadata(value: Any) -> dict[str, Any]:
         "producer_input_ids": string_list(source.get("producer_input_ids")),
         "verified_artifact_ids": string_list(source.get("verified_artifact_ids")),
         "input_fingerprints": source.get("input_fingerprints") if isinstance(source.get("input_fingerprints"), dict) else {},
+        "axis_kinds": axis_kinds,
         "self_grounded_axes": {
             normalize_gate_key(item)
             for item in string_list(
@@ -38,11 +55,17 @@ def verification_source_separation_gate(
     provenance_value: Any,
     verified_artifact_paths: list[str],
     independently_verified_fields: list[str],
+    self_grounded_fields: list[str] | None = None,
 ) -> dict[str, Any]:
     metadata = evidence_source_metadata(provenance_value)
     independent = sorted(set(independently_verified_fields))
-    self_grounded = set(metadata.get("self_grounded_axes") or set())
+    explicit_self_grounded = set(self_grounded_fields or [])
+    self_grounded = set(metadata.get("self_grounded_axes") or set()) | {
+        normalize_gate_key(field) for field in explicit_self_grounded
+    }
+    independent = sorted(set(independent) | explicit_self_grounded)
     source_required_fields = [field for field in independent if normalize_gate_key(field) not in self_grounded]
+    self_grounded_fields = [field for field in independent if normalize_gate_key(field) in self_grounded]
     input_paths = [path.replace("\\", "/").lstrip("./") for path in metadata.get("verification_input_paths") or []]
     artifact_paths = [path.replace("\\", "/").lstrip("./") for path in verified_artifact_paths]
     overlaps: list[str] = []
@@ -51,10 +74,65 @@ def verification_source_separation_gate(
             if input_path == artifact_path or path_matches_pattern(input_path, artifact_path) or path_matches_pattern(artifact_path, input_path):
                 overlaps.append(input_path)
                 break
-    missing = bool(source_required_fields and not input_paths)
-    overlap = bool(source_required_fields and overlaps)
-    pass_status = bool(independent) and not missing and not overlap
-    downgraded = source_required_fields if (missing or overlap) else []
+    verification_ids = set(metadata.get("verification_input_ids") or [])
+    target_ids = set(metadata.get("producer_input_ids") or []) | set(metadata.get("verified_artifact_ids") or [])
+    identity_overlap_ids = sorted(verification_ids & target_ids)
+
+    def fingerprint_values(raw: Any) -> set[str]:
+        if isinstance(raw, dict):
+            return {str(child) for child in raw.values() if isinstance(child, (str, int, float)) and str(child)}
+        return {str(child) for child in list_values(raw) if str(child)}
+
+    fingerprint_map = metadata.get("input_fingerprints") or {}
+    verification_fingerprints = fingerprint_values(
+        fingerprint_map.get("verification_inputs")
+        or fingerprint_map.get("verification")
+        or {key: fingerprint_map.get(key) for key in verification_ids if key in fingerprint_map}
+    )
+    producer_fingerprints = fingerprint_values(
+        fingerprint_map.get("producer_inputs")
+        or fingerprint_map.get("producer")
+        or fingerprint_map.get("verified_artifacts")
+        or {key: fingerprint_map.get(key) for key in target_ids if key in fingerprint_map}
+    )
+    fingerprint_overlap = sorted(verification_fingerprints & producer_fingerprints)
+    comparable_axes = [
+        bool(input_paths and artifact_paths),
+        bool(verification_ids and target_ids),
+        bool(verification_fingerprints and producer_fingerprints),
+    ]
+    missing = bool(source_required_fields and not any(comparable_axes))
+    overlap = bool(source_required_fields and (overlaps or identity_overlap_ids or fingerprint_overlap))
+    independent_pass = bool(source_required_fields) and not missing and not overlap
+    pass_status = independent_pass or bool(self_grounded_fields)
+    downgraded = sorted(set(self_grounded_fields + (source_required_fields if (missing or overlap) else [])))
+    axis_rows: list[dict[str, Any]] = []
+    for field in independent:
+        if field in self_grounded_fields:
+            coupling_status = "same_artifact"
+            evidence_provenance = "self_grounded"
+        elif missing:
+            coupling_status = "unknown"
+            evidence_provenance = "not_evaluated"
+        elif overlap:
+            coupling_status = "overlapping"
+            evidence_provenance = "producer_attested"
+        else:
+            coupling_status = "disjoint"
+            evidence_provenance = "independently_verified"
+        axis_rows.append(
+            {
+                "axis_id": field,
+                "axis_kind": (metadata.get("axis_kinds") or {}).get(normalize_gate_key(field), "unspecified"),
+                "semantic_axis": (metadata.get("axis_kinds") or {}).get(normalize_gate_key(field)) == "semantic",
+                "verification_input_ids": metadata.get("verification_input_ids") or [],
+                "verified_artifact_ids": metadata.get("verified_artifact_ids") or [],
+                "producer_input_ids": metadata.get("producer_input_ids") or [],
+                "input_fingerprints": metadata.get("input_fingerprints") or {},
+                "coupling_status": coupling_status,
+                "evidence_provenance": evidence_provenance,
+            }
+        )
     status = "pass" if pass_status else ("not_evaluated" if not independent else "block")
     return {
         "gate": "H4-VERIFICATION-SOURCE-SEPARATION",
@@ -65,10 +143,14 @@ def verification_source_separation_gate(
         "verified_artifact_ids": metadata.get("verified_artifact_ids") or [],
         "input_fingerprints": metadata.get("input_fingerprints") or {},
         "self_grounded_axes": sorted(self_grounded),
+        "self_grounded_fields": self_grounded_fields,
+        "verification_axes": axis_rows,
         "source_separation_required_fields": source_required_fields,
         "verification_input_disjoint": bool(source_required_fields and input_paths and not overlaps),
         "verification_input_overlap_paths": sorted(set(overlaps)),
-        "independent_source_separation_status": "missing" if missing else ("overlap" if overlap else ("pass" if pass_status else "not_evaluated")),
+        "verification_identity_overlap_ids": identity_overlap_ids,
+        "verification_fingerprint_overlap": fingerprint_overlap,
+        "independent_source_separation_status": "missing" if missing else ("overlap" if overlap else ("pass" if independent_pass else ("self_grounded" if self_grounded_fields else "not_evaluated"))),
         "independently_verified_downgraded_fields": downgraded,
         "zero_disagreement_reported": bool_value(metadata.get("zero_disagreement_reported")),
         "status": status,

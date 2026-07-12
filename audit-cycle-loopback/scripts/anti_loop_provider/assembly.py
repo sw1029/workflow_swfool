@@ -16,6 +16,8 @@ def build_base_packet(ns: dict[str, Any]) -> dict[str, Any]:
             body_divergence,
             key_divergence,
             consumer_missing,
+            not bool_value(decision_artifact_ref.get("scope_verified")),
+            not bool_value(coverage_gate.get("decision_contribution_allowed")),
             truth_required and truth_basis in {"", "not_evaluated", "missing", "unknown"},
             bool_value(validator_gate.get("constrains_disposition")),
             bool_value(source_separation_gate.get("independently_verified_downgraded_fields")),
@@ -23,6 +25,7 @@ def build_base_packet(ns: dict[str, Any]) -> dict[str, Any]:
     )
     row = {
         "schema_version": SCHEMA_VERSION,
+        "handoff_contract_version": 1,
         "step": "loopback_audit",
         "cycle_id": args.cycle_id,
         "task_id": args.task_id,
@@ -31,6 +34,33 @@ def build_base_packet(ns: dict[str, Any]) -> dict[str, Any]:
         "root_key": current_root_key,
         "root_family_key": current_root_family_key,
         "artifact_family": args.artifact_family,
+        "decision_artifact_ref": decision_artifact_ref,
+        "artifact_id": decision_artifact_ref.get("artifact_id"),
+        "artifact_class": decision_artifact_ref.get("artifact_class"),
+        "artifact_sha256": decision_artifact_ref.get("artifact_sha256"),
+        "production_lane_identity": decision_artifact_ref.get("production_lane_identity"),
+        "discovery_basis": decision_artifact_ref.get("discovery_basis"),
+        "scope_verified": bool_value(decision_artifact_ref.get("scope_verified")),
+        "advisory_discovery": bool_value(decision_artifact_ref.get("advisory_discovery")),
+        "gate_compatibility_results": gate_compatibility_results,
+        "required_gate_ids": sorted({
+            str(item.get("gate_id"))
+            for item in gate_compatibility_results
+            if item.get("gate_id") and item.get("gate_compatibility_status") == "compatible"
+        }),
+        "decision_consumed_gate_ids": sorted({
+            str(item.get("gate_id"))
+            for item in gate_compatibility_results
+            if item.get("gate_id") and item.get("gate_compatibility_status") == "compatible"
+        }),
+        "decision_excluded_gate_ids": sorted({
+            str(item.get("gate_id"))
+            for item in gate_compatibility_results
+            if item.get("gate_id") and item.get("gate_compatibility_status") != "compatible"
+        }),
+        "input_state_fingerprint": input_state_fingerprint,
+        "attempt_identity": attempt_identity,
+        "registry_label_correction": registry_label_correction,
         "semantic_signature": args.semantic_signature,
         "provider_request_count": provider_request_count,
         "quality_vector": quality,
@@ -142,6 +172,8 @@ def build_base_packet(ns: dict[str, Any]) -> dict[str, Any]:
         "evidence_provenance_gate": evidence_gate,
         "producer_attested_fields": evidence_gate.get("producer_attested_fields") or [],
         "independently_verified_fields": evidence_gate.get("independently_verified_fields") or [],
+        "self_grounded_fields": evidence_gate.get("self_grounded_fields") or [],
+        "verification_axes": source_separation_gate.get("verification_axes") or [],
         "attested_only_movement": bool_value(evidence_gate.get("attested_only_movement")),
         "primary_metric_gate": primary_metric_gate,
         "primary_metric_high_water_moved": bool_value(primary_metric_gate.get("primary_metric_high_water_moved")),

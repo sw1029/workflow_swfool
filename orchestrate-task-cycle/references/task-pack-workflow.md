@@ -414,6 +414,8 @@ If the item result has nonzero `surface_field_defect_matrix` counts, preserve pr
 scripts/task_pack_queue.py --root . apply-mutation --plan <derive-pack-plan.json> --render --language <user-language>
 ```
 
+Bind every current mutation plan to the canonical JSON body with `pack_coherence.schema_version: 1`: exact pack ref, canonical before SHA-256, before item IDs/order/current item, proposed after IDs/order, and mutation kind. Require the complete mutation receipt at result-contract consumption. The helper rejects stale hashes, unknown IDs, mismatched after state, and any material no-op. `pack_coherence.schema_version: 0` normalizes only an old mutation precondition; it never repairs initial-selection authority provenance.
+
 For promotion, write the new `task.md` only after the prior task has an
 authoritative validation result, then record the transition with the same
 helper using `pack_disposition: promote_next_item`. The plan must include
@@ -428,6 +430,11 @@ and current-task issue reconciliation (including a reasoned no-op) before it
 advances the queue. It refuses partial/failed validation, pending long runs,
 paths outside `.task/task_pack` for pack storage, symlink escapes, and
 promotion metadata recorded before the new task file exists.
+
+Use `promotion_origin: predecessor_completion` for successor items. For the first item only, use `bootstrap_initial_selection` or `authorized_initial_selection` with an `initial_selection_receipt` bound to a helper-owned or immutable-VCS creation snapshot, first item/order, exact task snapshot, and a subject-bound authority receipt file plus SHA-256. A bare ref, advice, or later completion is not authority. Create stores a content-addressed planned snapshot and receipt. Never reuse an initial origin for a later item. When completing an in-flight item and promoting its successor together, place the predecessor completion packet under `consume_current_item` in the same `promote_next_item` plan so the helper performs one atomic pack write.
+
+For a pre-contract pack whose first item is already selected, use `pack_disposition: normalize_initial_selection_provenance` only after `$manage-agent-authority` issues or validates a receipt for `task_pack.normalize_initial_selection`. The helper verifies the exact creation snapshot, task snapshot, authority subject and temporality, preserves every item status/order/result/completion and `current_item_id`, appends provenance plus one mutation record, and performs one locked atomic pack write. `current_ratification` permits continuation now while preserving `historical_selection_authority_status: unverifiable_before_ratification`, `historical_authority_verdict: partial`, and `retroactive_claim_allowed: false`. Literal replay of the same bound receipt is a validated no-op; a conflicting receipt blocks. Use [initial-selection-provenance.md](initial-selection-provenance.md) for complete plan shapes, snapshot construction, rollback, and replay rules.
+For standalone `mark-consumed`, pass the same current coherence object with `--pack-coherence-json` and all six versioned lifecycle verdict axes with `--verdict-axes-json`; use explicit version `0` only for a genuinely legacy transaction.
 The helper also refuses a second promotion while another item is in flight,
 rejects blocking result-contract envelopes/findings, snapshots the exact new
 task bytes, and writes Markdown renders atomically without following symlinks.
@@ -436,6 +443,7 @@ Allowed `pack_disposition` values:
 
 - `create_pack`: create a bounded 2-5 item pack when a known sequence prevents repeated myopic derivation.
 - `promote_next_item`: promote one safe item into `task.md`; no other item becomes executable.
+- `normalize_initial_selection_provenance`: append only verified first-selection provenance to an existing pack without changing lifecycle or semantic state.
 - `insert_items`: insert prerequisite or retarget items before the current item.
 - `reorder_items`: reorder existing items when the old order is unsafe, stale, or stationary.
 - `skip_items`: exclude item(s) by setting `status: skipped`; do not delete them.

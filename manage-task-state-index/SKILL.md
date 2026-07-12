@@ -50,6 +50,8 @@ Use stable IDs for all important artifacts:
 
 Use only the closed lifecycle vocabulary documented in [index-schema.md](references/index-schema.md). Keep `partially_resolved` active: it means evidence resolved part of the artifact while an explicit residual remains. Never collapse it to `resolved` because its text contains that substring.
 
+For an explicitly authorized malformed/legacy-ledger migration, read [legacy-migration.md](references/legacy-migration.md) and use `scripts/task_state_migration.py`. Keep repository-specific mappings outside the helper, preserve the source as a byte-identical sealed prefix, and require its committed receipt before normal mutation readers consume any quarantined prefix row. Review every observed token exactly: reject a mapping builder that uses prefix, substring, suffix, regex, or wildcard logic to decide lifecycle meaning even when its emitted JSON keys are exact tokens. Require `mapping_method: exact_token_review` and `pattern_inference_used: false`. Current migration plan, resolution-manifest, and receipt schema version 2 also requires lock-time safe task/pack anchor revalidation, exact original-token/reason preservation for mapped event/status/type values, correction ID/SHA bindings for every non-independent quarantine, a hash-bound final journal, and an immutable completion marker. Missing or tampered v2 bindings keep `scan|add|link|rebuild|audit` fail-closed.
+
 Validation artifacts may also record a separate progress status such as `advanced`, `safety_only`, `no_progress`, or `regressed` in their title, links, or concise metadata. Do not treat progress status as a replacement for validation status.
 
 For the complete event schema and link relationship names, read [index-schema.md](references/index-schema.md).
@@ -159,9 +161,11 @@ Use `scripts/task_state_index.py` for deterministic updates:
 - `rebuild`: regenerate `.task/index.md` from `.task/index.jsonl`.
 - `audit`: inspect global ID consistency, broken links, duplicate active paths, stale digests, missing files, active task conflicts, and unindexed standard artifacts. Add `--write-report` to write `.task/id_audit/*.md` and index it as `audit-*`. Add `--summary-only --focus-path <path>` to emit compact counts and focused issues for report packets.
 
+Use `scripts/task_state_migration.py` only for the bounded `inspect` and `migrate plan|apply|validate|recover` transaction documented in [legacy-migration.md](references/legacy-migration.md). `plan` and `apply --dry-run` must leave canonical `.task` state unchanged. Never use migration as a general malformed-row ignore mode.
+
 All commands print JSON so the caller can capture IDs and changed paths.
 
-All writers serialize through workspace-local `.task/index.lock`, validate the existing JSONL before mutation, and atomically replace `index.jsonl` and its Markdown view after durable flush. New events carry `format_version` and `schema_version`; legacy versionless events remain readable, while malformed or future-version JSONL fails closed without append. An empty scan/audit is `not_evaluated_no_artifacts`, not success or completion evidence.
+All writers serialize through workspace-local `.task/index.lock`, validate the existing JSONL before mutation, and atomically replace `index.jsonl` and its Markdown view after durable flush. New events carry `format_version` and `schema_version`. Detect legacy versions before validating the current event discriminator and normalize only unambiguous legacy upsert/link shapes at read time. During audit, quarantine malformed rows, continue scanning valid rows, and classify their current-projection impact as `independent`, `affected`, or `unknown`; keep affected or unknown current identities `not_evaluated`. Keep mutation paths strict: malformed or future-version JSONL fails closed without append. An empty scan/audit is `not_evaluated_no_artifacts`, not success or completion evidence.
 
 ## Guardrails
 

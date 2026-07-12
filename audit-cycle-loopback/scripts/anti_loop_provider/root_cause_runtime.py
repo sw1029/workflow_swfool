@@ -53,6 +53,8 @@ def apply_root_cause_ledger(ns: dict[str, Any]) -> tuple[bool, list[dict[str, An
         entry: dict[str, Any] = {
             "schema_version": "root-cause-hypothesis-ledger-v1",
             "cycle_id": args.cycle_id,
+            "attempt_identity": attempt_identity,
+            "input_state_fingerprint": input_state_fingerprint,
             "family_key": str(hypothesis.get("family_key") or family_key),
             "root_key": str(hypothesis.get("root_key") or current_root_key),
             "root_family_key": str(hypothesis.get("root_family_key") or current_root_family_key),

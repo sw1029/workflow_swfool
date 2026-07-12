@@ -5,6 +5,33 @@ from .common import *
 def default_high_water() -> dict[str, Any]:
     return {"ever_provider_dispatch": False}
 
+def decision_input_state_fingerprint(values: list[Any], artifact_ref: dict[str, Any]) -> str:
+    supplied = first_field_value(values, {"input_state_fingerprint", "decision_input_fingerprint"})
+    input_fingerprints = first_field_value(values, {"input_fingerprints"})
+    basis = {
+        "artifact_sha256": artifact_ref.get("artifact_sha256"),
+        "production_lane_identity": artifact_ref.get("production_lane_identity"),
+        "supplied_input_state_fingerprint": str(supplied) if supplied else None,
+        "input_fingerprints": input_fingerprints if isinstance(input_fingerprints, dict) else {},
+    }
+    raw = json.dumps(basis, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+def content_bound_attempt_identity(
+    cycle_id: str,
+    canonical_artifact_family: str,
+    blocker_signature: str,
+    input_state_fingerprint: str,
+) -> str:
+    basis = {
+        "cycle_id": str(cycle_id),
+        "canonical_artifact_family": str(canonical_artifact_family),
+        "blocker_signature": str(blocker_signature),
+        "input_state_fingerprint": str(input_state_fingerprint),
+    }
+    raw = json.dumps(basis, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return "attempt-" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
 def load_registry(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     if not path.is_file():
@@ -25,8 +52,28 @@ def load_registry(path: Path) -> list[dict[str, Any]]:
     return rows
 
 def compact_registry(rows: list[dict[str, Any]], max_rows_per_family: int) -> list[dict[str, Any]]:
-    buckets: dict[str, list[dict[str, Any]]] = {}
+    deduplicated: list[dict[str, Any]] = []
+    identity_index: dict[str, int] = {}
     for row in rows:
+        identity = str(row.get("attempt_identity") or "")
+        if identity and identity in identity_index:
+            index = identity_index[identity]
+            previous = deduplicated[index]
+            corrected = dict(previous)
+            corrected.update(row)
+            if any(
+                str(previous.get(field) or "") != str(row.get(field) or "")
+                for field in ("family_key", "root_key", "root_family_key", "blocker_signature")
+            ):
+                corrected["registry_label_correction"] = True
+                corrected["correction_of_attempt_identity"] = identity
+            deduplicated[index] = corrected
+            continue
+        if identity:
+            identity_index[identity] = len(deduplicated)
+        deduplicated.append(row)
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for row in deduplicated:
         buckets.setdefault(str(row.get("family_key") or "unknown"), []).append(row)
     compacted: list[dict[str, Any]] = []
     for family_rows in buckets.values():
@@ -136,7 +183,8 @@ def compact_root_cause_ledger(rows: list[dict[str, Any]], max_rows_per_family: i
             key = root_cause_distinct_key(row)
             existing = latest_by_equivalence.get(key)
             merged = dict(row)
-            attempted_increment = 1 if bool_value(row.get("repair_attempted")) else 0
+            label_correction = bool_value(row.get("label_correction"))
+            attempted_increment = 1 if bool_value(row.get("repair_attempted")) and not label_correction else 0
             vacuous_increment = attempted_increment if not bool_value(row.get("terminal_outcome_changed")) else 0
             if existing:
                 merged["attempt_count"] = root_cause_attempt_weight(existing, "attempt_count") + attempted_increment
@@ -144,6 +192,8 @@ def compact_root_cause_ledger(rows: list[dict[str, Any]], max_rows_per_family: i
                 merged["terminal_outcome_changed"] = bool_value(existing.get("terminal_outcome_changed")) or bool_value(row.get("terminal_outcome_changed"))
                 merged["first_cycle_id"] = existing.get("first_cycle_id") or existing.get("cycle_id")
                 merged["previous_cycle_id"] = existing.get("cycle_id")
+                if label_correction:
+                    merged["repair_attempted"] = bool_value(existing.get("repair_attempted"))
                 aliases = set(list_values(existing.get("hypothesis_aliases")))
                 aliases.add(str(existing.get("hypothesized_root_cause") or ""))
                 aliases.add(str(row.get("hypothesized_root_cause") or ""))
@@ -168,6 +218,38 @@ def append_root_cause_ledger(path: Path, entries: list[dict[str, Any]], max_rows
     }
     changed = False
     for entry in entries:
+        attempt_identity = str(entry.get("attempt_identity") or "")
+        correction = next(
+            (
+                row
+                for row in rows
+                if attempt_identity
+                and str(row.get("attempt_identity") or "") == attempt_identity
+                and equivalent_root_cause(entry, row)
+            ),
+            None,
+        )
+        if correction is not None:
+            label_fields = (
+                "family_key",
+                "root_key",
+                "root_family_key",
+                "hypothesized_root_cause",
+            )
+            if not any(
+                str(correction.get(field) or "") != str(entry.get(field) or "")
+                for field in label_fields
+            ):
+                continue
+            corrected = dict(entry)
+            corrected["label_correction"] = True
+            corrected["correction_of_attempt_identity"] = attempt_identity
+            corrected["repair_attempted"] = False
+            corrected["attempt_count"] = 0
+            corrected["vacuous_attempt_count"] = 0
+            rows.append(corrected)
+            changed = True
+            continue
         key = (
             str(entry.get("cycle_id") or ""),
             str(entry.get("family_key") or ""),

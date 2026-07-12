@@ -51,6 +51,64 @@ class CycleEfficiencyProfileRule(TargetContractRule):
                 "cycle_cost_basis must include the three identity lists and a non-empty denominator description.",
                 {"required_list_fields": sorted(BASIS_LIST_FIELDS)},
             )
+        elif isinstance(cost, (int, float)) and not isinstance(cost, bool):
+            expected_floor = max(
+                1,
+                len(set(str(item) for item in basis.get("unique_new_artifact_ids") or []))
+                + len(set(str(item) for item in basis.get("fresh_stage_event_ids") or [])),
+            )
+            if cost < expected_floor:
+                add(
+                    context.findings,
+                    severity,
+                    "cycle_efficiency_cost_below_observed_basis",
+                    "cycle_fixed_cost must not be smaller than the observable artifact and stage-event basis.",
+                    {"cycle_fixed_cost": cost, "observed_basis_floor": expected_floor},
+                )
+        scope_unverified = result.get("profile_scope_unverified")
+        if not isinstance(scope_unverified, bool):
+            add(
+                context.findings,
+                severity,
+                "cycle_efficiency_scope_status_missing",
+                "Cycle-efficiency profiles require an explicit boolean profile_scope_unverified field.",
+            )
+        if scope_unverified is True and result.get("family_scoped_hard_gate") is True:
+            add(
+                context.findings,
+                severity,
+                "cycle_efficiency_unverified_family_hard_gate",
+                "An unverified family scope cannot emit a current-family hard gate.",
+            )
+        global_aggregate = result.get("global_aggregate")
+        if not isinstance(global_aggregate, dict) or global_aggregate.get("dashboard_only") is not True:
+            add(
+                context.findings,
+                severity,
+                "cycle_efficiency_global_dashboard_contract_missing",
+                "Global efficiency debt must be explicitly marked dashboard_only.",
+            )
+        elif global_aggregate.get("hard_gate") is True:
+            add(
+                context.findings,
+                severity,
+                "cycle_efficiency_global_dashboard_hard_gate",
+                "Global dashboard debt cannot be a current-family hard gate.",
+            )
+        for budget_name in ("command_surface_budget", "artifact_sprawl_budget"):
+            budget = result.get(budget_name)
+            if not isinstance(budget, dict):
+                continue
+            if budget.get("decision_scope") == "global_dashboard" and (
+                budget.get("hard_gate") is True or budget.get("constrains_current_family") is True
+            ):
+                add(
+                    context.findings,
+                    severity,
+                    "cycle_efficiency_global_budget_hard_gate",
+                    "A global dashboard budget cannot constrain the current family.",
+                    {"budget": budget_name},
+                )
         recommendation = str(result.get("recommendation") or "").strip()
         if recommendation not in RECOMMENDATIONS:
             add(context.findings, severity, "cycle_efficiency_recommendation_invalid", "Cycle-efficiency recommendation is outside the closed vocabulary.", {"recommendation": recommendation or None, "allowed": sorted(RECOMMENDATIONS)})

@@ -171,3 +171,30 @@ def test_same_count_snapshot_with_different_latest_event_id_is_stale() -> None:
     assert summary["snapshot_status"] == "stale"
     assert summary["ledger_latest_event_id"] == "context-1"
     assert summary["current_stage_latest_event_id"] == "context-stale"
+
+
+def test_dashboard_preserves_six_verdict_axes_and_deduplicates_unchanged_refs() -> None:
+    rows = events()
+    verdicts = {
+        "task_acceptance_verdict": {"status": "pass", "evidence_ref": "packet_K.json"},
+        "artifact_truth_verdict": {"status": "pass", "evidence_ref": "packet_K.json"},
+        "artifact_semantic_verdict": {"status": "fail", "evidence_ref": "packet_K.json"},
+        "pack_transition_verdict": {"status": "pass", "evidence_ref": "pack_P.json"},
+        "historical_index_verdict": {"status": "not_evaluated", "evidence_ref": "index_row_R"},
+        "goal_readiness_verdict": {"status": "blocked", "evidence_ref": "verdict_V.json"},
+    }
+    rows[-1].update(
+        {
+            **verdicts,
+            "unchanged_refs": [
+                {"path": "packet_K.json", "sha256": "a" * 64},
+                {"path": "packet_K.json", "sha256": "a" * 64},
+            ],
+        }
+    )
+
+    summary = dashboard.summarize(rows, {"event_count": len(rows)}, "loaded", "cycle-1")
+
+    assert {item["axis"] for item in summary["verdict_axes"]} == set(verdicts)
+    assert summary["unchanged_ref_count"] == 1
+    assert summary["unchanged_refs"] == [{"path": "packet_K.json", "sha256": "a" * 64}]

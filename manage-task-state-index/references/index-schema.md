@@ -4,7 +4,7 @@
 
 Each `.task/index.jsonl` line is one JSON object. Treat the file as append-only.
 
-Current writers emit `format_version: 2` and `schema_version: 1`. Readers accept legacy rows with either field absent as version 1. Reject malformed JSON, non-object rows, invalid field shapes, unknown lifecycle statuses, and versions newer than the current reader before appending anything.
+Current writers emit `format_version: 2` and `schema_version: 1`. Detect versions before applying the current event discriminator. Readers accept legacy rows with either version field absent as version 1 and infer a missing legacy discriminator only from an unambiguous required upsert or link shape. Keep mutation readers strict: reject malformed JSON, non-object rows, invalid field shapes, unknown lifecycle statuses, and versions newer than the current reader before appending anything. Let audit readers quarantine malformed rows and continue with canonical rows without rewriting history.
 
 Required fields:
 
@@ -28,6 +28,12 @@ Common `upsert` fields:
 
 Lifecycle fields use the existing `fields` object: `record_class` (`mutable_alias` or `immutable_snapshot`), `snapshot_digest`, `snapshot_path`, `canonical_id`, and optional `alias_path`. Historical records compare only to their own immutable snapshot body/digest. Active switches return `lifecycle_transition_result` with ordered booleans for previous snapshot preservation, previous active supersede, new canonical add, alias update, link update, and index render.
 
+Migration correction events may carry `fields.link_tombstones`, a list of exact `{rel,id}` pairs. Apply each tombstone only to that artifact's merged link projection before adding links from the same event. The historical link events remain byte-identical. This bounded suffix semantics is valid only under the sealed migration contract in [legacy-migration.md](legacy-migration.md).
+
+Mapped legacy projections preserve changed source tokens in bounded `fields.legacy_original_event|status|type` objects containing the exact source `token` and mapping `reason_code`. Migration correction events carry a deterministic `fields.migration_correction_event_id`; non-independent quarantine manifest entries bind those IDs and their canonical event SHA-256 values under the sealed migration contract.
+
+For task packs, retain bounded initial-selection fields when present: promotion origin, inline receipt ref, creation-snapshot ref, authority-receipt ref/digest, authority mode, historical-selection status, and normalization mode/verdict. Do not copy receipt bodies into the index or turn `current_ratification` into historical authority.
+
 Treat `partially_resolved` as an active residual-bearing lifecycle state. It preserves the owning workflow's unresolved remainder and must not be normalized to `resolved` by substring matching.
 
 ## Stable Path and Replacement Contract
@@ -39,6 +45,8 @@ Treat `partially_resolved` as an active residual-bearing lifecycle state. It pre
 ## Durability Contract
 
 Use workspace-local `.task/index.lock` for every JSONL or Markdown mutation. While holding the lock, validate the complete existing JSONL, prepare all related events, durably flush a same-directory temporary file, atomically replace `index.jsonl`, and atomically regenerate `index.md`. A malformed or unsupported ledger must remain byte-for-byte unchanged. Empty registries report `not_evaluated_no_artifacts`; they are not success or completion evidence.
+
+A committed legacy migration is the sole exception to ordinary whole-file current-row parsing. It preserves the original bytes at offset zero, then appends correction, seal, and receipt-anchor events. Before allowing any exact prefix quarantine, run the two-pass receipt graph validation in [legacy-migration.md](legacy-migration.md), including the hash-bound final journal, immutable completion marker, and quarantine-to-correction bindings. A missing or invalid receipt graph retains ordinary fail-closed mutation behavior.
 
 Relationship object:
 
@@ -121,6 +129,8 @@ Use `scripts/task_state_index.py --root . audit` for deterministic checks before
 - missing or stale `.task/index.md`.
 
 Audit output separates `current_surface_blockers` from `historical_debt`. Only missing current canonical ID, duplicate active alias, and broken current links block completion-oriented close; inactive immutable-history defects remain debt.
+
+Audit output also reports bounded `index_read_results`, `legacy_normalized_count`, `malformed_row_count`, `projection_completeness`, and `current_projection_status`. Classify each malformed row's impact as `independent`, `affected`, or `unknown`. Preserve unrelated current traceability when independence is established; set affected or unknown current identities to `not_evaluated`. Prefer read-time normalization and a later append-only migration receipt over rewriting an immutable legacy row.
 
 Use `--write-report` to create `.task/id_audit/YYYYMMDD-HHMMSS-id-consistency-audit.md` and index it as `audit-*`.
 

@@ -1,4 +1,4 @@
 interface:
   display_name: "Manage Agent Authority"
-  short_description: "Manage agent authority GT"
-  default_prompt: "Use $manage-agent-authority to create, update, validate, or summarize .agent_goal/agent_authority.md without granting permissions beyond current authority; .agent_advice is non-GT evidence and never permission evidence."
+  short_description: "Manage authority policy and receipts"
+  default_prompt: "Use $manage-agent-authority to manage authority policy or issue and validate a subject-bound operation receipt without expanding current permissions or rewriting historical authority."

@@ -62,6 +62,20 @@ class LoopbackAuditRule(TargetContractRule):
             or deep_get(result, "verification_source_separation_gate.independently_verified_downgraded_fields")
             or deep_get(result, "evidence_provenance_gate.independently_verified_downgraded_fields")
         )
+        self_grounded_axes = set(
+            list_values(
+                value_for(result, "self_grounded_axes")
+                or deep_get(result, "verification_source_separation_gate.self_grounded_axes")
+                or deep_get(result, "evidence_provenance_gate.self_grounded_axes")
+            )
+        )
+        independently_verified_fields = set(
+            list_values(
+                value_for(result, "independently_verified_fields")
+                or deep_get(result, "evidence_provenance_gate.independently_verified_fields")
+            )
+        )
+        self_grounded_mislabeled_independent = sorted(self_grounded_axes & independently_verified_fields)
         envelope_thaw_item_required = boolish(value_for(result, "envelope_thaw_item_required")) or boolish(deep_get(result, "acceptance_reachability_gate.envelope_thaw_item_required"))
         envelope_thaw_item = value_for(result, "envelope_thaw_item") or deep_get(result, "acceptance_reachability_gate.envelope_thaw_item")
         scenario_uncovered = boolish(value_for(result, "scenario_uncovered")) or boolish(deep_get(result, "acceptance_scenario_gate.scenario_uncovered"))
@@ -282,6 +296,16 @@ class LoopbackAuditRule(TargetContractRule):
                 "loopback_downgraded_independent_verification_counted",
                 "`loopback_audit` must not count auto-downgraded independently_verified fields as primary progress.",
                 {"downgraded_fields": independently_verified_downgraded_fields},
+            )
+        if self_grounded_mislabeled_independent and (
+            primary_metric_high_water_moved or measurement_progress_allowed or disposition == "goal_productive" or semantic_progress
+        ):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "loopback_self_grounded_counted_as_independent",
+                "Self-grounded structural axes cannot remain in the independently-verified bucket or move semantic high-water.",
+                {"axis_ids": self_grounded_mislabeled_independent},
             )
         if envelope_thaw_item_required and (disposition == "goal_productive" or not hard_stop or not non_empty(envelope_thaw_item)):
             add(

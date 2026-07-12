@@ -10,6 +10,12 @@ def normalize_dispositions(value: Any) -> set[str]:
 
 
 def gate_allowed_dispositions(name: str, gate: dict[str, Any]) -> set[str]:
+    if (
+        name == "command_surface_budget"
+        and str(gate.get("decision_scope") or "").strip().lower() == "global_dashboard"
+        and not boolish(gate.get("constrains_current_family"))
+    ):
+        return set(DISPOSITION_UNIVERSE)
     explicit = normalize_dispositions(gate.get("allowed_dispositions"))
     if explicit:
         return explicit
@@ -21,6 +27,12 @@ def gate_allowed_dispositions(name: str, gate: dict[str, Any]) -> set[str]:
 
 
 def gate_constrains_disposition(name: str, gate: dict[str, Any]) -> bool:
+    if (
+        name == "command_surface_budget"
+        and str(gate.get("decision_scope") or "").strip().lower() == "global_dashboard"
+        and not boolish(gate.get("constrains_current_family"))
+    ):
+        return False
     return any(
         (
             boolish(gate.get("constrains_disposition")),

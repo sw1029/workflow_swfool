@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import hashlib
+import json
+from pathlib import Path
+
+import task_pack_queue
+
 from ..base import RuleContext, TargetContractRule
 from ..common import (
     ADOPTION_AXIS_TASK_KINDS,
@@ -48,6 +54,68 @@ from ..common import (
 )
 
 
+HANDOFF_APPLICABILITY = {"required", "not_applicable", "missing_required"}
+
+
+def _workspace_root(context: RuleContext) -> Path:
+    contract_context = context.get("contract_context")
+    values: list[object] = []
+    if isinstance(contract_context, dict):
+        values.extend((contract_context.get("workspace_root"), contract_context.get("root")))
+    values.extend((context.result.get("workspace_root"), context.result.get("root")))
+    value = next((item for item in values if isinstance(item, str) and item.strip()), ".")
+    return Path(str(value)).resolve()
+
+
+def _file_digest(root: Path, value: object) -> str | None:
+    raw = str(value or "").strip()
+    if not raw or raw.startswith(("store:", "opaque:")):
+        return None
+    path = Path(raw)
+    if path.is_absolute():
+        return None
+    try:
+        resolved = (root / path).resolve()
+        resolved.relative_to(root)
+    except (OSError, ValueError):
+        return None
+    if not resolved.is_file():
+        return None
+    digest = hashlib.sha256()
+    with resolved.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _local_packet(root: Path, value: object) -> tuple[str, dict[str, object]] | None:
+    digest = _file_digest(root, value)
+    if digest is None:
+        return None
+    path = (root / Path(str(value))).resolve()
+    try:
+        body = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(body, dict):
+        return None
+    payload = body.get("result") if isinstance(body.get("result"), dict) else body
+    return digest, payload
+
+
+def _packet_scalar(packet: dict[str, object], *paths: str) -> object:
+    for path in paths:
+        current: object = packet
+        for part in path.split("."):
+            if not isinstance(current, dict):
+                current = None
+                break
+            current = current.get(part)
+        if current not in (None, "", [], {}):
+            return current
+    return None
+
+
 class DeriveRule(TargetContractRule):
     """Validate next-task selection against active routing and evidence gates."""
 
@@ -75,6 +143,205 @@ class DeriveRule(TargetContractRule):
         ordinary_derive = derive_mode != "initial_init" and not (
             pending_selected_kind in pending_allowed_kinds or pending_selected_source == "terminal_blocked"
         )
+        handoff = first_present(
+            result,
+            [
+                "anti_loop_handoff",
+                "anti_loop_progress_handoff",
+                "anti_loop_progress_gate.handoff",
+                "result.anti_loop_handoff",
+                "result.anti_loop_progress_handoff",
+            ],
+        )
+        gate_value = first_present(result, ["anti_loop_progress_gate", "result.anti_loop_progress_gate"])
+        if not isinstance(handoff, dict) and isinstance(gate_value, dict) and gate_value.get("applicability"):
+            handoff = gate_value
+        handoff_version = (
+            handoff.get("handoff_contract_version")
+            if isinstance(handoff, dict)
+            else gate_value.get("handoff_contract_version")
+            if isinstance(gate_value, dict)
+            else first_present(result, ["handoff_contract_version", "result.handoff_contract_version"])
+        )
+        handoff_version_text = str(handoff_version).strip()
+        explicit_legacy_handoff = handoff_version_text == "0"
+        if explicit_legacy_handoff:
+            add(
+                findings,
+                "warn",
+                "derive_anti_loop_handoff_explicit_legacy",
+                "Explicit handoff contract version 0 uses legacy unbound consumption; emit a current hash-bound handoff on the next governed transition.",
+            )
+            handoff = None
+        governed_handoff_required = boolish(
+            first_present(
+                result,
+                [
+                    "governed_transition",
+                    "loopback_audit_completed",
+                    "anti_loop_handoff_required",
+                    "result.governed_transition",
+                ],
+            )
+        ) or isinstance(handoff, dict) or isinstance(gate_value, dict)
+        if explicit_legacy_handoff:
+            governed_handoff_required = False
+        if governed_handoff_required and not isinstance(handoff, dict):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_anti_loop_handoff_missing",
+                "A governed post-loopback derive transition requires a bounded hash-bound anti-loop handoff.",
+            )
+        elif isinstance(handoff, dict):
+            if handoff_version_text != "1":
+                add(
+                    findings,
+                    "block",
+                    "derive_anti_loop_handoff_version_missing_or_invalid",
+                    "Current anti-loop handoffs require handoff_contract_version=1; legacy requires explicit version 0.",
+                )
+            applicability = str(handoff.get("applicability") or "").strip().lower()
+            if applicability not in HANDOFF_APPLICABILITY:
+                add(findings, "block", "derive_anti_loop_applicability_invalid", "Anti-loop handoff applicability is invalid.")
+            elif applicability == "missing_required":
+                add(findings, "block", "derive_anti_loop_handoff_missing_required", "A required anti-loop handoff is missing.")
+            elif applicability == "not_applicable":
+                reason = handoff.get("not_applicable_reason") or handoff.get("applicability_reason")
+                legitimate_na = derive_mode == "initial_init" or pending_selected_source == "standalone"
+                prior_packet = bool(
+                    handoff.get("prior_packet_exists")
+                    or first_present(result, ["prior_loopback_packet_ref", "loopback_packet_ref"])
+                )
+                if not legitimate_na or not non_empty(reason) or prior_packet:
+                    add(
+                        findings,
+                        "block",
+                        "derive_anti_loop_not_applicable_invalid",
+                        "Anti-loop handoff not_applicable requires a reasoned initial/standalone derive with no prior required packet.",
+                    )
+            elif applicability == "required":
+                required_handoff_fields = (
+                    "handoff_contract_version",
+                    "packet_ref",
+                    "packet_sha256",
+                    "artifact_id",
+                    "artifact_sha256",
+                    "artifact_family",
+                    "blocker_signature",
+                    "progress_verdict",
+                    "allowed_next_action_classes",
+                )
+                missing_handoff = [field for field in required_handoff_fields if not non_empty(handoff.get(field))]
+                if missing_handoff:
+                    add(
+                        findings,
+                        "block",
+                        "derive_anti_loop_handoff_incomplete",
+                        "Required anti-loop handoff identity/action fields are incomplete.",
+                        {"missing_fields": missing_handoff},
+                    )
+                expected_sha = str(handoff.get("packet_sha256") or "").removeprefix("sha256:").lower()
+                if len(expected_sha) != 64 or any(character not in "0123456789abcdef" for character in expected_sha):
+                    add(findings, "block", "derive_anti_loop_handoff_hash_invalid", "Anti-loop handoff packet_sha256 must be a full lowercase SHA-256 digest.")
+                local_packet = _local_packet(_workspace_root(context), handoff.get("packet_ref"))
+                observed_sha = local_packet[0] if local_packet is not None else None
+                if observed_sha is not None and observed_sha != expected_sha:
+                    add(
+                        findings,
+                        "block",
+                        "derive_anti_loop_handoff_hash_mismatch",
+                        "Anti-loop handoff packet hash does not match the referenced packet.",
+                    )
+                elif observed_sha is None:
+                    verification_receipt = handoff.get("packet_verification_receipt")
+                    receipt_packet = (
+                        _local_packet(_workspace_root(context), verification_receipt.get("evidence_ref"))
+                        if isinstance(verification_receipt, dict)
+                        else None
+                    )
+                    receipt_evidence_sha = str(
+                        verification_receipt.get("evidence_sha256") or ""
+                    ).removeprefix("sha256:").lower() if isinstance(verification_receipt, dict) else ""
+                    receipt_valid = bool(
+                        isinstance(verification_receipt, dict)
+                        and str(verification_receipt.get("status") or "").lower() == "pass"
+                        and str(verification_receipt.get("packet_sha256") or "").removeprefix("sha256:").lower() == expected_sha
+                        and non_empty(verification_receipt.get("evidence_ref"))
+                        and receipt_packet is not None
+                        and receipt_evidence_sha == receipt_packet[0]
+                        and _packet_scalar(receipt_packet[1], "packet_sha256") == expected_sha
+                        and _packet_scalar(receipt_packet[1], "packet_ref") == handoff.get("packet_ref")
+                    )
+                    if not receipt_valid:
+                        add(
+                            findings,
+                            "block",
+                            "derive_anti_loop_handoff_ref_unverifiable",
+                            "Anti-loop packet reference requires either a verified workspace file or a trusted hash-bound store receipt.",
+                        )
+                if local_packet is not None:
+                    packet_body = local_packet[1]
+                    scalar_bindings = (
+                        ("artifact_id", ("artifact_id", "current_artifact_id", "decision_artifact_ref.artifact_id")),
+                        ("artifact_sha256", ("artifact_sha256", "decision_artifact_ref.artifact_sha256")),
+                        ("artifact_family", ("artifact_family",)),
+                        ("blocker_signature", ("blocker_signature",)),
+                        ("progress_verdict", ("progress_verdict",)),
+                        ("hard_stop", ("hard_stop", "hard_stop_required")),
+                        ("terminal_state", ("terminal_state", "terminal_disposition")),
+                    )
+                    mismatched_scalars: list[str] = []
+                    for handoff_field, packet_paths in scalar_bindings:
+                        handoff_value = handoff.get(handoff_field)
+                        packet_value = _packet_scalar(packet_body, *packet_paths)
+                        if handoff_field in {"artifact_id", "artifact_sha256", "artifact_family", "blocker_signature", "progress_verdict"} and packet_value in (None, "", [], {}):
+                            mismatched_scalars.append(handoff_field)
+                        elif handoff_value not in (None, "", [], {}) and packet_value != handoff_value:
+                            mismatched_scalars.append(handoff_field)
+                    packet_actions = _packet_scalar(packet_body, "allowed_next_action_classes", "effective_allowed_dispositions")
+                    if packet_actions in (None, "", [], {}) or {
+                        str(item) for item in list_values(packet_actions)
+                    } != {str(item) for item in list_values(handoff.get("allowed_next_action_classes"))}:
+                        mismatched_scalars.append("allowed_next_action_classes")
+                    if mismatched_scalars:
+                        add(
+                            findings,
+                            "block",
+                            "derive_anti_loop_handoff_body_mismatch",
+                            "Anti-loop handoff scalar identity does not match the referenced authoritative packet body.",
+                            {"fields": sorted(set(mismatched_scalars))},
+                        )
+                echoed_value = first_present(result, ["consumed_anti_loop_packet_sha256", "anti_loop_handoff_consumption.packet_sha256"])
+                echoed_sha = str(echoed_value or "").removeprefix("sha256:").lower()
+                if not echoed_value or echoed_sha != expected_sha:
+                    add(findings, "block", "derive_anti_loop_handoff_echo_mismatch", "Derive did not echo the consumed anti-loop packet identity.")
+                allowed_actions = {str(item).strip().lower() for item in list_values(handoff.get("allowed_next_action_classes"))}
+                selected_actions = {
+                    item
+                    for item in (
+                        pending_selected_source,
+                        pending_selected_kind,
+                        str(value_for(result, "progress_kind") or "").strip().lower(),
+                        str(value_for(result, "loop_breaker_disposition") or "").strip().lower(),
+                    )
+                    if item
+                }
+                if allowed_actions and selected_actions and not (allowed_actions & selected_actions):
+                    add(
+                        findings,
+                        "block",
+                        "derive_action_outside_anti_loop_handoff",
+                        "Selected derive action is outside the authoritative anti-loop handoff action classes.",
+                        {"selected": sorted(selected_actions), "allowed": sorted(allowed_actions)},
+                    )
+                if boolish(handoff.get("hard_stop")) and str(value_for(result, "progress_kind") or "").lower() == "goal_productive":
+                    add(
+                        findings,
+                        "block",
+                        "derive_overrides_anti_loop_hard_stop",
+                        "Derive cannot upgrade a hash-bound anti-loop hard stop to goal_productive.",
+                    )
         if ordinary_derive and not context.get("long_run_state_checked", False):
             add(
                 findings,
@@ -137,10 +404,48 @@ class DeriveRule(TargetContractRule):
             require_context_field("task_pack_path", "task_pack_path_missing", "`selected_task_source: task_pack` requires `task_pack_path`.")
             require_context_field("task_pack_item_id", "task_pack_item_id_missing", "`selected_task_source: task_pack` requires `task_pack_item_id` or `promoted_item_id`.")
             require_context_field("pack_disposition", "pack_disposition_missing", "`selected_task_source: task_pack` requires `pack_disposition`.")
-        if pack_disposition in PACK_MUTATION_DISPOSITIONS:
+        if pack_disposition in PACK_MUTATION_DISPOSITIONS | {"promote_next_item"}:
             require_context_field("pack_mutation_plan", "pack_mutation_plan_missing", "Pack mutation dispositions require `pack_mutation_plan`.")
             require_context_field("task_pack_path", "task_pack_path_missing", "Pack mutation dispositions require `task_pack_path`.")
             require_context_field("task_pack_render_path", "task_pack_render_path_missing", "Pack mutation dispositions require a refreshed Markdown render path.")
+            mutation_plan = first_present(
+                result,
+                ["pack_mutation_plan", "derive.pack_mutation_plan", "result.pack_mutation_plan", "task_pack_packet.pack_mutation_plan"],
+            )
+            mutation_receipt = first_present(
+                result,
+                ["pack_mutation_receipt", "derive.pack_mutation_receipt", "result.pack_mutation_receipt", "task_pack_packet.pack_mutation_receipt"],
+            )
+            if isinstance(mutation_plan, dict):
+                plan_for_validation = dict(mutation_plan)
+                plan_for_validation.setdefault("pack_path", value_for(result, "task_pack_path"))
+                if isinstance(mutation_receipt, dict):
+                    plan_for_validation["pack_mutation_receipt"] = mutation_receipt
+                coherence_version = task_pack_queue.pack_coherence_contract_version(mutation_plan)
+                current_contract = coherence_version == task_pack_queue.PACK_COHERENCE_VERSION
+                explicit_legacy_contract = coherence_version == 0
+                coherence_result = task_pack_queue.validate_pack_coherence_contract(
+                    _workspace_root(context),
+                    plan_for_validation,
+                    receipt=mutation_receipt if isinstance(mutation_receipt, dict) else None,
+                    require_declared=True,
+                    require_receipt=current_contract,
+                )
+                for coherence_finding in coherence_result.get("findings", []):
+                    add(
+                        findings,
+                        "block" if mode == "block" else "warn",
+                        f"derive_{coherence_finding.get('code')}",
+                        str(coherence_finding.get("message") or "Pack coherence validation failed."),
+                        coherence_finding.get("evidence"),
+                    )
+                if explicit_legacy_contract:
+                    add(
+                        findings,
+                        "warn",
+                        "derive_pack_coherence_legacy_normalized",
+                        "Legacy pack mutation input was normalized against the current body; emit explicit before-snapshot fields on the next mutation.",
+                    )
             if not has_value(result, "pack_mutation_log") and not has_value(result, "pack_mutation_plan"):
                 add(
                     findings,
@@ -148,6 +453,104 @@ class DeriveRule(TargetContractRule):
                     "pack_mutation_evidence_missing",
                     "Pack mutation dispositions should carry mutation-log evidence or a durable mutation plan.",
                 )
+            if pack_disposition == "promote_next_item" and isinstance(mutation_plan, dict):
+                origin = str(mutation_plan.get("promotion_origin") or "predecessor_completion").strip().lower()
+                if origin not in task_pack_queue.PROMOTION_ORIGINS:
+                    add(findings, "block", "promotion_origin_invalid", "Task-pack promotion origin is invalid.")
+                elif origin in {"bootstrap_initial_selection", "authorized_initial_selection"}:
+                    receipt = mutation_plan.get("initial_selection_receipt")
+                    if not isinstance(receipt, dict):
+                        add(findings, "block", "initial_selection_receipt_missing", "Initial pack promotion requires a bounded initial-selection receipt.")
+                    else:
+                        required_receipt = (
+                            "pack_ref",
+                            "pack_creation_sha256",
+                            "initial_item_id",
+                            "initial_order",
+                            "task_snapshot_sha256",
+                            "authority_receipt_ref",
+                            "selection_reason",
+                            "created_at",
+                        )
+                        missing_receipt = [field for field in required_receipt if not non_empty(receipt.get(field))]
+                        if missing_receipt:
+                            add(
+                                findings,
+                                "block",
+                                "initial_selection_receipt_incomplete",
+                                "Initial selection receipt is incomplete.",
+                                {"missing_fields": missing_receipt},
+                            )
+                elif not non_empty(
+                    mutation_plan.get("predecessor_completion_receipt_ref")
+                    or mutation_plan.get("validation_report_path")
+                ):
+                    add(
+                        findings,
+                        "block" if mode == "block" else "warn",
+                        "predecessor_completion_receipt_missing",
+                        "Successor promotion requires predecessor-completion receipt provenance.",
+                    )
+            if pack_disposition == "normalize_initial_selection_provenance":
+                if not isinstance(mutation_plan, dict):
+                    add(
+                        findings,
+                        "block",
+                        "initial_selection_normalization_plan_missing",
+                        "Initial-selection normalization requires the exact helper mutation plan.",
+                    )
+                else:
+                    try:
+                        workspace = _workspace_root(context)
+                        pack_ref = str(
+                            mutation_plan.get("pack_path")
+                            or value_for(result, "task_pack_path")
+                            or ""
+                        )
+                        pack_path = task_pack_queue.resolve_pack_path(workspace, pack_ref)
+                        pack_data = task_pack_queue.load_json(pack_path)
+                        supplied_receipt = mutation_plan.get("initial_selection_receipt")
+                        if not isinstance(supplied_receipt, dict):
+                            raise SystemExit("Normalization plan is missing initial_selection_receipt.")
+                        item_id = str(supplied_receipt.get("initial_item_id") or "")
+                        target = next(
+                            (
+                                item
+                                for item in pack_data.get("items", [])
+                                if isinstance(item, dict) and str(item.get("item_id") or "") == item_id
+                            ),
+                            None,
+                        )
+                        promotion = target.get("promotion") if isinstance(target, dict) else None
+                        if not isinstance(promotion, dict):
+                            raise SystemExit("Normalized pack does not preserve first promotion provenance.")
+                        stored_receipt = promotion.get("initial_selection_receipt")
+                        if stored_receipt != supplied_receipt:
+                            raise SystemExit("Normalized pack receipt differs from the helper mutation plan.")
+                        task_pack_queue.validate_initial_selection_receipt(
+                            workspace,
+                            pack_path,
+                            pack_data,
+                            stored_receipt,
+                            task_id=str(promotion.get("task_id") or ""),
+                            task_digest=str(promotion.get("task_sha256") or ""),
+                            operation="normalize_initial_selection_provenance",
+                        )
+                        normalization = promotion.get("provenance_normalization")
+                        if not isinstance(normalization, dict):
+                            raise SystemExit("Normalized pack is missing provenance_normalization.")
+                        if normalization.get("authority_mode") == "current_ratification" and (
+                            normalization.get("historical_authority_verdict") != "partial"
+                            or normalization.get("retroactive_claim_allowed") is not False
+                        ):
+                            raise SystemExit("Current ratification overstates historical authority.")
+                    except SystemExit as exc:
+                        add(
+                            findings,
+                            "block",
+                            "initial_selection_normalization_invalid",
+                            str(exc),
+                        )
         if pack_disposition in {"skip_items", "exclude_items"}:
             require_context_field("skipped_item_ids", "skipped_item_ids_missing", "Skipping/excluding pack items requires `skipped_item_ids` or `exclude_item_ids`.")
         if pack_disposition == "derive_standalone":
@@ -2179,6 +2582,34 @@ class DeriveRule(TargetContractRule):
                 ],
             )
         )
+        command_budget_scope = str(
+            first_present(
+                result,
+                [
+                    "command_surface_budget.decision_scope",
+                    "global_aggregate.decision_scope",
+                    "result.command_surface_budget.decision_scope",
+                ],
+            )
+            or ""
+        ).strip().lower()
+        command_budget_hard_gate_value = first_present(
+            result,
+            ["command_surface_budget.hard_gate", "global_aggregate.hard_gate", "result.command_surface_budget.hard_gate"],
+        )
+        command_budget_constrains_value = first_present(
+            result,
+            [
+                "command_surface_budget.constrains_current_family",
+                "global_aggregate.constrains_current_family",
+                "result.command_surface_budget.constrains_current_family",
+            ],
+        )
+        command_budget_constrains_current = (
+            command_budget_scope != "global_dashboard"
+            and (command_budget_hard_gate_value is None or boolish(command_budget_hard_gate_value))
+            and (command_budget_constrains_value is None or boolish(command_budget_constrains_value))
+        )
         consolidation_registered = boolish(
             first_present(
                 result,
@@ -2191,6 +2622,7 @@ class DeriveRule(TargetContractRule):
         )
         if (
             command_budget_required
+            and command_budget_constrains_current
             and not consolidation_registered
             and not terminal_selected
             and not strict_positive_output_delta

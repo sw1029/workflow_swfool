@@ -43,6 +43,389 @@ from result_contract_lib.rules.session_audit import SessionAuditRule  # noqa: E4
 
 PENDING_LONG_RUN_STATUSES = {"launching", "running", "completed_pending_validation", "stale", "not_running"}
 SESSION_AUDIT_RULE = SessionAuditRule()
+DECISION_TARGETS = {"qualitative_review", "loopback_audit", "derive", "validate", "report"}
+VERDICT_AXES = (
+    "task_acceptance_verdict",
+    "artifact_truth_verdict",
+    "artifact_semantic_verdict",
+    "pack_transition_verdict",
+    "historical_index_verdict",
+    "goal_readiness_verdict",
+)
+VERDICT_AXIS_STATUSES = {"pass", "fail", "partial", "blocked", "not_evaluated", "not_applicable"}
+COUPLING_STATUSES = {"disjoint", "overlapping", "same_artifact", "unknown"}
+EVIDENCE_PROVENANCE_STATUSES = {
+    "independently_verified",
+    "self_grounded",
+    "producer_attested",
+    "not_evaluated",
+}
+
+
+def _positive_decision_claim(target: str, result: dict[str, Any]) -> bool:
+    validation_verdict = str(value_for(result, "validation_verdict") or "").strip().lower()
+    progress_verdict = str(value_for(result, "progress_verdict") or "").strip().lower()
+    progress_kind = str(value_for(result, "progress_kind") or "").strip().lower()
+    return bool(
+        (target == "validate" and validation_verdict in {"complete", "pass", "passed", "success"})
+        or progress_verdict == "advanced"
+        or progress_kind == "goal_productive"
+        or boolish(first_present(result, ["semantic_progress", "authoritative_semantic_progress"]))
+        or boolish(first_present(result, ["hard_stop_required", "hard_stop"]))
+    )
+
+
+def _full_sha256(value: Any) -> bool:
+    normalized = str(value or "").strip().lower().removeprefix("sha256:")
+    return len(normalized) == 64 and all(character in "0123456789abcdef" for character in normalized)
+
+
+def validate_decision_identity_and_compatibility(
+    target: str,
+    result: dict[str, Any],
+    mode: str,
+    findings: list[dict[str, Any]],
+) -> None:
+    if target not in DECISION_TARGETS:
+        return
+    severity = "block" if mode == "block" or target in {"validate", "report"} else "warn"
+    raw_contract_version = first_present(
+        result,
+        [
+            "decision_contract_version",
+            "result.decision_contract_version",
+            "anti_loop_progress_gate.decision_contract_version",
+            "handoff_contract_version",
+        ],
+    )
+    try:
+        contract_version = int(raw_contract_version) if raw_contract_version is not None else None
+    except (TypeError, ValueError):
+        contract_version = None
+    positive_claim = _positive_decision_claim(target, result)
+    contract_required = positive_claim
+    if contract_required and raw_contract_version is None:
+        add(
+            findings,
+            severity,
+            "decision_contract_version_missing",
+            "Current decision claims require decision_contract_version=1; legacy consumption requires explicit version 0.",
+        )
+        return
+    if raw_contract_version is not None and contract_version not in {0, 1}:
+        add(findings, severity, "decision_contract_version_invalid", "Decision contract version must be 1 or explicit legacy version 0.")
+        return
+    if contract_version == 0:
+        return
+    identity = first_present(
+        result,
+        [
+            "decision_input_identity",
+            "decision_artifact_ref",
+            "selected_artifact_ref",
+            "artifact_ref",
+            "actual_artifact_ref",
+            "result.decision_input_identity",
+        ],
+    )
+    if contract_version == 1 and not isinstance(identity, dict):
+        add(
+            findings,
+            severity,
+            "decision_artifact_identity_missing",
+            "Current decision contract requires an exact decision artifact identity.",
+        )
+    if isinstance(identity, dict):
+        required = (
+            "artifact_id",
+            "artifact_class",
+            "artifact_sha256",
+            "production_lane_identity",
+            "discovery_basis",
+        )
+        missing = [field for field in required if not non_empty(identity.get(field))]
+        scope_verified = boolish(identity.get("scope_verified"))
+        advisory = boolish(identity.get("advisory_discovery")) or not scope_verified or bool(missing)
+        if identity.get("artifact_sha256") and not _full_sha256(identity.get("artifact_sha256")):
+            missing.append("artifact_sha256(valid_sha256)")
+            advisory = True
+        if missing:
+            add(
+                findings,
+                severity,
+                "decision_artifact_identity_incomplete",
+                "Decision-controlling artifact identity is incomplete and must remain advisory.",
+                {"missing_fields": sorted(set(missing))},
+            )
+        if positive_claim and advisory:
+            add(
+                findings,
+                severity,
+                "advisory_artifact_controls_decision",
+                "An advisory or scope-unverified artifact cannot control completion, progress, hard stop, terminal state, or pack consumption.",
+            )
+
+    explicit_identity = first_present(result, ["explicit_artifact_ref", "caller_artifact_ref"])
+    default_identity = first_present(result, ["default_artifact_ref", "discovered_default_artifact_ref"])
+    if isinstance(explicit_identity, dict) and isinstance(default_identity, dict):
+        conflict = any(
+            explicit_identity.get(field)
+            and default_identity.get(field)
+            and explicit_identity.get(field) != default_identity.get(field)
+            for field in ("artifact_id", "artifact_sha256", "production_lane_identity")
+        )
+        if conflict:
+            selected_id = identity.get("artifact_id") if isinstance(identity, dict) else None
+            if selected_id != explicit_identity.get("artifact_id") or not _full_sha256(explicit_identity.get("artifact_sha256")):
+                add(
+                    findings,
+                    severity,
+                    "explicit_artifact_conflict_not_resolved",
+                    "Exact caller artifact must win over a conflicting default discovery, and its hash must verify.",
+                )
+
+    rows = first_present(
+        result,
+        [
+            "gate_compatibility_results",
+            "gate_compatibility.rows",
+            "decision_gate_compatibility",
+            "result.gate_compatibility_results",
+        ],
+    )
+    if isinstance(rows, dict):
+        compatibility_rows = rows.get("rows") if isinstance(rows.get("rows"), list) else []
+    else:
+        compatibility_rows = rows if isinstance(rows, list) else []
+    compatibility_declared = any(
+        key in result
+        for key in ("gate_compatibility_results", "decision_gate_compatibility")
+    ) or isinstance(result.get("gate_compatibility"), dict)
+    required_gate_scope_declared = "required_gate_ids" in result or isinstance(result.get("gate_compatibility"), dict) and "required_gate_ids" in result["gate_compatibility"]
+    consumed_gate_scope_declared = any(
+        key in result
+        for key in ("decision_consumed_gate_ids", "consumed_gate_ids", "decision_gate_ids")
+    )
+    if contract_version == 1 and positive_claim:
+        missing_surfaces = []
+        if not compatibility_declared:
+            missing_surfaces.append("gate_compatibility_results")
+        if not required_gate_scope_declared:
+            missing_surfaces.append("required_gate_ids")
+        if not consumed_gate_scope_declared:
+            missing_surfaces.append("decision_consumed_gate_ids")
+        if missing_surfaces:
+            add(
+                findings,
+                severity,
+                "decision_gate_compatibility_scope_missing",
+                "Current decision contract requires explicit applicable, required, and consumed gate scopes, including explicit empty lists.",
+                {"missing_fields": missing_surfaces},
+            )
+    required_gate_ids = {
+        str(item)
+        for item in list_values(first_present(result, ["required_gate_ids", "gate_compatibility.required_gate_ids"]))
+    }
+    consumed_gate_ids: set[str] = set()
+    for field in ("decision_consumed_gate_ids", "consumed_gate_ids", "decision_gate_ids", "residual_gate_ids", "hard_stop_gate_ids"):
+        consumed_gate_ids.update(str(item) for item in list_values(first_present(result, [field, f"decision.{field}"])))
+    by_id: dict[str, dict[str, Any]] = {}
+    for row in compatibility_rows:
+        if not isinstance(row, dict) or not non_empty(row.get("gate_id")):
+            add(findings, severity, "gate_compatibility_row_invalid", "Gate compatibility rows require a gate_id.")
+            continue
+        gate_id = str(row.get("gate_id"))
+        by_id[gate_id] = row
+        status = str(row.get("gate_compatibility_status") or "").strip().lower()
+        if status not in {"compatible", "incompatible", "not_evaluated"}:
+            add(findings, severity, "gate_compatibility_status_invalid", "Gate compatibility status is invalid.", {"gate_id": gate_id})
+        if status != "compatible" and gate_id in consumed_gate_ids:
+            add(
+                findings,
+                severity,
+                "noncompatible_gate_consumed",
+                "An incompatible or unevaluated gate cannot contribute to the decision set.",
+                {"gate_id": gate_id, "status": status},
+            )
+        if isinstance(identity, dict):
+            for field in ("artifact_id", "artifact_sha256"):
+                if row.get(field) and row.get(field) != identity.get(field):
+                    add(
+                        findings,
+                        severity,
+                        "gate_compatibility_artifact_identity_mismatch",
+                        "Gate compatibility evidence is bound to a different artifact identity.",
+                        {"gate_id": gate_id, "field": field},
+                    )
+    missing_required = sorted(
+        gate_id
+        for gate_id in required_gate_ids
+        if gate_id not in by_id
+        or str(by_id[gate_id].get("gate_compatibility_status") or "").strip().lower() != "compatible"
+    )
+    if missing_required and positive_claim:
+        add(
+            findings,
+            severity,
+            "required_gate_compatibility_not_evaluated",
+            "A required decision gate is not proven compatible with the exact artifact.",
+            {"gate_ids": missing_required},
+        )
+
+
+def validate_verification_axes(
+    target: str,
+    result: dict[str, Any],
+    mode: str,
+    findings: list[dict[str, Any]],
+) -> None:
+    axes_value = first_present(
+        result,
+        ["verification_axes", "evidence_provenance_gate.verification_axes", "verification_source_separation_gate.verification_axes"],
+    )
+    axes = axes_value if isinstance(axes_value, list) else []
+    if not axes:
+        return
+    severity = "block" if mode == "block" or target in {"validate", "report"} else "warn"
+    required_ids = {
+        str(item)
+        for item in list_values(first_present(result, ["required_verification_axis_ids", "verification_axis_contract.required_axis_ids"]))
+    }
+    observed: dict[str, dict[str, Any]] = {}
+    for axis in axes:
+        if not isinstance(axis, dict) or not non_empty(axis.get("axis_id")):
+            add(findings, severity, "verification_axis_identity_missing", "Verification axis rows require axis_id.")
+            continue
+        axis_id = str(axis.get("axis_id"))
+        observed[axis_id] = axis
+        coupling = str(axis.get("coupling_status") or "unknown").strip().lower()
+        provenance = str(axis.get("evidence_provenance") or "not_evaluated").strip().lower()
+        if coupling not in COUPLING_STATUSES:
+            add(findings, severity, "verification_axis_coupling_invalid", "Verification coupling status is invalid.", {"axis_id": axis_id})
+        if provenance not in EVIDENCE_PROVENANCE_STATUSES:
+            add(findings, severity, "verification_axis_provenance_invalid", "Verification evidence provenance is invalid.", {"axis_id": axis_id})
+        if provenance == "independently_verified" and coupling != "disjoint":
+            add(
+                findings,
+                severity,
+                "verification_axis_independent_without_disjoint_inputs",
+                "Independently verified evidence requires disjoint verification inputs.",
+                {"axis_id": axis_id, "coupling_status": coupling},
+            )
+        semantic_axis = boolish(axis.get("semantic_axis")) or str(axis.get("axis_kind") or "").lower() in {
+            "semantic",
+            "source_semantic",
+        }
+        if semantic_axis and provenance == "self_grounded":
+            add(
+                findings,
+                severity,
+                "self_grounded_semantic_axis_overclaim",
+                "Same-artifact structural verification cannot establish a source-independent semantic axis.",
+                {"axis_id": axis_id},
+            )
+    not_evaluated = sorted(
+        axis_id
+        for axis_id in required_ids
+        if axis_id not in observed
+        or str(observed[axis_id].get("evidence_provenance") or "not_evaluated").lower() == "not_evaluated"
+    )
+    if not_evaluated and _positive_decision_claim(target, result):
+        add(
+            findings,
+            severity,
+            "required_verification_axis_not_evaluated",
+            "A required verification axis is not evaluated and cannot be consumed as pass.",
+            {"axis_ids": not_evaluated},
+        )
+
+
+def validate_verdict_axes(
+    target: str,
+    result: dict[str, Any],
+    mode: str,
+    findings: list[dict[str, Any]],
+) -> None:
+    supplied = {axis: first_present(result, [axis, f"verdict_axes.{axis}", f"result.{axis}"]) for axis in VERDICT_AXES}
+    raw_version = first_present(
+        result,
+        ["verdict_contract_version", "verdict_axes.schema_version", "result.verdict_contract_version"],
+    )
+    try:
+        contract_version = int(raw_version) if raw_version is not None else None
+    except (TypeError, ValueError):
+        contract_version = None
+    any_axes = any(value is not None for value in supplied.values())
+    current_required = target in {"validate", "derive", "report"} and _positive_decision_claim(target, result)
+    severity = "block" if mode == "block" or target in {"validate", "report"} else "warn"
+    if raw_version is None and (any_axes or current_required):
+        add(
+            findings,
+            severity,
+            "verdict_contract_version_missing",
+            "Lifecycle verdicts require version 1; legacy packets require explicit version 0.",
+        )
+        return
+    if raw_version is not None and contract_version not in {0, 1}:
+        add(findings, severity, "verdict_contract_version_invalid", "Verdict contract version must be 1 or explicit legacy version 0.")
+        return
+    if contract_version == 0:
+        return
+    if contract_version != 1 and not any_axes:
+        return
+    statuses: dict[str, str] = {}
+    for axis, value in supplied.items():
+        if value is None:
+            add(findings, severity, "verdict_axis_missing", "Current verdict-axis packets must preserve every lifecycle verdict axis.", {"axis": axis})
+            continue
+        if isinstance(value, dict):
+            status = str(value.get("status") or value.get("verdict") or "").strip().lower()
+            evidence = value.get("evidence_ref") or value.get("evidence_refs")
+        else:
+            status = str(value).strip().lower()
+            evidence = None
+        statuses[axis] = status
+        if status not in VERDICT_AXIS_STATUSES:
+            add(findings, severity, "verdict_axis_status_invalid", "Verdict axis status is invalid.", {"axis": axis, "status": status})
+        if status != "not_applicable" and not non_empty(evidence):
+            add(findings, severity, "verdict_axis_evidence_missing", "Verdict axes require a bounded evidence reference.", {"axis": axis})
+    goal_status = statuses.get("goal_readiness_verdict")
+    implementation_blocking = {
+        axis
+        for axis in ("task_acceptance_verdict", "artifact_truth_verdict", "artifact_semantic_verdict")
+        if statuses.get(axis) in {"fail", "blocked", "partial", "not_evaluated"}
+    }
+    readiness_blocking = {
+        axis
+        for axis in VERDICT_AXES[:-1]
+        if statuses.get(axis) in {"fail", "blocked", "partial", "not_evaluated"}
+    }
+    if implementation_blocking and str(value_for(result, "progress_verdict") or "").lower() == "advanced":
+        add(
+            findings,
+            severity,
+            "implementation_axis_failure_counted_as_progress",
+            "Task acceptance, artifact truth, or artifact semantic failure cannot be upgraded to advanced progress.",
+            {"blocking_axes": sorted(implementation_blocking)},
+        )
+    if readiness_blocking and goal_status == "pass":
+        add(
+            findings,
+            severity,
+            "failed_axis_counted_as_goal_ready",
+            "Goal readiness cannot pass while a required lifecycle axis is failed, blocked, partial, or not evaluated.",
+            {"blocking_axes": sorted(readiness_blocking)},
+        )
+    failed_axes = {axis for axis, status in statuses.items() if status in {"fail", "blocked", "partial", "not_evaluated"}}
+    retry_axis = str(first_present(result, ["retry_axis", "selected_remediation_axis", "derive.retry_axis"]) or "").strip()
+    if target == "derive" and failed_axes and retry_axis and retry_axis not in failed_axes:
+        add(
+            findings,
+            severity,
+            "derive_retry_axis_mismatch",
+            "Derive retry routing must target an actually failed verdict axis.",
+            {"retry_axis": retry_axis, "failed_axes": sorted(failed_axes)},
+        )
 
 
 def has_explicit_empty(result: dict[str, Any], field: str, expected_type: type[list[Any]] | type[dict[str, Any]]) -> bool:
@@ -202,6 +585,10 @@ def _validate(
     severity = "block" if mode == "block" or target == "report" else "warn"
     for field in missing:
         add(findings, severity, "missing_required_field", f"`{target}` result is missing `{field}`.", {"field": field})
+
+    validate_decision_identity_and_compatibility(target, result, mode, findings)
+    validate_verification_axes(target, result, mode, findings)
+    validate_verdict_axes(target, result, mode, findings)
 
     if target in AGENT_ROUTING_TARGETS:
         applicability = str(value_for(result, "agent_routing_applicability") or "").lower()
@@ -450,17 +837,32 @@ def _validate(
     invalid_consumers: list[str] = []
     for consumer_id in required_consumer_ids:
         row = conformance_by_id.get(str(consumer_id))
-        if not row or not all(
-            boolish(row.get(field))
-            for field in ("adapter_loaded", "required_hook_callable", "hook_signature_compatible", "return_contract_valid")
-        ) or not non_empty(row.get("probe_evidence_id")):
+        invocation_status = str((row or {}).get("invocation_status") or "").strip().lower()
+        return_status = str((row or {}).get("return_contract_status") or "").strip().lower()
+        echo_status = str((row or {}).get("artifact_identity_echo_status") or "").strip().lower()
+        consumption_status = str((row or {}).get("decision_consumption_status") or "").strip().lower()
+        valid = bool(row) and all(
+            (
+                boolish(row.get("adapter_loaded")),
+                boolish(row.get("hook_resolved")),
+                boolish(row.get("hook_callable") or row.get("required_hook_callable")),
+                boolish(row.get("signature_bind_passed") or row.get("hook_signature_compatible")),
+                boolish(row.get("invocation_completed")) or invocation_status in {"complete", "completed", "pass", "passed", "success"},
+                boolish(row.get("return_contract_valid")) or return_status in {"valid", "pass", "passed"},
+                boolish(row.get("artifact_identity_echo_valid")) or echo_status in {"valid", "pass", "passed", "matched"},
+                boolish(row.get("value_consumed_by_decision")) or consumption_status in {"consumed", "pass", "passed"},
+            )
+        ) and non_empty(row.get("probe_evidence_ref") or row.get("probe_evidence_id"))
+        if row and row.get("probe_evidence_sha256") and not _full_sha256(row.get("probe_evidence_sha256")):
+            valid = False
+        if not valid:
             invalid_consumers.append(str(consumer_id))
     if invalid_consumers:
         add(
             findings,
             "block" if mode == "block" or target == "validate" else "warn",
             "required_consumer_context_not_evaluated",
-            "Required adapter consumer contexts lack external loader probe evidence; root import or adapter self-attestation is insufficient.",
+            "Required adapter consumer contexts lack a full external invocation receipt; import, hook-name presence, or adapter self-attestation is insufficient.",
             {"consumer_context_ids": invalid_consumers},
         )
 

@@ -84,6 +84,8 @@ def validate_payload(*, complete: bool = True) -> dict[str, Any]:
         "task_id": "task-1",
         "validation_verdict": "pass" if complete else "partial",
         "progress_verdict": "advanced" if complete else "partial",
+        "decision_contract_version": 0,
+        "verdict_contract_version": 0,
         "blockers": [],
         "evidence_paths": ["validation.json"],
         "agent_routing_applicability": "deterministic_only",

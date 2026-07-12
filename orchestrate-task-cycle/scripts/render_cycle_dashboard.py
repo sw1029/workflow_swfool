@@ -72,6 +72,14 @@ AXIS_FIELDS = (
     "axis_stall_streak",
     "goal_axis_stall",
 )
+VERDICT_AXIS_FIELDS = (
+    "task_acceptance_verdict",
+    "artifact_truth_verdict",
+    "artifact_semantic_verdict",
+    "pack_transition_verdict",
+    "historical_index_verdict",
+    "goal_readiness_verdict",
+)
 
 
 class DashboardDataError(ValueError):
@@ -246,6 +254,22 @@ def summarize(events: list[dict[str, Any]], current: dict[str, Any], current_loa
         for field in AXIS_FIELDS
         if field in event and event[field] not in (None, "", [], {})
     ]
+    verdict_axes = [
+        {"step": event.get("step"), "axis": field, "verdict": event[field]}
+        for event in valid_events
+        for field in VERDICT_AXIS_FIELDS
+        if field in event and event[field] not in (None, "", [], {})
+    ]
+    unchanged_refs_by_identity: dict[tuple[str, str], dict[str, str]] = {}
+    for event in valid_events:
+        for ref in event.get("unchanged_refs") or []:
+            if not isinstance(ref, dict):
+                continue
+            path = str(ref.get("path") or "").strip()
+            sha256 = str(ref.get("sha256") or "").strip()
+            if path and sha256:
+                unchanged_refs_by_identity[(path, sha256)] = {"path": path, "sha256": sha256}
+    unchanged_refs = list(unchanged_refs_by_identity.values())
     lineage_findings = [
         {"step": event.get("step"), field: event[field]}
         for event in valid_events
@@ -308,6 +332,9 @@ def summarize(events: list[dict[str, Any]], current: dict[str, Any], current_loa
         "validation_verdict": validation,
         "progress_verdict": progress,
         "progress_axes": progress_axes,
+        "verdict_axes": verdict_axes,
+        "unchanged_ref_count": len(unchanged_refs),
+        "unchanged_refs": unchanged_refs[-50:],
         "lineage_findings": lineage_findings,
         "blockers": blockers,
         "findings": findings,
@@ -326,6 +353,7 @@ def render_summary(summary: dict[str, Any]) -> str:
         f"- 최신 상태(latest_status): {latest.get('status') or 'none'}",
         f"- 검증 판정(validation_verdict): {summary['validation_verdict']}",
         f"- 진행 판정(progress_verdict): {summary['progress_verdict']}",
+        f"- unchanged_ref 수: {summary['unchanged_ref_count']}",
         "",
         "## 단계 상태",
     ]
@@ -366,6 +394,8 @@ def render_summary(summary: dict[str, Any]) -> str:
         ("Issue 결과", summary["issue_results"]),
         ("Commit 결과", summary["commit_results"]),
         ("Progress Axes", summary["progress_axes"]),
+        ("분리 판정 축", summary["verdict_axes"]),
+        ("Unchanged References", summary["unchanged_refs"]),
         ("Part L/M 미해결 증거", summary["lineage_findings"]),
         ("Dashboard Findings", summary["findings"]),
     ):

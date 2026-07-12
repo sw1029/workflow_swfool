@@ -41,10 +41,10 @@ class GateEvaluationMixin:
 
     def _surface_budget_gate(self) -> dict[str, Any]:
         surface = command_surface_budget(self.root, threshold=12, metadata_only_count=self.state["metadata_only_count"])
-        surface["hard_gate"] = bool(surface.get("consolidation_candidate_required"))
+        surface["hard_gate"] = bool(surface.get("hard_gate")) and bool(surface.get("constrains_current_family"))
         surface["strict_output_delta_present"] = self.state["has_positive_output_delta"]
         surface["allowed_dispositions"] = ["consolidation", "goal_productive", "terminal_blocked"] if self.state["has_positive_output_delta"] else ["consolidation", "terminal_blocked"]
-        surface["constrains_disposition"] = bool(surface.get("hard_gate"))
+        surface["constrains_disposition"] = bool(surface.get("hard_gate")) and bool(surface.get("constrains_current_family"))
         return surface
 
     def _feature_symbol_gate(self) -> dict[str, Any]:

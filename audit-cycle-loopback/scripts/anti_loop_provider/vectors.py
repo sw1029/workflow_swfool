@@ -347,13 +347,18 @@ def apply_evidence_provenance_filter(
     pass_key: str,
     provenance: dict[str, str],
     hook_provided: bool,
-) -> tuple[dict[str, Any], list[str], list[str]]:
+) -> tuple[dict[str, Any], list[str], list[str], list[str]]:
     if not hook_provided:
-        return gate, [], []
+        return gate, [], [], []
     updated = dict(gate)
     improved = list_values(updated.get(improved_key))
     independent = [field for field in improved if metric_is_independently_verified(field, provenance, hook_provided)]
-    attested = [field for field in improved if field not in independent]
+    self_grounded = [
+        field
+        for field in improved
+        if provenance_for_metric(field, provenance, hook_provided) == "self_grounded"
+    ]
+    attested = [field for field in improved if field not in independent and field not in self_grounded]
     updated[improved_key] = independent
     updated[pass_key] = bool(independent)
     if improved and not independent:
@@ -362,9 +367,10 @@ def apply_evidence_provenance_filter(
         updated["status"] = "pass"
     updated["evidence_provenance_status"] = "provided"
     updated["independently_verified_fields"] = independent
+    updated["self_grounded_fields"] = self_grounded
     updated["producer_attested_fields"] = attested
     updated["attested_only_movement"] = bool(attested and not independent)
-    return updated, independent, attested
+    return updated, independent, attested, self_grounded
 
 def evidence_provenance_gate(
     *,
@@ -373,8 +379,10 @@ def evidence_provenance_gate(
     independent_fields: list[str],
     attested_fields: list[str],
     adapter_error: str | None,
+    self_grounded_fields: list[str] | None = None,
     source_separation_gate: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    self_grounded_fields = self_grounded_fields or []
     attested_only = bool(attested_fields and not independent_fields)
     source_separation_gate = source_separation_gate or {}
     return {
@@ -384,12 +392,14 @@ def evidence_provenance_gate(
         "provenance_by_metric": provenance,
         "independently_verified_fields": sorted(set(independent_fields)),
         "producer_attested_fields": sorted(set(attested_fields)),
+        "self_grounded_fields": sorted(set(self_grounded_fields)),
         "attested_only_movement": attested_only,
         "verification_source_separation_gate": source_separation_gate,
         "verification_input_paths": source_separation_gate.get("verification_input_paths") or [],
         "verified_artifact_paths": source_separation_gate.get("verified_artifact_paths") or [],
         "independent_source_separation_status": source_separation_gate.get("independent_source_separation_status"),
         "independently_verified_downgraded_fields": source_separation_gate.get("independently_verified_downgraded_fields") or [],
+        "verification_axes": source_separation_gate.get("verification_axes") or [],
         "status": "warn" if attested_only else ("pass" if independent_fields else ("not_evaluated" if not hook_provided else "ok")),
         "constrains_disposition": False,
     }

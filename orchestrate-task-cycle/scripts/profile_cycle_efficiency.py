@@ -107,6 +107,32 @@ def same_family_scope(event: dict[str, Any], scope: dict[str, str]) -> bool:
     return all(candidate.get(key) == value for key, value in scope.items())
 
 
+def current_cycle_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return the latest cycle's observable cost events without family guessing."""
+    if not events:
+        return []
+    latest_cycle_id = str(events[-1].get("cycle_id") or "").strip()
+    if not latest_cycle_id:
+        return list(events)
+    selected = [event for event in events if str(event.get("cycle_id") or "").strip() == latest_cycle_id]
+    return selected or list(events)
+
+
+def artifact_ref_identity(ref: dict[str, Any]) -> str:
+    """Keep location and content together so equal bytes at a new path remain new work."""
+
+    return json.dumps(
+        {
+            "path_or_store_ref": ref.get("path") or ref.get("store_ref"),
+            "sha256": ref.get("sha256"),
+            "artifact_id": ref.get("artifact_id"),
+            "production_lane_identity": ref.get("production_lane_identity"),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def collect_events(root: Path, cycle_id: str | None) -> list[dict[str, Any]]:
     resolved_root = root.resolve()
     cycle_root = (resolved_root / ".task" / "cycle").resolve(strict=False)
@@ -172,7 +198,9 @@ def command_surface_budget(root: Path, metadata_only_count: int, threshold: int 
         "metadata_only_count": metadata_only_count,
         "budget_exceeded": exceeded,
         "consolidation_candidate_required": exceeded,
-        "hard_gate": exceeded,
+        "hard_gate": False,
+        "constrains_current_family": False,
+        "decision_scope": "global_dashboard",
         "allowed_dispositions": ["consolidation", "goal_productive", "terminal_blocked"],
         "surfaces": surfaces[:8],
     }
@@ -209,7 +237,9 @@ def artifact_sprawl_budget(root: Path) -> dict[str, Any]:
             {"family": family, "count": count} for family, count in versioned_family_counter.most_common(8)
         ],
         "consolidation_candidate_required": over_budget,
-        "hard_gate": over_budget,
+        "hard_gate": False,
+        "constrains_current_family": False,
+        "decision_scope": "global_dashboard",
         "allowed_dispositions": ["consolidation", "goal_productive", "terminal_blocked", "user_escalation"],
     }
 
@@ -223,8 +253,9 @@ def analyze(
     latest_scope = family_scope(events[-1]) if events else family_scope({})
     profile_scope_unverified = not all(latest_scope.values())
     scoped_events = [event for event in events if same_family_scope(event, latest_scope)] if not profile_scope_unverified else []
-    progress_values = [str(event.get("progress_verdict")).lower() for event in events if event.get("progress_verdict")]
-    progress_kinds = [str(first_present(event, ("effective_progress_kind", "progress_kind"))).lower() for event in events if first_present(event, ("effective_progress_kind", "progress_kind"))]
+    decision_events = scoped_events if not profile_scope_unverified else []
+    progress_values = [str(event.get("progress_verdict")).lower() for event in decision_events if event.get("progress_verdict")]
+    progress_kinds = [str(first_present(event, ("effective_progress_kind", "progress_kind"))).lower() for event in decision_events if first_present(event, ("effective_progress_kind", "progress_kind"))]
     global_blockers = [str(item) for event in events for item in (event.get("blockers") or [])]
     blockers = [str(item) for event in scoped_events for item in (event.get("blockers") or [])]
     artifacts = [str(item) for event in events for item in (event.get("artifacts") or [])]
@@ -237,7 +268,7 @@ def analyze(
     validation_profiles = [str(event.get("validation_profile")).lower() for event in events if event.get("validation_profile")]
     global_blocker_signatures = [str(event.get("blocker_signature")).lower() for event in events if event.get("blocker_signature")]
     blocker_signatures = [str(event.get("blocker_signature")).lower() for event in scoped_events if event.get("blocker_signature")]
-    validation_set_events = [event for event in events if str(event.get("step") or "") == "validation_set_build"]
+    validation_set_events = [event for event in decision_events if str(event.get("step") or "") == "validation_set_build"]
     validation_set_artifacts = [artifact for artifact in artifacts if ".validation/sets/" in artifact or ".task/validation_set/" in artifact]
     validation_set_blockers = [
         blocker
@@ -247,8 +278,10 @@ def analyze(
     repeated_blockers = [{"blocker": key, "count": count} for key, count in Counter(blockers).most_common() if count >= 2]
     repeated_signatures = [{"blocker_signature": key, "count": count} for key, count in Counter(blocker_signatures).most_common() if count >= 2]
     duplicate_artifacts = [{"artifact": key, "count": count} for key, count in Counter(artifacts).most_common() if count >= 2]
-    progress_events = [event for event in events if event.get("progress_verdict") or first_present(event, ("progress_kind", "effective_progress_kind"))]
+    progress_events = [event for event in decision_events if event.get("progress_verdict") or first_present(event, ("progress_kind", "effective_progress_kind"))]
     metadata_only_events = [event for event in progress_events if is_metadata_only(event)]
+    global_progress_events = [event for event in events if event.get("progress_verdict") or first_present(event, ("progress_kind", "effective_progress_kind"))]
+    global_metadata_only_events = [event for event in global_progress_events if is_metadata_only(event)]
     vacuous_untried_streak = max(
         [
             int(value)
@@ -340,9 +373,12 @@ def analyze(
         findings.append({"severity": "warn", "code": "duplicate_validation_set_artifacts", "message": "Validation-set artifact paths repeat across events."})
     if any("base_commit" in json.dumps(record, sort_keys=True) for record in index_records):
         findings.append({"severity": "info", "code": "base_commit_present", "message": "Pre-commit hashes should stay classified as base/pre_commit evidence until $repo-change-commit returns a final commit."})
-    surface_budget = command_surface_budget(root, len(metadata_only_events))
+    surface_budget = command_surface_budget(root, len(global_metadata_only_events))
     sprawl_budget = artifact_sprawl_budget(root)
-    cost_events = scoped_events if not profile_scope_unverified else []
+    # Preserve family-scoped cost when that identity is verified. If family
+    # identity is unavailable, retain observable current-cycle cost instead of
+    # collapsing the basis to an artificial minimum.
+    cost_events = scoped_events if not profile_scope_unverified else current_cycle_events(events)
     scoped_unchanged_refs = [
         ref
         for event in cost_events
@@ -351,20 +387,24 @@ def analyze(
     ]
     unique_unchanged_artifact_ids = sorted(
         {
-            str(ref.get("sha256") or ref.get("artifact_id") or ref.get("path"))
+            artifact_ref_identity(ref)
             for ref in scoped_unchanged_refs
-            if ref.get("sha256") or ref.get("artifact_id") or ref.get("path")
+            if ref.get("sha256") or ref.get("artifact_id") or ref.get("path") or ref.get("store_ref")
         }
     )
     artifact_identities = {
-        str(ref.get("sha256") or ref.get("artifact_id") or ref.get("path"))
+        artifact_ref_identity(ref)
         for event in cost_events
         for ref in (event.get("artifact_refs") or [])
-        if isinstance(ref, dict) and (ref.get("sha256") or ref.get("artifact_id") or ref.get("path"))
+        if isinstance(ref, dict) and (ref.get("sha256") or ref.get("artifact_id") or ref.get("path") or ref.get("store_ref"))
     }
     unique_new_artifact_ids = sorted(artifact_identities - set(unique_unchanged_artifact_ids))
     fresh_stage_event_ids = sorted(
-        {str(event.get("event_id")) for event in cost_events if event.get("event_id") and not boolish(event.get("replayed"))}
+        {
+            str(event.get("event_id") or f"ledger_event_{index + 1}")
+            for index, event in enumerate(cost_events)
+            if not boolish(event.get("replayed"))
+        }
     )
     cycle_fixed_cost = max(1, len(unique_new_artifact_ids) + len(fresh_stage_event_ids))
     if surface_budget["consolidation_candidate_required"]:
@@ -393,10 +433,7 @@ def analyze(
         recommendations.append("resume_primary_output")
     if "repeated_blocker_signature" in codes:
         recommendations.append("consume_or_reorder_task_pack_or_terminal_block")
-    if "command_surface_budget_exceeded" in codes:
-        recommendations.append("register_consolidation_candidate")
-    if "artifact_sprawl_budget_exceeded" in codes:
-        recommendations.append("register_consolidation_candidate")
+    # Global debt remains visible, but it cannot force a current-family task.
     if "consecutive_safety_only" in codes:
         recommendations.append("batch_micro_contracts")
     if "validation_set_gap_without_build_phase" in codes:
@@ -423,14 +460,21 @@ def analyze(
             "unique_unchanged_artifact_ids": unique_unchanged_artifact_ids,
             "fresh_stage_event_ids": fresh_stage_event_ids,
             "denominator": "max(1, unique_new_artifact_count + fresh_stage_event_count)",
+            "scope": "verified_family" if not profile_scope_unverified else "current_cycle_available_evidence",
         },
         "profile_scope": latest_scope,
         "profile_scope_unverified": profile_scope_unverified,
         "family_scoped_event_count": len(scoped_events),
+        "family_scoped_hard_gate": False,
         "global_aggregate": {
             "blocker_counts": dict(Counter(global_blockers)),
             "blocker_signature_counts": dict(Counter(global_blocker_signatures)),
+            "progress_counts": dict(
+                Counter(str(event.get("progress_verdict")).lower() for event in events if event.get("progress_verdict"))
+            ),
+            "metadata_only_count": len(global_metadata_only_events),
             "dashboard_only": True,
+            "hard_gate": False,
         },
         "vacuous_untried_streak": vacuous_untried_streak,
         "hypothesis_exhausted": hypothesis_exhausted,

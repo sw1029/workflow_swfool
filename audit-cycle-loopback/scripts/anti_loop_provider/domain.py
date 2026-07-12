@@ -18,6 +18,9 @@ def normalize_adapter_quality_result(value: Any, root: Path) -> tuple[dict[str, 
             if value.get(key):
                 quality["current_output_fingerprint"] = value[key]
                 break
+    for key in ("artifact_id", "artifact_sha256"):
+        if key not in quality and value.get(key):
+            quality[key] = value[key]
     evidence_paths = string_list(value.get("evidence_paths"))
     evidence_paths.extend(string_list(value.get("artifact_paths")))
     reason = value.get("insufficient_reason") or value.get("blocked_reason")

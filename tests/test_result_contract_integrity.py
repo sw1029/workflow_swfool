@@ -223,3 +223,86 @@ def test_report_contract_rejects_inconsistent_complete_verified() -> None:
 
     assert validated["status"] == "block"
     assert "report_complete_verified_inconsistent" in finding_codes(validated)
+
+
+def current_validate_packet(**overrides: Any) -> dict[str, Any]:
+    evidence_ref = "packet_K.json"
+    packet: dict[str, Any] = {
+        "step": "validate",
+        "task_id": "item_I",
+        "validation_verdict": "complete",
+        "progress_verdict": "advanced",
+        "blockers": [],
+        "evidence_paths": [evidence_ref],
+        "agent_routing_applicability": "deterministic_only",
+        "decision_contract_version": 1,
+        "decision_artifact_ref": {
+            "artifact_id": "artifact_A",
+            "artifact_class": "family_F",
+            "artifact_sha256": "a" * 64,
+            "production_lane_identity": "lane_L",
+            "discovery_basis": "explicit_artifact_ref",
+            "scope_verified": True,
+        },
+        "verdict_contract_version": 1,
+    }
+    for axis in (
+        "task_acceptance_verdict",
+        "artifact_truth_verdict",
+        "artifact_semantic_verdict",
+        "pack_transition_verdict",
+        "historical_index_verdict",
+        "goal_readiness_verdict",
+    ):
+        packet[axis] = {"status": "pass", "evidence_ref": evidence_ref}
+    packet.update(overrides)
+    return packet
+
+
+def test_acceptance_and_transition_verdicts_remain_separate() -> None:
+    transition_blocked = current_validate_packet(
+        pack_transition_verdict={"status": "blocked", "evidence_ref": "pack_P.json"},
+    )
+    transition_result = result_contract.validate("validate", transition_blocked, "block")
+    transition_codes = finding_codes(transition_result)
+    assert "failed_axis_counted_as_goal_ready" in transition_codes
+    assert "implementation_axis_failure_counted_as_progress" not in transition_codes
+
+    semantic_failed = current_validate_packet(
+        artifact_semantic_verdict={"status": "fail", "evidence_ref": "verdict_V.json"},
+        goal_readiness_verdict={"status": "blocked", "evidence_ref": "verdict_V.json"},
+    )
+    semantic_result = result_contract.validate("validate", semantic_failed, "block")
+    semantic_codes = finding_codes(semantic_result)
+    assert "implementation_axis_failure_counted_as_progress" in semantic_codes
+    assert semantic_failed["pack_transition_verdict"]["status"] == "pass"
+
+
+def test_positive_current_decision_requires_identity_and_all_verdict_axes() -> None:
+    missing_identity = current_validate_packet()
+    del missing_identity["decision_artifact_ref"]
+    identity_result = result_contract.validate("validate", missing_identity, "block")
+    assert "decision_artifact_identity_missing" in finding_codes(identity_result)
+
+    missing_axis = current_validate_packet()
+    del missing_axis["historical_index_verdict"]
+    axis_result = result_contract.validate("validate", missing_axis, "block")
+    assert "verdict_axis_missing" in finding_codes(axis_result)
+
+    missing_versions = current_validate_packet()
+    del missing_versions["decision_contract_version"]
+    del missing_versions["verdict_contract_version"]
+    version_result = result_contract.validate("validate", missing_versions, "block")
+    codes = finding_codes(version_result)
+    assert "decision_contract_version_missing" in codes
+    assert "verdict_contract_version_missing" in codes
+
+
+def test_incomplete_current_index_projection_cannot_be_consumed_as_pass() -> None:
+    packet = current_validate_packet(
+        index_status="passed",
+        current_projection_status="not_evaluated",
+        projection_completeness="incomplete",
+    )
+    result = result_contract.validate("validate", packet, "block")
+    assert "historical_index_projection_not_evaluated" in finding_codes(result)

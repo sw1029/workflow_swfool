@@ -665,6 +665,12 @@ Promote the first unsatisfied actionable rung as a goal-productive task-pack ite
 
 When G-CHAIN reaches the forced-retarget threshold and the adapter supplied a ladder, the packet must expose the first actionable rung as `forced_selected_task` when its prerequisites allow it. `$derive-improvement-task` may terminal/user-escalate only after recording that no supplied ladder rung or self-inflicted gate correction is actionable. Without an adapter ladder, preserve generic terminal/selection rules without fabricating one.
 
+## Decision Identity and Handoff
+
+Before any gate contributes to residual, hard stop, terminal, completion, or derive routing, bind it to the exact decision artifact and consume `gate_compatibility_status`. Keep incompatible gates visible but outside the decision set; keep required `not_evaluated` gates non-consumable. Import-only adapter evidence is not consumer readiness: require hook resolution, signature bind, invocation, return validation, artifact echo, decision consumption, and a probe evidence ref.
+
+For normal post-loopback derive, durably write the authoritative packet first, then emit an adjacent version-1 `anti_loop_handoff` with `applicability: required`, packet/artifact ref and SHA-256, compatible/incompatible gate IDs, progress/blocker/hard-stop/terminal scalars, and allowed next action classes. Never self-embed the packet hash. Derive must verify the packet or a trusted store receipt, require every authoritative scalar on the packet body, and explicitly echo the consumed hash before selection. Permit `not_applicable` only for reasoned initial or standalone derivation with no prior required loopback packet; permit legacy unbound consumption only with explicit version 0.
+
 ## No-Overclaim Boundaries
 
 These gates must not close implementation issues, promote gold/readiness/rights/ZKP claims, or infer user/human review. They only decide whether the cycle can count as goal-productive progress and which next-task family is allowed.

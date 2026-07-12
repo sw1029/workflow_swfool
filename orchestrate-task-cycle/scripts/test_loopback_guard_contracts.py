@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import tempfile
+import types
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +36,22 @@ safe_failure_autopsy = load_module(SKILLS_ROOT / "run-task-code-and-log" / "scri
 cycle_ledger = load_module(ORCHESTRATE_ROOT / "scripts" / "cycle_ledger.py")
 profile_cycle_efficiency = load_module(ORCHESTRATE_ROOT / "scripts" / "profile_cycle_efficiency.py")
 task_state_index = load_module(SKILLS_ROOT / "manage-task-state-index" / "scripts" / "task_state_index.py")
+
+
+def bind_exact_artifact(root: Path, args: argparse.Namespace) -> dict[str, Any]:
+    artifact_path = root / "artifact_A.json"
+    artifact_path.write_text('{"artifact_id":"artifact_A"}\n', encoding="utf-8")
+    artifact_sha256 = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+    artifact_ref = {
+        "artifact_id": "artifact_A",
+        "artifact_class": str(args.artifact_family),
+        "artifact_path_or_store_ref": artifact_path.name,
+        "artifact_sha256": artifact_sha256,
+        "production_lane_identity": "lane_L",
+    }
+    args.artifact_path = [artifact_path.name]
+    args.artifact_ref_json = json.dumps(artifact_ref, sort_keys=True)
+    return artifact_ref
 
 
 def base_pack(items: list[dict[str, Any]]) -> dict[str, Any]:
@@ -354,6 +372,7 @@ def test_terminal_outcome_family_fallback_groups_mutating_blockers() -> None:
             output=None,
         )
 
+        bind_exact_artifact(root, args)
         packet, _, _ = anti_loop_gate_provider.evaluate(args)
 
     assert packet["facet_root_map_missing"] is True
@@ -436,6 +455,7 @@ def test_adapter_mandate_blocks_missing_adapter_stall_chain() -> None:
             output=None,
         )
 
+        bind_exact_artifact(root, args)
         packet, _, _ = anti_loop_gate_provider.evaluate(args)
 
     assert packet["adapter_mandate_required"] is True
@@ -681,8 +701,9 @@ def test_cumulative_chain_overrides_untried_veto_after_quality_stall() -> None:
         adapter.write_text(
             "\n".join(
                 [
-                    "def quality_vector(**kwargs):",
-                    "    return {'quality_vector': {'quality_score': 0, 'current_output_fingerprint': 'fp-current'}}",
+                        "def quality_vector(**kwargs):",
+                        "    ref = kwargs.get('decision_artifact_ref') or {}",
+                        "    return {'quality_vector': {'quality_score': 0, 'current_output_fingerprint': 'fp-current', 'artifact_id': ref.get('artifact_id'), 'artifact_sha256': ref.get('artifact_sha256')}}",
                     "def quality_delta_policy(**kwargs):",
                     "    return {'keys': ['quality_score']}",
                     "def substance_metrics(**kwargs):",
@@ -774,6 +795,7 @@ def test_cumulative_chain_overrides_untried_veto_after_quality_stall() -> None:
             output=None,
         )
 
+        bind_exact_artifact(root, args)
         packet, _, _ = anti_loop_gate_provider.evaluate(args)
 
     assert packet["cumulative_goal_distance_stalled"] is True
@@ -792,8 +814,9 @@ def test_chain_stall_forces_actionable_ladder_task_kind() -> None:
         adapter.write_text(
             "\n".join(
                 [
-                    "def quality_vector(**kwargs):",
-                    "    return {'quality_vector': {'quality_score': 0, 'current_output_fingerprint': 'fp-current'}}",
+                        "def quality_vector(**kwargs):",
+                        "    ref = kwargs.get('decision_artifact_ref') or {}",
+                        "    return {'quality_vector': {'quality_score': 0, 'current_output_fingerprint': 'fp-current', 'artifact_id': ref.get('artifact_id'), 'artifact_sha256': ref.get('artifact_sha256')}}",
                     "def quality_delta_policy(**kwargs):",
                     "    return {'keys': ['quality_score']}",
                     "def substance_metrics(**kwargs):",
@@ -873,6 +896,7 @@ def test_chain_stall_forces_actionable_ladder_task_kind() -> None:
         )
 
         anti_loop_gate_provider._DOMAIN_ADAPTER_MODULE = None
+        bind_exact_artifact(root, args)
         packet, _, _ = anti_loop_gate_provider.evaluate(args)
 
     assert packet["cumulative_goal_distance_stall_streak"] == 6
@@ -895,8 +919,9 @@ def test_repo_owned_source_provenance_rejects_nonactionable_self_report() -> Non
                     "    return ['scripts/**/*.py']",
                     "def facet_root_map(**kwargs):",
                     "    return {'self_gate': 'self_gate'}",
-                    "def quality_vector(**kwargs):",
-                    "    return {'quality_vector': {'quality_score': 0, 'current_output_fingerprint': 'fp-current'}}",
+                        "def quality_vector(**kwargs):",
+                        "    ref = kwargs.get('decision_artifact_ref') or {}",
+                        "    return {'quality_vector': {'quality_score': 0, 'current_output_fingerprint': 'fp-current', 'artifact_id': ref.get('artifact_id'), 'artifact_sha256': ref.get('artifact_sha256')}}",
                     "def quality_delta_policy(**kwargs):",
                     "    return {'keys': ['quality_score']}",
                     "def substance_metrics(**kwargs):",
@@ -987,6 +1012,7 @@ def test_repo_owned_source_provenance_rejects_nonactionable_self_report() -> Non
         )
 
         anti_loop_gate_provider._DOMAIN_ADAPTER_MODULE = None
+        bind_exact_artifact(root, args)
         packet, _, _ = anti_loop_gate_provider.evaluate(args)
 
     entry = packet["root_cause_ledger_entries"][0]
@@ -1441,6 +1467,7 @@ def test_loopback_uses_failure_surface_count_key_and_forces_instrumentation_opti
             output=None,
         )
 
+        bind_exact_artifact(root, args)
         packet, _, _ = anti_loop_gate_provider.evaluate(args)
 
     forced_kinds = {option.get("selected_task_kind") for option in packet["forced_selected_task_options"]}
@@ -1893,6 +1920,369 @@ def test_trace_label_variants_share_family_profile_scope() -> None:
     assert profile["cycle_fixed_cost"] == 2
 
 
+def test_exact_artifact_precedence_and_incompatible_gate_are_fail_closed() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        artifact_a = root / "artifact_A.json"
+        artifact_b = root / "artifact_B.json"
+        artifact_a.write_text('{"value":"A"}\n', encoding="utf-8")
+        artifact_b.write_text('{"value":"B"}\n', encoding="utf-8")
+        artifact_a_sha = hashlib.sha256(artifact_a.read_bytes()).hexdigest()
+        paths, selected = anti_loop_gate_provider.load_artifact_selection(
+            root,
+            json.dumps({"artifacts": [{"artifact_path_or_store_ref": artifact_b.name}]}),
+            [artifact_a.name],
+            artifact_ref_json=json.dumps(
+                {
+                    "artifact_id": "artifact_A",
+                    "artifact_class": "family_F",
+                    "artifact_path_or_store_ref": artifact_a.name,
+                    "artifact_sha256": artifact_a_sha,
+                    "production_lane_identity": "lane_L",
+                }
+            ),
+            artifact_family="family_F",
+        )
+        compatibility = anti_loop_gate_provider.gate_artifact_compatibility_result(
+            None,
+            "gate_G",
+            selected,
+            {"required_artifact_class": "other_family"},
+        )
+        applied = anti_loop_gate_provider.apply_gate_artifact_compatibility(
+            {"hard_stop_required": True, "constrains_disposition": True, "quality_delta_pass": True},
+            compatibility,
+            pass_fields=("quality_delta_pass",),
+        )
+        store_ref = f"sha256:{artifact_a_sha}"
+        _store_paths, store_selected = anti_loop_gate_provider.load_artifact_selection(
+            root,
+            None,
+            [],
+            artifact_ref_json=json.dumps(
+                {
+                    "artifact_id": "artifact_A",
+                    "artifact_class": "family_F",
+                    "artifact_path_or_store_ref": store_ref,
+                    "artifact_sha256": artifact_a_sha,
+                    "production_lane_identity": "lane_L",
+                }
+            ),
+            artifact_family="family_F",
+        )
+        list_paths, _list_selected = anti_loop_gate_provider.load_artifact_selection(
+            root,
+            json.dumps([{"artifact_path_or_store_ref": artifact_b.name}]),
+            [],
+            artifact_family="family_F",
+        )
+
+    assert paths == [artifact_a]
+    assert selected["scope_verified"] is True
+    assert selected["artifact_id"] == "artifact_A"
+    assert selected["conflicting_discovery_paths"] == [artifact_b.name]
+    assert compatibility["gate_compatibility_status"] == "incompatible"
+    assert applied["decision_contribution_allowed"] is False
+    assert applied["hard_stop_required"] is False
+    assert applied["constrains_disposition"] is False
+    assert applied["quality_delta_pass"] is False
+    assert store_selected["scope_verified"] is True
+    assert store_selected["artifact_path_or_store_ref"] == store_ref
+    assert list_paths == [artifact_b]
+
+
+def test_consumer_receipts_require_strict_signature_union_and_decision_consumption() -> None:
+    artifact_ref = {
+        "artifact_id": "artifact_A",
+        "artifact_class": "family_F",
+        "artifact_sha256": "a" * 64,
+        "production_lane_identity": "lane_L",
+        "scope_verified": True,
+    }
+
+    def zero_arg_compatibility() -> dict[str, Any]:
+        return {"compatible": True, "artifact_id": "artifact_A", "artifact_sha256": "a" * 64}
+
+    compatibility = anti_loop_gate_provider.gate_artifact_compatibility_result(
+        types.SimpleNamespace(gate_artifact_compatibility=zero_arg_compatibility),
+        "gate_G",
+        artifact_ref,
+        {},
+    )
+    valid = {
+        "consumer_context_id": "hook_H",
+        "adapter_loaded": True,
+        "required_hook_callable": True,
+        "hook_signature_compatible": True,
+        "invocation_completed": True,
+        "return_contract_valid": True,
+        "artifact_identity_echo_valid": True,
+        "value_consumed_by_decision": True,
+        "probe_evidence_ref": "packet:receipt/hook_H",
+    }
+    invalid_consumption = {**valid, "consumer_context_id": "hook_I", "value_consumed_by_decision": False}
+    invalid_return = {**valid, "consumer_context_id": "hook_J", "return_contract_valid": False}
+    invalid_identity = {**valid, "consumer_context_id": "hook_K", "artifact_identity_echo_valid": False}
+    conformance = anti_loop_gate_provider.consumer_context_conformance_gate(
+        {"required_consumer_ids": ["hook_H"], "consumer_context_conformance": {"rows": [valid]}},
+        {
+            "required_consumer_ids": ["hook_I", "hook_J", "hook_K"],
+            "consumer_context_conformance": {
+                "rows": [invalid_consumption, invalid_return, invalid_identity]
+            },
+        },
+    )
+
+    assert compatibility["gate_compatibility_status"] == "not_evaluated"
+    assert compatibility["consumer_invocation_receipt"]["hook_signature_compatible"] is False
+    assert conformance["status"] == "not_evaluated"
+    assert conformance["missing_consumer_context_ids"] == ["hook_I", "hook_J", "hook_K"]
+    assert {row["consumer_context_id"] for row in conformance["rows"]} == {
+        "hook_H",
+        "hook_I",
+        "hook_J",
+        "hook_K",
+    }
+
+
+def test_verification_coupling_preserves_self_grounded_and_rejects_identity_overlap() -> None:
+    axis_key = anti_loop_gate_provider.normalize_gate_key("axis_A")
+    gate, independent, attested, self_grounded = anti_loop_gate_provider.apply_evidence_provenance_filter(
+        {"improved_fields": ["axis_A"], "quality_delta_pass": True, "status": "pass"},
+        improved_key="improved_fields",
+        pass_key="quality_delta_pass",
+        provenance={axis_key: "self_grounded"},
+        hook_provided=True,
+    )
+    overlap = anti_loop_gate_provider.verification_source_separation_gate(
+        provenance_value={
+            "verification_input_ids": ["input_D"],
+            "producer_input_ids": ["input_D"],
+            "verified_artifact_ids": ["artifact_A"],
+            "evidence_provenance": {"axis_A": {"axis_kind": "semantic"}},
+        },
+        verified_artifact_paths=[],
+        independently_verified_fields=["axis_A"],
+    )
+    structural = anti_loop_gate_provider.verification_source_separation_gate(
+        provenance_value={
+            "self_grounded_axes": ["axis_A"],
+            "evidence_provenance": {"axis_A": {"axis_kind": "semantic"}},
+        },
+        verified_artifact_paths=["artifact_A.json"],
+        independently_verified_fields=[],
+        self_grounded_fields=["axis_A"],
+    )
+
+    assert independent == []
+    assert attested == []
+    assert self_grounded == ["axis_A"]
+    assert gate["quality_delta_pass"] is False
+    assert overlap["independent_source_separation_status"] == "overlap"
+    assert overlap["verification_identity_overlap_ids"] == ["input_D"]
+    assert overlap["verification_axes"][0]["evidence_provenance"] == "producer_attested"
+    assert structural["independent_source_separation_status"] == "self_grounded"
+    assert structural["verification_axes"][0]["evidence_provenance"] == "self_grounded"
+    assert structural["verification_axes"][0]["semantic_axis"] is True
+
+
+def test_registry_identity_is_content_bound_and_label_correction_is_not_a_new_attempt() -> None:
+    fingerprint_a = anti_loop_gate_provider.decision_input_state_fingerprint(
+        [{"input_state_fingerprint": "input_D"}],
+        {"artifact_sha256": "a" * 64, "production_lane_identity": "lane_L"},
+    )
+    fingerprint_b = anti_loop_gate_provider.decision_input_state_fingerprint(
+        [{"input_state_fingerprint": "input_D"}],
+        {"artifact_sha256": "b" * 64, "production_lane_identity": "lane_L"},
+    )
+    attempt_a = anti_loop_gate_provider.content_bound_attempt_identity(
+        "cycle_C", "family_F", "blocker_A", fingerprint_a
+    )
+    attempt_b = anti_loop_gate_provider.content_bound_attempt_identity(
+        "cycle_C", "family_F", "blocker_A", fingerprint_b
+    )
+    corrected = anti_loop_gate_provider.compact_registry(
+        [
+            {"attempt_identity": attempt_a, "family_key": "family_old", "cycle_id": "cycle_C"},
+            {"attempt_identity": attempt_a, "family_key": "family_corrected", "cycle_id": "cycle_C"},
+        ],
+        10,
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        ledger_path = Path(tmp) / "root_cause.jsonl"
+        original_root_cause = {
+            "attempt_identity": attempt_a,
+            "cycle_id": "cycle_C",
+            "family_key": "family_old",
+            "root_key": "root_A",
+            "root_family_key": "root_A",
+            "hypothesized_root_cause": "cause_A",
+            "target_surface": "surface_A",
+            "observed_delta_class": "no_delta",
+            "repair_attempted": True,
+            "attempt_count": 1,
+            "vacuous_attempt_count": 1,
+        }
+        anti_loop_gate_provider.write_registry(ledger_path, [original_root_cause])
+        durable_rows, durable_changed = anti_loop_gate_provider.append_root_cause_ledger(
+            ledger_path,
+            [{**original_root_cause, "family_key": "family_corrected"}],
+            10,
+        )
+
+    assert fingerprint_a != fingerprint_b
+    assert attempt_a != attempt_b
+    assert len(corrected) == 1
+    assert corrected[0]["registry_label_correction"] is True
+    assert corrected[0]["correction_of_attempt_identity"] == attempt_a
+    assert durable_changed is True
+    assert durable_rows[-1]["label_correction"] is True
+    assert sum(int(row.get("attempt_count") or 0) for row in durable_rows) == 1
+
+
+def test_scope_unverified_profile_preserves_cost_without_global_hard_gate() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        scripts = root / "scripts"
+        scripts.mkdir()
+        (scripts / "surface.py").write_text(
+            "\n".join(f"build-packet-v{index}-contract" for index in range(1, 14)) + "\n",
+            encoding="utf-8",
+        )
+        events = [
+            {
+                "event_id": f"event_{index}",
+                "progress_verdict": "safety_only",
+                "progress_kind": "governance_only",
+                "metadata_only": True,
+            }
+            for index in range(3)
+        ]
+        profile = profile_cycle_efficiency.analyze(root, events, [])
+
+    assert profile["profile_scope_unverified"] is True
+    assert profile["family_scoped_event_count"] == 0
+    assert profile["cycle_fixed_cost"] == 3
+    assert profile["command_surface_budget"]["budget_exceeded"] is True
+    assert profile["command_surface_budget"]["decision_scope"] == "global_dashboard"
+    assert profile["command_surface_budget"]["hard_gate"] is False
+    assert profile["command_surface_budget"]["constrains_current_family"] is False
+    assert detect_progress_loop.gate_constrains_disposition(
+        "command_surface_budget", profile["command_surface_budget"]
+    ) is False
+    assert "goal_productive" in detect_progress_loop.gate_allowed_dispositions(
+        "command_surface_budget", profile["command_surface_budget"]
+    )
+    assert not any(item["code"] == "consecutive_safety_only" for item in profile["findings"])
+
+
+def test_family_scoped_profile_does_not_inherit_other_family_streak() -> None:
+    shared = {
+        "goal_axis": "axis_A",
+        "producer_lineage": "producer_A",
+        "artifact_class": "family_F",
+        "current_decision_lane": "lane_L",
+        "input_cohort": "input_D",
+    }
+    events = [
+        {**shared, "event_id": "event_A", "root_family_key": "family_A", "progress_verdict": "safety_only"},
+        {**shared, "event_id": "event_B", "root_family_key": "family_A", "progress_verdict": "safety_only"},
+        {**shared, "event_id": "event_C", "root_family_key": "family_B", "progress_verdict": "advanced"},
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        profile = profile_cycle_efficiency.analyze(Path(tmp), events, [])
+
+    assert profile["profile_scope_unverified"] is False
+    assert profile["family_scoped_event_count"] == 1
+    assert profile["progress_counts"] == {"advanced": 1}
+    assert not any(item["code"] == "consecutive_safety_only" for item in profile["findings"])
+
+
+def test_hash_bound_handoff_requires_body_match_explicit_echo_and_reasoned_not_applicable() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        packet_path = root / "packet_K.json"
+        packet = {
+            "decision_contract_version": 1,
+            "artifact_id": "artifact_A",
+            "artifact_sha256": "a" * 64,
+            "artifact_family": "family_F",
+            "blocker_signature": "blocker_A",
+            "progress_verdict": "stalled",
+            "hard_stop_required": False,
+            "terminal_state": "conservative_hold",
+            "allowed_next_action_classes": ["conservative_hold"],
+        }
+        packet_path.write_text(json.dumps(packet, sort_keys=True) + "\n", encoding="utf-8")
+        packet_sha = hashlib.sha256(packet_path.read_bytes()).hexdigest()
+        handoff = {
+            "handoff_contract_version": 1,
+            "applicability": "required",
+            "packet_ref": packet_path.name,
+            "packet_sha256": packet_sha,
+            "artifact_id": "artifact_A",
+            "artifact_sha256": "a" * 64,
+            "artifact_family": "family_F",
+            "blocker_signature": "blocker_A",
+            "progress_verdict": "stalled",
+            "hard_stop": False,
+            "terminal_state": "conservative_hold",
+            "allowed_next_action_classes": ["conservative_hold"],
+        }
+        result = {
+            "workspace_root": str(root),
+            "decision_contract_version": 1,
+            "decision_artifact_ref": {
+                "artifact_id": "artifact_A",
+                "artifact_class": "family_F",
+                "artifact_sha256": "a" * 64,
+                "production_lane_identity": "lane_L",
+                "discovery_basis": "explicit_artifact_ref",
+                "scope_verified": True,
+            },
+            "anti_loop_handoff": handoff,
+            "consumed_anti_loop_packet_sha256": packet_sha,
+            "progress_verdict": "stalled",
+        }
+        valid = result_contract.validate("derive", result, "block")
+        missing_echo = result_contract.validate(
+            "derive",
+            {key: value for key, value in result.items() if key != "consumed_anti_loop_packet_sha256"},
+            "block",
+        )
+        packet_path.write_text(json.dumps({**packet, "progress_verdict": "advanced"}) + "\n", encoding="utf-8")
+        tampered = result_contract.validate("derive", result, "block")
+        missing = result_contract.validate(
+            "derive",
+            {
+                "governed_transition": True,
+                "decision_contract_version": 0,
+                "progress_verdict": "stalled",
+            },
+            "block",
+        )
+        standalone = result_contract.validate(
+            "derive",
+            {
+                "derive_mode": "initial_init",
+                "decision_contract_version": 0,
+                "anti_loop_handoff": {
+                    "handoff_contract_version": 1,
+                    "applicability": "not_applicable",
+                    "applicability_reason": "initial transition has no prior loopback packet",
+                },
+            },
+            "block",
+        )
+
+    valid_codes = {item["code"] for item in valid["findings"]}
+    assert not any(code.startswith("derive_anti_loop_handoff") for code in valid_codes)
+    assert any(item["code"] == "derive_anti_loop_handoff_echo_mismatch" for item in missing_echo["findings"])
+    assert any(item["code"] == "derive_anti_loop_handoff_hash_mismatch" for item in tampered["findings"])
+    assert any(item["code"] == "derive_anti_loop_handoff_missing" for item in missing["findings"])
+    assert not any(item["code"] == "derive_anti_loop_not_applicable_invalid" for item in standalone["findings"])
+
+
 def main() -> int:
     test_task_pack_scope_fidelity_blocks_diluted_consumed_item()
     test_task_pack_scope_fidelity_allows_explicit_descope_with_open_residual()
@@ -1937,6 +2327,13 @@ def main() -> int:
     test_repeated_terminal_tuple_latches_without_full_cycle()
     test_mutable_alias_change_preserves_immutable_history()
     test_trace_label_variants_share_family_profile_scope()
+    test_exact_artifact_precedence_and_incompatible_gate_are_fail_closed()
+    test_consumer_receipts_require_strict_signature_union_and_decision_consumption()
+    test_verification_coupling_preserves_self_grounded_and_rejects_identity_overlap()
+    test_registry_identity_is_content_bound_and_label_correction_is_not_a_new_attempt()
+    test_scope_unverified_profile_preserves_cost_without_global_hard_gate()
+    test_family_scoped_profile_does_not_inherit_other_family_streak()
+    test_hash_bound_handoff_requires_body_match_explicit_echo_and_reasoned_not_applicable()
     print("loopback guard contract tests passed")
     return 0
 

@@ -388,5 +388,8 @@ def command_surface_budget(root: Path, threshold: int, metadata_only_count: int,
         "metadata_only_count": metadata_only_count,
         "budget_exceeded": budget_exceeded,
         "consolidation_candidate_required": budget_exceeded,
+        "hard_gate": False,
+        "constrains_current_family": False,
+        "decision_scope": "global_dashboard",
         "surfaces": surfaces[:8],
     }

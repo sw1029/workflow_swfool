@@ -135,35 +135,81 @@ def adapter_wiring_gate(
 
 
 def consumer_context_conformance_gate(*values: Any) -> dict[str, Any]:
-    required_ids = list_values(first_field_value(list(values), {"required_consumer_ids"}))
-    rows_value = first_field_value(list(values), {"consumer_context_conformance", "adapter_consumer_conformance"})
-    if isinstance(rows_value, dict):
-        rows = rows_value.get("rows") or []
-    else:
-        rows = rows_value if isinstance(rows_value, list) else []
-    by_id = {
-        str(row.get("consumer_context_id")): row
-        for row in rows
-        if isinstance(row, dict) and row.get("consumer_context_id")
-    }
+    required_ids: list[str] = []
+    rows: list[dict[str, Any]] = []
+
+    def collect(value: Any) -> None:
+        if isinstance(value, list):
+            for child in value:
+                collect(child)
+            return
+        if not isinstance(value, dict):
+            return
+        for consumer_id in list_values(value.get("required_consumer_ids")):
+            text = str(consumer_id).strip()
+            if text and text not in required_ids:
+                required_ids.append(text)
+        for key in ("consumer_context_conformance", "adapter_consumer_conformance"):
+            nested = value.get(key)
+            if isinstance(nested, dict):
+                collect(nested)
+            elif isinstance(nested, list):
+                for row in nested:
+                    if isinstance(row, dict):
+                        rows.append(row)
+        rows_value = value.get("rows")
+        if isinstance(rows_value, list):
+            for row in rows_value:
+                if isinstance(row, dict):
+                    rows.append(row)
+
+    for value in values:
+        collect(value)
+    by_id: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        consumer_id = str(row.get("consumer_context_id") or "").strip()
+        if consumer_id:
+            by_id.setdefault(consumer_id, []).append(row)
     missing: list[str] = []
     normalized: list[dict[str, Any]] = []
-    for consumer_id in required_ids:
-        row = by_id.get(str(consumer_id)) or {}
-        valid = bool(row) and all(
-            bool_value(row.get(field))
-            for field in ("adapter_loaded", "required_hook_callable", "hook_signature_compatible", "return_contract_valid")
-        ) and bool(str(row.get("probe_evidence_id") or "").strip())
+    def receipt_pass(row: dict[str, Any], bool_field: str, status_field: str) -> bool:
+        if bool_field in row:
+            return bool_value(row.get(bool_field))
+        return str(row.get(status_field) or "").strip().lower() in {"pass", "passed", "complete", "completed", "consumed", "success"}
+    consumer_ids = list(dict.fromkeys([*required_ids, *by_id.keys()]))
+    for consumer_id in consumer_ids:
+        candidate_rows = by_id.get(str(consumer_id)) or [{}]
+        row = candidate_rows[-1]
+        valid = all(
+            bool(candidate) and all(
+                bool_value(candidate.get(field))
+                for field in ("adapter_loaded", "required_hook_callable", "hook_signature_compatible", "return_contract_valid")
+            ) and all(
+                (
+                    receipt_pass(candidate, "invocation_completed", "invocation_status"),
+                    receipt_pass(candidate, "artifact_identity_echo_valid", "artifact_identity_echo_status"),
+                    receipt_pass(candidate, "value_consumed_by_decision", "decision_consumption_status"),
+                )
+            ) and bool(str(candidate.get("probe_evidence_ref") or candidate.get("probe_evidence_id") or "").strip())
+            for candidate in candidate_rows
+        )
         normalized.append({
             "consumer_context_id": str(consumer_id),
             "adapter_loaded": bool_value(row.get("adapter_loaded")),
+            "hook_resolved": bool_value(row.get("hook_resolved") if "hook_resolved" in row else row.get("required_hook_callable")),
             "required_hook_callable": bool_value(row.get("required_hook_callable")),
             "hook_signature_compatible": bool_value(row.get("hook_signature_compatible")),
+            "invocation_completed": receipt_pass(row, "invocation_completed", "invocation_status"),
             "return_contract_valid": bool_value(row.get("return_contract_valid")),
+            "artifact_identity_echo_valid": receipt_pass(row, "artifact_identity_echo_valid", "artifact_identity_echo_status"),
+            "value_consumed_by_decision": receipt_pass(row, "value_consumed_by_decision", "decision_consumption_status"),
             "probe_evidence_id": row.get("probe_evidence_id"),
+            "probe_evidence_ref": row.get("probe_evidence_ref"),
+            "probe_evidence_sha256": row.get("probe_evidence_sha256"),
+            "source_receipt_count": len(candidate_rows),
             "status": "pass" if valid else "not_evaluated",
         })
-        if not valid:
+        if consumer_id in required_ids and not valid:
             missing.append(str(consumer_id))
     return {
         "required_consumer_ids": required_ids,

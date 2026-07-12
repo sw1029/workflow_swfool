@@ -306,6 +306,7 @@ ADVICE_REQUIRED_TARGETS = {"acceptance", "governance", "validation_set_plan", "q
 PACK_DISPOSITIONS = {
     "create_pack",
     "promote_next_item",
+    "normalize_initial_selection_provenance",
     "insert_items",
     "insert_item",
     "reorder_items",
@@ -315,4 +316,14 @@ PACK_DISPOSITIONS = {
     "derive_standalone",
     "terminal_blocked",
 }
-PACK_MUTATION_DISPOSITIONS = {"create_pack", "insert_items", "insert_item", "reorder_items", "skip_items", "exclude_items", "supersede_pack", "terminal_blocked"}
+PACK_MUTATION_DISPOSITIONS = {
+    "create_pack",
+    "normalize_initial_selection_provenance",
+    "insert_items",
+    "insert_item",
+    "reorder_items",
+    "skip_items",
+    "exclude_items",
+    "supersede_pack",
+    "terminal_blocked",
+}
