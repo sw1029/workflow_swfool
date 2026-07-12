@@ -416,7 +416,23 @@ class DeriveRule(TargetContractRule):
                 result,
                 ["pack_mutation_receipt", "derive.pack_mutation_receipt", "result.pack_mutation_receipt", "task_pack_packet.pack_mutation_receipt"],
             )
-            if isinstance(mutation_plan, dict):
+            if isinstance(mutation_plan, dict) and pack_disposition == "replace_pack":
+                replacement_result = task_pack_queue.validate_replacement_receipt(
+                    _workspace_root(context),
+                    mutation_plan,
+                    mutation_receipt if isinstance(mutation_receipt, dict) else None,
+                    current_pack_path=str(value_for(result, "task_pack_path") or "") or None,
+                    current_render_path=str(value_for(result, "task_pack_render_path") or "") or None,
+                )
+                for replacement_finding in replacement_result.get("findings", []):
+                    add(
+                        findings,
+                        "block" if mode == "block" else "warn",
+                        f"derive_{replacement_finding.get('code')}",
+                        str(replacement_finding.get("message") or "Pack replacement validation failed."),
+                        replacement_finding.get("evidence"),
+                    )
+            elif isinstance(mutation_plan, dict):
                 plan_for_validation = dict(mutation_plan)
                 plan_for_validation.setdefault("pack_path", value_for(result, "task_pack_path"))
                 if isinstance(mutation_receipt, dict):

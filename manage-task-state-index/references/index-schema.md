@@ -46,6 +46,10 @@ Treat `partially_resolved` as an active residual-bearing lifecycle state. It pre
 
 Use workspace-local `.task/index.lock` for every JSONL or Markdown mutation. While holding the lock, validate the complete existing JSONL, prepare all related events, durably flush a same-directory temporary file, atomically replace `index.jsonl`, and atomically regenerate `index.md`. A malformed or unsupported ledger must remain byte-for-byte unchanged. Empty registries report `not_evaluated_no_artifacts`; they are not success or completion evidence.
 
+`scan --dry-run` and `scan --check` are read-only publication planners. They must not create `.task/`, an index, a lock file, a snapshot, or a Markdown render. When an index exists, bind the observation to its pre/post SHA-256 and fail if it changes during the read. `--check` exits `1` when the plan reports a durable change and `0` when the projection is current; the exit code is not a completion verdict. A workspace with no standard artifacts and no task-state files is a clean no-context result, not a request to initialize an empty registry.
+
+Before a mutating scan appends its first event, complete the same read-only plan over the entire discovered inventory, simulate canonical identity selection in discovery order, reject cross-path/cross-type collisions, and recheck the ledger and artifact anchors. This prevalidation prevents a deterministic later collision from leaving an earlier partial append; ordinary per-item append/recovery semantics remain unchanged.
+
 A committed legacy migration is the sole exception to ordinary whole-file current-row parsing. It preserves the original bytes at offset zero, then appends correction, seal, and receipt-anchor events. Before allowing any exact prefix quarantine, run the two-pass receipt graph validation in [legacy-migration.md](legacy-migration.md), including the hash-bound final journal, immutable completion marker, and quarantine-to-correction bindings. A missing or invalid receipt graph retains ordinary fail-closed mutation behavior.
 
 Relationship object:
@@ -136,9 +140,11 @@ Use `--write-report` to create `.task/id_audit/YYYYMMDD-HHMMSS-id-consistency-au
 
 ## Markdown Index
 
-Regenerate `.task/index.md` from JSONL after every state change. The Markdown file is a view, not the canonical source. It should include:
+Evaluate `.task/index.md` against the JSONL projection after every state change, and republish it only when that rendered projection differs. The Markdown file is a view, not the canonical source. It should include:
 
 - generation timestamp,
 - artifact counts,
 - grouped artifact tables,
 - IDs, statuses, titles, paths, parent IDs, relationships, and update times.
+
+Rendering is semantic and byte-stable. Re-render first with the existing single `Generated` value; if that payload exactly matches the existing bytes, do not replace the file or change its modification time. When the projection differs, or the view is missing, malformed, or stale, publish a fresh payload atomically and set a fresh generation value. Repairing only the view does not append a JSONL event.

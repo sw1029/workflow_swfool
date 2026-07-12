@@ -131,7 +131,7 @@ Return 3-5 candidates. For each:
 - validation
 - risks
 - goal/convention blocker handled or avoided
-- task_pack_disposition: standalone | promote_pack_item | insert_pack_item | reorder_pack | terminal_block_pack | not_applicable
+- task_pack_disposition: standalone | create_pack | replace_pack | promote_pack_item | insert_pack_item | reorder_pack | terminal_block_pack | not_applicable
 - positive_input_delta: new input kind introduced plus non-empty supplied artifact path or `produced_domain_delta=true`, or why no delta is needed
 - scope_fidelity: affected measurable directive IDs, original target preservation, narrowed/descope status, and residual item needed
 - acceptance_verifier: required verifier status for measurable targets, especially `not_evaluated` verifier debt that must remain open or become the task
@@ -177,7 +177,7 @@ Return 3-5 candidates. For each:
 - validation_profile: current_only | affected_chain | full_chain
 - prerequisite surfaces that justify `affected_chain` or `full_chain`, if any
 - validation
-- task_pack_disposition: standalone | promote_pack_item | insert_pack_item | reorder_pack | terminal_block_pack | not_applicable
+- task_pack_disposition: standalone | create_pack | replace_pack | promote_pack_item | insert_pack_item | reorder_pack | terminal_block_pack | not_applicable
 - blocker_signature, semantic_signature, sealed-family, goal-distance, and input-delta implications
 - count-key implications: effective root/dominant-parameter key or terminal-outcome fallback when raw generated labels changed
 - structure_high_water_key_scope: whether any structure proposal moves adapter-owned global invariants or only a selected local scope
@@ -213,7 +213,7 @@ Return 3-5 candidates. For each:
 - blocker_state_transition
 - validation_profile: current_only | affected_chain | full_chain
 - batchability with related no-live or micro-contract candidates
-- task_pack_disposition: standalone | promote_pack_item | insert_pack_item | reorder_pack | terminal_block_pack | not_applicable
+- task_pack_disposition: standalone | create_pack | replace_pack | promote_pack_item | insert_pack_item | reorder_pack | terminal_block_pack | not_applicable
 - whether active pack order should change and why
 - acceptance_verifier risk: required verifier missing, failed, or `not_evaluated`
 - required gate-hook risk: acceptance-referenced gate hooks absent, fail-quiet, or `not_evaluated`
@@ -261,12 +261,14 @@ Tasks:
 7. Include `.schema` and `.contract` update requirements when the selected task affects schemas, module/script contracts, or causal compatibility.
 8. Include the effective authority policy in the generated `## Execution Environment` and explain any API/external-call, direction-freedom, conservative-implementation, validation-priority, or escalation constraint that affects the selected task.
 9. Include `External Advice` in the generated `## Execution Environment`: list used `adv-*` IDs/paths or `none`, and explain whether each active advice item is incorporated, deferred, rejected, or not applicable.
-10. If an active task pack exists, choose one disposition: `promote_next_item`, `insert_item`, `reorder_items`, `supersede_pack`, `derive_standalone`, or `terminal_blocked`.
-11. If writing or updating a task pack, produce canonical JSON content plus the user-language Markdown render requirement.
+10. If an active task pack exists, choose one disposition: `replace_pack`, `promote_next_item`, `insert_item`, `reorder_items`, `supersede_pack`, `derive_standalone`, or `terminal_blocked`.
+11. If writing or updating a task pack, produce canonical JSON content plus the user-language Markdown render requirement. New sequences contain 2-5 newly derived items. A replacement over five total items may add at most five new items and must identify every excess item as exact planning-contract carry-forward in predecessor-relative order. Do not relabel an old ID as new or omit a nonterminal predecessor item; carry it exactly or declare an evidence-hash-bound retirement. Use the helper-owned replacement transaction rather than separate supersede/create writes.
 12. Include `progress_kind: goal_productive|governance_only` and the selected or terminal `semantic_signature` in the derive result.
 13. If mode is `initial_init`, state that no `past_task` archive is required because no previous task.md exists.
 
 Selection constraints:
+- Keep `progress_target` in `advanced|safety_only|no_progress|regressed` and expected progress kind in `goal_productive|governance_only`. Put labels such as `workflow_capability`, `artifact_truth_only`, or artifact-truth verification in open `item_kind`, preserve the source target in `scope_fidelity`, and do not propose enum expansion or a shadow expected-progress field.
+- Before recommending archive/publication, require a finding-free dry-run over the exact deterministic task/pack inputs. Replacement must reuse those bytes, recover any pending helper journal, and state that helper atomicity excludes `task.md`, archive, index, and Git.
 - Do not select a task that conflicts with `.agent_goal/final_goal.md` or `.agent_goal/conventions.md` unless the selected task explicitly resolves that conflict.
 - Do not select a task that conflicts with the `$manage-agent-authority` result unless the selected task explicitly resolves that conflict. If the authority file is absent, do not infer permission beyond `default_current_agent_permissions`.
 - Do not select a task that treats `.agent_advice` as GT or authority. If active advice is incompatible with GT, authority, current user direction, or repo facts, reject or defer it explicitly.

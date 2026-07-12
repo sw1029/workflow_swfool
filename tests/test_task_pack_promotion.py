@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import concurrent.futures
 import hashlib
 import importlib.util
@@ -60,6 +61,86 @@ def write_pack(root: Path) -> Path:
     return path
 
 
+def replacement_fixture(root: Path) -> tuple[Path, dict[str, Any]]:
+    old_path = root / ".task" / "task_pack" / "pack-old.json"
+    old_items = [pack_item(f"tail-{index}", index) for index in range(1, 5)]
+    old = {
+        "schema_version": 1,
+        "pack_id": "pack-old",
+        "status": "active",
+        "language": "ko",
+        "goal": "Preserve the existing successor tail.",
+        "current_item_id": "tail-1",
+        "items": old_items,
+        "mutation_log": [],
+        "terminal_blocker": None,
+    }
+    write_json(old_path, old)
+    new_items = [
+        {
+            **pack_item("repair-a", 1),
+            "progress_kind_expected": "governance_only",
+            "item_kind": "workflow_capability",
+        },
+        {
+            **pack_item("repair-b", 2),
+            "progress_kind_expected": "governance_only",
+            "item_kind": "workflow_capability",
+        },
+        {
+            **pack_item("ratify", 3),
+            "progress_kind_expected": "governance_only",
+            "item_kind": "artifact_truth_ratification",
+        },
+    ]
+    for order, item in enumerate(old_items, start=4):
+        carried = json.loads(json.dumps(item))
+        carried["order"] = order
+        new_items.append(carried)
+    successor = {
+        "schema_version": 1,
+        "pack_id": "pack-successor",
+        "status": "active",
+        "language": "ko",
+        "goal": "Repair workflow capability, ratify truth, then resume the preserved tail.",
+        "current_item_id": "repair-a",
+        "created_at": "2026-07-12T22:00:00+09:00",
+        "updated_at": "2026-07-12T22:00:00+09:00",
+        "items": new_items,
+        "mutation_log": [],
+        "terminal_blocker": None,
+        "replacement_contract": {
+            "schema_version": 1,
+            "predecessor_pack_ref": ".task/task_pack/pack-old.json",
+            "predecessor_pack_file_sha256": sha256(old_path),
+            "predecessor_pack_canonical_sha256": task_pack_queue.canonical_pack_sha256(old),
+            "new_item_ids": ["repair-a", "repair-b", "ratify"],
+            "carried_forward_item_ids": ["tail-1", "tail-2", "tail-3", "tail-4"],
+        },
+    }
+    before_ids = [item["item_id"] for item in old_items]
+    plan = {
+        "action": "replace_pack",
+        "actor": "$task-doctor",
+        "reason": "insert bounded repair prerequisites while preserving the successor tail",
+        "evidence_paths": [],
+        "pack_path": ".task/task_pack/pack-old.json",
+        "pack_coherence": {
+            "schema_version": 1,
+            "canonical_pack_ref": ".task/task_pack/pack-old.json",
+            "before_pack_sha256": task_pack_queue.canonical_pack_sha256(old),
+            "declared_before_item_ids": before_ids,
+            "declared_before_order": before_ids,
+            "declared_current_item": "tail-1",
+            "mutation_kind": "replace",
+            "proposed_after_item_ids": before_ids,
+            "proposed_after_order": before_ids,
+        },
+        "pack": successor,
+    }
+    return old_path, plan
+
+
 def mutation_args(root: Path, plan: dict[str, Any]) -> argparse.Namespace:
     return argparse.Namespace(
         root=str(root),
@@ -69,6 +150,16 @@ def mutation_args(root: Path, plan: dict[str, Any]) -> argparse.Namespace:
         language="ko",
         render=False,
     )
+
+
+def replacement_transaction_id(root: Path, plan: dict[str, Any]) -> str:
+    fingerprint = task_pack_queue.replacement_plan_fingerprint(plan)
+    transaction_ids = (
+        task_pack_queue.task_pack_replacement.pending_transaction_ids_for_plan(root, fingerprint)
+        + task_pack_queue.task_pack_replacement.completed_transaction_ids_for_plan(root, fingerprint)
+    )
+    assert len(transaction_ids) == 1
+    return transaction_ids[0]
 
 
 def sha256(path: Path) -> str:
@@ -564,6 +655,587 @@ def test_create_rejects_traversal_pack_id(tmp_path: Path) -> None:
     }
     with pytest.raises(SystemExit, match="path-safe"):
         task_pack_queue.command_apply_mutation(mutation_args(tmp_path, plan))
+
+
+def test_task_pack_capabilities_keep_progress_and_item_kind_orthogonal() -> None:
+    contract = task_pack_queue.capability_contract()
+    assert "workflow_capability" not in contract["canonical_progress_kinds"]
+    assert "artifact_truth_only" not in contract["canonical_progress_targets"]
+    assert contract["item_kind"]["vocabulary"] == "open"
+    assert contract["publication"]["replacement_recovery"] == "fail_closed_forward_complete"
+
+
+def test_create_requires_clean_findings_and_no_active_predecessor(tmp_path: Path) -> None:
+    invalid = {
+        "action": "create_pack",
+        "reason": "invalid publication must fail closed",
+        "pack": {
+            "schema_version": 1,
+            "pack_id": "pack-invalid",
+            "status": "active",
+            "goal": "invalid",
+            "current_item_id": "item-1",
+            "items": [
+                {**pack_item("item-1", 1), "progress_target": "artifact_truth_only"},
+                pack_item("item-2", 2),
+            ],
+            "mutation_log": [],
+        },
+    }
+    assert task_pack_queue.command_apply_mutation(mutation_args(tmp_path, invalid)) == 2
+    assert not (tmp_path / ".task" / "task_pack" / "pack-invalid.json").exists()
+    assert not (tmp_path / ".task" / "task_pack" / "creation_snapshots").exists()
+
+    write_pack(tmp_path)
+    valid = json.loads(json.dumps(invalid))
+    valid["pack"]["pack_id"] = "pack-second"
+    valid["pack"]["items"][0]["progress_target"] = "advanced"
+    with pytest.raises(SystemExit, match="requires no active task pack"):
+        task_pack_queue.command_apply_mutation(mutation_args(tmp_path, valid))
+
+
+def test_create_dry_run_leaves_no_task_pack_or_lock_residue(tmp_path: Path) -> None:
+    plan = {
+        "action": "create_pack",
+        "reason": "zero-residue publication preflight",
+        "pack": {
+            "schema_version": 1,
+            "pack_id": "pack-clean-dry-run",
+            "status": "active",
+            "goal": "bounded create",
+            "current_item_id": "item-1",
+            "items": [pack_item("item-1", 1), pack_item("item-2", 2)],
+            "mutation_log": [],
+        },
+    }
+    args = mutation_args(tmp_path, plan)
+    args.dry_run = True
+    assert task_pack_queue.command_apply_mutation(args) == 0
+    assert not (tmp_path / ".task").exists()
+
+
+@pytest.mark.parametrize("item_count", [1, 6])
+def test_create_enforces_new_sequence_bound_without_durable_evidence(
+    tmp_path: Path, item_count: int
+) -> None:
+    plan = {
+        "action": "create_pack",
+        "reason": "ordinary new sequences are bounded",
+        "pack": {
+            "schema_version": 1,
+            "pack_id": f"pack-{item_count}",
+            "status": "active",
+            "goal": "bounded create",
+            "current_item_id": "item-1",
+            "items": [pack_item(f"item-{index}", index) for index in range(1, item_count + 1)],
+            "mutation_log": [],
+        },
+    }
+    assert task_pack_queue.command_apply_mutation(mutation_args(tmp_path, plan)) == 2
+    assert not (tmp_path / ".task" / "task_pack" / f"pack-{item_count}.json").exists()
+    assert not (tmp_path / ".task" / "task_pack" / "creation_snapshots").exists()
+
+
+def test_create_rejects_invalid_item_kind_without_expanding_progress_enums(tmp_path: Path) -> None:
+    plan = {
+        "action": "create_pack",
+        "reason": "item kind remains an open bounded token",
+        "pack": {
+            "schema_version": 1,
+            "pack_id": "pack-invalid-kind",
+            "status": "active",
+            "goal": "bounded subtype",
+            "current_item_id": "item-1",
+            "items": [
+                {**pack_item("item-1", 1), "item_kind": "workflow capability"},
+                pack_item("item-2", 2),
+            ],
+            "mutation_log": [],
+        },
+    }
+    assert task_pack_queue.command_apply_mutation(mutation_args(tmp_path, plan)) == 2
+    assert not (tmp_path / ".task" / "task_pack" / "pack-invalid-kind.json").exists()
+
+
+def test_replace_pack_dry_run_is_clean_and_preserves_seven_item_tail(tmp_path: Path) -> None:
+    old_path, plan = replacement_fixture(tmp_path)
+    before = old_path.read_bytes()
+    args = mutation_args(tmp_path, plan)
+    args.dry_run = True
+    assert task_pack_queue.command_apply_mutation(args) == 0
+    assert old_path.read_bytes() == before
+    assert not (tmp_path / ".task" / "task_pack" / "pack-successor.json").exists()
+    assert not (tmp_path / ".task" / "task_pack" / "replacement_transactions").exists()
+    assert not (tmp_path / ".task" / "task_pack" / "creation_snapshots").exists()
+    assert not (tmp_path / ".task" / "task_pack" / ".pack-mutation.lock").exists()
+
+
+def test_replace_pack_render_preflight_handles_missing_predecessor_and_rejects_successor_collision(
+    tmp_path: Path,
+) -> None:
+    old_path, plan = replacement_fixture(tmp_path)
+    before = old_path.read_bytes()
+    args = mutation_args(tmp_path, plan)
+    args.dry_run = True
+    args.render = True
+    assert task_pack_queue.command_apply_mutation(args) == 0
+    assert old_path.read_bytes() == before
+    assert not old_path.with_suffix(".md").exists()
+
+    successor_render = tmp_path / ".task" / "task_pack" / "pack-successor.md"
+    successor_render.write_text("stale orphan render\n", encoding="utf-8")
+    with pytest.raises(SystemExit, match="render path must be absent"):
+        task_pack_queue.command_apply_mutation(args)
+    assert old_path.read_bytes() == before
+    assert successor_render.read_text(encoding="utf-8") == "stale orphan render\n"
+    assert not (tmp_path / ".task" / "task_pack" / "creation_snapshots").exists()
+
+
+def test_replace_pack_rejects_body_bearing_plan_snapshot_fields(tmp_path: Path) -> None:
+    old_path, plan = replacement_fixture(tmp_path)
+    plan["raw_prompt"] = "must not be persisted in helper-owned evidence"
+    before = old_path.read_bytes()
+    args = mutation_args(tmp_path, plan)
+    args.dry_run = True
+
+    with pytest.raises(SystemExit, match="body-safe"):
+        task_pack_queue.command_apply_mutation(args)
+    assert old_path.read_bytes() == before
+    assert not (tmp_path / ".task" / "task_pack" / "replacement_plan_snapshots").exists()
+
+
+def test_replace_pack_commits_once_and_exact_replay_is_noop(tmp_path: Path) -> None:
+    old_path, plan = replacement_fixture(tmp_path)
+    assert task_pack_queue.command_apply_mutation(mutation_args(tmp_path, plan)) == 0
+    successor_path = tmp_path / ".task" / "task_pack" / "pack-successor.json"
+    old = json.loads(old_path.read_text(encoding="utf-8"))
+    successor = json.loads(successor_path.read_text(encoding="utf-8"))
+    assert old["status"] == "superseded"
+    assert successor["status"] == "active"
+    assert len(successor["items"]) == 7
+    assert [path.name for path, _data in task_pack_queue.active_pack_candidates(tmp_path)] == ["pack-successor.json"]
+    before_old = old_path.read_bytes()
+    before_successor = successor_path.read_bytes()
+    transaction_id = replacement_transaction_id(tmp_path, plan)
+    prepare_path = task_pack_queue.task_pack_replacement.prepare_path(tmp_path, transaction_id)
+    receipt_path = task_pack_queue.task_pack_replacement.completion_path(tmp_path, transaction_id)
+    before_prepare = prepare_path.read_bytes()
+    before_receipt = receipt_path.read_bytes()
+    before_transaction_files = sorted(
+        path.relative_to(tmp_path).as_posix()
+        for path in (tmp_path / ".task" / "task_pack").rglob("*")
+        if path.is_file()
+    )
+    assert task_pack_queue.command_apply_mutation(mutation_args(tmp_path, plan)) == 0
+    assert old_path.read_bytes() == before_old
+    assert successor_path.read_bytes() == before_successor
+    assert prepare_path.read_bytes() == before_prepare
+    assert receipt_path.read_bytes() == before_receipt
+    assert sorted(
+        path.relative_to(tmp_path).as_posix()
+        for path in (tmp_path / ".task" / "task_pack").rglob("*")
+        if path.is_file()
+    ) == before_transaction_files
+
+
+def test_completed_replacement_does_not_become_pending_after_later_valid_pack_update(tmp_path: Path) -> None:
+    _old_path, plan = replacement_fixture(tmp_path)
+    assert task_pack_queue.command_apply_mutation(mutation_args(tmp_path, plan)) == 0
+    successor_path = tmp_path / ".task" / "task_pack" / "pack-successor.json"
+    successor = json.loads(successor_path.read_text(encoding="utf-8"))
+    successor["updated_at"] = "2026-07-12T23:00:00+09:00"
+    write_json(successor_path, successor)
+
+    assert task_pack_queue.task_pack_replacement.pending_transaction_ids(tmp_path) == []
+    assert task_pack_queue.task_pack_store_findings(tmp_path) == []
+
+
+@pytest.mark.parametrize("tampered_field", ["after_payload_b64", "after_sha256"])
+def test_replace_pack_recovery_rejects_tampered_prepare_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tampered_field: str,
+) -> None:
+    _old_path, plan = replacement_fixture(tmp_path)
+    original_publish = task_pack_queue.task_pack_replacement.publish_transaction
+
+    def stop_after_prepare(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise OSError("stop after durable prepare")
+
+    monkeypatch.setattr(task_pack_queue.task_pack_replacement, "publish_transaction", stop_after_prepare)
+    with pytest.raises(OSError, match="stop after durable prepare"):
+        task_pack_queue.command_apply_mutation(mutation_args(tmp_path, plan))
+
+    transaction_id = replacement_transaction_id(tmp_path, plan)
+    prepare_path = task_pack_queue.task_pack_replacement.prepare_path(tmp_path, transaction_id)
+    prepare = json.loads(prepare_path.read_text(encoding="utf-8"))
+    target = next(item for item in prepare["targets"] if item["role"] == "successor_pack")
+    if tampered_field == "after_payload_b64":
+        target[tampered_field] = base64.b64encode(b"tampered successor payload").decode("ascii")
+    else:
+        target[tampered_field] = "0" * 64
+    write_json(prepare_path, prepare)
+
+    monkeypatch.setattr(task_pack_queue.task_pack_replacement, "publish_transaction", original_publish)
+    with pytest.raises(SystemExit, match="payload digest is inconsistent"):
+        task_pack_queue.command_recover_replacement(argparse.Namespace(root=str(tmp_path)))
+
+
+def test_replace_pack_recovery_rejects_coherently_rehashed_prepare_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _old_path, plan = replacement_fixture(tmp_path)
+    original_publish = task_pack_queue.task_pack_replacement.publish_transaction
+
+    def stop_after_prepare(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise OSError("stop after durable prepare")
+
+    monkeypatch.setattr(task_pack_queue.task_pack_replacement, "publish_transaction", stop_after_prepare)
+    with pytest.raises(OSError, match="stop after durable prepare"):
+        task_pack_queue.command_apply_mutation(mutation_args(tmp_path, plan))
+
+    transaction_id = replacement_transaction_id(tmp_path, plan)
+    prepare_path = task_pack_queue.task_pack_replacement.prepare_path(tmp_path, transaction_id)
+    prepare = json.loads(prepare_path.read_text(encoding="utf-8"))
+    target = next(item for item in prepare["targets"] if item["role"] == "successor_pack")
+    successor = json.loads(base64.b64decode(target["after_payload_b64"]).decode("utf-8"))
+    successor["goal"] = "tampered but internally rehashed goal"
+    payload = task_pack_queue.json_bytes(successor)
+    target["after_payload_b64"] = base64.b64encode(payload).decode("ascii")
+    target["after_sha256"] = hashlib.sha256(payload).hexdigest()
+    write_json(prepare_path, prepare)
+
+    monkeypatch.setattr(task_pack_queue.task_pack_replacement, "publish_transaction", original_publish)
+    with pytest.raises(SystemExit, match="target binding"):
+        task_pack_queue.command_recover_replacement(argparse.Namespace(root=str(tmp_path)))
+
+
+@pytest.mark.parametrize("evidence_key", ["creation_snapshot_ref", "creation_receipt_ref"])
+def test_replace_pack_receipt_validation_requires_creation_evidence_after_commit(
+    tmp_path: Path,
+    evidence_key: str,
+) -> None:
+    _old_path, plan = replacement_fixture(tmp_path)
+    assert task_pack_queue.command_apply_mutation(mutation_args(tmp_path, plan)) == 0
+    transaction_id = replacement_transaction_id(tmp_path, plan)
+    committed = task_pack_queue.task_pack_replacement.validate_completed_transaction(tmp_path, transaction_id)
+    prepare = task_pack_queue.task_pack_replacement.load_prepare(tmp_path, transaction_id)[0]
+    creation = prepare["metadata"]["creation_snapshot"]
+    evidence_path = tmp_path / creation[evidence_key]
+    evidence_path.unlink()
+
+    validation = task_pack_queue.validate_replacement_receipt(tmp_path, plan, committed)
+    assert validation["status"] == "block"
+    assert validation["findings"]
+
+
+def test_replace_pack_rejects_transaction_id_only_as_supplied_receipt(tmp_path: Path) -> None:
+    _old_path, plan = replacement_fixture(tmp_path)
+    assert task_pack_queue.command_apply_mutation(mutation_args(tmp_path, plan)) == 0
+    transaction_id = replacement_transaction_id(tmp_path, plan)
+
+    validation = task_pack_queue.validate_replacement_receipt(
+        tmp_path,
+        plan,
+        {"transaction_id": transaction_id},
+    )
+    assert validation["status"] == "block"
+    assert validation["findings"]
+
+
+def test_replace_pack_receipt_tamper_fails_closed(tmp_path: Path) -> None:
+    _old_path, plan = replacement_fixture(tmp_path)
+    assert task_pack_queue.command_apply_mutation(mutation_args(tmp_path, plan)) == 0
+    transaction_id = replacement_transaction_id(tmp_path, plan)
+    receipt_path = task_pack_queue.task_pack_replacement.completion_path(tmp_path, transaction_id)
+    original = json.loads(receipt_path.read_text(encoding="utf-8"))
+
+    changed_target = json.loads(json.dumps(original))
+    changed_target["targets"][0]["after_sha256"] = "0" * 64
+    write_json(receipt_path, changed_target)
+    with pytest.raises(SystemExit, match="target projection"):
+        task_pack_queue.task_pack_replacement.validate_completed_transaction(tmp_path, transaction_id)
+    assert transaction_id in task_pack_queue.task_pack_replacement.pending_transaction_ids(tmp_path)
+    render_args = argparse.Namespace(
+        root=str(tmp_path),
+        pack=".task/task_pack/pack-successor.json",
+        language="ko",
+    )
+    assert task_pack_queue.command_render(render_args) == 2
+    assert not (tmp_path / ".task" / "task_pack" / "pack-successor.md").exists()
+    with pytest.raises(SystemExit, match="forward recovery"):
+        task_pack_queue._command_mark_consumed_locked(argparse.Namespace(), tmp_path)
+
+    changed_postcondition = json.loads(json.dumps(original))
+    changed_postcondition["postcondition"]["active_pack_count"] = 2
+    write_json(receipt_path, changed_postcondition)
+    validation = task_pack_queue.validate_replacement_receipt(tmp_path, plan, changed_postcondition)
+    assert validation["status"] == "block"
+    assert any(
+        finding["code"] == "replacement_receipt_invalid"
+        for finding in validation["findings"]
+    )
+    assert transaction_id in task_pack_queue.task_pack_replacement.pending_transaction_ids(tmp_path)
+
+
+def test_replace_pack_supports_exact_authorized_initial_selection(tmp_path: Path) -> None:
+    _old_path, plan = replacement_fixture(tmp_path)
+    task_path = tmp_path / "task.md"
+    task_path.write_text("# old active verifier task\n", encoding="utf-8")
+    old_task_bytes = task_path.read_bytes()
+    prospective_task_path = tmp_path / ".task" / "prepublication" / "replacement-task.md"
+    prospective_task_path.parent.mkdir(parents=True, exist_ok=True)
+    prospective_task_path.write_text("# replacement task\n", encoding="utf-8")
+    selected_at = plan["pack"]["created_at"]
+    planned = json.loads(json.dumps(plan["pack"]))
+    planned["mutation_log"].append(
+        {
+            "timestamp": selected_at,
+            "action": "create",
+            "reason": plan["reason"],
+            "evidence_paths": [],
+            "before_order": [],
+            "after_order": [item["item_id"] for item in planned["items"]],
+            "actor": "$task-doctor",
+            "predecessor_pack_ref": ".task/task_pack/pack-old.json",
+        }
+    )
+    creation_payload = task_pack_queue.json_bytes(planned)
+    creation_digest = hashlib.sha256(creation_payload).hexdigest()
+    creation_ref = f".task/task_pack/creation_snapshots/pack-successor-{creation_digest[:16]}.json"
+    task_digest = sha256(prospective_task_path)
+    task_snapshot_ref = f".task/task_pack/task_snapshots/pack-successor/repair-a-task-repair-{task_digest[:16]}.md"
+    subject = {
+        "pack_ref": ".task/task_pack/pack-successor.json",
+        "pack_creation_snapshot_ref": creation_ref,
+        "pack_creation_snapshot_sha256": creation_digest,
+        "initial_item_id": "repair-a",
+        "initial_order": 1,
+        "task_id": "task-repair",
+        "task_snapshot_ref": task_snapshot_ref,
+        "task_snapshot_sha256": task_digest,
+    }
+    authority_ref, authority_sha = write_authority_receipt(
+        tmp_path,
+        subject,
+        operation="task_pack.initial_selection",
+        temporality="contemporaneous_selection_authority",
+        selected_at=selected_at,
+        receipt_id="authr-replace-selection",
+    )
+    plan["initial_selection"] = {
+        "item_id": "repair-a",
+        "task_id": "task-repair",
+        "task_path": "task.md",
+        "promotion_origin": "authorized_initial_selection",
+        "reason": "authorized replacement first selection",
+        "prospective_task_ref": prospective_task_path.relative_to(tmp_path).as_posix(),
+        "prospective_task_sha256": task_digest,
+        "initial_selection_receipt": {
+            "schema_version": 1,
+            "pack_ref": subject["pack_ref"],
+            "pack_creation_snapshot_kind": "workspace_file",
+            "pack_creation_snapshot_ref": creation_ref,
+            "pack_creation_snapshot_sha256": creation_digest,
+            "pack_creation_canonical_sha256": task_pack_queue.canonical_pack_sha256(planned),
+            "pack_creation_canonicalization_version": 1,
+            "creation_snapshot_state": "pre_selection",
+            "initial_item_id": "repair-a",
+            "initial_order": 1,
+            "task_id": "task-repair",
+            "task_snapshot_ref": task_snapshot_ref,
+            "task_snapshot_sha256": task_digest,
+            "authority_receipt_ref": authority_ref,
+            "authority_receipt_sha256": authority_sha,
+            "authority_mode": "contemporaneous_selection_authority",
+            "historical_selection_authority_status": "verified",
+            "selection_reason": "first successor item selected with replacement",
+            "created_at": selected_at,
+        },
+    }
+    dry_run_args = mutation_args(tmp_path, plan)
+    dry_run_args.dry_run = True
+    assert task_pack_queue.command_apply_mutation(dry_run_args) == 0
+    assert task_path.read_bytes() == old_task_bytes
+    assert not (tmp_path / ".task" / "task_pack" / "creation_snapshots").exists()
+
+    task_path.write_bytes(prospective_task_path.read_bytes())
+    assert task_pack_queue.command_apply_mutation(mutation_args(tmp_path, plan)) == 0
+    successor = json.loads(
+        (tmp_path / ".task" / "task_pack" / "pack-successor.json").read_text(encoding="utf-8")
+    )
+    assert successor["items"][0]["status"] == "promoted"
+    assert successor["items"][0]["promotion"]["task_sha256"] == task_digest
+    assert successor["current_item_id"] == "repair-b"
+
+
+def test_replace_pack_rejects_changed_carried_planning_contract(tmp_path: Path) -> None:
+    old_path, plan = replacement_fixture(tmp_path)
+    plan["pack"]["items"][3]["objective"] = "Changed carried objective."
+    before = old_path.read_bytes()
+    args = mutation_args(tmp_path, plan)
+    args.dry_run = True
+    assert task_pack_queue.command_apply_mutation(args) == 2
+    assert old_path.read_bytes() == before
+    assert not (tmp_path / ".task" / "task_pack" / "pack-successor.json").exists()
+
+
+def test_replace_pack_rejects_reclassifying_predecessor_item_as_new(tmp_path: Path) -> None:
+    old_path, plan = replacement_fixture(tmp_path)
+    contract = plan["pack"]["replacement_contract"]
+    contract["carried_forward_item_ids"].remove("tail-1")
+    contract["new_item_ids"].append("tail-1")
+    before = old_path.read_bytes()
+    args = mutation_args(tmp_path, plan)
+    args.dry_run = True
+
+    assert task_pack_queue.command_apply_mutation(args) == 2
+    assert old_path.read_bytes() == before
+    assert not (tmp_path / ".task" / "task_pack" / "pack-successor.json").exists()
+
+
+def test_replace_pack_rejects_silently_dropped_nonterminal_predecessor_item(tmp_path: Path) -> None:
+    old_path, plan = replacement_fixture(tmp_path)
+    plan["pack"]["items"] = [
+        item for item in plan["pack"]["items"] if item["item_id"] != "tail-4"
+    ]
+    plan["pack"]["replacement_contract"]["carried_forward_item_ids"].remove("tail-4")
+    before = old_path.read_bytes()
+    args = mutation_args(tmp_path, plan)
+    args.dry_run = True
+
+    assert task_pack_queue.command_apply_mutation(args) == 2
+    assert old_path.read_bytes() == before
+    assert not (tmp_path / ".task" / "task_pack" / "pack-successor.json").exists()
+
+
+def test_replace_pack_allows_explicit_hash_bound_predecessor_retirement(tmp_path: Path) -> None:
+    _old_path, plan = replacement_fixture(tmp_path)
+    evidence_path = tmp_path / ".task" / "authorization" / "retire-tail-4.md"
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text("# Replacement direction\n\n- source_id: direction-retire-tail-4\n", encoding="utf-8")
+    plan["pack"]["items"] = [item for item in plan["pack"]["items"] if item["item_id"] != "tail-4"]
+    contract = plan["pack"]["replacement_contract"]
+    contract["carried_forward_item_ids"].remove("tail-4")
+    contract["retired_items"] = [
+        {
+            "item_id": "tail-4",
+            "reason": "explicit direction replaces this obsolete predecessor item",
+            "evidence": [
+                {
+                    "path": evidence_path.relative_to(tmp_path).as_posix(),
+                    "sha256": sha256(evidence_path),
+                }
+            ],
+        }
+    ]
+    assert task_pack_queue.command_apply_mutation(mutation_args(tmp_path, plan)) == 0
+    transaction_id = replacement_transaction_id(tmp_path, plan)
+    receipt = task_pack_queue.task_pack_replacement.validate_completed_transaction(tmp_path, transaction_id)
+    evidence_path.unlink()
+    validation = task_pack_queue.validate_replacement_receipt(tmp_path, plan, receipt)
+    assert validation["status"] == "block"
+    assert any(
+        finding["code"] == "replacement_postcondition_invalid"
+        for finding in validation["findings"]
+    )
+
+
+def test_replace_pack_rejects_dependency_on_retired_uncompleted_predecessor(tmp_path: Path) -> None:
+    old_path, plan = replacement_fixture(tmp_path)
+    predecessor = json.loads(old_path.read_text(encoding="utf-8"))
+    predecessor["items"][0]["dependencies"] = ["tail-4"]
+    write_json(old_path, predecessor)
+    plan["pack_coherence"]["before_pack_sha256"] = task_pack_queue.canonical_pack_sha256(predecessor)
+    contract = plan["pack"]["replacement_contract"]
+    contract["predecessor_pack_file_sha256"] = sha256(old_path)
+    contract["predecessor_pack_canonical_sha256"] = task_pack_queue.canonical_pack_sha256(predecessor)
+    plan["pack"]["items"][3]["dependencies"] = ["tail-4"]
+    plan["pack"]["items"] = [item for item in plan["pack"]["items"] if item["item_id"] != "tail-4"]
+    contract["carried_forward_item_ids"].remove("tail-4")
+    evidence_path = tmp_path / ".task" / "authorization" / "retire-dependent.md"
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text("# Direction\n\n- source_id: retire-dependent\n", encoding="utf-8")
+    contract["retired_items"] = [
+        {
+            "item_id": "tail-4",
+            "reason": "obsolete verifier",
+            "evidence": [
+                {
+                    "path": evidence_path.relative_to(tmp_path).as_posix(),
+                    "sha256": sha256(evidence_path),
+                }
+            ],
+        }
+    ]
+    args = mutation_args(tmp_path, plan)
+    args.dry_run = True
+    assert task_pack_queue.command_apply_mutation(args) == 2
+    assert not (tmp_path / ".task" / "task_pack" / "pack-successor.json").exists()
+
+
+def test_replace_pack_rejects_retirement_evidence_inside_mutated_pack_store(tmp_path: Path) -> None:
+    old_path, plan = replacement_fixture(tmp_path)
+    plan["pack"]["items"] = [item for item in plan["pack"]["items"] if item["item_id"] != "tail-4"]
+    contract = plan["pack"]["replacement_contract"]
+    contract["carried_forward_item_ids"].remove("tail-4")
+    contract["retired_items"] = [
+        {
+            "item_id": "tail-4",
+            "reason": "invalid self-referential evidence",
+            "evidence": [
+                {
+                    "path": old_path.relative_to(tmp_path).as_posix(),
+                    "sha256": sha256(old_path),
+                }
+            ],
+        }
+    ]
+    args = mutation_args(tmp_path, plan)
+    args.dry_run = True
+    assert task_pack_queue.command_apply_mutation(args) == 2
+
+
+def test_replace_pack_forward_recovers_after_successor_publish_crash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    old_path, plan = replacement_fixture(tmp_path)
+    original = task_pack_queue.task_pack_replacement.atomic_write_bytes
+
+    def crash_on_successor(path: Path, payload: bytes) -> None:
+        if path.name == "pack-successor.json":
+            raise OSError("simulated successor publication crash")
+        original(path, payload)
+
+    monkeypatch.setattr(task_pack_queue.task_pack_replacement, "atomic_write_bytes", crash_on_successor)
+    with pytest.raises(OSError, match="simulated successor"):
+        task_pack_queue.command_apply_mutation(mutation_args(tmp_path, plan))
+    assert json.loads(old_path.read_text(encoding="utf-8"))["status"] == "superseded"
+    assert task_pack_queue.task_pack_replacement.pending_transaction_ids(tmp_path)
+    monkeypatch.setattr(task_pack_queue.task_pack_replacement, "atomic_write_bytes", original)
+    dry_run_args = mutation_args(tmp_path, plan)
+    dry_run_args.dry_run = True
+    assert task_pack_queue.command_apply_mutation(dry_run_args) == 2
+    assert not (tmp_path / ".task" / "task_pack" / "pack-successor.json").exists()
+    recover_args = argparse.Namespace(root=str(tmp_path))
+    assert task_pack_queue.command_recover_replacement(recover_args) == 0
+    assert not task_pack_queue.task_pack_replacement.pending_transaction_ids(tmp_path)
+    assert [path.name for path, _data in task_pack_queue.active_pack_candidates(tmp_path)] == ["pack-successor.json"]
+
+
+def test_active_pack_does_not_fallback_and_multiple_active_is_blocked(tmp_path: Path) -> None:
+    first = write_pack(tmp_path)
+    body = json.loads(first.read_text(encoding="utf-8"))
+    body["status"] = "superseded"
+    write_json(first, body)
+    assert task_pack_queue.active_pack(tmp_path) == (None, None)
+    body["status"] = "active"
+    write_json(first, body)
+    second = tmp_path / ".task" / "task_pack" / "pack-2.json"
+    second_body = json.loads(json.dumps(body))
+    second_body["pack_id"] = "pack-2"
+    write_json(second, second_body)
+    status_args = argparse.Namespace(root=str(tmp_path), format="json")
+    assert task_pack_queue.command_status(status_args) == 2
 
 
 def test_create_with_initial_selection_commits_one_coherent_state(tmp_path: Path) -> None:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import contextlib
 import datetime as dt
 import hashlib
@@ -441,6 +442,12 @@ def load_events_for_audit(root: Path) -> tuple[list[dict[str, Any]], list[dict[s
 
 def _load_events_unlocked(root: Path) -> list[dict[str, Any]]:
     _ensure_index_unlocked(root)
+    return _read_existing_events(root)
+
+
+def _read_existing_events(root: Path) -> list[dict[str, Any]]:
+    """Read and validate an existing index without creating workspace state."""
+
     sealed = load_sealed_events_if_present(root)
     if sealed is not None:
         events, _read_results = sealed
@@ -462,6 +469,21 @@ def _load_events_unlocked(root: Path) -> list[dict[str, Any]]:
 def load_events(root: Path) -> list[dict[str, Any]]:
     with index_lock(root):
         return _load_events_unlocked(root)
+
+
+def load_events_read_only(root: Path) -> tuple[list[dict[str, Any]], str | None]:
+    """Read the current ledger without creating a lock, index, or render."""
+
+    root = root.resolve()
+    source = jsonl_path(root)
+    if not source.is_file():
+        return [], None
+    before = sha256_file(source)
+    events = _read_existing_events(root)
+    after = sha256_file(source)
+    if before != after:
+        raise ValueError("Task-state index changed during read-only scan preflight")
+    return events, before
 
 
 def merge_state(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -681,8 +703,23 @@ def escape_md(value: Any) -> str:
     return text.replace("|", "\\|").replace("\n", " ")
 
 
-def _rebuild_markdown_unlocked(root: Path, events: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    state = merge_state(events if events is not None else _load_events_unlocked(root))
+def _generated_at_from_markdown(payload: bytes) -> str | None:
+    try:
+        lines = payload.decode("utf-8").splitlines()
+    except UnicodeDecodeError:
+        return None
+    prefix = "- Generated: "
+    matches = [line[len(prefix) :].strip() for line in lines if line.startswith(prefix)]
+    if len(matches) != 1 or not matches[0]:
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(matches[0].replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return matches[0] if parsed.tzinfo is not None else None
+
+
+def _render_markdown_payload(state: dict[str, dict[str, Any]], generated_at: str) -> bytes:
     groups: dict[str, list[dict[str, Any]]] = {}
     for item in state.values():
         groups.setdefault(str(item.get("type", "unknown")), []).append(item)
@@ -690,7 +727,7 @@ def _rebuild_markdown_unlocked(root: Path, events: list[dict[str, Any]] | None =
     lines = [
         "# Task State Index",
         "",
-        f"- Generated: {now_iso()}",
+        f"- Generated: {generated_at}",
         "- Canonical JSONL: `.task/index.jsonl`",
         f"- Format version: {INDEX_FORMAT_VERSION}",
         f"- Schema version: {INDEX_SCHEMA_VERSION}",
@@ -727,9 +764,33 @@ def _rebuild_markdown_unlocked(root: Path, events: list[dict[str, Any]] | None =
             )
         lines.append("")
 
-    atomic_write_text(markdown_path(root), "\n".join(lines).rstrip() + "\n")
+    return ("\n".join(lines).rstrip() + "\n").encode("utf-8")
+
+
+def _markdown_projection_matches(root: Path, state: dict[str, dict[str, Any]]) -> bool:
+    path = markdown_path(root)
+    if not path.is_file():
+        return False
+    existing = path.read_bytes()
+    generated_at = _generated_at_from_markdown(existing)
+    return bool(generated_at and existing == _render_markdown_payload(state, generated_at))
+
+
+def _rebuild_markdown_unlocked(root: Path, events: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    state = merge_state(events if events is not None else _load_events_unlocked(root))
+    path = markdown_path(root)
+    existing = path.read_bytes() if path.is_file() else b""
+    generated_at = _generated_at_from_markdown(existing) or now_iso()
+    payload = _render_markdown_payload(state, generated_at)
+    changed = payload != existing
+    if changed:
+        generated_at = now_iso()
+        payload = _render_markdown_payload(state, generated_at)
+        atomic_write_bytes(path, payload)
     return {
-        "index_md": rel_path(root, markdown_path(root)),
+        "index_md": rel_path(root, path),
+        "index_md_changed": changed,
+        "generated_at": generated_at,
         "artifact_count": len(state),
         "format_version": INDEX_FORMAT_VERSION,
         "schema_version": INDEX_SCHEMA_VERSION,
@@ -1382,17 +1443,76 @@ def discover_standard_artifacts(root: Path) -> list[tuple[str, str, str, str]]:
     return artifacts
 
 
-def scan_artifacts(root: Path) -> dict[str, Any]:
-    ensure_index(root)
+def scan_artifacts(root: Path, *, dry_run: bool = False) -> dict[str, Any]:
+    root = root.resolve()
+    artifacts = discover_standard_artifacts(root)
+    for canonical_path in (jsonl_path(root), markdown_path(root)):
+        if canonical_path.exists() and not canonical_path.is_file():
+            raise ValueError(f"Task-state canonical path is not a regular file: {canonical_path}")
+    had_jsonl = jsonl_path(root).is_file()
+    had_markdown = markdown_path(root).is_file()
+    if not dry_run and not artifacts and not had_jsonl and not had_markdown:
+        return {
+            "mode": "apply",
+            "mutation_performed": False,
+            "indexed_events": 0,
+            "events": [],
+            "index_md": None,
+            "index_md_changed": False,
+            "artifact_count": 0,
+            "format_version": INDEX_FORMAT_VERSION,
+            "schema_version": INDEX_SCHEMA_VERSION,
+            "scan_evidence_status": "not_evaluated_no_artifacts",
+        }
+    if not dry_run:
+        artifact_anchor = [
+            (item_type, path_value, status, title, sha256_file(root / path_value))
+            for item_type, path_value, status, title in artifacts
+        ]
+        preflight = scan_artifacts(root, dry_run=True)
+        current_artifacts = discover_standard_artifacts(root)
+        current_anchor = [
+            (item_type, path_value, status, title, sha256_file(root / path_value))
+            for item_type, path_value, status, title in current_artifacts
+        ]
+        if current_anchor != artifact_anchor:
+            raise ValueError("Workspace artifacts changed during task-state scan preflight")
+        if preflight.get("source_index_sha256") != sha256_file(jsonl_path(root)):
+            raise ValueError("Task-state index changed after scan preflight")
+        artifacts = current_artifacts
+    source_index_sha256: str | None = None
+    if dry_run:
+        events, source_index_sha256 = load_events_read_only(root)
+    else:
+        ensure_index(root)
+        events = load_events(root)
     added: list[dict[str, Any]] = []
-    state = merge_state(load_events(root))
+    pending: list[dict[str, Any]] = []
+    markdown_changed_during_scan = False
+    state = merge_state(events)
+    projected_state = copy.deepcopy(state)
+    projected_markdown_forced = False
+    projected_timestamp = now_iso()
+    projected_pack_id_paths: dict[str, str] = {}
+    for projected_item in projected_state.values():
+        projected_fields = projected_item.get("fields") if isinstance(projected_item.get("fields"), dict) else {}
+        projected_pack_id = str(projected_fields.get("pack_id") or "")
+        projected_path = str(projected_item.get("path") or "")
+        if projected_item.get("type") != "task_pack" or not projected_pack_id or not projected_path:
+            continue
+        previous_path = projected_pack_id_paths.setdefault(projected_pack_id, projected_path)
+        if previous_path != projected_path:
+            raise ValueError(
+                f"Task pack id {projected_pack_id!r} is already bound to another artifact path"
+            )
 
     def maybe_upsert(item_type: str, path_value: str, status: str, title: str) -> None:
-        nonlocal state
+        nonlocal markdown_changed_during_scan, projected_markdown_forced, state
+        identity_state = projected_state if dry_run else state
         digest = sha256_file(root / path_value)
         fields = None
         retire_alias_ids: list[str] = []
-        item_id = stable_path_id(state, item_type, path_value)
+        item_id = stable_path_id(identity_state, item_type, path_value)
         if item_type in {"schema_contract", "schema_map"}:
             fields = extract_schema_fields(root / path_value)
         elif item_type == "task_pack":
@@ -1401,7 +1521,12 @@ def scan_artifacts(root: Path) -> dict[str, Any]:
                 fields["render_path"] = rel_path(root, Path(fields["render_path"]))
             pack_id = fields.get("pack_id") if fields else None
             if pack_id:
-                for existing_id, existing in state.items():
+                previous_path = projected_pack_id_paths.setdefault(str(pack_id), path_value)
+                if previous_path != path_value:
+                    raise ValueError(
+                        f"Task pack id {pack_id!r} is already bound to another artifact path"
+                    )
+                for existing_id, existing in identity_state.items():
                     existing_fields = existing.get("fields") if isinstance(existing.get("fields"), dict) else {}
                     if existing.get("type") == "task_pack" and existing_fields.get("pack_id") == pack_id:
                         item_id = existing_id
@@ -1415,9 +1540,9 @@ def scan_artifacts(root: Path) -> dict[str, Any]:
             advice_id = fields.get("advice_id") if fields else None
             if advice_id:
                 item_id, retire_alias_ids = select_external_advice_scan_id(
-                    root, state, path_value, advice_id,
+                    root, identity_state, path_value, advice_id,
                 )
-        existing = state.get(item_id) if item_id else None
+        existing = identity_state.get(item_id) if item_id else None
         existing_fields = existing.get("fields") if isinstance(existing, dict) and isinstance(existing.get("fields"), dict) else {}
         if (
             existing
@@ -1427,6 +1552,41 @@ def scan_artifacts(root: Path) -> dict[str, Any]:
             and existing.get("title") == title
             and all(existing_fields.get(key) == value for key, value in (fields or {}).items())
         ):
+            return
+        if dry_run:
+            pending.append(
+                {
+                    "type": item_type,
+                    "path": path_value,
+                    "status": status,
+                    "title": title,
+                    "stable_id": item_id,
+                    "identity_status": "existing" if item_id else "would_allocate_on_apply",
+                    "content_sha256": digest,
+                }
+            )
+            if item_id:
+                projected = copy.deepcopy(projected_state.get(item_id) or {})
+                projected.update(
+                    {
+                        "type": item_type,
+                        "status": status,
+                        "path": path_value,
+                        "title": title,
+                        "updated_at": projected_timestamp,
+                        "content_sha256": digest,
+                    }
+                )
+                if fields:
+                    projected.setdefault("fields", {}).update(fields)
+                projected_state[item_id] = projected
+                for alias_id in retire_alias_ids:
+                    if alias_id in projected_state:
+                        projected_state[alias_id]["status"] = "superseded"
+                        projected_state[alias_id]["updated_at"] = projected_timestamp
+                        projected_markdown_forced = True
+            if not item_id:
+                projected_markdown_forced = True
             return
         result = upsert_item(
             root,
@@ -1440,16 +1600,44 @@ def scan_artifacts(root: Path) -> dict[str, Any]:
             retire_alias_ids=retire_alias_ids,
         )
         added.append(result["event"])
+        markdown_changed_during_scan = markdown_changed_during_scan or bool(result.get("index_md_changed"))
         state = merge_state(load_events(root))
 
-    for item_type, path_value, status, title in discover_standard_artifacts(root):
+    for item_type, path_value, status, title in artifacts:
         maybe_upsert(item_type, path_value, status, title)
 
+    if dry_run:
+        markdown_matches = _markdown_projection_matches(root, projected_state)
+        has_index_context = bool(artifacts) or source_index_sha256 is not None or markdown_path(root).is_file()
+        index_jsonl_would_change = bool(pending) or (source_index_sha256 is None and has_index_context)
+        markdown_would_change = has_index_context and (projected_markdown_forced or not markdown_matches)
+        if sha256_file(jsonl_path(root)) != source_index_sha256:
+            raise ValueError("Task-state index changed during read-only scan planning")
+        return {
+            "mode": "dry_run",
+            "mutation_performed": False,
+            "indexed_events": 0,
+            "events": [],
+            "planned_artifact_updates": len(pending),
+            "pending_artifacts": pending,
+            "would_change": bool(pending) or index_jsonl_would_change or markdown_would_change,
+            "index_jsonl_would_change": index_jsonl_would_change,
+            "index_md_would_change": markdown_would_change,
+            "source_index_sha256": source_index_sha256,
+            "source_index_md_sha256": sha256_file(markdown_path(root)),
+            "scan_evidence_status": "evaluated" if artifacts else "not_evaluated_no_artifacts",
+        }
+
     rebuild = rebuild_markdown(root)
+    rebuild["index_md_changed"] = markdown_changed_during_scan or bool(rebuild.get("index_md_changed"))
+    index_created = not had_jsonl and jsonl_path(root).is_file()
     return {
+        "mode": "apply",
+        "mutation_performed": index_created or bool(added) or bool(rebuild.get("index_md_changed")),
+        "index_jsonl_changed": index_created or bool(added),
         "indexed_events": len(added),
         "events": added,
-        "scan_evidence_status": "evaluated" if discover_standard_artifacts(root) else "not_evaluated_no_artifacts",
+        "scan_evidence_status": "evaluated" if artifacts else "not_evaluated_no_artifacts",
         **rebuild,
     }
 
@@ -1858,9 +2046,13 @@ def cmd_init(args: argparse.Namespace) -> None:
     print(json.dumps({"initialized": True, "evidence_status": "not_evaluated", **result}, ensure_ascii=False, indent=2))
 
 
-def cmd_scan(args: argparse.Namespace) -> None:
+def cmd_scan(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve()
-    print(json.dumps(scan_artifacts(root), ensure_ascii=False, indent=2))
+    read_only = bool(getattr(args, "dry_run", False) or getattr(args, "check", False))
+    result = scan_artifacts(root, dry_run=read_only)
+    result["mode"] = "check" if getattr(args, "check", False) else result["mode"]
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 1 if getattr(args, "check", False) and result.get("would_change") else 0
 
 
 def cmd_add(args: argparse.Namespace) -> None:
@@ -1929,6 +2121,9 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.set_defaults(func=cmd_init)
 
     scan_parser = subparsers.add_parser("scan", help="Index standard task artifacts in the workspace.")
+    scan_mode = scan_parser.add_mutually_exclusive_group()
+    scan_mode.add_argument("--dry-run", action="store_true", help="Report pending scan changes without creating or modifying task-state files.")
+    scan_mode.add_argument("--check", action="store_true", help="Run the read-only scan and exit 1 when publication would change task-state files.")
     scan_parser.set_defaults(func=cmd_scan)
 
     add_parser = subparsers.add_parser("add", help="Append an upsert event for one artifact.")
@@ -1964,8 +2159,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
-    args.func(args)
-    return 0
+    result = args.func(args)
+    return int(result or 0)
 
 
 if __name__ == "__main__":

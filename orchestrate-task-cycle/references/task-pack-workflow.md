@@ -7,8 +7,10 @@ This reference defines optional long-range task packs for `$orchestrate-task-cyc
 - [Core Invariant](#core-invariant)
 - [Artifacts](#artifacts)
 - [JSON Shape](#json-shape)
+- [Progress Classification](#progress-classification)
 - [Scope Fidelity](#scope-fidelity)
 - [Pack Transactions](#pack-transactions)
+- [Replacement Transaction](#replacement-transaction)
 - [Promotion](#promotion)
 - [Loop Breaker Fields](#loop-breaker-fields)
 - [Part G Workflow Gates](#part-g-workflow-gates)
@@ -304,6 +306,18 @@ returns `status: in_flight` and no executable `next_item`; the following queued
 item remains visible only as planning state until the in-flight item is
 consumed or otherwise closed.
 
+## Progress Classification
+
+Keep lifecycle outcome, evidence class, and work subtype orthogonal:
+
+- `progress_target` is the expected lifecycle outcome and remains one of `advanced`, `safety_only`, `no_progress`, or `regressed`.
+- `progress_kind_expected` is the expected goal-distance evidence class and remains `goal_productive` or `governance_only`.
+- `item_kind` is an optional open, bounded, path-safe subtype such as `workflow_capability`, `artifact_truth_only`, `artifact_truth_reconciliation`, `artifact_truth_verification`, `implementation`, or `instrumentation_exercise`. It routes work but never upgrades either canonical progress field.
+
+Do not add a new lifecycle enum merely because an instruction uses a domain or workflow label. For example, map `workflow_capability` to `item_kind: workflow_capability`, and map a source `artifact_truth_only` label to `item_kind: artifact_truth_only` plus its explicit verifier/acceptance contract. Choose the canonical `progress_target` and `progress_kind_expected` from the expected outcome and observable output evidence. Preserve the source wording and any narrower/original measurable target in `scope_fidelity`; do not invent `effective_*` shadow fields or a parallel verdict vocabulary.
+
+`item_kind` is not authoritative progress evidence. In particular, `item_kind: artifact_truth_only` requires its declared verifier and bound artifact evidence before any artifact-truth claim; the label alone proves nothing. A workflow-capability or artifact-truth subtype normally remains `governance_only` unless independent output-delta or adapter evidence proves goal-product output movement, and a verifier-only result cannot by itself claim semantic, readiness, gold, canonical, or production promotion.
+
 ## Scope Fidelity
 
 When a pack item derives from an external advice, steering document, issue, or user directive with a measurable target, record the directive-to-item mapping in `scope_fidelity`. This is provenance for later completion validation; it is not goal truth and does not grant authority.
@@ -414,6 +428,8 @@ If the item result has nonzero `surface_field_defect_matrix` counts, preserve pr
 scripts/task_pack_queue.py --root . apply-mutation --plan <derive-pack-plan.json> --render --language <user-language>
 ```
 
+Before publication, inspect the helper contract with `capabilities` and require `findings: []` from the create/replace dry-run for the exact in-memory candidate body. Use `validate --pack <workspace-relative-pack.json> --strict-findings` only to audit an already-existing pack artifact; create/replace requires the final successor JSON path to remain absent, so an existing canonical-path candidate is debt/input rather than a publishable successor at that ref. Historical findings in unrelated inactive packs are separate debt: they do not authorize publishing a candidate with findings, and global debt must not be misreported as a defect in a clean exact candidate.
+
 Bind every current mutation plan to the canonical JSON body with `pack_coherence.schema_version: 1`: exact pack ref, canonical before SHA-256, before item IDs/order/current item, proposed after IDs/order, and mutation kind. Require the complete mutation receipt at result-contract consumption. The helper rejects stale hashes, unknown IDs, mismatched after state, and any material no-op. `pack_coherence.schema_version: 0` normalizes only an old mutation precondition; it never repairs initial-selection authority provenance.
 
 For promotion, write the new `task.md` only after the prior task has an
@@ -439,9 +455,35 @@ The helper also refuses a second promotion while another item is in flight,
 rejects blocking result-contract envelopes/findings, snapshots the exact new
 task bytes, and writes Markdown renders atomically without following symlinks.
 
+## Replacement Transaction
+
+Use `pack_disposition: replace_pack` with helper action `replace_pack` when one active pack must be superseded by a clean successor. Do not emulate replacement by separately applying `supersede_pack` and `create_pack`, and do not hand-edit either pack. The plan must bind the exact unique active predecessor through current coherence and must provide a successor whose publication validation returns no findings.
+
+Place the successor JSON under the plan's top-level `pack` key; `successor_pack` is not an alias. `pack_coherence` describes the predecessor-side supersession precondition, so its declared and proposed IDs/order repeat the predecessor's exact IDs/order and its exact `current_item_id`. The successor IDs/order belong only to `pack.items` and `replacement_contract`.
+
+The successor must contain `replacement_contract.schema_version: 1` with:
+
+- exact predecessor pack ref, file SHA-256, and canonical SHA-256;
+- a complete, disjoint partition of successor items into `new_item_ids` and `carried_forward_item_ids`;
+- a complete disposition for every nonterminal predecessor item: carry it unchanged, or list it under `retired_items` with a bounded reason and non-empty evidence entries containing exact workspace-relative `path` and `sha256` values. Retirement evidence must live outside the mutable `.task/task_pack/` transaction store and must still verify after publication;
+- at most five newly derived items;
+- exact carried-forward planning contracts and predecessor-relative order;
+- dependency closure: a successor dependency that names a predecessor item must still resolve to a successor item, or that predecessor item must already be `consumed` with preserved completion evidence. Retiring an unfinished dependency target requires rederiving the dependent item with a new ID and counts against the new-item bound.
+
+An ordinary new pack contains two to five newly derived items. A replacement may contain more than five total items only when the excess items are exact carry-forward items under this contract; lifecycle-only fields may be normalized by the helper, but changed objective, acceptance, validation, dependencies, scope, or other planning content makes the item newly derived. An existing predecessor ID cannot be relabeled as new, and omission is not retirement. Use `retired_items` only when exact direction/authority evidence permits removing that live predecessor item. Do not use carry-forward or retirement to evade the five-new-item bound.
+
+Set deterministic successor `created_at` and `updated_at` values in the planned body before preflight. Keep the persisted plan body-safe: refer to source instructions and sensitive external metadata through opaque IDs, workspace evidence refs, and hashes rather than raw prompts, transcripts, credentials, or corpus metadata. Run that exact plan with `apply-mutation --dry-run` first and require `status: dry_run` and `findings: []`; then reuse the byte-identical plan and task inputs for apply. If any input digest or timestamp changes, rerun preflight and rebuild any precomputed creation-snapshot/authority binding instead of relying on apply-time defaults. The dry-run must leave no pack, render, snapshot, receipt, or transaction residue. On apply, the helper content-addresses the exact plan, locks the task-pack store, writes a prepare journal whose transaction identity binds the plan fingerprint and every target before/after hash, publishes the predecessor as `superseded` and the successor as the only active pack, verifies creation evidence and the postcondition, and writes a completion receipt. Optional first-item selection uses the same creation-snapshot, task-snapshot, and authority receipt contract described in [initial-selection-provenance.md](initial-selection-provenance.md). A downstream result must supply the complete validated receipt, including its durable ref and SHA-256; a transaction ID alone is not a receipt.
+
+For replacement plus initial selection, use a two-phase preflight. First dry-run the successor/carry/retirement plan without selection to derive creation identities. Store prospective new-task bytes in a bounded noncanonical workspace staging file, hash them, construct the deterministic task-snapshot subject, and issue the one-shot authority receipt. Then add `prospective_task_ref` and `prospective_task_sha256` beside canonical `task_path` inside `initial_selection` and dry-run the complete final plan. Dry-run uses staging even when canonical `task.md` still contains the predecessor task; apply requires canonical `task.md` to equal those staged bytes. Keep staging until apply completes, then remove it. The staging file and unused subject-bound receipt are explicit preparation evidence; no pack, helper snapshot, journal, completion receipt, or lifecycle state may survive dry-run.
+
+The helper's transaction scope is deliberately limited to the task-pack store and helper-owned evidence: predecessor/successor JSON, requested Markdown renders, creation/task snapshots, journal, and receipt. It does not atomically publish or roll back `task.md`, `past_task` archives, `.task/index.*`, issue/schema state, Git staging, or a commit. For optional initial selection, the exact `task.md` must exist by apply time; preflight may use the hash-bound prospective staging path above. The helper hash-verifies and snapshots task bytes but does not publish them. The caller must preflight those outer lifecycle surfaces before archive or replacement and reconcile them afterward without claiming they were part of the pack transaction. Retain old task/index anchors until commit: restore the old task only when failure occurs before durable prepare, but forward-recover the pack and then reconcile links once a valid prepare exists.
+
+If a prepare journal exists without a valid completion receipt, every other pack mutation must fail closed. Run `recover-replacement` to forward-complete the exact journal only after its content-addressed plan, target binding, creation snapshot/receipt, and current before/after state all validate; do not truncate, delete, recreate, rehash, or apply a different replacement plan. Replaying a completed exact plan is a receipt-validated no-op, while a different plan, altered journal, missing helper-owned evidence, or stale predecessor binding remains blocked.
+
 Allowed `pack_disposition` values:
 
-- `create_pack`: create a bounded 2-5 item pack when a known sequence prevents repeated myopic derivation.
+- `create_pack`: create a bounded 2-5 newly derived item pack when a known sequence prevents repeated myopic derivation.
+- `replace_pack`: supersede the unique active predecessor and publish one clean successor through the helper-owned replacement transaction; a successor over five total items requires exact carry-forward and may still add at most five new items.
 - `promote_next_item`: promote one safe item into `task.md`; no other item becomes executable.
 - `normalize_initial_selection_provenance`: append only verified first-selection provenance to an existing pack without changing lifecycle or semantic state.
 - `insert_items`: insert prerequisite or retarget items before the current item.

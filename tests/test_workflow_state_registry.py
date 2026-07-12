@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -46,6 +47,208 @@ def test_scan_keeps_stable_id_for_ordinary_same_path_edit(tmp_path: Path) -> Non
     assert state[first_id]["title"] == "Clarified task wording"
     assert state[first_id]["content_sha256"] == task_state_index.sha256_file(task)
     assert not any(issue["code"] == "duplicate_active_path" for issue in audit["issues"])
+
+
+def test_scan_semantic_noop_preserves_markdown_bytes_timestamp_and_mtime(tmp_path: Path) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("# Stable task\n", encoding="utf-8")
+    first = task_state_index.scan_artifacts(tmp_path)
+    index = tmp_path / ".task" / "index.jsonl"
+    markdown = tmp_path / ".task" / "index.md"
+    before_index = index.read_bytes()
+    before_markdown = markdown.read_bytes()
+    before_mtime = markdown.stat().st_mtime_ns
+
+    second = task_state_index.scan_artifacts(tmp_path)
+
+    assert first["index_md_changed"] is True
+    assert second["indexed_events"] == 0
+    assert second["index_md_changed"] is False
+    assert second["mutation_performed"] is False
+    assert index.read_bytes() == before_index
+    assert markdown.read_bytes() == before_markdown
+    assert markdown.stat().st_mtime_ns == before_mtime
+
+
+def test_scan_real_projection_change_republishes_markdown(tmp_path: Path) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("# Before title\n", encoding="utf-8")
+    task_state_index.scan_artifacts(tmp_path)
+    index = tmp_path / ".task" / "index.jsonl"
+    markdown = tmp_path / ".task" / "index.md"
+    before_index = index.read_bytes()
+    before_markdown = markdown.read_bytes()
+
+    task.write_text("# After title\n", encoding="utf-8")
+    result = task_state_index.scan_artifacts(tmp_path)
+
+    assert result["indexed_events"] == 1
+    assert result["index_md_changed"] is True
+    assert result["mutation_performed"] is True
+    assert index.read_bytes() != before_index
+    assert markdown.read_bytes() != before_markdown
+    assert b"After title" in markdown.read_bytes()
+
+
+def test_scan_repairs_missing_and_stale_markdown_without_ledger_event(tmp_path: Path) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("# Repair view\n", encoding="utf-8")
+    task_state_index.scan_artifacts(tmp_path)
+    index = tmp_path / ".task" / "index.jsonl"
+    markdown = tmp_path / ".task" / "index.md"
+    ledger = index.read_bytes()
+
+    markdown.unlink()
+    missing = task_state_index.scan_artifacts(tmp_path)
+    repaired = markdown.read_bytes()
+    assert missing["indexed_events"] == 0
+    assert missing["index_md_changed"] is True
+    assert index.read_bytes() == ledger
+    assert b"Repair view" in repaired
+
+    malformed = repaired.decode("utf-8")
+    malformed = re.sub(r"^- Generated: .+$", "- Generated: not-a-timestamp", malformed, flags=re.MULTILINE)
+    markdown.write_text(malformed, encoding="utf-8")
+    stale = task_state_index.scan_artifacts(tmp_path)
+    assert stale["indexed_events"] == 0
+    assert stale["index_md_changed"] is True
+    assert index.read_bytes() == ledger
+    assert b"not-a-timestamp" not in markdown.read_bytes()
+    assert b"Repair view" in markdown.read_bytes()
+
+
+def test_scan_dry_run_with_artifact_creates_no_task_state_files(tmp_path: Path) -> None:
+    (tmp_path / "task.md").write_text("# Planned task\n", encoding="utf-8")
+
+    result = task_state_index.scan_artifacts(tmp_path, dry_run=True)
+
+    assert result["mode"] == "dry_run"
+    assert result["mutation_performed"] is False
+    assert result["planned_artifact_updates"] == 1
+    assert result["would_change"] is True
+    assert not (tmp_path / ".task").exists()
+
+
+def test_scan_dry_run_without_index_context_is_a_clean_noop(tmp_path: Path) -> None:
+    result = task_state_index.scan_artifacts(tmp_path, dry_run=True)
+
+    assert result["scan_evidence_status"] == "not_evaluated_no_artifacts"
+    assert result["would_change"] is False
+    assert result["index_md_would_change"] is False
+    assert not (tmp_path / ".task").exists()
+    applied = task_state_index.scan_artifacts(tmp_path)
+    assert applied["mutation_performed"] is False
+    assert not (tmp_path / ".task").exists()
+
+
+def test_scan_rejects_non_file_canonical_index_path_without_mutation(tmp_path: Path) -> None:
+    invalid = tmp_path / ".task" / "index.jsonl"
+    invalid.mkdir(parents=True)
+    with pytest.raises(ValueError, match="not a regular file"):
+        task_state_index.scan_artifacts(tmp_path, dry_run=True)
+    with pytest.raises(ValueError, match="not a regular file"):
+        task_state_index.scan_artifacts(tmp_path)
+    assert invalid.is_dir()
+    assert not (tmp_path / ".task" / "index.md").exists()
+
+
+def test_scan_check_reports_missing_jsonl_without_rewriting_matching_view(tmp_path: Path) -> None:
+    task_dir = tmp_path / ".task"
+    task_dir.mkdir(parents=True)
+    markdown = task_dir / "index.md"
+    markdown.write_bytes(task_state_index._render_markdown_payload({}, "2026-07-12T00:00:00+09:00"))
+    before = markdown.read_bytes()
+
+    planned = task_state_index.scan_artifacts(tmp_path, dry_run=True)
+    assert planned["would_change"] is True
+    assert planned["index_jsonl_would_change"] is True
+    assert planned["index_md_would_change"] is False
+
+    applied = task_state_index.scan_artifacts(tmp_path)
+    assert applied["mutation_performed"] is True
+    assert applied["index_jsonl_changed"] is True
+    assert (task_dir / "index.jsonl").is_file()
+    assert markdown.read_bytes() == before
+
+
+def test_scan_dry_run_projects_body_only_update_per_surface(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("# Same title\n\nold body\n", encoding="utf-8")
+    task_state_index.scan_artifacts(tmp_path)
+    events = task_state_index.load_events(tmp_path)
+    stable_time = str(events[-1]["updated_at"])
+    markdown = tmp_path / ".task" / "index.md"
+    before_markdown = markdown.read_bytes()
+    monkeypatch.setattr(task_state_index, "now_iso", lambda: stable_time)
+    task.write_text("# Same title\n\nnew body\n", encoding="utf-8")
+
+    planned = task_state_index.scan_artifacts(tmp_path, dry_run=True)
+    assert planned["would_change"] is True
+    assert planned["planned_artifact_updates"] == 1
+    assert planned["index_jsonl_would_change"] is True
+    assert planned["index_md_would_change"] is False
+
+    applied = task_state_index.scan_artifacts(tmp_path)
+    assert applied["index_jsonl_changed"] is True
+    assert applied["index_md_changed"] is False
+    assert markdown.read_bytes() == before_markdown
+
+
+def test_scan_dry_run_preserves_existing_index_and_markdown_bytes(tmp_path: Path) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("# Existing task\n", encoding="utf-8")
+    task_state_index.scan_artifacts(tmp_path)
+    index = tmp_path / ".task" / "index.jsonl"
+    markdown = tmp_path / ".task" / "index.md"
+    task.write_text("# Pending title\n", encoding="utf-8")
+    before_index = index.read_bytes()
+    before_markdown = markdown.read_bytes()
+    before_mtimes = (index.stat().st_mtime_ns, markdown.stat().st_mtime_ns)
+
+    result = task_state_index.scan_artifacts(tmp_path, dry_run=True)
+
+    assert result["planned_artifact_updates"] == 1
+    assert result["would_change"] is True
+    assert result["index_md_would_change"] is True
+    assert index.read_bytes() == before_index
+    assert markdown.read_bytes() == before_markdown
+    assert (index.stat().st_mtime_ns, markdown.stat().st_mtime_ns) == before_mtimes
+
+
+def test_scan_check_exit_code_reports_pending_changes_without_mutation(tmp_path: Path) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("# Check task\n", encoding="utf-8")
+    task_state_index.scan_artifacts(tmp_path)
+    script = ROOT / "manage-task-state-index" / "scripts" / "task_state_index.py"
+    environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+    index = tmp_path / ".task" / "index.jsonl"
+    markdown = tmp_path / ".task" / "index.md"
+
+    clean = subprocess.run(
+        [sys.executable, str(script), "--root", str(tmp_path), "scan", "--check"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    assert clean.returncode == 0
+    assert json.loads(clean.stdout)["mode"] == "check"
+
+    task.write_text("# Check changed task\n", encoding="utf-8")
+    before = (index.read_bytes(), markdown.read_bytes())
+    pending = subprocess.run(
+        [sys.executable, str(script), "--root", str(tmp_path), "scan", "--check"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    assert pending.returncode == 1
+    assert json.loads(pending.stdout)["planned_artifact_updates"] == 1
+    assert (index.read_bytes(), markdown.read_bytes()) == before
 
 
 def test_explicit_new_id_is_a_semantic_replacement(tmp_path: Path) -> None:
@@ -388,6 +591,27 @@ def test_scan_rejects_canonical_advice_id_cross_path_collision_without_append(tm
     assert index.read_bytes() == before
 
 
+def test_scan_preflight_rejects_two_new_advice_paths_with_same_id_before_first_append(
+    tmp_path: Path,
+) -> None:
+    active = tmp_path / ".agent_advice" / "active"
+    active.mkdir(parents=True)
+    canonical_id = "adv-colliding-new-paths"
+    for name in ("first.md", "second.md"):
+        (active / name).write_text(
+            f"# {name}\n\n- advice_id: {canonical_id}\n- status: active\n",
+            encoding="utf-8",
+        )
+
+    with pytest.raises(ValueError, match="another artifact path"):
+        task_state_index.scan_artifacts(tmp_path, dry_run=True)
+    assert not (tmp_path / ".task").exists()
+
+    with pytest.raises(ValueError, match="another artifact path"):
+        task_state_index.scan_artifacts(tmp_path)
+    assert not (tmp_path / ".task").exists()
+
+
 def test_advice_metadata_normalizes_one_backtick_scalar_and_skips_pointer(tmp_path: Path) -> None:
     canonical_id = "adv-backtick-normalized"
     pointer = tmp_path / ".agent_advice" / "active" / "pointer.md"
@@ -535,6 +759,22 @@ def test_mixed_legacy_malformed_and_current_rows_preserve_projection_uncertainty
             },
         )
     assert index.read_bytes() == before
+
+
+def test_scan_preflight_rejects_duplicate_discovered_task_pack_id_before_append(tmp_path: Path) -> None:
+    pack_dir = tmp_path / ".task" / "task_pack"
+    pack_dir.mkdir(parents=True)
+    body = {"pack_id": "pack-duplicate-id", "status": "superseded", "items": []}
+    for name in ("first.json", "second.json"):
+        (pack_dir / name).write_text(json.dumps(body) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="already bound to another artifact path"):
+        task_state_index.scan_artifacts(tmp_path, dry_run=True)
+    assert not (tmp_path / ".task" / "index.jsonl").exists()
+
+    with pytest.raises(ValueError, match="already bound to another artifact path"):
+        task_state_index.scan_artifacts(tmp_path)
+    assert not (tmp_path / ".task" / "index.jsonl").exists()
 
 
 def test_task_pack_index_retains_bounded_initial_normalization_links(tmp_path: Path) -> None:

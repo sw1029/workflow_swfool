@@ -173,6 +173,30 @@ If any create+selection validation fails before canonical publication, the helpe
 
 `apply-mutation --dry-run` validates the proposed create/selection state and reports `status=dry_run` without leaving a pack, render, creation snapshot/receipt, or task snapshot. The same no-durable-artifact rule applies to promotion dry-runs.
 
+## Replacement first selection
+
+When a clean successor replaces the unique active pack and its first item must be selected immediately, use one `pack_disposition: replace_pack` plan with an `initial_selection` object that follows the same receipt contract above. Do not supersede, create, and promote through three independent writes.
+
+Precompute the successor creation body only after setting deterministic `created_at` and `updated_at`. At apply time, exact `task.md` must exist at the receipt-bound path and its byte SHA-256 must match the planned task snapshot, prospective preflight digest, and exact authority subject. The helper hash-verifies and snapshots those task bytes; `task.md` publication is outside the replacement transaction and is never implied by a successful pack receipt.
+
+For prepublication dry-run while canonical `task.md` is absent or still contains the predecessor task, place the exact prospective bytes in a bounded noncanonical workspace staging file and add both fields to the same final plan:
+
+```json
+{
+  "initial_selection": {
+    "task_path": "task.md",
+    "prospective_task_ref": ".task/prepublication/<opaque-id>.md",
+    "prospective_task_sha256": "<64 lowercase hex>"
+  }
+}
+```
+
+First dry-run the replacement without selection to derive the creation identity, then construct the task-snapshot subject from the staged digest and issue the exact one-shot authority receipt. Run the complete final plan with `--dry-run`; the helper uses staging bytes for validation but records canonical `task_path`. After pass, overwrite/publish `task.md` with byte-identical staged bytes and apply the same plan. Apply reads canonical `task.md` and rejects any staging mismatch. Keep staging through apply, then delete it only after the committed replacement receipt validates. An unused authority receipt proves no selection and cannot authorize a different subject.
+
+Dry-run the exact full replacement plan and require `findings: []` with no helper-owned pack/snapshot/journal/receipt or lifecycle residue; the declared staging file and unused subject-bound authority receipt are preparation evidence. Apply must reuse the byte-identical plan, successor timestamps, task bytes, creation-snapshot binding, and authority receipt input. If any digest or timestamp changes between dry-run/authority issue and apply, discard the stale prospective binding, rerun dry-run, and issue authority for the new exact subject. Do not patch the authority subject or creation snapshot after publication.
+
+The replacement completion receipt covers only the predecessor/successor task-pack store and helper-owned renders, creation/task snapshots, journal, and receipt. It does not cover the pre-existing `task.md`, a `past_task` archive, `.task/index.*`, schema/issue state, Git staging, or a commit. If the helper reports a pending prepare journal, run `recover-replacement` to forward-complete that exact plan before any other pack mutation; do not recreate or truncate it.
+
 ## Existing-pack normalization
 
 Use `normalize_initial_selection_provenance` only when the first item is already selected and lifecycle semantics must remain unchanged. Supply the same receipt fields as above, plus:

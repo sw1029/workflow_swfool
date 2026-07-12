@@ -305,6 +305,7 @@ LONG_RUN_STATUSES = {"launching", "running", "completed_pending_validation", "st
 ADVICE_REQUIRED_TARGETS = {"acceptance", "governance", "validation_set_plan", "qualitative_review", "validation_set_build", "derive", "validate"}
 PACK_DISPOSITIONS = {
     "create_pack",
+    "replace_pack",
     "promote_next_item",
     "normalize_initial_selection_provenance",
     "insert_items",
@@ -318,6 +319,7 @@ PACK_DISPOSITIONS = {
 }
 PACK_MUTATION_DISPOSITIONS = {
     "create_pack",
+    "replace_pack",
     "normalize_initial_selection_provenance",
     "insert_items",
     "insert_item",

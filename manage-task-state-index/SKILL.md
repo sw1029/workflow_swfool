@@ -74,10 +74,14 @@ For the complete event schema and link relationship names, read [index-schema.md
    - During `scan`, reuse the stable ID for the same artifact type and path and append an update event when content, title, status, or bounded metadata changes.
    - Create a new ID only for an explicit semantic replacement: pass a new `--id`, or use `add --replace`. Supersede and cross-link the previous active same-path record in the same locked transaction.
    - Do not infer semantic replacement from an ordinary digest change. This prevents `scan` from creating `duplicate_active_path` debt itself.
+   - Use `scan --dry-run` for a read-only publication plan. It must not create `.task/`, acquire a writer lock, append events, create snapshots, or rewrite the Markdown view. Use `scan --check` for the same read-only plan with exit code `1` when applying `scan` would change durable task-state files and `0` otherwise.
+   - A mutating `scan` must first complete the same read-only identity/collision plan for the full discovered inventory and recheck source hashes before its first append. Do not commit an earlier artifact when a later discovered artifact has a deterministic canonical-ID/path collision.
+   - A normal `scan` regenerates `.task/index.md` only when its rendered projection changes. An exact projection match preserves the existing `Generated` value, bytes, and modification time; a missing or stale view is repaired without appending a ledger event when the JSONL projection itself is already current.
    - When a caller restricts indexing to exact-path add/link, record that restriction in the created/updated artifact note and include the reason global scan/audit was skipped.
 
      ```bash
      python3 "${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts/task_state_index.py" --root . scan
+     python3 "${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts/task_state_index.py" --root . scan --check
      ```
 
 3. Add or update a specific artifact when another workflow creates it.
@@ -155,7 +159,7 @@ For the complete event schema and link relationship names, read [index-schema.md
 Use `scripts/task_state_index.py` for deterministic updates:
 
 - `init`: create `.task/index.jsonl` if needed and rebuild `.task/index.md`.
-- `scan`: discover standard artifacts and append missing index events.
+- `scan`: discover standard artifacts, append missing or changed index events, and publish the Markdown view only when its projection changes. Add `--dry-run` for a zero-write plan or `--check` for the same plan with CI-friendly `0`/`1` exit status.
 - `add`: append or update one artifact event; use `--replace` or a new explicit `--id` only for semantic replacement.
 - `link`: append a relationship from one indexed artifact to another.
 - `rebuild`: regenerate `.task/index.md` from `.task/index.jsonl`.
@@ -165,7 +169,7 @@ Use `scripts/task_state_migration.py` only for the bounded `inspect` and `migrat
 
 All commands print JSON so the caller can capture IDs and changed paths.
 
-All writers serialize through workspace-local `.task/index.lock`, validate the existing JSONL before mutation, and atomically replace `index.jsonl` and its Markdown view after durable flush. New events carry `format_version` and `schema_version`. Detect legacy versions before validating the current event discriminator and normalize only unambiguous legacy upsert/link shapes at read time. During audit, quarantine malformed rows, continue scanning valid rows, and classify their current-projection impact as `independent`, `affected`, or `unknown`; keep affected or unknown current identities `not_evaluated`. Keep mutation paths strict: malformed or future-version JSONL fails closed without append. An empty scan/audit is `not_evaluated_no_artifacts`, not success or completion evidence.
+All writers serialize through workspace-local `.task/index.lock`, validate the existing JSONL before mutation, and atomically replace changed `index.jsonl` and Markdown payloads after durable flush. Read-only `scan --dry-run|--check` does not enter this writer path. New events carry `format_version` and `schema_version`. Detect legacy versions before validating the current event discriminator and normalize only unambiguous legacy upsert/link shapes at read time. During audit, quarantine malformed rows, continue scanning valid rows, and classify their current-projection impact as `independent`, `affected`, or `unknown`; keep affected or unknown current identities `not_evaluated`. Keep mutation paths strict: malformed or future-version JSONL fails closed without append. An empty scan/audit is `not_evaluated_no_artifacts`, not success or completion evidence.
 
 ## Guardrails
 

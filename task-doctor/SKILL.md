@@ -88,12 +88,14 @@ When reviewing a terminal or escalation request, require the existing loopback r
    - Keep inspection at workflow and convention level. Do not inspect implementation source to solve the task.
 
 3. Refresh traceability before replacement.
-   - Use `$manage-task-state-index` `scan` when any task-state artifact exists.
+   - Use `$manage-task-state-index` `scan --check` (or `scan --dry-run`) when any task-state artifact exists. This preflight is read-only: it must not create or rewrite `.task/index.jsonl` or `.task/index.md` merely to inspect readiness.
    - Use `$manage-task-state-index` `audit` before replacing `task.md` when `.task/index.jsonl` exists.
    - Treat high-severity active-task, missing-file, duplicate-ID, or broken-link findings as blockers unless the replacement is explicitly meant to repair that condition.
 
 4. Decide the task update shape.
    - Preserve all applicable user requirements and repo conventions.
+   - Normalize noncanonical progress labels without extending the task-pack enums. Keep `progress_target` in `advanced|safety_only|no_progress|regressed` and `progress_kind_expected` in `goal_productive|governance_only`. Put an open bounded subtype such as `workflow_capability`, `artifact_truth_only`, `artifact_truth_reconciliation`, or `artifact_truth_verification` in `item_kind`; `item_kind` routes the work but is not progress evidence.
+   - When the direction says `workflow_capability`, preserve that source label in directive provenance or `scope_fidelity` and use `item_kind: workflow_capability`. When it says `artifact_truth_only`, preserve the exact source target in `scope_fidelity`, use `item_kind: artifact_truth_only`, and retain the required verifier/evaluation status in acceptance. Select the canonical progress fields from expected observable outcomes; do not create `effective_progress_kind_expected`, `artifact_truth_only` as a progress enum, or a new verdict-axis vocabulary.
    - Preserve the previous `## Execution Environment` section only when it remains applicable to the new task.
    - If no environment is applicable, set `Status: not_applicable`.
    - If a Python or runnable environment is needed but unknown, use `$find-local-python-envs` or mark `Status: unresolved` with the blocker. Do not install dependencies from this skill.
@@ -101,7 +103,7 @@ When reviewing a terminal or escalation request, require the existing loopback r
    - If the user requested a task pack, keep `task.md` as the single active executable task and use `.task/task_pack/` only for the ordered proposal. Bind an included current first task through the helper's bootstrap/authorized initial-selection transaction; do not hand-author an unproven promoted item.
    - When an existing pack's first selection predates that contract, do not replay promotion or patch JSON directly. Require an explicit normalization direction, immutable creation/task snapshots, and a validated `$manage-agent-authority` receipt; then use the helper's `normalize_initial_selection_provenance` transaction. Current ratification authorizes continuation only and must preserve partial historical authority.
    - Use a task pack only when the explicit direction contains an ordered sequence or when a single doctored task would lose important sequencing context. Otherwise write only `task.md`.
-   - Do not create multiple active task packs. Update the named/active pack, or mark the old pack `superseded` before creating a replacement.
+   - Do not create multiple active task packs. Update the named active pack in place when appropriate; when replacing it with a successor, use the helper-owned `replace_pack` transaction so predecessor supersession and successor publication share one journal/receipt. Never supersede first and create separately.
    - If active advice was used, decide whether it is incorporated into the new task, deferred for later implementation, or rejected because it conflicts with user instruction, GT, authority, or repository facts.
    - Do not write a replacement task that forbids a `.agent_goal` allowed or required provider/credential action unless the new task explicitly resolves the conflict or cites a newer explicit user instruction that supersedes the GT with a verifiable source. A bare phrase such as "latest user instruction" is not enough. When caller authority permits quoting, supply the exact bounded user quote separately and bind it to the validated privacy-safe [$audit-session-governance](../audit-session-governance/SKILL.md) packet's event/hash/timestamp reference; require an explicit `integrity_status` and preserve its limitations. The packet itself contains no quote or message body, and a raw transcript path or transcript-only observation is insufficient. The quote supports provenance only and cannot by itself expand authority. Otherwise keep the prior supersession/authority state and ask the user for confirmation.
    - Do not write a replacement task whose progress case depends only on self-declared `produced_domain_delta=true`; require observed output evidence, legitimate provider-terminal evidence, consolidation, or explicit terminal/user escalation.
@@ -155,14 +157,24 @@ When reviewing a terminal or escalation request, require the existing loopback r
    - When an explicit `gt_constraint_policy.generalization` reports a repeated single-unit invariant against a multi-unit/generalization goal, require the adapter-indicated bounded multi-unit path or terminal-block on the exact missing source/authority/provider condition. Do not infer domain units or generalization fields without that policy.
    - Put `## Execution Environment` immediately after `# Task`.
 
-5. Archive the old task before overwriting.
+5. Pass the prepublication feasibility gate.
+   - Run this gate before creating a `past_task` archive, overwriting canonical `task.md`, superseding or creating a pack, appending task-state events, rendering a durable view, Git staging, or committing. The only permitted preparation writes are a bounded noncanonical prospective-task file and, after its exact subject is known, a one-shot subject-bound authority receipt; neither is lifecycle progress or proof that selection occurred.
+   - Inspect `task_pack_queue.py --root . capabilities` and verify that the requested operation, canonical progress enums, open `item_kind`, first-selection mode, replacement recovery, active-pack cardinality, and transaction scope are supported. A requested source label that is representable through canonical fields plus `item_kind` is not grounds for enum expansion.
+   - Materialize the exact prospective `task.md`, exact successor pack body, exact create/replace mutation plan, and authority subject inputs in memory or a disposable noncanonical staging area. Set deterministic successor `created_at` and `updated_at` in that body instead of allowing apply-time defaults, bind the plan to the named predecessor's exact ref, file/canonical hashes, IDs, order, and current item, and retain the exact bytes/digests that passed preflight. Keep the plan body-safe: replace raw prompts, transcripts, credentials, corpus metadata, and source instruction bodies with opaque IDs, bounded workspace refs, and hashes before the helper content-addresses it.
+   - When replacement also performs initial selection, use two bounded feasibility phases whether canonical `task.md` is absent or still contains the old active task. First dry-run the exact successor/carry/retirement body without `initial_selection` to obtain deterministic creation-snapshot identities. Write the exact prospective task bytes only to a bounded noncanonical workspace path, compute the deterministic task-snapshot identity, resolve authority, and issue the exact one-shot receipt. Then add `initial_selection.prospective_task_ref` and `prospective_task_sha256` and run the complete final plan in dry-run mode. The helper records canonical `task_path: task.md` while sourcing bytes from staging for dry-run even when old canonical bytes exist. After that full plan passes, publish byte-identical `task.md` and apply the same plan; apply requires canonical bytes to equal the staged digest.
+   - Run the exact helper dry-run and require `status: dry_run`, `findings: []`, and no helper-owned pack/snapshot/journal/receipt or lifecycle residue. The explicitly permitted prospective-task staging file and unused subject-bound authority receipt are preparation evidence, not a dry-run mutation. Keep staging byte-identical through apply; remove it only after the committed replacement receipt validates, or on pre-prepare abort, and report its cleanup. Keep a replacement successor in memory or noncanonical staging: its final `.task/task_pack/<pack_id>.json` path must remain absent for apply. Use `validate --pack <path> --strict-findings` only to audit an already-existing pack artifact; it is debt/input, not a publishable replacement at that same ref. Evaluate the prospective successor through replacement dry-run independently from unrelated historical pack debt; global debt may remain reported, but it neither invalidates a clean exact candidate nor permits publishing a candidate with findings.
+   - For a new sequence, require two to five newly derived items. For `replace_pack`, allow more than five total items only when the successor introduces at most five new items and every additional item is exact carry-forward under `replacement_contract`, including unchanged planning content and preserved predecessor-relative order. Existing predecessor IDs cannot be relabeled as new. Account for every nonterminal predecessor item as exact carry-forward or as an explicit `retired_items` disposition with a bounded reason and hash-bound direction/authority evidence outside `.task/task_pack/`; omission is a failed preflight. Reject a carried dependency on a removed predecessor unless that dependency is already consumed with preserved completion evidence; otherwise rederive the dependent item under a new ID and count it as new.
+   - Confirm before publication that exactly one active predecessor exists when replacing, no active pack exists when creating, the prospective task snapshot is deterministic, the exact authority subject is constructible when initial selection is requested, the task-state store is appendable, and all outer lifecycle writes are authorized. Apply must reuse the byte-identical preflight task and pack plan; if any digest or deterministic timestamp differs, rerun preflight and reissue any subject-bound authority rather than silently rebuilding the candidate.
+   - If any check fails, stop fail-closed. Do not archive, replace canonical `task.md`, mutate either pack, append task state, render a durable view, Git-stage, commit, or run orchestration. Remove disposable prospective-task staging. If the exact one-shot authority receipt was already issued for the full preflight, retain and report it as unused subject-bound preparation; it proves no selection or lifecycle mutation and cannot be reused for a different plan/subject. Report a stable blocker signature, the first exact finding, the missing material delta, and all retained non-lifecycle evidence.
+
+6. Archive the old task before overwriting.
    - If `task.md` exists, use `$record-agent-work-log` to create a `past_task` entry before changing it.
    - Include the old task content or a safe summary, the user-provided doctor instruction, and why the old task was superseded.
    - Run `$manage-task-state-index` `scan` after logging so the old task is indexed as `past-*` or `log-*` when possible.
    - If `task.md` is absent, treat the operation as `initial_task` and skip `past_task` archival.
    - For `initial_task`, apply the non-blocking `tier0_hook_set` acceptance pointer in `$orchestrate-task-cycle` [workflow-routing.md](../orchestrate-task-cycle/references/workflow-routing.md); Tier-1+ hooks remain demand-ledger work through `adapter_hook_demand`.
 
-6. Write the new `task.md`.
+7. Write the new `task.md`.
    - Use this structure:
 
      ```markdown
@@ -180,7 +192,7 @@ When reviewing a terminal or escalation request, require the existing loopback r
      - Task Pack: <pack-id/path | none>
      - Task Pack Item: <item-id | none>
      - Pack Position: <order/total | none>
-     - Pack Source: planned | inserted | reordered | user_instruction | none
+     - Pack Source: planned | inserted | reordered | none
 
      ## Objective
 
@@ -223,7 +235,7 @@ When reviewing a terminal or escalation request, require the existing loopback r
    - If the new task came from `.task/candidate_task/`, delete the applied candidate only after the new `task.md` is written and the transition is indexed. Keep unapplied candidates.
    - Do not delete task misses or issues from this skill unless their owning skill confirms the lifecycle transition.
 
-7. Write or update a task-pack proposal when requested.
+8. Write or update a task-pack proposal when requested.
    - Create `.task/task_pack/` only when the explicit doctor instruction asks for a pack, sequence, ordered proposal, or current-task-plus-followups plan.
    - Use canonical JSON under `.task/task_pack/pack-<timestamp>-<slug>.json` and render `.task/task_pack/pack-<timestamp>-<slug>.md` in the user's language.
    - Follow the schema from `$orchestrate-task-cycle` [task-pack-workflow.md](../orchestrate-task-cycle/references/task-pack-workflow.md): `schema_version`, `pack_id`, `status`, `language`, `goal`, `current_item_id`, `items`, `mutation_log`, and optional `terminal_blocker`.
@@ -244,17 +256,21 @@ When reviewing a terminal or escalation request, require the existing loopback r
    - If the current `task.md` remains active and is included in the pack, make it the first item and promote it with a creation-snapshot- and authority-bound initial origin; do not create a second active task.
    - If the doctor instruction replaces `task.md` and also creates a pack, create the planned pack then use the same initial-selection contract to promote the new first task; put follow-up tasks after it as `planned`.
    - Prefer `create_pack` with its optional subject-bound initial-selection input when available so creation snapshot, authority receipt, task snapshot, and first promotion share one locked transaction. If the helper exposes only two-step compatibility, do not continue unless its durable creation receipt is captured and verified before promotion.
+   - When one active pack must be replaced, use one helper-owned `replace_pack` plan and receipt. Do not emulate it with separate `supersede_pack` and `create_pack` applies, and do not hand-edit predecessor or successor JSON. Require exact predecessor coherence, a finding-free successor, a complete new/carried/retired disposition, exact carry-forward planning hashes/order, hash-bound evidence for each retired live item, a content-addressed exact-plan snapshot, and a valid complete completion receipt. A transaction ID alone is not a receipt.
+   - Treat replacement atomicity honestly. The helper transaction covers the task-pack store and helper-owned evidence only; `task.md`, `past_task` archive, `.task/index.*`, schema/issue records, Git staging, and commits remain outer doctor workflow steps. For initial selection, exact `task.md` must exist by apply time; complete dry-run may use the declared hash-bound prospective staging path. The helper only hash-verifies/snapshots task bytes; it does not publish or roll them back atomically. Preflight all outer surfaces before archive, then reconcile them after the pack receipt without claiming a cross-store atomic commit.
+   - Preserve the exact old `task.md` bytes and pre-replacement index anchors until the pack receipt commits. If apply fails before a prepare journal exists, restore the old task bytes, leave the still-active predecessor pack unchanged, keep the truthful archive as history, and reconcile only append-only/index-view consequences. If a valid prepare journal exists, do not roll the task or pack backward; forward-recover that exact pack transaction, then reconcile task/index links. Report which boundary was crossed.
+   - If a replacement prepare journal is pending, stop every other pack mutation and run `recover-replacement` only after its plan fingerprint, target-binding transaction ID, creation evidence, and exact before/after states validate. Do not delete/truncate/rehash the journal, recreate the pack, or submit a different plan. A completed exact-plan replay may be accepted only as a receipt-validated no-op.
    - If the instruction only asks for a pack proposal, do not overwrite `task.md` unless the user explicitly asks to retarget the active task.
    - Validate and render the pack with:
 
      ```bash
-     python3 "${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/scripts/task_pack_queue.py" --root . validate
+     python3 "${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/scripts/task_pack_queue.py" --root . validate --pack <candidate-path> --strict-findings
      python3 "${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/scripts/task_pack_queue.py" --root . render --language <language>
      ```
 
    - If validation reports a blocking pack-schema issue, fix the pack before continuing to index or commit.
 
-8. Reconcile state after replacement.
+9. Reconcile state after replacement.
    - Use `$manage-schema-contracts` when `.agent_goal/goal_schema_contract.md`, `.schema/`, `.contract/`, or the new task names schema/module/script contract work.
    - Use `$manage-task-state-index` `scan` after writing `task.md` or `.task/task_pack/`.
    - Link relevant `adv-*` artifacts to the new task with `advice_for` or `incorporated_into` when `.agent_advice/` and `.task/index` exist.
@@ -263,15 +279,15 @@ When reviewing a terminal or escalation request, require the existing loopback r
    - Use `$manage-task-state-index` `audit`; write an audit report when the replacement touched candidates, task packs, task misses, issues, schema records, or prior task links.
    - Use `$manage-implementation-issues` when the new task intentionally defers, supersedes, creates, or tracks an implementation blocker.
 
-9. Commit the task-direction change.
+10. Commit the task-direction change.
    - If `git rev-parse --is-inside-work-tree` returns `true`, invoke `$repo-change-commit` as the final mutating step.
    - Commit intent: task-doctor direction update only; include `Task: <new task id if known>`, old task/past log ID when known, and `Validation: not_run` unless a real validation command was run.
    - Let `$repo-change-commit` stage only coherent workflow artifacts and preserve unrelated local changes unstaged.
    - If the workspace is not a Git worktree, report that Git finalization was not applicable.
 
-10. Hand off to orchestration.
+11. Hand off to orchestration.
    - Do not automatically run `$orchestrate-task-cycle` unless the user explicitly asked for both task doctoring and execution.
-   - Report the new active task summary, important convention checks, old-task archive path, task/index IDs, schema/issue updates, commit hash or commit skip reason, and the recommended next invocation: `$orchestrate-task-cycle`.
+   - Report the prepublication feasibility result and exact candidate findings, the new active task summary, important convention checks, old-task archive path, task/index IDs, schema/issue updates, replacement transaction/receipt or aborted-residue state, commit hash or commit skip reason, and the recommended next invocation: `$orchestrate-task-cycle`.
 
 ## Compatibility Rules
 
@@ -296,10 +312,12 @@ Use this concise order:
 
 - `task doctor 지시:` explicit user direction used
 - `규칙 확인:` goal/convention/rule files checked
+- `선행 feasibility:` exact candidate dry-run/findings, helper capability, authority-subject constructibility, and appendability result
 - `외부 조언:` used `.agent_advice` paths or `없음`
 - `이전 task 처리:` archived path or `없음`
 - `신규 task:` objective and path
 - `task pack:` pack path/status/current item or `없음`
+- `replacement transaction:` receipt/recovery state, or fail-closed blocker plus durable residue `none`
 - `상태 갱신:` index/schema/issue actions and IDs when known
 - `Git:` commit hash or skip reason
 - `다음 단계:` `$orchestrate-task-cycle` or the specific blocker
