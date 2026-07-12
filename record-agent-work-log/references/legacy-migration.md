@@ -20,11 +20,29 @@ python3 scripts/agent_log_migration.py apply --root ROOT --plan PLAN.json \
   --expected-inventory-sha256 SHA
 python3 scripts/agent_log_migration.py validate --root ROOT \
   --receipt .agent_log/migrations/ID/receipt.json --require-appendable
+python3 scripts/agent_log_migration_verifier.py --root ROOT \
+  --receipt .agent_log/migrations/ID/receipt.json \
+  --expected-status-map STATUS-MAP.json \
+  --expected-recovery-status not_needed
 ```
 
 `inspect` is read-only. `plan` writes only its caller-selected plan output and
 does not change the canonical store. `apply` is blocked unless every source row
 and Markdown body has one exact disposition and `unresolved_count` is zero.
+
+The final command is a read-only, source-separated trust-boundary check. It
+does not import or call the migration producer. A producer return value,
+receipt claim, or rehashed sidecar is insufficient: the verifier independently
+reconstructs source rows, exact status mappings, Markdown inventory,
+duplicate/orphan dispositions, counts, committed records, journal bindings,
+and the marker/index publication boundary. It may run against a byte-for-byte
+copied workspace fixture; the plan's root identity remains provenance rather
+than a hardcoded current path. A copied fixture must still contain every
+migration-time body unchanged. `--expected-status-map` must be a caller-owned
+exact copy outside every `.agent_log/migrations/` sidecar tree. The verifier
+also checks the external source recorded in `plan.status_map.ref`; neither that
+reference nor the caller-owned oracle may diverge from the published copy.
+Passing a transaction sidecar back as its own trust anchor fails.
 
 ## Exact Status Map
 
@@ -112,6 +130,20 @@ recovery keeps the original index unchanged and marks prepared work retryable.
 After switch, recovery never rolls history back: it forward-completes the
 receipt and marker. Source or prefix drift blocks automatic recovery. Reapplying
 the exact committed plan is an idempotent no-op; a different plan conflicts.
+After forward recovery, run the independent verifier and require
+`recovery_status=forward_completed`. Repeating the verifier over an unchanged
+graph must return the same `graph_sha256`; this observes replay idempotency
+without replaying or recovering a live migration. A forward-recovered graph
+also requires `--recovery-observation OBSERVATION.json`, captured by the
+read-only transaction-boundary observer before recovery. The observation must
+prove a hash-bound post-switch/incomplete state. Preserve its emitted hash
+outside the transaction and pass it as
+`--expected-recovery-observation-sha256 SHA`; the final graph digest binds that
+hash. Changing only the producer's receipt/journal recovery strings, or
+coherently rehashing the observation without the external hash anchor, cannot
+pass. Set `--expected-recovery-status forward_completed`; this caller-owned
+expectation is mandatory so a recovered graph cannot erase its observation
+requirement by rewriting receipt/journal strings to `not_needed`.
 
 The receipt kind is `agent_log_legacy_migration`. It binds the source snapshot,
 inventory, plan, map, manifest, before/after index boundaries and counts,
