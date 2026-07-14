@@ -56,12 +56,36 @@ class ResultBuilderMixin:
         findings = self.state["findings"]
         status = "block" if any(item["severity"] == "block" for item in findings) else ("warn" if findings else "ok")
         progress_items = self.state["progress_items"]
-        registry_update = append_feature_symbol_registry(self.root, progress_items[0]) if self.write_registry and progress_items else {"write_enabled": self.write_registry, "updated": False}
+        registry_update = (
+            prepare_feature_symbol_registry_update(
+                self.root,
+                progress_items[0],
+                self.recurrence_threshold,
+                self.state["registry_state"]["rows"],
+            )
+            if self.write_registry and progress_items
+            else {
+                "write_enabled": False,
+                "legacy_write_requested": self.write_registry,
+                "updated": False,
+                "prepared": False,
+            }
+        )
         return {
             "status": status,
             "checked_at": now_iso(),
             "workspace": str(self.root),
             "recent_limit": self.recent,
+            "evidence_scope": {
+                "status": "explicit_limit" if self.recent is not None else "not_evaluated",
+                "limit": self.recent,
+            },
+            "detector_policy_gate": self.state["detector_policy_gate"],
+            "registry_input_gate": self.state["registry_input_gate"],
+            "recurrence_budget": {
+                "threshold": self.recurrence_threshold,
+                "evaluation_status": "evaluated" if self.recurrence_threshold is not None else "budget_unverified",
+            },
             "safety_only_count": self.state["safety_count"],
             "governance_only_count": self.state["governance_only_count"],
             "metadata_only_count": self.state["metadata_only_count"],
@@ -91,7 +115,8 @@ class ResultBuilderMixin:
             "disposition_intersection_basis": self.state["disposition_intersection_basis"],
             "consolidation_streak": self.state["consolidation_streak_count"],
             "consolidation_reduces_goal_distance": False,
-            "consolidation_streak_cap": CONSOLIDATION_STREAK_CAP,
+            "consolidation_streak_cap": self.consolidation_streak_cap,
+            "consolidation_streak_evaluation_status": "evaluated" if self.consolidation_streak_cap is not None else "budget_unverified",
             "positive_input_delta_gate": self._positive_input_delta_gate(),
             "provider_reattempt_gate": self._provider_reattempt_summary(),
             "command_surface_budget": self.state["surface_budget"],
@@ -102,7 +127,10 @@ class ResultBuilderMixin:
 
     def _hard_stop_required(self) -> bool:
         return bool(
-            self.state["autonomous_retarget_disabled"]
+            self.state["detector_policy_gate"]["hard_stop_required"]
+            or self.state["registry_input_gate"]["hard_stop_required"]
+            or self.state["feature_symbol_gate"]["hard_stop_required"]
+            or self.state["autonomous_retarget_disabled"]
             or self.state["provider_scale_dispatch_gate_result"]["dispatch_required"]
             or self.state["validator_integrity_gate_result"]["hard_stop_required"]
             or self.state["detection_balance_gate"]["hard_stop_required"]
@@ -130,9 +158,11 @@ class ResultBuilderMixin:
 
     def _provider_reattempt_summary(self) -> dict[str, Any]:
         records = self.state["provider_reattempt_records"]
+        policy_supplied = bool((self.policy.get("provider_retry_policy") or {}).get("supplied"))
         return {
             "provider_reattempt_required": any(bool(item.get("authority_allows_retry")) for item in records),
             "provider_mitigation_required": bool(records),
-            "provider_terminal_seal_allowed": not bool(records),
+            "provider_terminal_seal_allowed": policy_supplied and not bool(records),
             "records": records[:10],
+            "evaluation_status": "evaluated" if policy_supplied else "not_evaluated",
         }

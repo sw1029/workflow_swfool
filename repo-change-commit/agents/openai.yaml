@@ -1,4 +1,4 @@
 interface:
   display_name: "Repo Change Commit"
   short_description: "Review repo state, goal gates, gitignore noise, and commit"
-  default_prompt: "Use $repo-change-commit with fixed Tier 1 Terra/low when delegated; review repo status, validation/progress/issue/goal context, classify changes, validate readiness, and make a scoped commit."
+  default_prompt: "Use $repo-change-commit with configured Tier 1 model_ref:balanced/low when delegated; review repo status, validation/progress/issue/goal context, classify changes, validate readiness, and make a scoped commit."

@@ -9,6 +9,17 @@ from pathlib import Path
 from typing import Any
 
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from result_contract_lib.finalization import (  # noqa: E402
+    extract_finalization_receipt,
+    projection_from_result,
+    verified_projection,
+)
+
+
 ORDER = [
     "context",
     "authority",
@@ -647,6 +658,44 @@ def validate(
     for step in required:
         if not completed(stage, step):
             add(findings, "block", "ordering_required_step_missing", f"{transition} requires completed step `{step}`.", {"step_status": status_for_step(stage, step)})
+
+    if workflow_mode == "normal" and transition in {"pre_derive", "pre_dashboard", "pre_report", "pre_closeout_commit"}:
+        validate_event = step_event(stage, "validate")
+        applicability = str(validate_event.get("finalization_applicability") or "required").strip().lower()
+        if applicability == "not_applicable":
+            transition_kind = str(validate_event.get("transition_kind") or "").strip().lower()
+            reason = validate_event.get("finalization_not_applicable_reason")
+            prior_final_attempt = validate_event.get("prior_final_attempt_exists")
+            if transition_kind not in {"standalone_repair", "unrelated_state_repair", "no_predecessor_attempt"} or not reason or prior_final_attempt is not False:
+                add(
+                    findings,
+                    "block",
+                    "finalization_not_applicable_invalid",
+                    "Only a reasoned standalone/unrelated repair with no predecessor final attempt may bypass receipt consumption.",
+                )
+        elif applicability != "required":
+            add(findings, "block", "finalization_applicability_invalid", "Finalization applicability must be required or reasoned not_applicable.")
+        else:
+            receipt = extract_finalization_receipt(validate_event)
+            if receipt is None:
+                add(
+                    findings,
+                    "block",
+                    f"{transition}_finalization_receipt_missing",
+                    "Consumer transition requires the current content-bound finalization receipt from completion validation.",
+                )
+            else:
+                projection, _receipt, verification_errors = verified_projection(validate_event, context)
+                for item in verification_errors:
+                    add(findings, "block", str(item["code"]), str(item["message"]), item.get("evidence"))
+                declared_projection = projection_from_result(validate_event)
+                if projection is not None and declared_projection is not None and declared_projection != projection:
+                    add(
+                        findings,
+                        "block",
+                        f"{transition}_authoritative_projection_mismatch",
+                        "Transition input disagrees with the current finalization snapshot projection.",
+                    )
 
     if workflow_mode == "normal" and transition == "pre_derive":
         loopback_event = step_event(stage, "loopback_audit")
@@ -1392,9 +1441,6 @@ def validate(
             add(findings, "warn", "external_advice_misclassified_as_gt", "External advice must be reported separately from `.agent_goal` GT.", {"used_advice": used_advice, "used_goal_truth": stage_gt})
 
     blob = text_blob(stage)
-    routing_blob = text_blob(routing_source)
-    if "gpt-5.3-codex-spark" in routing_blob or "spark worker" in routing_blob or "spark workers" in routing_blob:
-        add(findings, "warn", "stale_worker_model", "Stale Spark worker routing detected. Delegated agents must use the tier policy.")
     worker_model = first_value(routing_source, "routing.code_worker_model", "worker.model", "code_worker_model")
     if worker_model and str(worker_model) != CODE_WORKER_MODEL:
         add(findings, "warn", "noncanonical_worker_model", f"Code-writing worker model must remain Tier 2/3 `{CODE_WORKER_MODEL}`.", {"worker_model": worker_model})
@@ -1406,6 +1452,30 @@ def validate(
         "routing.requested_model",
         "routing.code_worker.requested_model",
         "worker.requested_model",
+    )
+    requested_model_ref = first_value(
+        routing_source,
+        "requested_model_ref",
+        "agent_routing.requested_model_ref",
+        "routing.requested_model_ref",
+        "routing.code_worker.requested_model_ref",
+        "worker.requested_model_ref",
+    )
+    model_configuration_status = first_value(
+        routing_source,
+        "model_configuration_status",
+        "agent_routing.model_configuration_status",
+        "routing.model_configuration_status",
+        "routing.code_worker.model_configuration_status",
+        "worker.model_configuration_status",
+    )
+    model_binding_receipt = first_value(
+        routing_source,
+        "model_binding_receipt",
+        "agent_routing.model_binding_receipt",
+        "routing.model_binding_receipt",
+        "routing.code_worker.model_binding_receipt",
+        "worker.model_binding_receipt",
     )
     policy_id = first_value(
         routing_source,
@@ -1506,7 +1576,11 @@ def validate(
         or ""
     )
 
-    if requested_model and str(requested_model) not in SUPPORTED_AGENT_MODELS:
+    if (
+        requested_model
+        and str(model_configuration_status or "reference_only") == "reference_only"
+        and str(requested_model) not in SUPPORTED_AGENT_MODELS
+    ):
         add(findings, "block", "unsupported_requested_model", "Delegated agent request is outside the tier routing policy.", {"requested_model": requested_model})
     if requested_effort and str(requested_effort) not in SUPPORTED_AGENT_EFFORTS:
         add(findings, "block", "unsupported_requested_effort", "Requested reasoning effort is outside the tier routing policy.", {"requested_reasoning_effort": requested_effort})
@@ -1514,19 +1588,23 @@ def validate(
         "policy_id": policy_id,
         "profile_id": profile_id,
         "routing_tier": routing_tier,
+        "requested_model_ref": requested_model_ref,
         "requested_model": requested_model,
+        "model_configuration_status": model_configuration_status,
+        "model_binding_receipt": model_binding_receipt,
         "requested_reasoning_effort": requested_effort,
         "routing_reason_codes": routing_reason_codes,
         "routing_signals": routing_signals or {},
         "routing_signal_evidence": routing_signal_evidence or {},
         "routing_violations": routing_violations or [],
         "final_direction_ownership": final_direction_ownership,
+        "routing_enforcement": routing_enforcement,
         "max_escalation_reason": first_value(routing_source, "max_escalation_reason", "agent_routing.max_escalation_reason", "routing.max_escalation_reason"),
         "prior_tier5_unresolved": first_value(routing_source, "prior_tier5_unresolved", "agent_routing.prior_tier5_unresolved", "routing.prior_tier5_unresolved"),
         "prior_tier5_evidence": first_value(routing_source, "prior_tier5_evidence", "agent_routing.prior_tier5_evidence", "routing.prior_tier5_evidence"),
         "agent_count": first_value(routing_source, "agent_count", "agent_routing.agent_count", "routing.agent_count", "review_agent_count"),
     }
-    if profile_id or routing_tier or requested_model or requested_effort:
+    if profile_id or routing_tier or requested_model_ref or requested_model or model_configuration_status or model_binding_receipt or requested_effort:
         route_target = transition.removeprefix("pre_")
         supplied_route_target = str(first_value(routing_source, "target", "step") or "")
         if supplied_route_target and supplied_route_target != route_target:
@@ -1537,34 +1615,11 @@ def validate(
                 "Caller-supplied routing target does not match the canonical transition target.",
                 {"transition_target": route_target, "supplied_target": supplied_route_target},
             )
-        hard_routing_codes = {
-            "unknown_model_effort_profile",
-            "target_profile_mismatch",
-            "routing_policy_id_mismatch",
-            "reported_routing_violations",
-            "routing_tier_missing_or_invalid",
-            "unknown_routing_tier",
-            "profile_tier_mismatch",
-            "dynamic_tier_not_justified",
-            "dynamic_tier_reason_missing",
-            "unknown_routing_signals",
-            "tier5_signal_evidence_missing",
-            "direction_ownership_unclassified",
-            "direction_signal_conflicts_with_ownership",
-            "direction_signal_missing_for_owned_decision",
-            "tier_model_mismatch",
-            "tier_effort_mismatch",
-            "max_not_allowed_for_profile_or_tier",
-            "max_prior_tier5_evidence_missing",
-            "max_escalation_reason_missing",
-            "max_agent_count_invalid",
-            "delegated_ultra_prohibited",
-        }
         for routing_finding in MODEL_EFFORT_ROUTER.validate_claim(claim, MODEL_EFFORT_POLICY, route_target):
             code = str(routing_finding.get("code") or "model_effort_routing_invalid")
             add(
                 findings,
-                "block" if code in hard_routing_codes else "warn",
+                "block",
                 code,
                 "Delegated model/effort claim violates the tier routing policy.",
                 routing_finding,
@@ -1586,12 +1641,15 @@ def validate(
         if routing_violations is None:
             add(findings, "warn", "delegated_routing_evidence_missing", "Delegated agent result is missing `routing_violations`.", {"field": "routing_violations"})
     if str(routing_enforcement) == "enforced" and (not actual_model or not actual_effort):
-        add(findings, "warn", "enforced_routing_actual_evidence_missing", "Enforced routing lacks actual model/effort runtime evidence.", {"actual_model": actual_model, "actual_reasoning_effort": actual_effort})
-    if actual_model and str(actual_model) not in SUPPORTED_AGENT_MODELS:
-        add(findings, "block", "actual_model_outside_policy", "Actual delegated model is outside the tier routing policy.", {"actual_model": actual_model})
+        add(findings, "block", "enforced_routing_actual_evidence_missing", "Enforced routing lacks actual model/effort runtime evidence.", {"actual_model": actual_model, "actual_reasoning_effort": actual_effort})
     if actual_effort and str(actual_effort) not in SUPPORTED_AGENT_EFFORTS:
         add(findings, "block", "unsupported_actual_effort", "Actual reasoning effort is outside the tier routing policy.", {"actual_reasoning_effort": actual_effort})
-    if actual_model and requested_model and str(actual_model) != str(requested_model):
+    if (
+        str(model_configuration_status) == "resolved"
+        and actual_model
+        and requested_model
+        and str(actual_model) != str(requested_model)
+    ):
         add(findings, "block", "actual_model_route_mismatch", "Actual model does not match the validated requested route.", {"requested_model": requested_model, "actual_model": actual_model})
     if actual_effort and requested_effort and str(actual_effort) != str(requested_effort):
         add(findings, "block", "actual_effort_route_mismatch", "Actual effort does not match the validated requested route.", {"requested_reasoning_effort": requested_effort, "actual_reasoning_effort": actual_effort})

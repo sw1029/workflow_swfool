@@ -190,7 +190,7 @@ def diagnostics_unavailable_gate(
     registry_rows: list[dict[str, Any]],
     failure_surface_count_key: str | None,
     contexts: list[Any],
-    threshold: int,
+    threshold: int | None,
 ) -> dict[str, Any]:
     diagnostics_unavailable = any(bool_value(first_field_value([context], {"diagnostics_unavailable"})) for context in contexts)
     streak = 1 if diagnostics_unavailable else 0
@@ -202,12 +202,20 @@ def diagnostics_unavailable_gate(
                 streak += 1
                 continue
             break
-    required = diagnostics_unavailable and streak >= max(1, threshold)
+    budget_contract = budget_evaluation(
+        "instrumentation_unobservable_attempts",
+        threshold,
+        source="adapter_caller_or_repository_config",
+    )
+    threshold_value = budget_value(budget_contract)
+    required = diagnostics_unavailable and threshold_value is not None and streak >= threshold_value
     return {
         "gate": "H3-DIAGNOSTICS-UNAVAILABLE",
         "diagnostics_unavailable": diagnostics_unavailable,
         "diagnostics_unavailable_streak": streak,
-        "instrumentation_trigger_threshold": max(1, threshold),
+        "instrumentation_trigger_threshold": threshold_value,
+        "budget_evaluation": budget_contract,
+        "budget_evaluation_status": budget_contract["budget_evaluation_status"],
         "instrumentation_supply_required": required,
         "status": "block" if required else ("warn" if diagnostics_unavailable else "not_applicable"),
         "constrains_disposition": required,

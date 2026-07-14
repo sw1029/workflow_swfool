@@ -1,6 +1,6 @@
 ---
 name: manage-task-state-index
-description: "Maintain workspace `.task/index.md` and `.task/index.jsonl` as a durable task-state index using deterministic helpers first and fixed Tier 2 `gpt-5.6-terra/medium` only for optional ID insight or delegated ID correction. Use when Codex creates, updates, promotes, archives, resolves, deletes, audits, validates, or needs global ID consistency across task, issue, goal, advice, schema-contract, execution, and validation workflows."
+description: "Maintain workspace `.task/index.md` and `.task/index.jsonl` as a durable task-state index using deterministic helpers first and Tier 2 `model_ref:balanced`/medium only for optional ID insight or delegated ID correction. Use when Codex creates, updates, promotes, archives, resolves, deletes, audits, validates, or needs global ID consistency across task, issue, goal, advice, schema-contract, execution, and validation workflows."
 ---
 
 # Manage Task State Index
@@ -14,10 +14,10 @@ This skill records traceability only. It does not decide task completion, delete
 ## Routing Policy
 
 - When called from `$orchestrate-task-cycle`, consume the canonical orchestration reference [workflow-routing.md](../orchestrate-task-cycle/references/workflow-routing.md) as caller context, but keep this skill's fixed ID-only routing below.
-- Run deterministic scan/audit/render helpers without assigning a model. When an optional ID insight or delegated ID correction agent is needed, request fixed Tier 2 `model: gpt-5.6-terra` with `reasoning_effort: medium`.
-- Apply the same Tier 2 Terra/medium profile to delegated scan interpretation, link repair, lifecycle transition recording, candidate/miss cleanup gating, or durable ID audit reporting.
+- Run deterministic scan/audit/render helpers without assigning a model. When an optional ID insight or delegated ID correction agent is needed, request Tier 2 `model_ref: model_ref:balanced` with `reasoning_effort: medium` under `configured-tiered-routing-v3`.
+- Apply the same Tier 2 balanced-profile/medium route to delegated scan interpretation, link repair, lifecycle transition recording, candidate/miss cleanup gating, or durable ID audit reporting.
 - Do not inherit `high` or `xhigh` routing from caller workflows for `$manage-task-state-index` ID correction. This skill's ID-specific routing is fixed at medium unless the user explicitly changes it.
-- If the delegation tool cannot enforce model/effort, include the request in the prompt and report prompt-only or inherited-unverified routing; do not claim Terra execution.
+- Keep runtime model bindings in caller configuration or a repository adapter. If the binding is absent, retain `model_configuration_status: reference_only`; if the delegation tool cannot enforce the resolved model/effort, report `routing_enforcement: prompt_only|inherited_unverified` and a limitation. Never claim enforced routing or actual-model execution from an abstract reference alone.
 
 ## Index Model
 
@@ -148,7 +148,7 @@ For the complete event schema and link relationship names, read [index-schema.md
 
 7. Optionally request additional ID insight from a dedicated agent.
    - Use one separate read-only ID insight agent only when the calling workflow already authorizes agents or the user explicitly asks for ID/governance audit.
-   - Spawn or request this ID insight agent with `model: gpt-5.6-terra` and fixed `reasoning_effort: medium`.
+   - Spawn or request this ID insight agent with Tier 2 `model_ref: model_ref:balanced` and fixed `reasoning_effort: medium`.
    - This agent is additional; never count it as one of the existing implementation, inspection, question, review, or synthesis agents.
    - Give the agent `.task/index.md`, the deterministic `audit` JSON, and relevant artifact paths only. Do not assign repo implementation, OOM analysis, env discovery, prompt shaping, or task synthesis to it.
    - The agent may suggest missing links, stale IDs, duplicate lifecycle records, parent/child relationship corrections, and candidate/miss cleanup risks. The main agent owns all writes.
@@ -156,7 +156,7 @@ For the complete event schema and link relationship names, read [index-schema.md
 
 8. Report the index state.
    - Include the updated `.task/index.md` path and the important IDs in the user-facing summary.
-   - Report `agent_routing_applicability: deterministic_only` when no ID agent ran. When one ran, include its Tier 2 profile, requested model/effort, reason codes, and routing enforcement or limitation.
+   - Report `agent_routing_applicability: deterministic_only` when no ID agent ran. When one ran, include its Tier 2 profile, requested model reference, model-configuration status, requested model/effort when resolved, reason codes, and routing enforcement or limitation.
    - If an artifact could not be linked because its producing workflow did not leave a durable file, record that as a note rather than inventing evidence.
 
 ## Script Commands

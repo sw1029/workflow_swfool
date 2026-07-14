@@ -1,4 +1,4 @@
 interface:
   display_name: "Manage Schema Contracts"
   short_description: "Track shared schemas and module contracts"
-  default_prompt: "Use $manage-schema-contracts with Tier 3 Terra/high analysis, Tier 4 Terra/xhigh controlling review, and Tier 5 Sol/xhigh only for a final architecture-direction change with an explicit structured signal."
+  default_prompt: "Use $manage-schema-contracts with configured Tier 3-4 model_ref:balanced routes and Tier 5 model_ref:direction only for a final architecture-direction change with an explicit structured signal."

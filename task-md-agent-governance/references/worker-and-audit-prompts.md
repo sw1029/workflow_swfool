@@ -8,9 +8,10 @@ Use worker agents only for implementation. Give each worker a disjoint write sco
 You are a worker agent implementing part of `task.md` in this repository.
 
 Agent routing:
-- Spawn this worker at Tier 2 with `agent_type: worker`, `model: gpt-5.6-terra`, and `reasoning_effort: medium` by default.
-- Use Tier 3 `model: gpt-5.6-terra` with `reasoning_effort: high` for high-reliability core logic, including schema/contract compatibility logic, task/index/issue lifecycle state mutation, validation gates, security-sensitive behavior, irreversible workflow implementation, or code whose regression can corrupt durable artifacts.
-- If the tool cannot enforce model/effort, preserve this request in the prompt and report `routing_enforcement: prompt_only|inherited_unverified`; do not claim Terra execution.
+- Apply `policy_id: configured-tiered-routing-v3` and request profile `code_worker`, Tier 2, `agent_type: worker`, `requested_model_ref: model_ref:balanced`, and `requested_reasoning_effort: medium` by default.
+- Use profile `code_worker_high_reliability`, Tier 3, `requested_model_ref: model_ref:balanced`, and `requested_reasoning_effort: high` for high-reliability core logic, including schema/contract compatibility logic, task/index/issue lifecycle state mutation, validation gates, security-sensitive behavior, irreversible workflow implementation, or code whose regression can corrupt durable artifacts.
+- Resolve `requested_model` only from caller configuration or a repository adapter. Record `model_configuration_status` and the content-bound `model_binding_receipt` when resolved.
+- If the tool cannot enforce the resolved binding or effort, preserve the abstract request in the prompt and report `routing_enforcement: prompt_only|inherited_unverified`; a `reference_only` model configuration cannot substantiate enforced routing.
 - This worker implements only the assigned write scope. Governance decisions, validation verdicts, miss cleanup, issue state, schema-version sufficiency, and commit readiness remain with the high-reasoning coordinator/audit path.
 
 You are not alone in the codebase. Other workers may be editing other files. Do not revert or overwrite changes outside your assigned scope; adapt to existing edits.
@@ -50,9 +51,10 @@ Use this shape when invoking the repository inspection workflow after implementa
 Use $inspect-repo-with-agents to audit this repository after implementing `task.md`.
 
 Agent routing:
-- Use Tier 3 `model: gpt-5.6-terra` with minimum `reasoning_effort: high` for ordinary code-analysis inspection agents.
-- Use Tier 4 Terra/xhigh for important work review: completion-readiness risks, blocker-level governance, resolved-miss archive/delete recommendations, issue lifecycle implications, schema/API/CLI/data-contract compatibility, security-sensitive behavior, irreversible cleanup, or high-severity regression analysis. This advisory review must not use Sol.
-- Keep ID-only consistency review separate through `$manage-task-state-index` at fixed Tier 2 Terra/medium.
+- Apply `policy_id: configured-tiered-routing-v3`; use profile `code_analysis`, Tier 3, `requested_model_ref: model_ref:balanced`, and `requested_reasoning_effort: high` for ordinary code-analysis inspection agents.
+- Use profile `important_review`, Tier 4, `requested_model_ref: model_ref:balanced`, and `requested_reasoning_effort: xhigh` for completion-readiness risks, blocker-level governance, resolved-miss archive/delete recommendations, issue lifecycle implications, schema/API/CLI/data-contract compatibility, security-sensitive behavior, irreversible cleanup, or high-severity regression analysis. This advisory review never owns the Tier 5 direction decision and never requests `model_ref:direction`.
+- Resolve the runtime model only from caller configuration or a repository adapter. Preserve `requested_model_ref`, `requested_model`, `model_configuration_status`, an optional binding receipt, and routing enforcement limitations in the audit result.
+- Keep ID-only consistency review separate through `$manage-task-state-index` with profile `id_index`, fixed Tier 2, `requested_model_ref: model_ref:balanced`, and `requested_reasoning_effort: medium`.
 - Do not use delegated `ultra`.
 - Inspect read-only; do not edit files.
 

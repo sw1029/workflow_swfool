@@ -11,6 +11,20 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from result_contract_lib.finalization import (  # noqa: E402
+    VERDICT_AXES,
+    extract_finalization_receipt,
+    load_current_projection,
+    projection_from_result,
+    projection_conclusions,
+    verified_projection,
+)
+
+
 DEFAULT_STEPS = [
     "context",
     "authority",
@@ -72,14 +86,7 @@ AXIS_FIELDS = (
     "axis_stall_streak",
     "goal_axis_stall",
 )
-VERDICT_AXIS_FIELDS = (
-    "task_acceptance_verdict",
-    "artifact_truth_verdict",
-    "artifact_semantic_verdict",
-    "pack_transition_verdict",
-    "historical_index_verdict",
-    "goal_readiness_verdict",
-)
+VERDICT_AXIS_FIELDS = VERDICT_AXES
 
 
 class DashboardDataError(ValueError):
@@ -209,7 +216,13 @@ def event_malformed_reasons(event: dict[str, Any], cycle_id: str) -> list[str]:
     return reasons
 
 
-def summarize(events: list[dict[str, Any]], current: dict[str, Any], current_load_status: str, cycle_id: str) -> dict[str, Any]:
+def summarize(
+    events: list[dict[str, Any]],
+    current: dict[str, Any],
+    current_load_status: str,
+    cycle_id: str,
+    workspace_root: Path | None = None,
+) -> dict[str, Any]:
     latest_by_step: dict[str, dict[str, Any]] = {}
     valid_events: list[dict[str, Any]] = []
     malformed_events: list[dict[str, Any]] = []
@@ -245,8 +258,16 @@ def summarize(events: list[dict[str, Any]], current: dict[str, Any], current_loa
     changed_files = collect_fields(valid_events, ("changed_files",))
     blockers = collect_fields(valid_events, ("blockers",))
     artifacts = evidence_paths(valid_events)
-    validation = str(latest_value(valid_events, "validation_verdict", default="not_run"))
-    progress = str(latest_value(valid_events, "progress_verdict", default="not_run"))
+    observed_validation = str(latest_value(valid_events, "validation_verdict", default="not_run")).strip().lower()
+    normalized_observed_validation = {
+        "complete": "passed",
+        "pass": "passed",
+        "success": "passed",
+        "ok": "passed",
+    }.get(observed_validation, observed_validation)
+    observed_progress = str(latest_value(valid_events, "progress_verdict", default="not_run"))
+    validation = observed_validation
+    progress = observed_progress
     task_id = str(latest_value(valid_events, "task_id", "completed_task_id", default="unknown-task"))
     progress_axes = [
         {"step": event.get("step"), field: event[field]}
@@ -254,12 +275,88 @@ def summarize(events: list[dict[str, Any]], current: dict[str, Any], current_loa
         for field in AXIS_FIELDS
         if field in event and event[field] not in (None, "", [], {})
     ]
-    verdict_axes = [
+    verdict_axis_history = [
         {"step": event.get("step"), "axis": field, "verdict": event[field]}
         for event in valid_events
         for field in VERDICT_AXIS_FIELDS
         if field in event and event[field] not in (None, "", [], {})
     ]
+    authoritative_projection: dict[str, Any] | None = None
+    finalization_receipt: dict[str, Any] | None = None
+    finalization_errors: list[dict[str, Any]] = []
+    receipt_source = next(
+        (event for event in reversed(valid_events) if extract_finalization_receipt(event) is not None),
+        None,
+    )
+    finalization_required = any(
+        event.get("step") == "validate"
+        and (
+            event.get("final_candidate") is True
+            or str(event.get("finalization_applicability") or "").strip().lower() == "required"
+        )
+        for event in valid_events
+    )
+    pointer_path = (
+        workspace_root / ".task" / "cycle" / cycle_id / "current_finalization.json"
+        if workspace_root is not None
+        else None
+    )
+    if workspace_root is not None and (finalization_required or receipt_source is not None or pointer_path.is_file()):
+        authoritative_projection, finalization_receipt, finalization_errors = load_current_projection(
+            workspace_root,
+            cycle_id,
+        )
+        if finalization_receipt is not None and receipt_source is not None:
+            event_receipt = extract_finalization_receipt(receipt_source)
+            if event_receipt != finalization_receipt:
+                finalization_errors.append(
+                    {
+                        "code": "dashboard_event_receipt_not_current",
+                        "message": "Ledger-event receipt does not match the verified current finalization pointer.",
+                    }
+                )
+            event_projection = projection_from_result(receipt_source)
+            if event_projection is not None and event_projection != authoritative_projection:
+                finalization_errors.append(
+                    {
+                        "code": "dashboard_event_projection_not_current",
+                        "message": "Ledger-event projection does not match the verified current finalization pointer.",
+                    }
+                )
+    elif receipt_source is not None:
+        authoritative_projection, finalization_receipt, finalization_errors = verified_projection(receipt_source, {})
+    if authoritative_projection is not None:
+        validation, progress = projection_conclusions(authoritative_projection)
+        if normalized_observed_validation not in {"not_run", validation} or observed_progress not in {"not_run", progress}:
+            finalization_errors.append(
+                {
+                    "code": "authoritative_projection_dashboard_divergence",
+                    "message": "Dashboard event verdicts disagree with the current finalization projection.",
+                    "evidence": {
+                        "observed_validation_verdict": observed_validation,
+                        "observed_progress_verdict": observed_progress,
+                        "projected_validation_verdict": validation,
+                        "projected_progress_verdict": progress,
+                    },
+                }
+            )
+    elif finalization_required:
+        finalization_errors.append(
+            {
+                "code": "dashboard_finalization_receipt_missing",
+                "message": "A finalized validation event cannot be rendered as canonical truth without its current receipt.",
+            }
+        )
+        validation = "not_finalized"
+        progress = "not_finalized"
+    verdict_axes = (
+        [
+            {"step": "finalization", "axis": field, "verdict": authoritative_projection[field]}
+            for field in VERDICT_AXES
+        ]
+        if authoritative_projection is not None
+        else verdict_axis_history
+    )
     unchanged_refs_by_identity: dict[tuple[str, str], dict[str, str]] = {}
     for event in valid_events:
         for ref in event.get("unchanged_refs") or []:
@@ -306,7 +403,16 @@ def summarize(events: list[dict[str, Any]], current: dict[str, Any], current_loa
         findings.append({"severity": "warn", "code": "empty_cycle_ledger"})
     elif not valid_events:
         findings.append({"severity": "warn", "code": "no_valid_cycle_events"})
-    dashboard_status = "rendered" if not findings else "warn"
+    findings.extend(
+        {
+            "severity": "block",
+            "code": str(item["code"]),
+            "message": str(item["message"]),
+            **({"evidence": item["evidence"]} if item.get("evidence") is not None else {}),
+        }
+        for item in finalization_errors
+    )
+    dashboard_status = "block" if finalization_errors else "rendered" if not findings else "warn"
     return {
         "format_version": 1,
         "step": "dashboard",
@@ -333,6 +439,25 @@ def summarize(events: list[dict[str, Any]], current: dict[str, Any], current_loa
         "progress_verdict": progress,
         "progress_axes": progress_axes,
         "verdict_axes": verdict_axes,
+        "verdict_axis_history": verdict_axis_history,
+        "authoritative_final": authoritative_projection.get("authoritative_final") if authoritative_projection else None,
+        "authoritative_projection": authoritative_projection,
+        "finalization_receipt": finalization_receipt,
+        "finalization_consumption": (
+            {
+                field: finalization_receipt[field]
+                for field in (
+                    "finalization_token",
+                    "attempt_id",
+                    "attempt_revision",
+                    "authoritative_projection_id",
+                    "authoritative_projection_digest",
+                    "receipt_hash",
+                )
+            }
+            if finalization_receipt
+            else None
+        ),
         "unchanged_ref_count": len(unchanged_refs),
         "unchanged_refs": unchanged_refs[-50:],
         "lineage_findings": lineage_findings,
@@ -476,7 +601,7 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write(f"dashboard blocked: {exc}\n")
         return 2
     current, current_load_status = load_current(current_path)
-    summary = summarize(events, current, current_load_status, args.cycle_id)
+    summary = summarize(events, current, current_load_status, args.cycle_id, root)
     markdown = render_summary(summary)
     if args.write:
         atomic_write(dashboard_path, markdown)

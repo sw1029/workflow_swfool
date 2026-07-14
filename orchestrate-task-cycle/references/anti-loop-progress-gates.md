@@ -61,7 +61,7 @@ Use this reference when recent task-cycle evidence shows safe but stationary wor
 
 ## Domain-Adapter Contract
 
-Gate logic must stay domain-agnostic. A repository may supply a domain adapter to `$audit-cycle-loopback` with `--domain-adapter <path.py>`, `TASK_CYCLE_DOMAIN_ADAPTER_PATH`, or the conventional `.task/domain_adapter.py` path when present. The adapter owns domain-specific paths, metric names, lexicons, thresholds, and artifact interpretation. The workflow consumes only these interfaces:
+Gate logic must stay domain-agnostic. A repository may supply a domain adapter to `$audit-cycle-loopback` with explicit `--domain-adapter <path.py>` or `TASK_CYCLE_DOMAIN_ADAPTER_PATH` configuration. Do not auto-discover a conventional repository path. The adapter owns domain-specific paths, metric names, lexicons, thresholds, and artifact interpretation. The workflow consumes only these interfaces:
 
 - `quality_vector(...)`: coverage/quality vector for G-COV.
 - `quality_delta_policy(...)`: optional G-COV metric keys and aliases. Missing policy leaves G-COV `not_evaluated`; generic workflow code does not infer axes from vector field names.
@@ -89,8 +89,8 @@ Gate logic must stay domain-agnostic. A repository may supply a domain adapter t
 - `goal_axis_map(targets, quality_vector, **context)`: optional mapping from active measurable goals to adapter-owned quality/vector axes that observe each goal. The workflow checks only whether each active measurable goal has at least one mapped axis; axis definitions, formulas, thresholds, and source artifacts stay adapter-owned.
 - `execution_stage_ladder(**context)`: optional H1/H2 ordered execution stages, optionally with `terminal_classification_stage_map`. Loopback combines this with `last_successful_stage` from failure autopsy to derive `failure_surface_stage`.
 - `terminal_classification_stage_map(**context)`: optional mapping of terminal classifications to allowed failure stages. A contradiction makes the terminal classification invalid for counting or close.
-- `instrumentation_trigger_threshold(**context)`: optional H3 threshold for repeated `diagnostics_unavailable` on the same failure surface. Missing hook defaults to `2`.
-- `hook_demand_threshold(**context)`: optional G-ADAPTER demand threshold for `adapter_hook_demand` `decision_relevant_skip_count`. Missing hook defaults to `2` and remains fail-quiet.
+- `instrumentation_trigger_threshold(**context)`: optional H3 threshold for repeated `diagnostics_unavailable` on the same failure surface. Missing policy records `budget_unverified` and cannot force instrumentation supply.
+- `hook_demand_threshold(**context)`: optional G-ADAPTER demand threshold for `adapter_hook_demand` `decision_relevant_skip_count`. Missing policy records `budget_unverified` and cannot force hook supply.
 - Verification source metadata in `evidence_provenance(...)` or a dedicated hook: `verification_input_paths`, `verified_artifact_paths`, and `self_grounded` axes for H4 independent-source separation.
 - `instrumentation_field_map(...)`: optional I1 map of supplied diagnostic/instrumentation fields and domain-owned non-empty criteria. Missing hooks fail quiet unless the task-pack item or caller packet explicitly marks the work as instrumentation supply.
 - `run_disposition(safety_violations, quality_vector, **context)`: optional I4 disposition classifier returning `failed_closed`, `candidate_degraded`, or `candidate_written`. Safety contracts and quality axes remain adapter-owned.
@@ -105,7 +105,7 @@ Gate logic must stay domain-agnostic. A repository may supply a domain adapter t
 - `production_lane_identity(artifact_paths, **context)`: optional L1 helper returning an opaque lane identity for validated artifacts, such as producer/contract/config lineage keys. Component definitions stay adapter-owned.
 - `current_decision_lane(**context)`: optional L1 helper returning the opaque lane identity currently under adoption, capability, baseline, or next-rung decision.
 - `gating_axis_producer_map(**context)`: optional L3 helper mapping gating axis IDs to producer source paths or globs that should supply that axis. Missing hooks fail quiet.
-- `portfolio_quota(**context)`: optional L4 helper returning the recent-window size, verifier/report/metadata versus producer/envelope/long-run classification, and threshold ratio. Missing hooks are warn-only with default `N=6` and `3:1`.
+- `portfolio_quota(**context)`: optional L4 helper returning the recent-window size, verifier/report/metadata versus producer/envelope/long-run classification, and threshold ratio. Missing policy records `budget_unverified` and cannot restrict the next selection.
 - `throughput_evidence(**context)`: optional L5 helper returning observed cycle throughput, unit, run id, and confidence interval for scale reachability.
 - `acceptance_scale(target, **context)`: optional L5 helper returning required acceptance scale and unit for the target.
 - `metric_basis_inputs(metric_id, **context)`: optional L6 helper returning claimed basis class, consumed input classes, and whether the claim is derivable from those inputs.
@@ -154,7 +154,7 @@ These rules revise the basis on which existing gates stand. They do not add a ne
 - G1 count-key hygiene: same-family counters, root-cause distinctness, family seals, and stall keys are valid only when the effective count key is generation-independent. Plan/advice/task-pack IDs, cycle IDs, run IDs, timestamps, hash-only suffixes, and version/date suffixes are trace material, not count-key material. If a generated key contains those components, preserve it only as a legacy/trace key and count with the adapter-collapsed root plus dominant parameter, or with the existing terminal-outcome family fallback when the adapter map is absent. Unmapped facets must merge conservatively by `terminal_outcome_key` rather than minting a new family.
 - G2 required gate hooks: when a measurable acceptance contract depends on a gate named in a SKILL.md contract and that gate's required adapter hook is absent or `not_evaluated`, treat it as E2 `unverifiable_acceptance_contract`. Fail-quiet remains valid only for optional gates that no acceptance, task, advice, issue, or caller packet requires.
 - G3 goal-axis completeness: a qualitative review `pass` is consumable only if every active measurable goal has at least one adapter-supplied quality/vector axis observing it. If a goal has zero mapped axes, the review result is `pass_with_unobserved_axes`, not pass, and consumers must preserve B1 partial/residual scope plus an adapter follow-up to supply axes. Missing `goal_axis_map` fails quiet to legacy review semantics.
-- G4 cycle-cost denominator: F3 residual-gap selection compares `marginal_gap_value / cycle_fixed_cost` against the alternative's expected value per cycle cost. Reuse `$profile-cycle-efficiency` or equivalent cycle-efficiency evidence; when the denominator is absent, use `1` and preserve legacy F3. Below-policy ratios default to explicit descope-with-residual plus the next capability rung unless adapter evidence records a higher value case.
+- G4 cycle-cost denominator: F3 residual-gap selection compares `marginal_gap_value / cycle_fixed_cost` against the alternative's expected value per cycle cost. Reuse `$profile-cycle-efficiency` or equivalent cycle-efficiency evidence; when the denominator or comparison policy is absent, record `budget_unverified` and do not force a cost-ratio disposition. Below-policy ratios select explicit descope-with-residual plus the next capability rung only when adapter evidence supplies that policy.
 
 Keep generation-key rules, required-hook lists, goal-axis maps, residual value thresholds, and cycle-cost measurement details in repository adapters, caller packets, or existing workflow profile evidence. Generic skills consume abstract fields only.
 
@@ -215,7 +215,7 @@ These rules revise existing validation consumption, decision refresh, derive sel
 - L1 current-lane validation binding: when a capability or quality verifier pass is consumed as task, pack, capability, adoption, or next-rung evidence, bind the verified artifact to `production_lane_identity(...)` and compare it with `current_decision_lane(...)`. If they differ, set `pass_on_stale_lane=true`. The pass can prove that the historical artifact or introduced contract worked, but it cannot prove the current lane's capability, support adoption, or unlock the next rung until current-lane rerun/residual evidence exists. Missing lane hooks fail quiet and emit `lane_identity_missing` only.
 - L2 fresh measurement for decision updates: when adoption, disqualification, baseline, or comparison decisions are updated after upstream production contracts changed, require a fresh measurement run for the current lane. If the task only relabels or reclassifies stale artifacts, set `decision_metadata_revision=true`; count it as metadata/governance, not measurement progress or pack consumption. Existing `required_new_run_id` and K parity/baseline fields carry the run requirement; no new run phase is created.
 - L3 gating-axis producer starvation: when a gating axis remains zero or unmet, use `gating_axis_producer_map(...)` to classify whether the producer path that should create that axis is absent or unexercised. Set `axis_starved_by_missing_producer=true` when source/execution evidence is missing. Derive must prefer producer-supply work above another verifier/guard/report for that axis, and verifier/guard/report additions over the same starved axis collapse under verifier-surface hardening until producer supply fires.
-- L4 verifier:producer portfolio quota: when recent consumed work exceeds the adapter-owned verifier/guard/report/metadata to producer/envelope/long-run ratio, set `portfolio_quota_exceeded=true`. If the adapter explicitly supplies a quota, restrict next selection to producer, envelope, long-run, descope-with-residual, terminal blocker, or user escalation until the ratio recovers. Without the hook, record warn-only default quota evidence and do not restrict selection.
+- L4 verifier:producer portfolio quota: when recent consumed work exceeds the adapter-owned verifier/guard/report/metadata to producer/envelope/long-run ratio, set `portfolio_quota_exceeded=true`. If the adapter explicitly supplies a quota, restrict next selection to producer, envelope, long-run, descope-with-residual, terminal blocker, or user escalation until the ratio recovers. Without the policy, record `budget_unverified` and do not restrict selection.
 - L5 cycle-scale reachability: when `acceptance_scale(...)` and `throughput_evidence(...)` prove the target scale cannot be reached within the cycle cap, set `unreachable_within_cycle=true` instead of `indeterminate`. Derive may select only long-run launch with monitor/harvest plan, throughput improvement with measured C increase, explicit descope-with-residual, terminal blocker, or user escalation. A small smoke repeat is not goal-productive in this state.
 - L6 metric basis derivability: when a metric claims a basis/provenance class, compare the claim with `metric_basis_inputs(...)`. If the claim is not derivable from consumed inputs, set `basis_overclaim=true`, downgrade the metric to the actual input class, and exclude it from high-water/progress consumption under F2. The metric value may remain trace evidence; honest downgrade is not a regression.
 - L7 surface-field review coverage: when a reviewed artifact family has source locators and `surface_field_classes(...)`, qualitative review samples the adapter-owned record count and compares every producer-written surface string field class, not only summaries. Record only scalar field-class by defect-class counts unless authority allows excerpts. Nonzero counts feed loopback root-family classification and producer-supply derivation; missing hooks fail quiet with `field_class_map_missing`.
@@ -366,7 +366,7 @@ Treat `blocker_mutation_kind=facet_rename` as lateral churn. Treat `blocker_muta
 
 ## G-ADAPTER Adapter-Mandate Gate
 
-When `facet_root_map_missing=true`, `substance_delta_gate.status=missing`, or `quality_vector` is missing for the same `artifact_family` across the configured adapter cap, default `3`, and quality/substance high-water has not improved during that span, emit:
+When `facet_root_map_missing=true`, `substance_delta_gate.status=missing`, or `quality_vector` is missing for the same `artifact_family` across an explicitly configured adapter/caller cap, and quality/substance high-water has not improved during that span, emit the forced adapter state below. Without that cap, record `budget_unverified` and do not force the state:
 
 - `adapter_mandate_required: true`
 - `adapter_missing_streak`
@@ -387,7 +387,7 @@ If G-ADAPTER fires, it precedes G-CHAIN. This prevents adapter absence from bein
 
 Track cumulative high-water movement by `root_family_key` after adapter facet collapse. If the adapter is absent, track by `artifact_family` instead of proximate blocker label or terminal outcome. This gate is independent of `blocker_signature`, terminal-outcome wording, version suffixes, and renamed hypotheses.
 
-When the same scope has no G-COV or G-SUBSTANCE high-water improvement for the configured chain cap, default `3`, emit:
+When the same scope has no G-COV or G-SUBSTANCE high-water improvement for an explicitly configured adapter/caller chain cap, emit the state below. Without that cap, record `budget_unverified` and do not force chain-stall disposition:
 
 - `cumulative_goal_distance_stalled: true`
 - `cumulative_goal_distance_stall_streak`
@@ -448,7 +448,7 @@ Classify each cycle task as:
 - `correction`: producer, prompt, transform, resolver, extraction, generation, provider dispatch, or other implementation work that can change primary output.
 - `mixed`: both detection and correction are present.
 
-If `detection_only` repeats for the same `blocker_root_family` at or above the cap, default `2`, and primary-output semantic progress remains false, expose `detection_balance_gate` or `requires_correction_or_terminal=true`. The next task must be correction/implementation work, `terminal_blocked`, or `user_escalation`. Another detection-only task cannot satisfy a goal-productive hard gate.
+If `detection_only` repeats for the same `blocker_root_family` at or above an explicitly configured adapter/caller cap, and primary-output semantic progress remains false, expose `detection_balance_gate` or `requires_correction_or_terminal=true`. The next task must be correction/implementation work, `terminal_blocked`, or `user_escalation`. Without that cap, record `budget_unverified`; another detection-only task still cannot become new semantic-progress credit merely because the budget is unknown.
 
 ## G-DISPATCH Provider/Scale Duty Gate
 
@@ -500,7 +500,7 @@ If the adapter omits structure metrics, do nothing beyond warn-only generic code
 
 ## G5b Consolidation Streak Cap
 
-Consolidation is governance-only unless it independently produces accepted primary-output progress. Track `consolidation_streak` over recent progress items. When `consolidation_streak >= consolidation_streak_cap` (default 2), remove `consolidation` from `effective_allowed_dispositions` and require `goal_productive`, `terminal_blocked`, or `user_escalation`.
+Consolidation is governance-only unless it independently produces accepted primary-output progress. Track `consolidation_streak` over recent progress items. When an adapter/caller supplies `consolidation_streak_cap` and the streak reaches it, remove `consolidation` from `effective_allowed_dispositions` and require `goal_productive`, `terminal_blocked`, or `user_escalation`. Without a supplied cap, record `budget_unverified` and do not invent a forced threshold.
 
 ## G6 Same-Family Micro-Hardening Limit
 
@@ -545,7 +545,7 @@ The repository adapter or shared module must fail closed on noisy quality inputs
 Use the packet as a derive gate:
 
 - `semantic_progress=true` may reset the same-family streak, subject to ordinary validation and no-overclaim constraints.
-- `semantic_progress=false` with `same_family_micro_hardening_count >= 3` blocks another same-family micro-hardening task as `goal_productive`.
+- `semantic_progress=false` with an evaluated same-family nonsemantic budget blocks another same-family micro-hardening task as `goal_productive` only when `same_family_micro_hardening_count` reaches the supplied budget. An unverified budget preserves the count but cannot create a hard stop.
 - `evidence_class=insufficient_evidence` blocks `goal_productive` unless the next task supplies the missing raw artifacts, runs a bounded provider/semantic transition, or records terminal/user escalation with evidence.
 - `effective_allowed_dispositions` bounds the next selected disposition. Do not choose a disposition by taking a union of individual gates.
 - `disposition_intersection_basis.allowed_task_kinds` binds `goal_productive` to those task kinds. A label-only `goal_productive` task with another kind is not valid progress.
@@ -614,7 +614,7 @@ Track `forward_mutation_budget_remaining`. When it reaches zero, set `force_impl
 
 ## A2b Root-Cause Hypothesis Ledger
 
-`$audit-cycle-loopback` may append `.task/anti_loop/root_cause_ledger.jsonl` rows keyed by `family_key`, `root_key`, and `hypothesized_root_cause`. The hypothesis slug is domain-owned; the generic workflow evaluates whether it was attempted, whether terminal outcome changed, whether it is actionability-verified, and whether it is distinct from attempted hypotheses by normalized `(hypothesized_root_cause, target_surface, observed_delta_class)`.
+`$audit-cycle-loopback` may prepare root-cause ledger rows keyed by `family_key`, `root_key`, and `hypothesized_root_cause`, but it must not append them while evaluating. The hypothesis slug is domain-owned; the generic workflow evaluates whether it was attempted, whether terminal outcome changed, whether it is actionability-verified, and whether it is distinct from attempted hypotheses by normalized `(hypothesized_root_cause, target_surface, observed_delta_class)`. Only the cycle-ledger finalizer may publish the prepared row together with the other finalized state surfaces.
 
 When the adapter supplies a collapsed root plus `root_dominant_parameter_key`, distinctness is evaluated on that pair before proximate labels. Renaming prompt/schema/event-edge labels, version suffixes, or target-surface wording does not create a fresh untried hypothesis for the same collapsed root and dominant parameter.
 
@@ -632,11 +632,11 @@ Before derive writes `terminal_blocked`, check the next unsatisfied capability-l
 
 When loop detection reports `terminal_quiescence_gate.quiescence_required=true`, the orchestrator must not automatically start another domain cycle for the same `root_key`. Record one user-handoff note and skip closeout/dashboard/report/recheck reproduction with `commit_skipped_reason: terminal_quiescence`.
 
-This gate applies only when `has_supplied_input_delta=false` and the same root has reached terminal state at least `terminal_quiescence_threshold` consecutive times, default `2`. Count `untried_root_cause_repair_required` records with no terminal outcome change as same-root no-progress records for the streak. Use `quiescence_untried_reconcile` as the single source of truth for priority: a verified, unexhausted untried hypothesis may override quiescence; exhausted or unverified hypotheses may not.
+This gate applies only when `has_supplied_input_delta=false`, an adapter/caller supplies `terminal_quiescence_threshold`, and the same root reaches that consecutive-terminal budget. Without a supplied budget, expose `budget_unverified` and do not force quiescence. Count `untried_root_cause_repair_required` records with no terminal outcome change as same-root no-progress records for the streak. Use `quiescence_untried_reconcile` as the single source of truth for priority: a verified, unexhausted untried hypothesis may override quiescence; exhausted or unverified hypotheses may not.
 
 ## A3c Terminal Escalation Gate
 
-When loop detection reports `terminal_escalation_gate.escalation_required=true`, the workflow must promote repeated terminal recheck into `user_escalation`. This gate applies when the same root family has `terminal_blocked`, terminal handoff, or recheck records for at least `terminal_escalation_threshold` consecutive cycles, default `2`, and `has_supplied_input_delta=false`.
+When loop detection reports `terminal_escalation_gate.escalation_required=true`, the workflow must promote repeated terminal recheck into `user_escalation`. This gate applies only when an adapter/caller supplies `terminal_escalation_threshold`, the same root family reaches that consecutive-terminal budget, and `has_supplied_input_delta=false`. Without the budget, record `budget_unverified` and do not force escalation.
 
 The packet must expose `terminal_recheck_streak`, `root_family`, `forced_disposition: user_escalation`, `seal_required: true`, `seal_family_path`, and exactly one `missing_input` object. The missing input kind must be one of `new_input_kind`, `authority_change`, `external_state_change`, or `gate_contract_fix_approval`.
 
@@ -669,8 +669,8 @@ When G-CHAIN reaches the forced-retarget threshold and the adapter supplied a la
 
 Before any gate contributes to residual, hard stop, terminal, completion, or derive routing, bind it to the exact decision artifact and consume `gate_compatibility_status`. Keep incompatible gates visible but outside the decision set; keep required `not_evaluated` gates non-consumable. Import-only adapter evidence is not consumer readiness: require hook resolution, signature bind, invocation, return validation, artifact echo, decision consumption, and a probe evidence ref.
 
-For normal post-loopback derive, durably write the authoritative packet first, then emit an adjacent version-1 `anti_loop_handoff` with `applicability: required`, packet/artifact ref and SHA-256, compatible/incompatible gate IDs, progress/blocker/hard-stop/terminal scalars, and allowed next action classes. Never self-embed the packet hash. Derive must verify the packet or a trusted store receipt, require every authoritative scalar on the packet body, and explicitly echo the consumed hash before selection. Permit `not_applicable` only for reasoned initial or standalone derivation with no prior required loopback packet; permit legacy unbound consumption only with explicit version 0.
+For normal post-loopback validation, emit an immutable candidate packet and a prepared version-1 `anti_loop_handoff` with packet/artifact ref and SHA-256, compatible/incompatible gate IDs, progress/blocker/hard-stop/terminal observations, and allowed next action classes. Never self-embed the packet hash, call these observations authoritative, or change a current registry/ledger/seal. Completion validation binds the packet into `final_candidate: true`; the cycle-ledger finalizer then publishes the single current snapshot and `cycle_finalization_receipt`. Normal post-validation derive verifies that receipt, the current pointer, attempt revision, and authoritative projection digest before selection. Permit receipt `not_applicable` only for reasoned initial/bootstrap or genuinely standalone derivation; legacy anti-loop handoff alone is never final truth.
 
 ## No-Overclaim Boundaries
 
-These gates must not close implementation issues, promote gold/readiness/rights/ZKP claims, or infer user/human review. They only decide whether the cycle can count as goal-productive progress and which next-task family is allowed.
+These gates must not close implementation issues, promote adapter-owned readiness or downstream claims, or infer user/human review. They only decide whether the cycle can count as goal-productive progress and which next-task family is allowed.

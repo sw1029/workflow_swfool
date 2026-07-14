@@ -57,6 +57,55 @@ TERMINAL_LATCH_KEY_VERSION = 2
 CYCLE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 EVENT_ID_PATTERN = re.compile(r"^[^\x00-\x20/\\]{1,255}$")
 
+FINALIZATION_SCHEMA_VERSION = 1
+FINAL_CANDIDATE_KIND = "cycle_final_candidate"
+FINALIZATION_SNAPSHOT_KIND = "cycle_finalization_snapshot"
+FINALIZATION_RECEIPT_KIND = "cycle_finalization_receipt"
+FINALIZATION_POINTER_KIND = "cycle_finalization_pointer"
+VERDICT_AXES = (
+    "task_acceptance_verdict",
+    "artifact_truth_verdict",
+    "artifact_semantic_verdict",
+    "pack_transition_verdict",
+    "historical_index_verdict",
+    "goal_readiness_verdict",
+)
+VERDICT_AXIS_STATUSES = {"pass", "fail", "partial", "blocked", "not_evaluated", "not_applicable"}
+DURABLE_STATE_MODES = {"complete_projection", "typed_operations"}
+DURABLE_OPERATION_TYPES = {"append_projection", "replace_projection"}
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+SENSITIVE_DURABLE_KEYS = {
+    "character_count",
+    "char_count",
+    "direct_quote",
+    "locator",
+    "message",
+    "offset",
+    "original_title",
+    "quote",
+    "quoted_text",
+    "raw_text",
+    "source_text",
+    "text",
+    "text_span",
+    "title",
+}
+SENSITIVE_DURABLE_KEY_PARTS = (
+    "character_count",
+    "char_count",
+    "direct_quote",
+    "line_number",
+    "line_start",
+    "line_end",
+    "locator",
+    "offset",
+    "original_title",
+    "quoted_text",
+    "raw_text",
+    "source_text",
+    "text_span",
+)
+
 MIN_FIELDS = [
     "format_version",
     "cycle_id",
@@ -197,6 +246,27 @@ def initialization_path(root: Path, cycle_id: str) -> Path:
     return cycle_dir(root, cycle_id) / "initialization.json"
 
 
+def finalizations_dir(root: Path, cycle_id: str) -> Path:
+    directory = cycle_dir(root, cycle_id)
+    path = (directory / "finalizations").resolve(strict=False)
+    try:
+        path.relative_to(directory)
+    except ValueError as exc:
+        raise ValueError("finalization directory escapes its cycle directory, including through a symlink") from exc
+    return path
+
+
+def finalization_snapshot_path(root: Path, cycle_id: str, finalization_token: str) -> Path:
+    token = str(finalization_token or "").strip().lower()
+    if not SHA256_PATTERN.fullmatch(token):
+        raise ValueError("finalization_token must be a full lowercase SHA-256 digest")
+    return finalizations_dir(root, cycle_id) / f"{token}.json"
+
+
+def current_finalization_path(root: Path, cycle_id: str) -> Path:
+    return cycle_dir(root, cycle_id) / "current_finalization.json"
+
+
 def read_initialization_metadata(root: Path, cycle_id: str) -> dict[str, Any]:
     path = initialization_path(root, cycle_id)
     if not path.is_file():
@@ -258,6 +328,42 @@ def atomic_write_text(path: Path, content: str) -> None:
             pass
 
 
+def canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def canonical_sha256(value: Any) -> str:
+    return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+
+
+def immutable_write_bytes(path: Path, content: bytes) -> None:
+    """Publish one content-addressed object without replacing an existing object."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}")
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, path)
+            fsync_directory(path.parent)
+        except FileExistsError:
+            if path.read_bytes() != content:
+                raise ValueError(f"immutable finalization object already exists with different content: {path}")
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def durable_append_json(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     existed = path.exists()
@@ -276,9 +382,14 @@ def load_json_value(value: str | None) -> dict[str, Any]:
     if value == "-":
         raw = sys.stdin.read()
         return json.loads(raw) if raw.strip() else {}
+    if value.lstrip().startswith("{"):
+        return json.loads(value)
     path = Path(value)
-    if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+    except OSError:
+        pass
     return json.loads(value)
 
 
@@ -1034,6 +1145,619 @@ def init_cycle(
     return result
 
 
+def _candidate_expected_revision(candidate: dict[str, Any]) -> int | None:
+    if "expected_previous_revision" not in candidate:
+        raise ValueError("final candidate requires explicit expected_previous_revision, including null for first publication")
+    value = candidate.get("expected_previous_revision")
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError("expected_previous_revision must be null or a positive integer")
+    return value
+
+
+def _candidate_expected_identifier(candidate: dict[str, Any], field: str) -> str | None:
+    if field not in candidate:
+        raise ValueError(f"final candidate requires explicit {field}, including null for first publication")
+    value = candidate.get(field)
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        raise ValueError(f"{field} must be null or a non-empty opaque identifier")
+    if field == "expected_previous_finalization_token":
+        normalized = normalized.lower()
+        if not SHA256_PATTERN.fullmatch(normalized):
+            raise ValueError("expected_previous_finalization_token must be null or a full lowercase SHA-256 digest")
+    else:
+        validate_event_id(normalized)
+    return normalized
+
+
+def _positive_progress_markers(value: Any, prefix: str = "durable_state_candidate") -> dict[str, list[str]]:
+    markers: dict[str, list[str]] = {"semantic": [], "goal": [], "combined": []}
+    if isinstance(value, dict):
+        for raw_key, item in value.items():
+            key = str(raw_key).strip().lower()
+            path = f"{prefix}.{raw_key}"
+            normalized = str(item).strip().lower() if not isinstance(item, (dict, list)) else ""
+            positive_boolean = item is True or normalized in {"true", "yes", "1"}
+            if key in {"semantic_progress", "authoritative_semantic_progress"} and positive_boolean:
+                markers["semantic"].append(path)
+            if key == "goal_productive" and positive_boolean:
+                markers["goal"].append(path)
+            if key == "progress_kind" and normalized == "goal_productive":
+                markers["combined"].append(path)
+            if key == "progress_verdict" and normalized in {"advanced", "success", "succeeded", "goal_productive"}:
+                markers["combined"].append(path)
+            nested = _positive_progress_markers(item, path)
+            for category, paths in nested.items():
+                markers[category].extend(paths)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            nested = _positive_progress_markers(item, f"{prefix}[{index}]")
+            for category, paths in nested.items():
+                markers[category].extend(paths)
+    return markers
+
+
+def _durable_key_is_sensitive(key: str) -> bool:
+    normalized = key.strip().lower()
+    return bool(
+        normalized in SENSITIVE_DURABLE_KEYS
+        or normalized.endswith("_path")
+        or normalized.endswith("_paths")
+        or normalized.startswith("path_")
+        or any(part in normalized for part in SENSITIVE_DURABLE_KEY_PARTS)
+    )
+
+
+def _durable_string_looks_like_path(value: str) -> bool:
+    text = value.strip()
+    return bool(
+        text.startswith(("/", "./", "../", "~"))
+        or "\\" in text
+        or "/" in text
+    )
+
+
+def validate_durable_payload_privacy(value: Any, prefix: str) -> None:
+    if isinstance(value, dict):
+        for raw_key, child in value.items():
+            key = str(raw_key)
+            if _durable_key_is_sensitive(key):
+                raise ValueError(f"durable state payload contains prohibited source metadata at {prefix}.{key}")
+            validate_durable_payload_privacy(child, f"{prefix}.{key}")
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            validate_durable_payload_privacy(child, f"{prefix}[{index}]")
+    elif isinstance(value, str) and _durable_string_looks_like_path(value):
+        raise ValueError(f"durable state payload contains a path-like string at {prefix}")
+
+
+def validate_durable_state_candidate(
+    durable_state: Any,
+    semantic_status: str,
+    goal_status: str,
+) -> dict[str, Any]:
+    if not isinstance(durable_state, dict):
+        raise ValueError("final candidate requires a durable_state_candidate JSON object")
+    durable_state_mode = str(durable_state.get("mode") or "").strip()
+    if durable_state_mode not in DURABLE_STATE_MODES:
+        raise ValueError("durable_state_candidate mode must be complete_projection or typed_operations")
+    if durable_state_mode == "complete_projection":
+        if not isinstance(durable_state.get("projections"), dict):
+            raise ValueError("complete_projection durable state requires a projections object")
+        validate_durable_payload_privacy(
+            durable_state["projections"],
+            "durable_state_candidate.projections",
+        )
+    else:
+        operations = durable_state.get("operations")
+        if not isinstance(operations, list) or not operations:
+            raise ValueError("typed_operations durable state requires a non-empty operations list")
+        versioned_producer_contract = (
+            "contract_version" in durable_state or "producer" in durable_state
+        )
+        if versioned_producer_contract:
+            contract_version = durable_state.get("contract_version")
+            if isinstance(contract_version, bool) or contract_version != 1:
+                raise ValueError("versioned durable state candidate contract_version must be 1")
+            producer = str(durable_state.get("producer") or "").strip()
+            if not producer:
+                raise ValueError("versioned durable state candidate requires an opaque producer")
+            validate_event_id(producer)
+        seen_targets: set[str] = set()
+        for index, operation in enumerate(operations):
+            if not isinstance(operation, dict):
+                raise ValueError(f"durable state operation {index} must be a JSON object")
+            operation_type = str(operation.get("operation_type") or "").strip()
+            target_id = str(operation.get("target_id") or "").strip()
+            if not operation_type or not target_id or not isinstance(operation.get("payload"), dict):
+                raise ValueError(
+                    f"durable state operation {index} requires operation_type, target_id, and object payload"
+                )
+            validate_event_id(operation_type)
+            validate_event_id(target_id)
+            if operation_type not in DURABLE_OPERATION_TYPES:
+                raise ValueError(f"durable state operation {index} has an unsupported operation_type")
+            if target_id in seen_targets:
+                raise ValueError(f"durable state operation target_id is duplicated: {target_id}")
+            seen_targets.add(target_id)
+            validate_durable_payload_privacy(
+                operation["payload"],
+                f"durable_state_candidate.operations[{index}].payload",
+            )
+            payload_sha256 = operation.get("payload_sha256")
+            if versioned_producer_contract and payload_sha256 is None:
+                raise ValueError(
+                    f"versioned durable state operation {index} requires payload_sha256"
+                )
+            if payload_sha256 is not None:
+                normalized_payload_sha256 = str(payload_sha256).strip().lower()
+                if (
+                    not SHA256_PATTERN.fullmatch(normalized_payload_sha256)
+                    or normalized_payload_sha256 != canonical_sha256(operation["payload"])
+                ):
+                    raise ValueError(f"durable state operation {index} payload_sha256 mismatch")
+        candidate_sha256 = durable_state.get("candidate_sha256")
+        if versioned_producer_contract and candidate_sha256 is None:
+            raise ValueError("versioned durable state candidate requires candidate_sha256")
+        if candidate_sha256 is not None:
+            normalized_candidate_sha256 = str(candidate_sha256).strip().lower()
+            candidate_body = dict(durable_state)
+            candidate_body.pop("candidate_sha256", None)
+            if (
+                not SHA256_PATTERN.fullmatch(normalized_candidate_sha256)
+                or normalized_candidate_sha256 != canonical_sha256(candidate_body)
+            ):
+                raise ValueError("durable state candidate_sha256 mismatch")
+    positive_markers = _positive_progress_markers(durable_state)
+    if positive_markers["semantic"] and (semantic_status != "pass" or goal_status != "pass"):
+        raise ValueError(
+            "durable state contains positive semantic progress that contradicts the final artifact semantic verdict or goal readiness verdict"
+        )
+    if positive_markers["goal"] and (semantic_status != "pass" or goal_status != "pass"):
+        raise ValueError(
+            "durable state contains positive goal progress that contradicts the final artifact semantic verdict or goal readiness verdict"
+        )
+    if positive_markers["combined"] and (semantic_status != "pass" or goal_status != "pass"):
+        raise ValueError("durable state contains an advanced progress verdict that contradicts final semantic or goal axes")
+    return durable_state
+
+
+def normalize_final_candidate(cycle_id: str, candidate: dict[str, Any]) -> dict[str, Any]:
+    cycle_id = validate_cycle_id(cycle_id)
+    if not isinstance(candidate, dict):
+        raise ValueError("final candidate must be a JSON object")
+    normalized = dict(candidate)
+    candidate_schema_version = normalized.get("schema_version")
+    if isinstance(candidate_schema_version, bool) or candidate_schema_version != FINALIZATION_SCHEMA_VERSION:
+        raise ValueError("final candidate schema_version must be 1")
+    if normalized.get("kind") != FINAL_CANDIDATE_KIND:
+        raise ValueError(f"final candidate kind must be {FINAL_CANDIDATE_KIND}")
+    if normalized.get("final_candidate") is not True:
+        raise ValueError("completion output must explicitly mark final_candidate true")
+    if str(normalized.get("cycle_id") or "") != cycle_id:
+        raise ValueError("final candidate cycle_id does not match finalization cycle")
+    attempt_id = validate_event_id(normalized.get("attempt_id"))
+    normalized["attempt_id"] = attempt_id
+    owner_only_fields = {
+        "attempt_revision",
+        "supersedes_revision",
+        "supersedes_finalization_token",
+        "finalization_token",
+        "state_commit_status",
+        "receipt_hash",
+        "authoritative_final",
+    }
+    supplied_owner_fields = sorted(owner_only_fields.intersection(normalized))
+    if supplied_owner_fields:
+        raise ValueError(
+            "revision, supersession, receipt, and authoritative verdict fields are assigned only by the finalization owner: "
+            + ", ".join(supplied_owner_fields)
+        )
+    normalized["expected_previous_revision"] = _candidate_expected_revision(normalized)
+    normalized["expected_previous_attempt_id"] = _candidate_expected_identifier(
+        normalized, "expected_previous_attempt_id"
+    )
+    normalized["expected_previous_finalization_token"] = _candidate_expected_identifier(
+        normalized, "expected_previous_finalization_token"
+    )
+    verdict_contract_version = normalized.get("verdict_contract_version")
+    if isinstance(verdict_contract_version, bool) or verdict_contract_version != 1:
+        raise ValueError("final candidate verdict_contract_version must be 1")
+    for axis in VERDICT_AXES:
+        value = normalized.get(axis)
+        if not isinstance(value, dict):
+            raise ValueError(f"final candidate requires object verdict axis {axis}")
+        status = str(value.get("status") or value.get("verdict") or "").strip().lower()
+        if status not in VERDICT_AXIS_STATUSES:
+            raise ValueError(f"final candidate verdict axis {axis} has invalid status")
+        evidence = value.get("evidence_ref") or value.get("evidence_refs")
+        if status != "not_applicable" and evidence in (None, "", []):
+            raise ValueError(f"final candidate verdict axis {axis} requires bounded evidence")
+        if evidence not in (None, "", []):
+            validate_durable_payload_privacy(evidence, f"final_candidate.{axis}.evidence")
+        normalized[axis] = {**value, "status": status}
+    semantic_status = normalized["artifact_semantic_verdict"]["status"]
+    goal_status = normalized["goal_readiness_verdict"]["status"]
+    normalized["durable_state_candidate"] = validate_durable_state_candidate(
+        normalized.get("durable_state_candidate"),
+        semantic_status,
+        goal_status,
+    )
+    try:
+        canonical_json_bytes(normalized)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("final candidate must contain only JSON-serializable values") from exc
+    return normalized
+
+
+def authoritative_final_from_axes(axes: dict[str, dict[str, Any]]) -> str:
+    statuses = {str(value.get("status") or "") for value in axes.values()}
+    if "fail" in statuses:
+        return "failure"
+    if "blocked" in statuses:
+        return "blocked"
+    if "partial" in statuses:
+        return "partial"
+    if "not_evaluated" in statuses:
+        return "not_evaluated"
+    return "success"
+
+
+def final_candidate_commit_material(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Select only decision-bound candidate fields for idempotency and receipts."""
+    fields = (
+        "schema_version",
+        "kind",
+        "final_candidate",
+        "cycle_id",
+        "attempt_id",
+        "expected_previous_revision",
+        "expected_previous_attempt_id",
+        "expected_previous_finalization_token",
+        "verdict_contract_version",
+        *VERDICT_AXES,
+        "durable_state_candidate",
+    )
+    return {field: candidate[field] for field in fields}
+
+
+def _load_current_finalization_unlocked(root: Path, cycle_id: str) -> dict[str, Any] | None:
+    path = current_finalization_path(root, cycle_id)
+    if not path.is_file():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"malformed current finalization pointer: {path}") from exc
+    if not isinstance(value, dict):
+        raise ValueError("current finalization pointer must be a JSON object")
+    return value
+
+
+def _verify_finalization_receipt_unlocked(
+    root: Path,
+    cycle_id: str,
+    receipt: dict[str, Any],
+    current_pointer: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    cycle_id = validate_cycle_id(cycle_id)
+    if not isinstance(receipt, dict):
+        raise ValueError("finalization receipt must be a JSON object")
+    receipt_schema_version = receipt.get("schema_version")
+    if isinstance(receipt_schema_version, bool) or receipt_schema_version != FINALIZATION_SCHEMA_VERSION:
+        raise ValueError("finalization receipt schema_version must be 1")
+    if receipt.get("kind") != FINALIZATION_RECEIPT_KIND:
+        raise ValueError(f"finalization receipt kind must be {FINALIZATION_RECEIPT_KIND}")
+    if str(receipt.get("cycle_id") or "") != cycle_id:
+        raise ValueError("finalization receipt cycle_id mismatch")
+    validate_event_id(receipt.get("attempt_id"))
+    revision = receipt.get("attempt_revision")
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+        raise ValueError("finalization receipt attempt_revision must be a positive integer")
+    expected_previous = receipt.get("expected_previous_revision")
+    if expected_previous is not None and (
+        isinstance(expected_previous, bool) or not isinstance(expected_previous, int) or expected_previous < 1
+    ):
+        raise ValueError("finalization receipt expected_previous_revision is invalid")
+    expected_previous_attempt_id = receipt.get("expected_previous_attempt_id")
+    if expected_previous_attempt_id is not None:
+        validate_event_id(expected_previous_attempt_id)
+    expected_previous_token = receipt.get("expected_previous_finalization_token")
+    if expected_previous_token is not None and not SHA256_PATTERN.fullmatch(str(expected_previous_token)):
+        raise ValueError("finalization receipt expected previous token is invalid")
+    supersedes_revision = receipt.get("supersedes_revision")
+    supersedes_token = receipt.get("supersedes_finalization_token")
+    if revision > 1:
+        if (
+            supersedes_revision != revision - 1
+            or expected_previous != supersedes_revision
+            or expected_previous_attempt_id != receipt.get("attempt_id")
+            or expected_previous_token != supersedes_token
+            or not SHA256_PATTERN.fullmatch(str(supersedes_token or ""))
+        ):
+            raise ValueError("same-attempt finalization revision has invalid supersession lineage")
+    elif supersedes_revision is not None or supersedes_token is not None:
+        raise ValueError("first attempt revision must not claim same-attempt supersession")
+    elif expected_previous_attempt_id == receipt.get("attempt_id"):
+        raise ValueError("same-attempt correction cannot reset attempt_revision to 1")
+    receipt_hash = str(receipt.get("receipt_hash") or "").strip().lower()
+    receipt_body = dict(receipt)
+    receipt_body.pop("receipt_hash", None)
+    if not SHA256_PATTERN.fullmatch(receipt_hash) or receipt_hash != canonical_sha256(receipt_body):
+        raise ValueError("finalization receipt hash mismatch")
+    finalization_token = str(receipt.get("finalization_token") or "").strip().lower()
+    snapshot_path = finalization_snapshot_path(root, cycle_id, finalization_token)
+    expected_ref = rel_path(root, snapshot_path)
+    if str(receipt.get("snapshot_ref") or "") != expected_ref:
+        raise ValueError("finalization receipt snapshot_ref mismatch")
+    if not snapshot_path.is_file():
+        raise ValueError("finalization receipt snapshot is missing")
+    raw_snapshot = snapshot_path.read_bytes()
+    snapshot_sha256 = hashlib.sha256(raw_snapshot).hexdigest()
+    if snapshot_sha256 != finalization_token or str(receipt.get("snapshot_sha256") or "") != snapshot_sha256:
+        raise ValueError("finalization snapshot content hash mismatch")
+    try:
+        snapshot = json.loads(raw_snapshot.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("finalization snapshot is malformed") from exc
+    if not isinstance(snapshot, dict) or canonical_json_bytes(snapshot) != raw_snapshot:
+        raise ValueError("finalization snapshot is not canonical JSON")
+    snapshot_schema_version = snapshot.get("schema_version")
+    if (
+        isinstance(snapshot_schema_version, bool)
+        or snapshot_schema_version != FINALIZATION_SCHEMA_VERSION
+        or snapshot.get("kind") != FINALIZATION_SNAPSHOT_KIND
+    ):
+        raise ValueError("finalization snapshot schema or kind mismatch")
+    for field in (
+        "cycle_id",
+        "attempt_id",
+        "attempt_revision",
+        "supersedes_revision",
+        "supersedes_finalization_token",
+        "expected_previous_revision",
+        "expected_previous_attempt_id",
+        "expected_previous_finalization_token",
+        "final_candidate_digest",
+        "validation_axes_digest",
+        "authoritative_projection_id",
+        "authoritative_projection_digest",
+    ):
+        if snapshot.get(field) != receipt.get(field):
+            raise ValueError(f"finalization receipt and snapshot disagree on {field}")
+    projection = snapshot.get("authoritative_projection")
+    if not isinstance(projection, dict):
+        raise ValueError("finalization snapshot lacks authoritative_projection")
+    expected_projection_fields = {"verdict_contract_version", "authoritative_final", *VERDICT_AXES}
+    projection_version = projection.get("verdict_contract_version")
+    if (
+        set(projection) != expected_projection_fields
+        or isinstance(projection_version, bool)
+        or projection_version != 1
+    ):
+        raise ValueError("authoritative projection fields or verdict contract version mismatch")
+    verified_axes: dict[str, dict[str, Any]] = {}
+    for axis in VERDICT_AXES:
+        value = projection.get(axis)
+        if not isinstance(value, dict) or str(value.get("status") or "") not in VERDICT_AXIS_STATUSES:
+            raise ValueError(f"authoritative projection verdict axis {axis} is invalid")
+        evidence = value.get("evidence_ref") or value.get("evidence_refs")
+        if value.get("status") != "not_applicable" and evidence in (None, "", []):
+            raise ValueError(f"authoritative projection verdict axis {axis} lacks evidence")
+        if evidence not in (None, "", []):
+            validate_durable_payload_privacy(evidence, f"authoritative_projection.{axis}.evidence")
+        verified_axes[axis] = value
+    if projection.get("authoritative_final") != authoritative_final_from_axes(verified_axes):
+        raise ValueError("authoritative final verdict does not match the six verdict axes")
+    projection_digest = canonical_sha256(projection)
+    if projection_digest != snapshot.get("authoritative_projection_digest"):
+        raise ValueError("authoritative projection digest mismatch")
+    if snapshot.get("authoritative_projection_id") != f"sha256:{projection_digest}":
+        raise ValueError("authoritative projection id mismatch")
+    if projection.get("authoritative_final") != receipt.get("authoritative_final"):
+        raise ValueError("authoritative final verdict mismatch")
+    axes_material = {"verdict_contract_version": projection.get("verdict_contract_version")}
+    for axis in VERDICT_AXES:
+        axes_material[axis] = projection.get(axis)
+    if canonical_sha256(axes_material) != snapshot.get("validation_axes_digest"):
+        raise ValueError("validation axes digest mismatch")
+    durable_state = snapshot.get("durable_state_candidate")
+    validate_durable_state_candidate(
+        durable_state,
+        verified_axes["artifact_semantic_verdict"]["status"],
+        verified_axes["goal_readiness_verdict"]["status"],
+    )
+    if canonical_sha256(durable_state) != snapshot.get("durable_state_digest"):
+        raise ValueError("durable state candidate digest mismatch")
+    if receipt.get("state_commit_status") != "committed":
+        raise ValueError("finalization receipt is not committed")
+    pointer = current_pointer if current_pointer is not None else _load_current_finalization_unlocked(root, cycle_id)
+    if not isinstance(pointer, dict):
+        raise ValueError("current finalization pointer is missing")
+    if (
+        isinstance(pointer.get("schema_version"), bool)
+        or pointer.get("schema_version") != FINALIZATION_SCHEMA_VERSION
+        or pointer.get("kind") != FINALIZATION_POINTER_KIND
+        or pointer.get("cycle_id") != cycle_id
+    ):
+        raise ValueError("current finalization pointer schema, kind, or cycle mismatch")
+    if pointer.get("receipt_hash") != receipt_hash or pointer.get("finalization_token") != finalization_token:
+        raise ValueError("finalization receipt is stale or does not match current pointer")
+    if pointer.get("receipt") != receipt:
+        raise ValueError("current finalization pointer receipt body mismatch")
+    return {
+        "valid": True,
+        "finalization_receipt": receipt,
+        "receipt": receipt,
+        "authoritative_projection": projection,
+        "snapshot": snapshot,
+        "current_pointer": pointer,
+    }
+
+
+def verify_finalization_receipt(
+    root: Path,
+    cycle_id: str,
+    receipt: dict[str, Any],
+) -> dict[str, Any]:
+    cycle_id = validate_cycle_id(cycle_id)
+    with ledger_lock(root, cycle_id, exclusive=False):
+        return _verify_finalization_receipt_unlocked(root, cycle_id, receipt)
+
+
+def load_current_finalized_state(root: Path, cycle_id: str) -> dict[str, Any]:
+    """Load only the content-verified current state projection for downstream consumers."""
+    cycle_id = validate_cycle_id(cycle_id)
+    with ledger_lock(root, cycle_id, exclusive=False):
+        pointer = _load_current_finalization_unlocked(root, cycle_id)
+        if not isinstance(pointer, dict) or not isinstance(pointer.get("receipt"), dict):
+            raise ValueError("current finalized state is unavailable")
+        verified = _verify_finalization_receipt_unlocked(
+            root,
+            cycle_id,
+            pointer["receipt"],
+            current_pointer=pointer,
+        )
+        snapshot = verified["snapshot"]
+        return {
+            "valid": True,
+            "cycle_id": cycle_id,
+            "receipt": verified["receipt"],
+            "durable_state_candidate": snapshot["durable_state_candidate"],
+            "durable_state_digest": snapshot["durable_state_digest"],
+            "authoritative_projection": snapshot["authoritative_projection"],
+            "authoritative_projection_digest": snapshot["authoritative_projection_digest"],
+        }
+
+
+def finalize_candidate(root: Path, cycle_id: str, candidate: dict[str, Any]) -> dict[str, Any]:
+    cycle_id = validate_cycle_id(cycle_id)
+    normalized = normalize_final_candidate(cycle_id, candidate)
+    final_candidate_digest = canonical_sha256(final_candidate_commit_material(normalized))
+    expected_previous_revision = normalized["expected_previous_revision"]
+    expected_previous_attempt_id = normalized["expected_previous_attempt_id"]
+    expected_previous_token = normalized["expected_previous_finalization_token"]
+    attempt_id = normalized["attempt_id"]
+    axes = {axis: normalized[axis] for axis in VERDICT_AXES}
+    axes_material = {"verdict_contract_version": 1, **axes}
+    validation_axes_digest = canonical_sha256(axes_material)
+    authoritative_final = authoritative_final_from_axes(axes)
+    projection = {**axes_material, "authoritative_final": authoritative_final}
+    projection_digest = canonical_sha256(projection)
+    projection_id = f"sha256:{projection_digest}"
+    durable_state_candidate = normalized["durable_state_candidate"]
+    durable_state_digest = canonical_sha256(durable_state_candidate)
+
+    with ledger_lock(root, cycle_id, exclusive=True):
+        read_initialization_metadata(root, cycle_id)
+        current_pointer = _load_current_finalization_unlocked(root, cycle_id)
+        current_receipt: dict[str, Any] | None = None
+        if current_pointer is not None:
+            embedded = current_pointer.get("receipt")
+            if not isinstance(embedded, dict):
+                raise ValueError("current finalization pointer lacks a receipt")
+            verified_current = _verify_finalization_receipt_unlocked(
+                root, cycle_id, embedded, current_pointer=current_pointer
+            )
+            current_receipt = verified_current["receipt"]
+            if (
+                current_receipt.get("attempt_id") == attempt_id
+                and current_receipt.get("final_candidate_digest") == final_candidate_digest
+            ):
+                return {
+                    **verified_current,
+                    "idempotent": True,
+                    "snapshot_path": current_receipt["snapshot_ref"],
+                    "current_finalization_path": rel_path(root, current_finalization_path(root, cycle_id)),
+                }
+
+        actual_previous_revision = current_receipt.get("attempt_revision") if current_receipt else None
+        actual_previous_attempt_id = current_receipt.get("attempt_id") if current_receipt else None
+        actual_previous_token = current_receipt.get("finalization_token") if current_receipt else None
+        expected_tuple = (
+            expected_previous_revision,
+            expected_previous_attempt_id,
+            expected_previous_token,
+        )
+        actual_tuple = (actual_previous_revision, actual_previous_attempt_id, actual_previous_token)
+        if expected_tuple != actual_tuple:
+            raise ValueError("final candidate expected previous finalization does not match current pointer")
+
+        same_attempt_correction = current_receipt is not None and actual_previous_attempt_id == attempt_id
+        attempt_revision = int(actual_previous_revision) + 1 if same_attempt_correction else 1
+        supersedes_revision = actual_previous_revision if same_attempt_correction else None
+        supersedes_token = actual_previous_token if same_attempt_correction else None
+        snapshot = {
+            "schema_version": FINALIZATION_SCHEMA_VERSION,
+            "kind": FINALIZATION_SNAPSHOT_KIND,
+            "cycle_id": cycle_id,
+            "attempt_id": attempt_id,
+            "attempt_revision": attempt_revision,
+            "supersedes_revision": supersedes_revision,
+            "supersedes_finalization_token": supersedes_token,
+            "expected_previous_revision": expected_previous_revision,
+            "expected_previous_attempt_id": expected_previous_attempt_id,
+            "expected_previous_finalization_token": expected_previous_token,
+            "final_candidate_digest": final_candidate_digest,
+            "validation_axes_digest": validation_axes_digest,
+            "authoritative_projection_id": projection_id,
+            "authoritative_projection_digest": projection_digest,
+            "authoritative_projection": projection,
+            "durable_state_candidate": durable_state_candidate,
+            "durable_state_digest": durable_state_digest,
+        }
+        snapshot_bytes = canonical_json_bytes(snapshot)
+        finalization_token = hashlib.sha256(snapshot_bytes).hexdigest()
+        snapshot_path = finalization_snapshot_path(root, cycle_id, finalization_token)
+        receipt_body = {
+            "schema_version": FINALIZATION_SCHEMA_VERSION,
+            "kind": FINALIZATION_RECEIPT_KIND,
+            "cycle_id": cycle_id,
+            "attempt_id": attempt_id,
+            "attempt_revision": attempt_revision,
+            "supersedes_revision": supersedes_revision,
+            "supersedes_finalization_token": supersedes_token,
+            "expected_previous_revision": expected_previous_revision,
+            "expected_previous_attempt_id": expected_previous_attempt_id,
+            "expected_previous_finalization_token": expected_previous_token,
+            "finalization_token": finalization_token,
+            "snapshot_ref": rel_path(root, snapshot_path),
+            "snapshot_sha256": finalization_token,
+            "state_commit_status": "committed",
+            "authoritative_final": authoritative_final,
+            "final_candidate_digest": final_candidate_digest,
+            "validation_axes_digest": validation_axes_digest,
+            "authoritative_projection_id": projection_id,
+            "authoritative_projection_digest": projection_digest,
+        }
+        receipt = {**receipt_body, "receipt_hash": canonical_sha256(receipt_body)}
+        pointer = {
+            "schema_version": FINALIZATION_SCHEMA_VERSION,
+            "kind": FINALIZATION_POINTER_KIND,
+            "cycle_id": cycle_id,
+            "finalization_token": finalization_token,
+            "receipt_hash": receipt["receipt_hash"],
+            "receipt": receipt,
+        }
+
+        immutable_write_bytes(snapshot_path, snapshot_bytes)
+        atomic_write_text(
+            current_finalization_path(root, cycle_id),
+            json.dumps(pointer, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        )
+        verified = _verify_finalization_receipt_unlocked(root, cycle_id, receipt, current_pointer=pointer)
+        return {
+            **verified,
+            "idempotent": False,
+            "snapshot_path": rel_path(root, snapshot_path),
+            "current_finalization_path": rel_path(root, current_finalization_path(root, cycle_id)),
+        }
+
+
 def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
     latest_by_step: dict[str, dict[str, Any]] = {}
     changed_files: list[str] = []
@@ -1183,6 +1907,21 @@ def main(argv: list[str] | None = None) -> int:
     current_p = sub.add_parser("current", help="Refresh and print current_stage.json.")
     current_p.add_argument("--cycle-id", required=True)
 
+    finalize_p = sub.add_parser("finalize", help="Atomically publish one validated final candidate.")
+    finalize_p.add_argument("--cycle-id", required=True)
+    finalize_p.add_argument("--candidate-json", required=True, help="JSON object, JSON file path, or '-' for stdin.")
+
+    verify_finalization_p = sub.add_parser(
+        "verify-finalization",
+        help="Verify a finalization receipt against its immutable snapshot and current pointer.",
+    )
+    verify_finalization_p.add_argument("--cycle-id", required=True)
+    verify_finalization_p.add_argument(
+        "--receipt-json",
+        required=True,
+        help="Receipt or current-pointer JSON object, file path, or '-' for stdin.",
+    )
+
     args = parser.parse_args(argv)
     root = Path(args.root).resolve()
     if args.command == "init":
@@ -1238,8 +1977,15 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout.write(render_markdown(summary))
             return 0
         result = summary
-    else:
+    elif args.command == "current":
         result = write_current(root, args.cycle_id)
+    elif args.command == "finalize":
+        result = finalize_candidate(root, args.cycle_id, load_json_value(args.candidate_json))
+    else:
+        receipt_value = load_json_value(args.receipt_json)
+        if receipt_value.get("kind") == FINALIZATION_POINTER_KIND and isinstance(receipt_value.get("receipt"), dict):
+            receipt_value = receipt_value["receipt"]
+        result = verify_finalization_receipt(root, args.cycle_id, receipt_value)
 
     json.dump(result, sys.stdout, ensure_ascii=False, indent=2, sort_keys=True)
     sys.stdout.write("\n")

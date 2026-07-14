@@ -83,32 +83,45 @@ def apply_root_cause_ledger(ns: dict[str, Any]) -> tuple[bool, list[dict[str, An
         entry["actionability_status"] = actionability["status"]
         entry["actionability_basis"] = actionability["basis"]
         ledger_entries.append(entry)
-    existing_root_cause_rows = read_jsonl(root_cause_ledger_path)
-    root_cause_rows = [*existing_root_cause_rows, *ledger_entries]
-    root_cause_ledger_updated = False
-    if getattr(args, "write_registry", False) and ledger_entries:
-        root_cause_rows, root_cause_ledger_updated = append_root_cause_ledger(
-            root_cause_ledger_path,
-            ledger_entries,
-            args.max_root_cause_rows_per_family,
-        )
+    if finalized_state_status == "invalid":
+        existing_root_cause_rows = []
+        root_cause_state_source = "invalid_finalized_state"
+    elif finalized_root_cause_present:
+        existing_root_cause_rows = list(finalized_root_cause_rows)
+        root_cause_state_source = "verified_finalization"
+    else:
+        existing_root_cause_rows = read_jsonl(root_cause_ledger_path)
+        root_cause_state_source = "legacy_ledger_fallback"
+    root_cause_rows = compact_root_cause_ledger(
+        [*existing_root_cause_rows, *ledger_entries],
+        getattr(args, "max_root_cause_rows_per_family", ROOT_CAUSE_LEDGER_MAX_ROWS_PER_FAMILY_DEFAULT),
+    )
     root_cause_gate = root_cause_hypothesis_gate(
         root_cause_rows,
         family_key,
         current_root_key,
         current_root_family_key,
-        args.untried_promotion_budget,
+        getattr(args, "untried_promotion_budget", None),
         root=root,
         repo_owned_source_roots=repo_owned_source_roots,
     )
     untried = root_cause_gate["untried_root_cause_hypotheses"]
     row["root_cause_ledger_path"] = rel_path(root, root_cause_ledger_path)
-    row["root_cause_ledger_status"] = "recorded" if ledger_entries else "not_applicable_no_hypotheses"
-    row["root_cause_ledger_updated"] = root_cause_ledger_updated
+    row["root_cause_ledger_status"] = (
+        "prepared_not_finalized" if ledger_entries else "not_applicable_no_hypotheses"
+    )
+    row["root_cause_ledger_updated"] = False
+    row["root_cause_ledger_update_candidate"] = bool(ledger_entries)
     row["root_cause_ledger_entries"] = ledger_entries
+    row["root_cause_ledger_projection"] = root_cause_rows
+    row["root_cause_ledger_state_source"] = root_cause_state_source
     row["root_cause_unverified_hypotheses"] = root_cause_gate["root_cause_unverified_hypotheses"][:10]
     row["root_cause_duplicate_hypotheses"] = root_cause_gate["root_cause_duplicate_hypotheses"][:10]
     row["untried_promotion_budget"] = root_cause_gate["untried_promotion_budget"]
+    row["root_cause_budget_evaluation"] = root_cause_gate["budget_evaluation"]
+    row["root_cause_budget_evaluation_status"] = root_cause_gate[
+        "budget_evaluation_status"
+    ]
     row["vacuous_untried_attempt_count"] = root_cause_gate["vacuous_untried_attempt_count"]
     row["vacuous_untried_streak"] = root_cause_gate["vacuous_untried_streak"]
     row["hypothesis_exhausted"] = root_cause_gate["hypothesis_exhausted"]
@@ -124,6 +137,30 @@ def apply_root_cause_ledger(ns: dict[str, Any]) -> tuple[bool, list[dict[str, An
     row["terminal_blocked_invalid_due_to_untried_root_cause"] = bool(untried) and not chain_untried_override
     if root_cause_adapter_error:
         row["root_cause_ledger_adapter_error"] = root_cause_adapter_error
-    if row["hypothesis_exhausted"] and getattr(args, "write_registry", False):
-        row["hypothesis_exhaustion_seal_path"] = feed_exhausted_family_seal(root, row)
+    seal_path = root / ".task" / "sealed_blocker_families.json"
+    if finalized_state_status == "invalid":
+        existing_seal_state = {}
+        seal_state_source = "invalid_finalized_state"
+    elif finalized_seal_present:
+        existing_seal_state = finalized_seal_state
+        seal_state_source = "verified_finalization"
+    else:
+        existing_seal_state = read_json(seal_path)
+        seal_state_source = "legacy_seal_fallback"
+    if row["hypothesis_exhausted"]:
+        row["hypothesis_exhaustion_seal_path"] = rel_path(root, seal_path)
+        row["hypothesis_exhaustion_seal_status"] = "prepared_not_finalized"
+        row["hypothesis_exhaustion_seal_candidate"] = exhausted_family_seal_record(row)
+        row["sealed_blocker_families_projection"] = project_exhausted_family_seal(
+            existing_seal_state,
+            row,
+        )
+    elif isinstance(existing_seal_state, dict):
+        row["sealed_blocker_families_projection"] = existing_seal_state
+    else:
+        row["sealed_blocker_families_projection"] = {
+            "schema_version": "sealed-blocker-families-v1",
+            "families": [],
+        }
+    row["sealed_blocker_families_state_source"] = seal_state_source
     return chain_untried_override, untried, ledger_entries

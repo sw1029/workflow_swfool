@@ -110,12 +110,12 @@ def output_delta_gate(value: dict[str, Any], observed: dict[str, Any] | None = N
     declared_semantic = boolish(semantic)
     has_strict_delta_fields = produced is not None and (changed is not None or semantic is not None)
     observed_class = (observed or {}).get("observed_output_class")
-    override_applied = observed_class in {"node_edge_delta", "metadata_only", "terminal_record"}
+    override_applied = observed_class in {"material_delta", "metadata_only", "terminal_record"}
     if override_applied:
         declared_status = str(status) if status is not None else None
-        observed_produced = observed_class == "node_edge_delta"
+        observed_produced = observed_class == "material_delta"
         produced_value = observed_produced and (not has_strict_delta_fields or (declared_changed and declared_semantic))
-        metadata_value = observed_class != "node_edge_delta" or (observed_produced and not produced_value)
+        metadata_value = observed_class != "material_delta" or (observed_produced and not produced_value)
         effective_value = "goal_productive" if produced_value else "governance_only"
         status_value = declared_status or f"observed_{observed_class}"
     else:

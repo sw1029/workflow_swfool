@@ -26,6 +26,88 @@ def float_value(value: Any) -> float:
 def int_metric(value: Any) -> int:
     return int(max(0.0, float_value(value)))
 
+
+def positive_int_or_none(value: Any) -> int | None:
+    """Return an explicitly supplied positive integer without inventing one."""
+    if isinstance(value, bool) or value is None:
+        return None
+    raw = value
+    if isinstance(value, dict):
+        raw = next(
+            (
+                value.get(key)
+                for key in (
+                    "budget_value",
+                    "budget",
+                    "cap",
+                    "threshold",
+                    "limit",
+                    "max_attempts",
+                    "value",
+                )
+                if value.get(key) is not None
+            ),
+            None,
+        )
+    if isinstance(raw, bool) or raw is None:
+        return None
+    try:
+        numeric = float(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    if numeric <= 0 or not numeric.is_integer():
+        return None
+    return int(numeric)
+
+
+def budget_evaluation(
+    budget_id: str,
+    value: Any,
+    *,
+    source: str | None = None,
+    applicable: bool = True,
+    error: str | None = None,
+) -> dict[str, Any]:
+    """Normalize a caller/adapter budget into a typed, fail-quiet contract."""
+    normalized_id = normalize_root_family_key(budget_id) or str(budget_id)
+    if not applicable:
+        status = "not_evaluated"
+        reason = "budget_not_applicable"
+        parsed = None
+    else:
+        parsed = positive_int_or_none(value)
+        status = "evaluated" if parsed is not None else "budget_unverified"
+        reason = None if parsed is not None else ("budget_provider_error" if error else "budget_not_supplied_or_invalid")
+    supplied_source = source
+    if isinstance(value, dict):
+        supplied_source = str(
+            value.get("budget_source")
+            or value.get("source")
+            or value.get("provided_by")
+            or supplied_source
+            or ""
+        ).strip() or None
+    result = {
+        "budget_id": normalized_id,
+        "budget_value": parsed,
+        "evaluation_status": status,
+        "budget_evaluation_status": status,
+        "source": supplied_source if parsed is not None else None,
+        "reason_code": reason,
+    }
+    if error:
+        result["provider_error"] = error
+    return result
+
+
+def budget_value(contract: Any) -> int | None:
+    if not isinstance(contract, dict):
+        return None
+    if contract.get("budget_evaluation_status") != "evaluated":
+        return None
+    return positive_int_or_none(contract.get("budget_value"))
+
+
 def truthy_observation(value: Any) -> bool:
     if isinstance(value, bool):
         return value

@@ -1,4 +1,4 @@
 interface:
   display_name: "Validate Subskill Result Contract"
-  short_description: "Validate cycle subskill result fields"
-  default_prompt: "Use $validate-subskill-result-contract to check a subskill result before the cycle advances."
+  short_description: "Validate cycle results and final receipts"
+  default_prompt: "Use $validate-subskill-result-contract to check a subskill result, including final-candidate, current-receipt, projection, and consumer-echo integrity when applicable, before the cycle advances."

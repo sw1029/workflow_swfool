@@ -69,7 +69,7 @@ When session governance is available, consume only a trusted-collector privacy-s
 
 7. Report status.
    - Summarize issue backend, issue ID or URL, local mirror path, branch/worktree path, linked task ID, index result, and any unresolved blockers.
-   - Report `agent_routing_applicability: deterministic_only` unless the optional issue-fit agent ran; if it ran, include the Tier 3 Terra/high profile and routing enforcement or limitation.
+   - Report `agent_routing_applicability: deterministic_only` unless the optional issue-fit agent ran. If it ran, include the `configured-tiered-routing-v3` Tier 3 `model_ref:balanced`/high profile, requested model reference, model-configuration status, requested model/effort when resolved, and routing enforcement or limitation. Runtime bindings belong to caller configuration or a repository adapter; `reference_only` cannot prove enforced or actual-model execution.
    - For `$orchestrate-task-cycle`, explicitly state whether the new active `task.md` is tracked by a GitHub issue or `.issue/` document.
 
 ## Orchestrated Cycle Behavior

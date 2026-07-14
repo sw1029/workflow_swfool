@@ -1,6 +1,6 @@
 ---
 name: review-cycle-output-quality
-description: "Run one read-only qualitative reviewer agent over task-cycle output artifacts after `$run-task-code-and-log` returns and before `$derive-improvement-task` selects the next task. Use when `$orchestrate-task-cycle` needs direct inspection of generated outputs, KG/candidate artifacts, reports, logs, dashboards, validation bundles, or other task products so the next-task direction can incorporate qualitative output quality without treating the review as goal truth or implementation authority."
+description: "Run one read-only qualitative reviewer agent over task-cycle output artifacts after `$run-task-code-and-log` returns and before `$derive-improvement-task` selects the next task. Use when `$orchestrate-task-cycle` needs direct inspection of primary or candidate artifacts, reports, logs, dashboards, validation bundles, or other task products without treating the review as goal truth, final direction authority, or implementation authority."
 ---
 
 # Review Cycle Output Quality
@@ -14,7 +14,7 @@ The caller should invoke it after `$run-task-code-and-log` returns execution evi
 ## Invocation Contract
 
 - Invoke exactly one read-only reviewer agent. Do not fan out multiple reviewers, create debate panels, or let the main coordinator silently replace the reviewer.
-- Route the reviewer at Tier 4 with `model: gpt-5.6-terra` and `reasoning_effort: xhigh`. This read-only qualitative reviewer is capped at Tier 4 and must not use Sol. If the tool cannot enforce either field, preserve the request in the prompt, report prompt-only or inherited-unverified routing, and do not claim Terra execution. Do not use `ultra`.
+- Apply `policy_id: configured-tiered-routing-v3` and route the reviewer with profile `qualitative_review`, Tier 4, `requested_model_ref: model_ref:balanced`, and `requested_reasoning_effort: xhigh`. Keep this read-only reviewer capped at Tier 4; it never owns the Tier 5 direction decision or requests `model_ref:direction`. Resolve `requested_model` only through caller configuration or a repository adapter. If the model configuration is reference-only or the tool cannot verify the binding or effort, report prompt-only or inherited-unverified routing and do not claim enforced execution. Do not use delegated `ultra`.
 - Keep the reviewer read-only. It may inspect task outputs, generated artifacts, logs, validation bundles, `.task/`, `.agent_log/`, `.schema/`, `.contract/`, `.issue/`, `.agent_advice/`, and source/output artifacts named by task/run evidence when authority permits.
 - Do not let the reviewer edit implementation files, workflow artifacts, task state, issue state, schema records, commits, or advice lifecycle files.
 - Do not read `.env`, credentials, private keys, raw secrets, or unrelated personal data. Do not persist raw provider prompts/responses/source bodies unless the task policy explicitly allows bounded local evidence.
@@ -51,15 +51,15 @@ Do not define domain lexicons, identifier surface forms, source-language rules, 
 Ask the reviewer to cover only dimensions relevant to the produced artifact:
 
 - `artifact_presence`: expected outputs exist, are readable, and are in the intended location. For existence/empty judgments, first resolve the body through S2 `output_body_locator` when a producer manifest is supplied; producer-declared body files prevent `missing_or_empty` even if a fixed legacy directory is empty. When the hook is absent, keep the fixed-path legacy check but report `path_binding=fixed_only` / `output_body_locator_unverified`; when the manifest schema or layout id differs from reviewer expectations, report `layout_drift` and use the declared path fallback. Do not infer output-layer paths from project-specific names in this skill.
-- `format_contract`: files parse and follow the expected schema, report, dashboard, KG, or validation shape.
+- `format_contract`: files parse and follow the expected primary-artifact, schema, report, dashboard, or validation shape supplied by the caller or repository adapter.
 - `content_coverage`: output covers the task's material requirements and important source/output regions.
-- `semantic_quality`: labels, entities, relations, claims, summaries, visuals, or decisions are meaningful rather than generic or meta-process filler.
+- `semantic_quality`: adapter-designated content fields, claims, summaries, visuals, or decisions are meaningful rather than generic or meta-process filler.
 - `landed_feature_regression`: when `landed_feature_inventory` is supplied for a new representative output, compare authorized feature classes against Q2 `feature_presence_evidence` body counts when that hook is available; present requires the adapter-owned body field count to meet its minimum. If the body file is absent, set `artifact_body_missing=true`, fail-close the review verdict, and cap review-backed progress for that output at `governance_only`. If body evidence exists but only metadata pointers or other artifact existence support the class, count `synthesis_not_materialized`, set `feature_regression_count`, and preserve `feature_regressed_artifact=true`. If Q2 evidence is absent, fall back to the output manifest's `feature_classes_present`, set `presence_basis=manifest_declaration_only`, and keep existing P1 behavior. Set `feature_manifest_missing=true` when the manifest is absent and no body hook supplies presence. If the inventory hook is absent, fail quiet and do not infer feature classes locally.
-- `semantic_readiness`: whether primary output semantics are ready enough to count as progress, or are capped by placeholder events, surface-only entities, unsupported relations, generic labels, or meta-process filler.
+- `semantic_readiness`: whether adapter-designated primary-artifact semantics are ready enough to count as progress, or are capped by placeholders, contextless fields, unsupported claims, generic labels, or meta-process filler.
 - `substance_delta`: whether the produced artifact contains real primary-output substance beyond validator/oracle/metric existence, using adapter/domain packet fields when supplied.
 - `constraint_forced_vacuity`: whether a passed metric points at adapter-classified opaque surrogates or otherwise meaning-empty targets below the adapter-owned density floor. This is separate from tautological metric validity: G-OENV covers metrics that pass by construction, while N1 covers real measurements over empty targets.
 - `vacuous_corrective`: whether corrective/backfill/reconciliation rows attempted work but resolved zero actual items.
-- `degenerate_surface_language`: whether entities or events appear to be pronouns, Korean particles attached to common nouns, repeated generic nouns, placeholders, or surface strings without stable identity.
+- `degenerate_surface_language`: whether adapter-designated content fields contain malformed, unstable, placeholder, repeated-generic, or contextless values under repository-owned rules. The adapter owns applicability and language-specific semantics.
 - `coverage_sufficiency`: whether the adapter-designated coverage axis satisfies the current task/rung; a partial envelope should cap progress only when the repository-owned rung contract requires broader coverage.
 - `goal_axis_completeness`: when the caller or repository adapter supplies `goal_axis_map`, verify that every active measurable goal has at least one mapped `quality_vector` axis. Do not invent axes; report `pass_with_unobserved_axes=true` for goals whose mapped axis set is empty.
 - `verification_source_separation`: report axis ID, verification/producer input IDs, verified artifact IDs, fingerprints, coupling, and provenance. Preserve same-artifact structural recomputation as `self_grounded`; do not extend it to source-independent semantic evidence.
@@ -71,10 +71,10 @@ Ask the reviewer to cover only dimensions relevant to the produced artifact:
 - `output_delta`: when the caller supplies an output-delta contract packet, call the contract helper on produced artifact paths and report whether the repository-defined primary output layer actually changed.
 - `validator_disagreement`: when the caller supplies strict runner validation plus output-delta evidence, compare their `semantic_progress` values. If runner validation says true while output-delta says false, report a block-level disagreement and return only an `observed_semantic_progress` claim. This review never owns the authoritative progress verdict.
 - `coverage_quality_reconciliation`: when the caller supplies both loopback and output-delta G-COV evidence, report a block-level disagreement if `coverage_quality_delta_reconciliation_gate.status=block`; do not let the favorable G-COV source override inspected output quality.
-- `observed_output_class`: when the caller supplies loop-breaker or output-delta evidence from `detect_progress_loop.py`, prefer the observed class over self-declared progress fields. Classify `metadata_only` and repeated `terminal_record` as governance-only unless independent artifact inspection proves a primary output delta.
+- `observed_output_class`: when the caller supplies loop-breaker or output-delta evidence from `detect_progress_loop.py`, prefer the observed class over self-declared progress fields. Use `material_delta` for an adapter-validated primary-artifact change. Classify `metadata_only` and repeated `terminal_record` as governance-only unless independent artifact inspection proves a material delta.
 - `evidence_traceability`: claims link to exact supporting paths, hashes, spans, logs, or validation records.
 - `user_visible_quality`: output is understandable, useful, and not misleading for the target user or workflow.
-- `no_overclaim`: output does not claim gold, readiness, legal/rights/ZKP/downstream status, or completion beyond evidence.
+- `no_overclaim`: output does not claim repository-defined assurance, readiness, compliance, downstream eligibility, or completion beyond evidence.
 - `blocker_direction`: defects are classified into actionable next-task directions.
 
 ## Result Contract
@@ -87,10 +87,13 @@ Return a JSON-compatible summary and, when durable evidence is required, write a
   "cycle_id": "cycle-* or unknown",
   "review_agent_count": 1,
   "agent_routing_applicability": "delegated|delegation_unavailable",
-  "policy_id": "gpt-5.6-tiered-routing-v2",
+  "policy_id": "configured-tiered-routing-v3",
   "profile_id": "qualitative_review",
   "routing_tier": 4,
-  "requested_model": "gpt-5.6-terra",
+  "requested_model_ref": "model_ref:balanced",
+  "requested_model": "model_ref:balanced|model_id_A",
+  "model_configuration_status": "reference_only|resolved|invalid",
+  "model_binding_receipt": null,
   "requested_reasoning_effort": "xhigh",
   "routing_reason_codes": ["profile_default"],
   "routing_signals": {},
@@ -116,7 +119,7 @@ Return a JSON-compatible summary and, when durable evidence is required, write a
   ],
   "direction_recommendations": ["next-task direction candidate"],
   "output_delta_status": "complete|not_applicable_no_contract|not_applicable_no_provider|blocked_provider_failed|blocked_provider_malformed",
-  "observed_output_class": "node_edge_delta|metadata_only|terminal_record|unknown",
+  "observed_output_class": "material_delta|metadata_only|terminal_record|unknown",
   "changed_vs_previous": false,
   "semantic_progress": false,
   "substance_delta_pass": false,
@@ -228,6 +231,10 @@ Return a JSON-compatible summary and, when durable evidence is required, write a
 
 Use `review_status` as the owning skill result status. When the orchestration ledger records this stage, use canonical lifecycle statuses such as `complete`, `partial`, `blocked`, `skipped`, or `not_applicable` and preserve the raw result status separately if needed.
 
+Treat `requested_model_ref` as the stable policy identity. When `model_configuration_status=reference_only`, keep `requested_model=model_ref:balanced`, omit the binding receipt, and restrict `routing_enforcement` to `prompt_only|inherited_unverified`. Use `routing_enforcement=enforced` only when caller or repository configuration resolves the runtime model and the content-bound binding receipt revalidates.
+
+Preserve `degenerate_surface_language`, `placeholder_event_found`, `surface_entity_suspected`, `relation_semantics_ready`, and `kg_core_blocker` as compatibility schema labels only. Populate or interpret them only through caller- or adapter-supplied field-class and blocker mappings; do not embed graph, event, entity, relation, language, or assurance semantics in this global skill. Keep `not_gold` as an existing no-overclaim compatibility flag, not as an independently verified quality claim.
+
 ## Integration Guidance
 
 - Pass the result to `$manage-schema-contracts` before derivation when the review found schema, evidence, or artifact-contract gaps.
@@ -251,14 +258,14 @@ Use `review_status` as the owning skill result status. When the orchestration le
 - When the reviewed change is guard/verifier/report-only hardening over the same target artifact and no fresh run id exists, set `verifier_surface_hardening=true`; do not describe it as primary-output progress.
 - When the run disposition is `candidate_degraded`, preserve it as quality-miss evidence and do not call it acceptable/canonical output unless independent verification evidence is supplied for the consumed axes.
 - When `surface_field_classes` is supplied, emit one `field_class_results` row for every listed active class, not only summaries or the most visible field. An applicable class that is absent, `not_observed`, `not_evaluated`, referentially unresolved, or has nonzero scalar defects prevents aggregate `surface_field_review_status=pass`; a representative class cannot mask it. Explicit adapter-owned `not_applicable` rows are excluded rather than failed. Preserve scalar `surface_field_defect_matrix` and recommend producer/field repair, producer supply, residual descope, terminal blocker, or user escalation as appropriate. Missing field class maps are `field_class_map_missing=true` and fail quiet; they do not fabricate an aggregate pass.
-- When `surface_quality_suspected=true`, `semantic_ready=false`, `placeholder_event_found=true`, or `surface_entity_suspected=true` affects the primary output, set `progress_cap: governance_only` unless strict changed-and-semantic output-delta evidence independently proves primary-output progress.
+- When `surface_quality_suspected=true`, `semantic_ready=false`, `placeholder_event_found=true`, or `surface_entity_suspected=true` affects an adapter-designated primary element, set `progress_cap: governance_only` unless strict changed-and-semantic output-delta evidence independently proves primary-output progress.
 - Do not double-count Part M and Part N: Part M harvest/preflight fields decide whether the execution-context exit contract was safe to consume; N1 decides whether the landed output target carries adapter-owned meaning after that exit. Preserve both when supplied, but use one blocking reason per affected progress claim.
-- When pronoun-only, particle-attached, common-noun, placeholder, or repeated-generic labels affect primary entities/events, set `surface_quality_suspected=true`, set `surface_entity_suspected=true`, add both codes when applicable, and cap progress at `governance_only` unless strict changed-and-semantic output-delta evidence proves otherwise.
+- When adapter-owned rules classify primary-artifact fields as malformed, unstable, contextless, placeholder, or repeated-generic, set `surface_quality_suspected=true`, use the compatibility field `surface_entity_suspected=true` only when an adapter-designated primary element is affected, add both codes when applicable, and cap progress at `governance_only` unless strict changed-and-semantic output-delta evidence proves otherwise.
 - When the adapter-designated coverage axis is below the task/rung requirement, add `coverage_insufficient` to `quality_blocker_codes` and recommend the repository-owned next coverage/envelope capability rather than inventing a domain scale or adding another measurement surface.
-- When `observed_output_class` is available, carry it into `qualitative_review_packet` and downstream derivation. Do not allow self-declared `produced_domain_delta=true` to override an observed `metadata_only` or repeated `terminal_record` classification.
+- When `observed_output_class` is available, carry it into `qualitative_review_packet` and downstream derivation. Do not allow self-declared `produced_domain_delta=true` to override an observed `metadata_only` or repeated `terminal_record` classification; only an observed `material_delta` represents the generic primary-artifact delta class.
 - Require `$derive-improvement-task` to explain whether it incorporated, deferred, rejected, or found this review not applicable.
 - Pass the result into `$validate-task-completion` as qualitative evidence, while preserving that it is agent review rather than direct human approval.
-- Report this review in Korean cycle summaries as agent qualitative output review evidence when it affects the next task direction.
+- Report this review in user-facing cycle summaries as agent qualitative output-review evidence when it affects the next-task direction.
 
 ## Failure Handling
 

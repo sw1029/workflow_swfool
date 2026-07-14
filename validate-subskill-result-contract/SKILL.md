@@ -1,6 +1,6 @@
 ---
 name: validate-subskill-result-contract
-description: "Validate result contracts from `$orchestrate-task-cycle` subskills. Use before advancing cycle stages to check required fields such as task IDs, verdicts, changed files, blockers, evidence paths, running-state details, issue status, commit status, and final-report fields; default to warn except final report or explicit block mode."
+description: "Validate result contracts from `$orchestrate-task-cycle` subskills. Use before advancing cycle stages to check required fields, typed verdict axes, final-candidate and finalization-receipt bindings, consumer echoes, lifecycle applicability, and final-report evidence; default to warn except integrity boundaries, final report, or explicit block mode."
 ---
 
 # Validate Subskill Result Contract
@@ -11,14 +11,14 @@ Use this skill as a stage gate between orchestration phases. It checks whether t
 
 Use `${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/scripts/result_contract.py` for deterministic validation.
 
-`result_contract.py` is the stable CLI and `validate(target, result, mode, context=None)` facade. Supply `--context`/`context` when long-run ledger state is in scope; `launching`, `running`, and `completed_pending_validation` independently block pass/advanced validation and ordinary derive. Reusable implementation lives under `scripts/result_contract_lib/`: `RuleContext` and the abstract `ContractRule`/`TargetContractRule` hierarchy own the extension contract, `RuleRegistry` composes ordered rules, common modules own configuration/access/integrity/task-routing helpers, and `rules/` owns one target-specific validator class per result family. Add or test a target rule through the registry instead of expanding the facade.
+`result_contract.py` is the stable CLI and `validate(target, result, mode, context=None)` facade. Supply `--context`/`context` when long-run ledger or finalization state is in scope; `launching`, `running`, and `completed_pending_validation` independently block pass/advanced validation and ordinary derive. Reusable implementation lives under `scripts/result_contract_lib/`: `RuleContext` and the abstract `ContractRule`/`TargetContractRule` hierarchy own the extension contract, `RuleRegistry` composes ordered rules, `finalization.py` owns candidate/receipt/current-projection verification, `lifecycle.py` owns optional typed option and operation-applicability checks, common modules own shared helpers, and `rules/` owns one target-specific validator class per result family. Add or test a target rule through the registry instead of expanding the facade.
 
 ## Workflow
 
 1. Choose the target: `repo_skill_adapter_scan`, `acceptance`, `validation_scope_plan`, `validation_set_plan`, `governance`, `repo_skill_adapter_validate`, `code_structure_audit`, `run`, `qualitative_review`, `loopback_audit`, `validation_set_build`, `visible_increment`, `repo_skill_gap_analysis`, `cycle_efficiency_profile`, `validation_scope_finalize`, `index_pre_validate`, `validate`, `issue`, `schema_pre_derive`, `derive`, `schema_post_derive`, `index`, `commit`, `dashboard`, `report`, or `closeout_commit`.
 2. Validate the owning skill result in `warn` mode by default.
 3. Treat a missing or mismatched top-level canonical `step` as a ledger-envelope warning. Use `block` mode, or pass an explicit `--step <canonical-step>` to `$maintain-cycle-ledger`, before using the result JSON directly as a ledger event.
-4. Use `block` mode when missing fields would corrupt the cycle transition, especially final report fields, `running` execution details, task-pack promotion provenance, candidate deletion, issue closure, or commit creation.
+4. Use `block` mode when missing fields would corrupt the cycle transition, especially a governed final candidate, current finalization receipt, consumer echo, final report fields, `running` execution details, task-pack promotion provenance, candidate deletion, issue closure, or commit creation. Finalization-integrity findings block regardless of the caller's warning preference.
 5. Append the contract result to the cycle ledger through `$maintain-cycle-ledger`.
 6. Pass warnings downstream in the next subskill packet.
 
@@ -28,6 +28,11 @@ Use `${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/scripts/result_co
 - Top-level `step` matching the target when a result may be appended directly as a ledger event.
 - `changed_files` for implementation/governance, validation, issue, commit, and report stages when files changed.
 - `validation_verdict` and `progress_verdict` from validation onward.
+- For governed `validate`, require `schema_version: 1`, `kind: cycle_final_candidate`, `final_candidate: true`, stable cycle/attempt identity, the explicit expected-previous revision/attempt/token tuple, all six existing evidence-bound verdict axes, and a `complete_projection` or `typed_operations` durable-state candidate. Reject owner-assigned revision, supersession, receipt, or authoritative-final fields in the candidate.
+- For ordinary `derive` and later consumers, require the current `cycle_finalization_receipt`, its exact authoritative projection, and a `finalization_consumption` echo of token, attempt ID/revision, projection ID/digest, and receipt hash. Re-verify the receipt against the immutable snapshot and current pointer. Permit receipt `not_applicable` only for initial/bootstrap work or a reasoned standalone/unrelated repair that explicitly has no predecessor final attempt.
+- For `dashboard`, load the verified current pointer as the canonical source even when a ledger receipt echo is absent. For `report`, re-verify its supplied current receipt. Require both to expose the same receipt-bound projection digest and block any independently recomputed divergent conclusion.
+- When escalation synthesis supplies `option_inventory`, validate its closed option classes, applicability, completeness, blocker-removing presence, and evidence-bound absence reason. An incomplete inventory may ask for information but cannot establish terminal, completion, or authority truth.
+- When gate consumption supplies `gate_operation_applicability`, validate each closed operation independently. Treat unknown state-changing scope as blocked; allow diagnostic reads only with a separate verified authority, safety, privacy, and provenance receipt.
 - Owning-skill result statuses such as run `success` belong in the result contract; cycle ledger lifecycle status normalization belongs to `$maintain-cycle-ledger`.
 - `blockers` as an explicit list, using an empty list when no blockers remain.
 - `evidence_paths` for run, schema, index, validation, issue, commit, dashboard, and report stages.
@@ -75,6 +80,9 @@ Use `${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/scripts/result_co
 ## Guardrails
 
 - Do not infer success from missing data.
+- Do not accept a candidate, prepared mutation, stale receipt, non-current revision, or mismatched consumer echo as finalized truth.
+- Do not collapse task acceptance into goal progress. Preserve all six axes and allow `advanced` only when the finalized artifact-semantic and goal-readiness axes both pass.
+- Do not let an incomplete option inventory or an unknown operation scope create terminal, authority, promotion, or other state-changing permission.
 - Do not use this skill to override an owning skill verdict.
 - Do not let a session-audit packet supply message bodies, self-require its own completeness, upgrade any verdict, establish authority, close an issue, or authorize semantic repair. Only deterministic `.task/session_audit/index.json` reconstruction may be auto-repairable.
 - Do not let green tests satisfy a missing `acceptance_scenario_gate`.

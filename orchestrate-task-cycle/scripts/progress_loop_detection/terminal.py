@@ -57,13 +57,34 @@ def untried_quiescence_reconcile(progress_items: list[dict[str, Any]], raw_quies
     }
 
 
-def terminal_quiescence_gate(progress_items: list[dict[str, Any]], has_supplied_input_delta: bool, threshold: int) -> dict[str, Any]:
+def terminal_quiescence_gate(
+    progress_items: list[dict[str, Any]],
+    has_supplied_input_delta: bool,
+    threshold: int | None,
+) -> dict[str, Any]:
+    if threshold is None:
+        reconcile = untried_quiescence_reconcile(progress_items, False)
+        return {
+            "gate": "T-QUIESCENCE",
+            "status": "budget_unverified",
+            "evaluation_status": "budget_unverified",
+            "threshold": None,
+            "terminal_streak": 0,
+            "quiescence_required": False,
+            "raw_quiescence_required": False,
+            "commit_skipped_reason": None,
+            "terminal_root_key": None,
+            "has_supplied_input_delta": has_supplied_input_delta,
+            "overridden_by_untried_root_cause": False,
+            "quiescence_untried_reconcile": reconcile,
+        }
     first_terminal = next((item for item in progress_items if quiescence_progress_item(item)), None)
     if not first_terminal:
         reconcile = untried_quiescence_reconcile(progress_items, False)
         return {
             "gate": "T-QUIESCENCE",
             "status": "not_applicable",
+            "evaluation_status": "not_applicable",
             "threshold": threshold,
             "terminal_streak": 0,
             "quiescence_required": False,
@@ -97,6 +118,7 @@ def terminal_quiescence_gate(progress_items: list[dict[str, Any]], has_supplied_
     return {
         "gate": "T-QUIESCENCE",
         "status": "block" if required else "ok",
+        "evaluation_status": "evaluated",
         "threshold": threshold,
         "terminal_streak": streak,
         "untried_repair_required_streak": untried_repair_streak,
@@ -158,13 +180,31 @@ def terminal_escalation_missing_input(item: dict[str, Any] | None) -> dict[str, 
 def terminal_escalation_gate(
     progress_items: list[dict[str, Any]],
     has_supplied_input_delta: bool,
-    threshold: int,
+    threshold: int | None,
 ) -> dict[str, Any]:
+    if threshold is None:
+        return {
+            "gate": "G2-TERMINAL-ESCALATION",
+            "status": "budget_unverified",
+            "evaluation_status": "budget_unverified",
+            "threshold": None,
+            "terminal_recheck_streak": 0,
+            "root_family": None,
+            "escalation_required": False,
+            "forced_disposition": None,
+            "has_supplied_input_delta": has_supplied_input_delta,
+            "missing_input": None,
+            "seal_required": False,
+            "seal_family_path": ".task/sealed_blocker_families.json",
+            "hard_stop_required": False,
+            "evidence_paths": [],
+        }
     first_terminal = next((item for item in progress_items if terminal_recheck_item(item)), None)
     if not first_terminal:
         return {
             "gate": "G2-TERMINAL-ESCALATION",
             "status": "not_applicable",
+            "evaluation_status": "not_applicable",
             "threshold": threshold,
             "terminal_recheck_streak": 0,
             "root_family": None,
@@ -203,6 +243,7 @@ def terminal_escalation_gate(
     return {
         "gate": "G2-TERMINAL-ESCALATION",
         "status": "block" if required else "ok",
+        "evaluation_status": "evaluated",
         "threshold": threshold,
         "terminal_recheck_streak": streak,
         "root_family": root_family,

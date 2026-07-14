@@ -56,42 +56,9 @@ def progress_kind(value: dict[str, Any], progress: str | None, text: str = "") -
         if isinstance(raw, str) and raw.lower() in {"goal_productive", "governance_only"}:
             return raw.lower()
 
-    positive_fields = (
-        "goal_productive_this_cycle",
-        "goal_productive_output",
-        "produced_domain_delta",
-        "semantic_quality_evidence_added",
-        "quality_metric_improved",
-        "reviewable_output_added",
-        "source_backed_output_added",
-        "validation_set_built",
-    )
-    governance_fields = (
-        "artifact_sidecar_added",
-        "governance_only",
-        "workflow_only",
-        "metadata_only",
-        "sidecar_only",
-    )
-    if any(boolish(value.get(field)) for field in positive_fields):
+    if "goal_productive" in lowered or "produced domain delta" in lowered:
         return "goal_productive"
-    if any(boolish(value.get(field)) for field in governance_fields):
-        return "governance_only"
-
-    if any(
-        token in lowered
-        for token in (
-            "goal_productive",
-            "produced domain delta",
-            "semantic_quality_evidence_added",
-            "quality metric improved",
-            "reviewable output added",
-            "source-backed validation",
-            "source backed validation",
-        )
-    ):
-        return "goal_productive"
-    if any(token in lowered for token in ("governance_only", "artifact_sidecar_added", "sidecar only", "metadata-only", "no-live")):
+    if any(token in lowered for token in ("governance_only", "metadata-only", "no-live")):
         return "governance_only"
     if progress in {"safety_only", "no_progress"}:
         return "governance_only"
@@ -104,14 +71,17 @@ def task_correction_class(
     coverage_gate: dict[str, Any],
     provider_gate: dict[str, Any],
     text: str = "",
+    policy: dict[str, Any] | None = None,
 ) -> str:
     explicit = first_value(value, ("task_correction_class", "anti_loop_progress_gate.task_correction_class"))
     if isinstance(explicit, str) and explicit.strip().lower() in {"detection", "correction", "mixed", "unknown"}:
         return explicit.strip().lower()
     lowered = " ".join([text, *scalar_values(value)]).lower()
+    detection_pattern = (policy or {}).get("detection_terms_pattern")
+    correction_pattern = (policy or {}).get("correction_terms_pattern")
     detection = bool(
         boolish(first_value(value, ("measurement_progress", "anti_loop_progress_gate.measurement_progress")))
-        or DETECTION_TERMS_RE.search(lowered)
+        or (detection_pattern and re.search(detection_pattern, lowered, re.IGNORECASE))
     )
     correction = bool(
         boolish(delta.get("produced_domain_delta"))
@@ -119,7 +89,7 @@ def task_correction_class(
         or boolish(delta.get("semantic_progress"))
         or boolish(coverage_gate.get("quality_delta_pass"))
         or (number_value(provider_gate.get("provider_request_count")) or 0) > 0
-        or CORRECTION_TERMS_RE.search(lowered)
+        or (correction_pattern and re.search(correction_pattern, lowered, re.IGNORECASE))
     )
     if detection and correction:
         return "mixed"
@@ -155,14 +125,15 @@ def evidence_item_from_value(
     progress: str | None,
     blockers: list[str],
     registry: dict[str, dict[str, Any]],
+    policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     signature = normalized_signature(value, blockers)
-    semantic = semantic_signature(value, blockers)
-    axis = root_axis(value, blockers, semantic, signature)
+    semantic = semantic_signature(value, blockers, policy)
+    axis = root_axis(value, blockers, semantic, signature, policy)
     key = root_key(value, blockers, semantic, signature)
     root_family = normalize_root_family_key(key, signature, semantic)
-    feature = workflow_feature_symbol(root, value, blockers, axis)
-    observed = observed_output_class(root, value, registry.get(feature["symbol"]))
+    feature = workflow_feature_symbol(root, value, blockers, axis, policy)
+    observed = observed_output_class(root, value, registry.get(feature["symbol"]), policy)
     delta = output_delta_gate(value, observed)
     coverage_gate = coverage_quality_delta_gate(value)
     dispatch_gate = provider_scale_dispatch_gate(value, coverage_gate)
@@ -170,9 +141,9 @@ def evidence_item_from_value(
     if delta.get("observed_override_applied"):
         kind = str(delta.get("effective_progress_kind") or kind or "")
     supplied = supplied_input_delta_gate(root, value, delta)
-    provider_gate = provider_reattempt_gate(value)
+    provider_gate = provider_reattempt_gate(value, policy)
     validator_gate = validator_integrity_gate(value)
-    correction_class = task_correction_class(value, delta, coverage_gate, dispatch_gate)
+    correction_class = task_correction_class(value, delta, coverage_gate, dispatch_gate, policy=policy)
     detection_only = correction_class == "detection" and kind != "goal_productive"
     unverified_hypotheses = first_value(
         value,
@@ -225,9 +196,14 @@ def evidence_item_from_value(
     }
 
 
-def structured_evidence(root: Path, recent: int) -> list[dict[str, Any]]:
+def structured_evidence(
+    root: Path,
+    recent: int | None,
+    policy: dict[str, Any] | None = None,
+    registry: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     evidence: list[dict[str, Any]] = []
-    registry = load_symbol_registry(root)
+    registry = registry if registry is not None else load_symbol_registry(root)
     cycle_root = root / ".task" / "cycle"
     if cycle_root.is_dir():
         for ledger in sorted(cycle_root.glob("*/stage.jsonl"), key=lambda path: path.stat().st_mtime, reverse=True):
@@ -235,16 +211,16 @@ def structured_evidence(root: Path, recent: int) -> list[dict[str, Any]]:
                 progress = structured_progress(event)
                 blockers = structured_blockers(event)
                 if progress or blockers:
-                    evidence.append(evidence_item_from_value(root, ledger, "cycle_ledger", "high", event, progress, blockers, registry))
-                if len(evidence) >= recent:
+                    evidence.append(evidence_item_from_value(root, ledger, "cycle_ledger", "high", event, progress, blockers, registry, policy))
+                if recent is not None and len(evidence) >= recent:
                     return evidence
     index_path = root / ".task" / "index.jsonl"
     for record in reversed(read_jsonl(index_path)):
         progress = structured_progress(record)
         blockers = structured_blockers(record)
         if progress or blockers:
-            evidence.append(evidence_item_from_value(root, index_path, "task_index", "medium", record, progress, blockers, registry))
-        if len(evidence) >= recent:
+            evidence.append(evidence_item_from_value(root, index_path, "task_index", "medium", record, progress, blockers, registry, policy))
+        if recent is not None and len(evidence) >= recent:
             return evidence
     validation_dir = root / ".task" / "validation"
     if validation_dir.is_dir():
@@ -258,10 +234,10 @@ def structured_evidence(root: Path, recent: int) -> list[dict[str, Any]]:
                 progress = structured_progress(value)
                 blockers = structured_blockers(value)
                 if progress or blockers:
-                    evidence.append(evidence_item_from_value(root, path, "structured_validation", "medium", value, progress, blockers, registry))
-            if len(evidence) >= recent:
+                    evidence.append(evidence_item_from_value(root, path, "structured_validation", "medium", value, progress, blockers, registry, policy))
+            if recent is not None and len(evidence) >= recent:
                 return evidence
-    return evidence[:recent]
+    return evidence if recent is None else evidence[:recent]
 
 
 def classify_progress(text: str) -> str | None:
@@ -353,7 +329,28 @@ def collect_sealed_families(root: Path) -> list[dict[str, Any]]:
     return sealed
 
 
-def command_surface_budget(root: Path, threshold: int, metadata_only_count: int, metadata_window: int = 2) -> dict[str, Any]:
+def command_surface_budget(
+    root: Path,
+    threshold: int | None,
+    metadata_only_count: int,
+    metadata_window: int | None,
+    pattern: str | None,
+) -> dict[str, Any]:
+    if threshold is None or metadata_window is None or not pattern:
+        return {
+            "threshold": threshold,
+            "surface_count": 0,
+            "metadata_only_window": metadata_window,
+            "metadata_only_count": metadata_only_count,
+            "budget_exceeded": False,
+            "consolidation_candidate_required": False,
+            "hard_gate": False,
+            "constrains_current_family": False,
+            "decision_scope": "global_dashboard",
+            "evaluation_status": "budget_unverified",
+            "surfaces": [],
+        }
+    command_pattern = re.compile(pattern, re.IGNORECASE)
     surfaces: list[dict[str, Any]] = []
     scripts_dir = root / "scripts"
     if scripts_dir.is_dir():
@@ -361,13 +358,12 @@ def command_surface_budget(root: Path, threshold: int, metadata_only_count: int,
             text = read_text(path)
             if not text:
                 continue
-            commands = [match.group(0).lower() for match in COMMAND_SURFACE_RE.finditer(text)]
+            commands = [match.group(0).lower() for match in command_pattern.finditer(text)]
             if not commands:
                 continue
             family_counts = Counter(
                 re.sub(r"[-_]v\d+", "-vNNN", command)
                 for command in commands
-                if any(token in command for token in ("contract", "handoff", "packet", "gate", "preflight", "check", "locator", "resolution", "recovery"))
             )
             total_contract_like = sum(family_counts.values())
             if total_contract_like >= threshold:
@@ -391,5 +387,6 @@ def command_surface_budget(root: Path, threshold: int, metadata_only_count: int,
         "hard_gate": False,
         "constrains_current_family": False,
         "decision_scope": "global_dashboard",
+        "evaluation_status": "evaluated",
         "surfaces": surfaces[:8],
     }

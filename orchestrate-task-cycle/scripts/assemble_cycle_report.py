@@ -8,6 +8,19 @@ from pathlib import Path
 from typing import Any
 
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from result_contract_lib.finalization import (  # noqa: E402
+    VERDICT_AXES,
+    extract_finalization_receipt,
+    projection_from_result,
+    projection_conclusions,
+    verified_projection,
+)
+
+
 FIELD_ORDER = [
     "기준 GT",
     "비-GT 방향성 문서",
@@ -135,6 +148,61 @@ def all_events(context: dict[str, Any], stage: dict[str, Any]) -> list[dict[str,
             deduped.append(event)
             seen_keys.add(key)
     return deduped
+
+
+def finalization_source(stage: dict[str, Any], validation: dict[str, Any]) -> dict[str, Any] | None:
+    if extract_finalization_receipt(validation) is not None:
+        return validation
+    candidates = [event for event in stage_events(stage) if event.get("step") == "validate"]
+    for event in reversed(candidates):
+        if extract_finalization_receipt(event) is not None:
+            return event
+    if extract_finalization_receipt(stage) is not None:
+        return stage
+    return None
+
+
+def finalization_projection(
+    context: dict[str, Any],
+    stage: dict[str, Any],
+    validation: dict[str, Any],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, list[dict[str, Any]]]:
+    source = finalization_source(stage, validation)
+    if source is None:
+        return None, None, []
+    projection, receipt, errors = verified_projection(source, context)
+    declared_projection = projection_from_result(source)
+    if projection is not None and declared_projection is not None and declared_projection != projection:
+        errors.append(
+            {
+                "code": "authoritative_projection_report_input_mismatch",
+                "message": "Report input projection differs from the current immutable finalization snapshot.",
+            }
+        )
+    findings = [
+        {
+            "severity": "block",
+            "code": str(error["code"]),
+            "message": str(error["message"]),
+            **({"evidence": error["evidence"]} if error.get("evidence") is not None else {}),
+        }
+        for error in errors
+    ]
+    return projection, receipt, findings
+
+
+def finalization_consumption(receipt: dict[str, Any]) -> dict[str, Any]:
+    return {
+        field: receipt[field]
+        for field in (
+            "finalization_token",
+            "attempt_id",
+            "attempt_revision",
+            "authoritative_projection_id",
+            "authoritative_projection_digest",
+            "receipt_hash",
+        )
+    }
 
 
 def report_evidence_paths(
@@ -689,16 +757,54 @@ def assemble(
     commit: dict[str, Any],
     closeout_commit: dict[str, Any],
 ) -> dict[str, Any]:
-    validation_value = validation_verdict(validation, stage)
-    report_validation_value = "passed" if validation_value == "complete" else validation_value
-    progress_value = progress_verdict(validation, stage, progress)
+    observed_validation_value = validation_verdict(validation, stage)
+    observed_progress_value = progress_verdict(validation, stage, progress)
     blocker_list = blockers(context, stage, validation, progress)
     report_findings = report_input_findings(stage, validation)
+    authoritative_projection, finalization_receipt, finalization_findings = finalization_projection(
+        context,
+        stage,
+        validation,
+    )
+    report_findings.extend(finalization_findings)
+    if authoritative_projection is not None:
+        report_validation_value, progress_value = projection_conclusions(authoritative_projection)
+        if observed_validation_value not in {"not_run", report_validation_value} or observed_progress_value not in {
+            "not_run",
+            progress_value,
+        }:
+            report_findings.append(
+                {
+                    "severity": "block",
+                    "code": "authoritative_projection_report_divergence",
+                    "message": "Report inputs disagree with the receipt-bound authoritative finalization projection.",
+                    "evidence": {
+                        "observed_validation_verdict": observed_validation_value,
+                        "observed_progress_verdict": observed_progress_value,
+                        "projected_validation_verdict": report_validation_value,
+                        "projected_progress_verdict": progress_value,
+                    },
+                }
+            )
+    else:
+        report_validation_value = "passed" if observed_validation_value == "complete" else observed_validation_value
+        progress_value = observed_progress_value
+        if report_validation_value in {"passed", "pass", "success"} or progress_value == "advanced":
+            report_findings.append(
+                {
+                    "severity": "block",
+                    "code": "finalization_receipt_missing",
+                    "message": "A positive report conclusion requires the current verified finalization receipt and projection.",
+                }
+            )
     completion_candidate = (
-        validation_value in {"complete", "passed", "pass", "success"}
+        report_validation_value in {"complete", "passed", "pass", "success"}
         and progress_value == "advanced"
         and not blocker_list
         and not report_findings
+        and authoritative_projection is not None
+        and finalization_receipt is not None
+        and authoritative_projection.get("authoritative_final") == "success"
     )
     used_goal_truth = goal_truth(context, stage, validation)
     used_advice = advice_docs(context, stage, validation)
@@ -707,6 +813,16 @@ def assemble(
     changed = changed_files(context, stage, validation, commit)
     commands = command_results(validation, stage)
     axes = progress_axes(validation, stage)
+    verdict_axes = (
+        {axis: authoritative_projection[axis] for axis in VERDICT_AXES}
+        if authoritative_projection is not None
+        else {}
+    )
+    if authoritative_projection is not None and axes == ["not_recorded"]:
+        axes = [
+            f"{axis}: {str(authoritative_projection[axis].get('status') or 'unknown')}"
+            for axis in VERDICT_AXES
+        ]
     evidence_paths = report_evidence_paths(context, stage, validation, progress, commit, closeout_commit)
     task_id = (
         validation.get("completed_task_id")
@@ -780,6 +896,12 @@ def assemble(
         "progress_verdict": progress_value,
         "blockers": blocker_list,
         "progress_axes": axes,
+        "verdict_contract_version": authoritative_projection.get("verdict_contract_version") if authoritative_projection else None,
+        "verdict_axes": verdict_axes,
+        "authoritative_final": authoritative_projection.get("authoritative_final") if authoritative_projection else None,
+        "authoritative_projection": authoritative_projection,
+        "finalization_receipt": finalization_receipt,
+        "finalization_consumption": finalization_consumption(finalization_receipt) if finalization_receipt else None,
         "next_task_id": next_task_id,
         "selected_task_source": selected_task_source,
         "closure_steps": closure_steps,

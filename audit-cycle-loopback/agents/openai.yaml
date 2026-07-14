@@ -1,4 +1,4 @@
 interface:
   display_name: "Audit Cycle Loopback"
-  short_description: "Compute anti-loop adapter routing gates"
-  default_prompt: "Use $audit-cycle-loopback to compute a deterministic anti-loop gate, using at most one read-only Tier 4 Terra/xhigh reviewer when evidence is insufficient or near threshold; do not use Sol."
+  short_description: "Prepare conservative anti-loop verdict candidates"
+  default_prompt: "Use $audit-cycle-loopback to prepare an anti-loop verdict and durable-mutation candidate without writing registry, ledger, or seal state."

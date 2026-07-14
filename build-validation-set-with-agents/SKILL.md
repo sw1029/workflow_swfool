@@ -1,6 +1,6 @@
 ---
 name: build-validation-set-with-agents
-description: Build reusable validation-set assets with source tracing, oracle manifests, split manifests, leakage checks, label adjudication, and no-overclaim controls. Use when a task needs to plan, create, refresh, freeze, or consume validation sets for extractors, parsers, classifiers, evaluators, KG/data pipelines, regression suites, sampled-real evidence preflights, or when `$orchestrate-task-cycle` routes `validation_set_plan` or `validation_set_build`.
+description: Build reusable validation-set assets with source tracing, oracle manifests, split manifests, leakage checks, label adjudication, and no-overclaim controls. Use when a task needs to plan, create, refresh, freeze, or consume validation sets for extractors, parsers, classifiers, evaluators, structured-data pipelines, regression suites, sampled-real evidence preflights, or when `$orchestrate-task-cycle` routes `validation_set_plan` or `validation_set_build`.
 ---
 
 # Build Validation Set With Agents
@@ -14,9 +14,12 @@ The skill may create or update `.validation/sets/`, `.validation/candidates/`, `
 ## Agent Routing Policy
 
 - Prefer deterministic oracles, split/leakage scripts, and manifest validation without an agent model.
-- When semantic planning or labeling needs agents, request Tier 3 `model: gpt-5.6-terra` with `reasoning_effort: high`.
-- Use one Tier 4 Terra/xhigh adjudicator only for final semantic disagreement, sealed-label policy, or contract-sensitive oracle review. This evidence-building skill is capped at Tier 4; do not use Sol or delegated `ultra`.
-- Record routing applicability and enforcement. If the tool cannot enforce model/effort, report prompt-only or inherited-unverified routing and do not claim Terra execution.
+- Resolve delegated routes against `policy_id: configured-tiered-routing-v3`.
+- When semantic planning or labeling needs agents, request `profile_id: validation_set`, Tier 3, `requested_model_ref: model_ref:balanced`, and `requested_reasoning_effort: high`.
+- Use one `profile_id: validation_set_adjudication` Tier 4 agent with the same abstract model reference and `requested_reasoning_effort: xhigh` only for final semantic disagreement, sealed-label policy, or contract-sensitive oracle review.
+- Keep runtime model bindings in caller configuration or a repository adapter. Do not embed provider names or deployment-specific model identifiers in this skill.
+- Record routing applicability, requested model reference, requested model as the resolved runtime value or the abstract reference when unresolved, model configuration status, requested effort, enforcement, and any limitation. Treat an unresolved abstract reference as `reference_only`; it can support a prompt request but cannot prove enforced execution.
+- Keep this evidence-building, recommendation-only skill capped at Tier 4. Do not take final direction authority or use delegated `ultra`.
 
 ## Modes
 
@@ -96,7 +99,7 @@ Return these fields when applicable:
 - `used_goal_truth`
 - `used_advice` or `advice_handling_rationale`
 - `agent_routing_applicability`: `delegated`, `deterministic_only`, or `delegation_unavailable`
-- delegated routing fields: `policy_id`, `profile_id`, `routing_tier`, `requested_model`, `requested_reasoning_effort`, `routing_reason_codes`, `routing_signals`, `routing_signal_evidence` when Tier 5, `routing_violations` even when empty, `routing_enforcement`, and `routing_limitation` when not enforced
+- delegated routing fields: `policy_id`, `profile_id`, `routing_tier`, `requested_model_ref`, `requested_model`, `model_configuration_status`, optional `model_binding_receipt`, `requested_reasoning_effort`, `routing_reason_codes`, `routing_signals`, `routing_violations` even when empty, `routing_enforcement`, and `routing_limitation` when not enforced
 
 If `validation_set_status` is blocked, include `blocked_reason` and the exact missing source/authority/oracle condition. If `quality_tier` is `gold`, include human-reviewed or fully deterministic authoritative evidence.
 

@@ -24,9 +24,6 @@ def domain_adapter_candidate_paths(root: Path, explicit_path: str | None) -> lis
         if not candidate.is_absolute():
             candidate = root / candidate
         candidates.append(candidate)
-    default_candidate = root / DEFAULT_DOMAIN_ADAPTER_REL_PATH
-    if default_candidate.is_file():
-        candidates.append(default_candidate)
     return candidates
 
 def load_domain_adapter(root: Path, explicit_path: str | None) -> tuple[Any | None, str | None, str | None]:

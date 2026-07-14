@@ -1,6 +1,6 @@
 ---
 name: task-md-agent-governance
-description: "Implement repository work described by a root or workspace `task.md` using Tier 2 `gpt-5.6-terra/medium` routine coding agents, Tier 3 `gpt-5.6-terra/high` high-reliability coding and code analysis, and Tier 4 `gpt-5.6-terra/xhigh` important post-implementation review. This skill never promotes code-writing or recommendation-only review to Tier 5 Sol. Use when a current `task.md` needs governed delegated implementation, review, convention enforcement, or durable miss/gap handling."
+description: "Implement repository work described by a root or workspace `task.md` with governed Tier 2 routine workers, Tier 3 high-reliability workers and code analysis, and Tier 4 important post-implementation review. Use when a current `task.md` needs delegated implementation, review, convention enforcement, explicit authority boundaries, or durable miss/gap handling under configured model routing."
 ---
 
 # Task.md Agent Governance
@@ -23,15 +23,16 @@ Use a repository-owned `code_convention_contract` when available from a repo-loc
 
 ## Agent Routing Policy
 
-- When called from `$orchestrate-task-cycle`, use its [model-effort-routing.md](../orchestrate-task-cycle/references/model-effort-routing.md) policy. This skill is capped at Tier 4 and requests `gpt-5.6-terra` for every delegated worker or audit agent.
+- When called from `$orchestrate-task-cycle`, use its authoritative [model-effort-routing.md](../orchestrate-task-cycle/references/model-effort-routing.md) contract with `policy_id: configured-tiered-routing-v3`. Keep this skill capped at Tier 4 and request the abstract `model_ref:balanced` identity for every delegated worker or audit agent; never promote these roles to Tier 5 `model_ref:direction`.
 - Treat ordinary code analysis and governance as `high`; use `xhigh` when review controls completion readiness, blocker-level misses, issue lifecycle, schema/API/CLI/data-contract compatibility, security-sensitive behavior, or irreversible cleanup.
 - Route ID-only consistency work through `$manage-task-state-index` at fixed `medium`.
-- Spawn routine code-writing workers at Tier 2 with `agent_type: worker`, `model: gpt-5.6-terra`, and `reasoning_effort: medium`.
-- Use Tier 3 `gpt-5.6-terra/high` for high-reliability core logic, including schema/contract compatibility, durable task/index/issue state mutation, validation gates, security-sensitive behavior, irreversible workflow implementation, or code whose regression can corrupt durable artifacts.
-- Keep authority boundaries explicit: Terra workers may implement assigned code/tests/scripts and report observations, but they do not decide task scope, validation verdicts, miss cleanup, issue state, schema-version sufficiency, or commit readiness.
+- Spawn routine code-writing workers with profile `code_worker`, Tier 2, `agent_type: worker`, `requested_model_ref: model_ref:balanced`, and `requested_reasoning_effort: medium`.
+- Use profile `code_worker_high_reliability`, Tier 3, `requested_model_ref: model_ref:balanced`, and `requested_reasoning_effort: high` for high-reliability core logic, including schema/contract compatibility, durable task/index/issue state mutation, validation gates, security-sensitive behavior, irreversible workflow implementation, or code whose regression can corrupt durable artifacts.
+- Resolve `requested_model` only from caller configuration or a repository adapter. Record `model_configuration_status: resolved|reference_only|invalid` and the content-bound `model_binding_receipt` when resolved. A reference-only request may support planning or prompt evidence, but it cannot substantiate `routing_enforcement: enforced`.
+- Keep authority boundaries explicit: workers may implement assigned code/tests/scripts and report observations, but they do not decide task scope, validation verdicts, miss cleanup, issue state, schema-version sufficiency, or commit readiness. Tier and model selection never grant broader authority.
 - Include the effective `$manage-agent-authority` result in every code-writing worker prompt and every implementation audit prompt. Tell workers to ask/report a blocker instead of using API/network/external services, changing direction, or broadening implementation beyond the allowed freedom profile when the authority policy does not permit it.
 - Include relevant `.agent_advice` summaries in every worker or audit prompt when the task names advice or the caller supplied active advice. Tell workers to treat it as non-GT task/design context and to report conflicts instead of silently applying it.
-- Record `agent_routing_applicability`, `policy_id`, `profile_id`, `routing_tier`, requested model/effort, `routing_reason_codes`, `routing_signals`, `routing_violations` even when empty, and `routing_enforcement` in the result. If the delegation tool cannot enforce model or effort, include the request in the prompt, use `prompt_only` or `inherited_unverified`, and record the limitation instead of claiming Terra execution.
+- Record `agent_routing_applicability`, `policy_id`, `profile_id`, `routing_tier`, `requested_model_ref`, `requested_model`, `model_configuration_status`, optional `model_binding_receipt`, requested effort, `routing_reason_codes`, `routing_signals`, `routing_violations` even when empty, and `routing_enforcement` in the result. If the delegation tool cannot enforce the resolved binding or effort, include the request in the prompt, use `prompt_only` or `inherited_unverified`, and record the limitation instead of claiming execution by a particular runtime model.
 
 ## Workflow
 
@@ -55,7 +56,7 @@ Use a repository-owned `code_convention_contract` when available from a repo-loc
 3. Delegate implementation to worker agents.
    - Split work into disjoint write scopes based on `task.md` and repo structure.
    - Use worker agents for implementation when there is code to write.
-   - Spawn each code-writing worker with `agent_type: worker`, `model: gpt-5.6-terra`, and `reasoning_effort: medium` by default; use `high` for high-reliability core logic. Use Terra for governance/audit agents too, with the effort owned by their role.
+   - Spawn each routine code-writing worker with profile `code_worker`, `agent_type: worker`, `requested_model_ref: model_ref:balanced`, and `requested_reasoning_effort: medium`; use profile `code_worker_high_reliability` and `high` for high-reliability core logic. Use the same abstract model reference for governance/audit agents, with profile and effort owned by their role.
    - Tell every worker they are not alone in the codebase, must not revert others' edits, and must list changed files.
    - Tell every worker the effective authority policy and require them to stay within it. If a worker believes the task requires broader API/network/external access, direction freedom, destructive operations, or validation posture than allowed, the worker must report the mismatch instead of proceeding.
    - Tell every worker the relevant active advice constraints and require `used_advice` in their output when advice shaped implementation. If advice conflicts with the task, GT, authority, or repo facts, workers must report the conflict instead of deciding scope themselves.
@@ -79,8 +80,8 @@ Use a repository-owned `code_convention_contract` when available from a repo-loc
 
 5. Audit with `$inspect-repo-with-agents`.
    - Run a multi-agent inspection of both existing code and newly written code.
-   - Request `model: gpt-5.6-terra` and minimum `reasoning_effort: high` for ordinary code-analysis inspection agents.
-   - Request Tier 4 Terra/xhigh for important work review, including blocker-level post-implementation governance, resolved-miss archive/delete recommendations, schema/API/CLI/data-contract compatibility, security-sensitive behavior, and completion-readiness risks.
+   - Request profile `code_analysis`, Tier 3, `requested_model_ref: model_ref:balanced`, and minimum `requested_reasoning_effort: high` for ordinary code-analysis inspection agents.
+   - Request profile `important_review`, Tier 4, `requested_model_ref: model_ref:balanced`, and `requested_reasoning_effort: xhigh` for important work review, including blocker-level post-implementation governance, resolved-miss archive/delete recommendations, schema/API/CLI/data-contract compatibility, security-sensitive behavior, and completion-readiness risks.
    - Read existing `.task/task_miss/` reports before audit when that directory exists, and include unresolved prior misses in the audit target.
    - Include `.agent_goal/goal_schema_contract.md`, `.schema/`, and `.contract/` in the audit target when schema/module/script contract surfaces are relevant.
    - Include the `$manage-agent-authority` result in the audit target. Audit whether workers respected API/external-call policy, direction freedom, implementation/validation priority, strictness, conservative implementation, and escalation constraints.
@@ -119,7 +120,7 @@ Use a repository-owned `code_convention_contract` when available from a repo-loc
 7. Report outcome.
    - Summarize what was implemented, validation result, audit findings, and the saved miss report path.
    - Include active task ID, miss IDs, audit IDs, log/run IDs, and ID audit blockers when available.
-   - Include `agent_routing_applicability` and, for delegated work, `policy_id`, `profile_id`, `routing_tier`, requested model/effort, `routing_reason_codes`, signals/evidence, `routing_violations` even when empty, `routing_enforcement`, actual routing when exposed, and any limitation.
+   - Include `agent_routing_applicability` and, for delegated work, `policy_id`, `profile_id`, `routing_tier`, `requested_model_ref`, resolved or reference-only `requested_model`, `model_configuration_status`, optional `model_binding_receipt`, requested effort, `routing_reason_codes`, signals/evidence, `routing_violations` even when empty, `routing_enforcement`, actual routing when exposed, and any limitation.
    - Lead with blocking misses or failed validation before implementation summary.
 
 ## ID Governance Add-on
@@ -146,7 +147,7 @@ Treat these as miss candidates:
 - Implementation or audit output that ignores task-referenced `.agent_advice`, treats advice as `.agent_goal` GT, or applies advice despite conflict with the task, authority, current user direction, or repository facts.
 - Tests that only assert the happy path or mirror implementation details instead of behavior.
 - A task that repeats a no-live/fail-closed safety proof on the same blocker without a declared transition, batching rationale, or evidence-supply path.
-- A task that claims positive input progress from a renamed/new input kind without a non-empty supplied artifact path, `produced_domain_delta=true`, or another validated domain/output artifact.
+- A task that claims positive input progress from a renamed/new input kind without a non-empty supplied artifact reference, `produced_domain_delta=true`, or another validated primary-artifact delta.
 - A provider-terminal or sealed-family implementation path that bypasses a task-declared bounded retry/probe or an authority-permitted productive alternative path.
 - A command-surface task that adds another versioned contract/handoff/preflight command when the task declared consolidation/refactor as the expected direction.
 - A validation plan that reruns the full historical prerequisite chain without a changed affected surface, live/readiness/issue-closure gate, shared validator/runtime change, or explicit user/task requirement.
@@ -173,7 +174,7 @@ Use these statuses for prior `.task/task_miss` files after audit:
 - Do not proceed without `task.md`.
 - Do not let inspection agents edit files.
 - Do not let worker agents write outside their assigned scopes.
-- Do not spawn a code-writing implementation worker without requesting `gpt-5.6-terra` and the declared effort. When the tool cannot enforce them, record prompt-only or inherited-unverified routing instead of silently claiming compliance.
+- Do not spawn a code-writing implementation worker without requesting the profile-owned `model_ref:balanced` identity and declared effort. Resolve the runtime model only through caller or repository configuration; when the tool cannot verify the binding and effort, record prompt-only or inherited-unverified routing instead of silently claiming compliance.
 - Do not run code-analysis inspection agents below `reasoning_effort: high` when the tooling exposes reasoning effort.
 - Do not run important post-implementation review below `reasoning_effort: xhigh` when the tooling exposes reasoning effort.
 - Do not use `ultra` for delegated implementation or audit agents.

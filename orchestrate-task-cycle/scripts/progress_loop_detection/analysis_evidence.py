@@ -34,14 +34,24 @@ def candidate_files(root: Path) -> list[Path]:
 
 class EvidenceCollectionMixin:
     def _collect_evidence(self) -> list[dict[str, Any]]:
-        evidence: list[dict[str, Any]] = structured_evidence(self.root, max(1, self.recent))
-        registry = load_symbol_registry(self.root)
+        registry = self.state["registry_state"]["rows"]
+        if self.recent is None:
+            return []
+        evidence: list[dict[str, Any]] = structured_evidence(
+            self.root,
+            self.recent,
+            self.policy,
+            registry,
+        )
         seen_paths = {item.get("path") for item in evidence}
-        for path in candidate_files(self.root)[: max(1, self.recent)]:
+        paths = candidate_files(self.root)
+        if self.recent is not None:
+            paths = paths[: self.recent]
+        for path in paths:
             if rel_path(self.root, path) in seen_paths:
                 continue
             evidence.append(self._fallback_evidence_item(path, registry))
-            if len(evidence) >= self.recent:
+            if self.recent is not None and len(evidence) >= self.recent:
                 break
         return evidence
 
@@ -77,6 +87,7 @@ class EvidenceCollectionMixin:
             progress,
             blockers[:5],
             registry,
+            self.policy,
         )
         fallback_kind = progress_kind(pseudo_value, progress, lowered)
         if not (item.get("output_delta_gate") or {}).get("observed_override_applied") and fallback_kind:
@@ -90,6 +101,7 @@ class EvidenceCollectionMixin:
             item.get("coverage_quality_delta_gate") or {},
             item.get("provider_scale_dispatch_gate") or {},
             lowered,
+            self.policy,
         )
         item["detection_only"] = item["task_correction_class"] == "detection" and item.get("progress_kind") != "goal_productive"
         item["has_no_live_language"] = any(term in lowered for term in ("no-live", "fail-closed", "non-dispatchable", "safety_only"))
@@ -97,10 +109,5 @@ class EvidenceCollectionMixin:
         return item
 
     def _fallback_mitigations(self, lowered: str) -> list[str]:
-        attempted = []
-        for name in ("structured_output", "window_reduce", "timeout_budget_increase", "model_fallback"):
-            if name in lowered or name.replace("_", "-") in lowered:
-                attempted.append(name)
-        if any(token in lowered for token in ("backoff_retry", "backoff retry", "retries>=3", "retry>=3")):
-            attempted.append("backoff_retry>=3")
-        return sorted(set(attempted))
+        # Free-text mitigation vocabularies are adapter policy, not global truth.
+        return []

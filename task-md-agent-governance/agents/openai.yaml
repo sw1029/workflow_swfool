@@ -1,4 +1,4 @@
 interface:
   display_name: "Task.md Agent Governance"
   short_description: "Implement task.md with convention governance"
-  default_prompt: "Use $task-md-agent-governance with Tier 2-3 Terra medium/high workers and Tier 3-4 Terra high/xhigh audits; never route code writing or advisory review to Tier 5 Sol."
+  default_prompt: "Use $task-md-agent-governance to implement the current task.md with configured Tier 2-3 workers, Tier 3-4 read-only audits, and explicit authority and routing evidence."

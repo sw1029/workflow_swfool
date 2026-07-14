@@ -221,10 +221,7 @@ def equivalent_root_cause(row: dict[str, Any], attempted_row: dict[str, Any]) ->
     attempted_key = root_cause_distinct_key(attempted_row)
     if row_key == attempted_key:
         return True
-    if row_key[1:] != attempted_key[1:]:
-        return False
-    ratio = difflib.SequenceMatcher(None, row_key[0], attempted_key[0]).ratio()
-    return ratio >= 0.88
+    return False
 
 def root_cause_attempt_weight(row: dict[str, Any], field: str, default: int = 0) -> int:
     value = row.get(field)
@@ -241,7 +238,7 @@ def root_cause_exhaustion_state(
     family_key: str,
     root_key: str,
     root_family_key: str,
-    budget: int,
+    budget: int | None,
 ) -> dict[str, Any]:
     scoped = [row for row in rows if same_root_cause_scope(row, family_key, root_key, root_family_key)]
     attempted_rows = [row for row in scoped if bool_value(row.get("repair_attempted"))]
@@ -259,10 +256,22 @@ def root_cause_exhaustion_state(
         if bool_value(row.get("terminal_outcome_changed")):
             break
         streak += root_cause_attempt_weight(row, "vacuous_attempt_count", 1)
-    exhausted = vacuous_attempt_count >= max(1, budget) and not positive_attempts
+    budget_contract = budget_evaluation(
+        "root_cause_repair_attempts",
+        budget,
+        source="caller_or_repository_config",
+    )
+    budget_limit = budget_value(budget_contract)
+    exhausted = (
+        budget_limit is not None
+        and vacuous_attempt_count >= budget_limit
+        and not positive_attempts
+    )
     return {
         "hypothesis_exhausted": exhausted,
-        "untried_promotion_budget": max(1, budget),
+        "untried_promotion_budget": budget_limit,
+        "budget_evaluation": budget_contract,
+        "budget_evaluation_status": budget_contract["budget_evaluation_status"],
         "vacuous_untried_attempt_count": vacuous_attempt_count,
         "vacuous_untried_streak": streak,
         "successful_untried_attempt_count": len(positive_attempts),
@@ -274,7 +283,7 @@ def root_cause_hypothesis_gate(
     family_key: str,
     root_key: str,
     root_family_key: str,
-    budget: int,
+    budget: int | None,
     *,
     root: Path | None = None,
     repo_owned_source_roots: list[str] | None = None,
@@ -366,7 +375,7 @@ def untried_root_cause_hypotheses(
         family_key,
         root_key,
         root_family_key,
-        UNTRIED_PROMOTION_BUDGET_DEFAULT,
+        None,
         root=root,
         repo_owned_source_roots=repo_owned_source_roots,
     )["untried_root_cause_hypotheses"]

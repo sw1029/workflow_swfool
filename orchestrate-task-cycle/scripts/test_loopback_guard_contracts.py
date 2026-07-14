@@ -482,7 +482,7 @@ def test_registered_adapter_load_failure_routes_wiring_defect() -> None:
             artifact_family="primary_output",
             semantic_signature="same_root",
             root_key="same_root",
-            domain_adapter=None,
+            domain_adapter=str(adapter),
             provider_request_count=0,
             artifact_path=[],
             artifact_paths_json=None,
@@ -606,6 +606,9 @@ def write_hook_demand_adapter(path: Path) -> None:
                 "",
                 "def facet_root_map(**kwargs):",
                 "    return {'same_root': 'same_root'}",
+                "",
+                "def hook_demand_threshold(**kwargs):",
+                "    return 2",
             ]
         )
         + "\n",
@@ -672,7 +675,15 @@ def test_hook_demand_two_decision_relevant_skips_emit_supply_required() -> None:
             hook_demand_args(root, "cycle-hook-one", domain_adapter=adapter)
         )
         assert should_write is True
-        anti_loop_gate_provider.write_registry(registry, rows)
+        registry.parent.mkdir(parents=True, exist_ok=True)
+        registry.write_text(
+            "".join(
+                json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                + "\n"
+                for row in rows
+            ),
+            encoding="utf-8",
+        )
 
         anti_loop_gate_provider._DOMAIN_ADAPTER_MODULE = None
         packet, _, _ = anti_loop_gate_provider.evaluate(
@@ -1324,6 +1335,42 @@ def test_result_contract_blocks_loopback_part_f_misrouting() -> None:
     assert "loopback_c4_user_escalation_misrouted" in codes
 
 
+def test_loopback_result_contract_requires_an_evaluated_same_family_budget() -> None:
+    base = {
+        "task_id": "task-A",
+        "cycle_id": "cycle-A",
+        "family_key": "family-A",
+        "changed_vs_previous": False,
+        "semantic_progress": False,
+        "same_family_micro_hardening_count": 7,
+        "recommended_disposition": "prefer_primary_artifact",
+        "hard_stop_required": False,
+        "evidence_class": "direct",
+        "evidence_paths": ["evidence-A"],
+    }
+    unverified = result_contract.validate("loopback_audit", base, "block")
+    evaluated = result_contract.validate(
+        "loopback_audit",
+        {
+            **base,
+            "same_family_nonsemantic_budget": 2,
+            "same_family_budget_evaluation": {
+                "budget_id": "same_family_nonsemantic_attempts",
+                "budget_value": 2,
+                "budget_evaluation_status": "evaluated",
+                "source": "caller_configuration",
+                "reason_code": "budget_supplied",
+            },
+        },
+        "block",
+    )
+
+    assert "loopback_streak_without_hard_stop" not in {
+        item.get("code") for item in unverified["findings"]
+    }
+    assert "loopback_streak_without_hard_stop" in {
+        item.get("code") for item in evaluated["findings"]
+    }
 def test_result_contract_blocks_validate_completion_from_part_f_failures() -> None:
     result = result_contract.validate(
         "validate",
@@ -2127,12 +2174,11 @@ def test_registry_identity_is_content_bound_and_label_correction_is_not_a_new_at
             "attempt_count": 1,
             "vacuous_attempt_count": 1,
         }
-        anti_loop_gate_provider.write_registry(ledger_path, [original_root_cause])
-        durable_rows, durable_changed = anti_loop_gate_provider.append_root_cause_ledger(
-            ledger_path,
-            [{**original_root_cause, "family_key": "family_corrected"}],
+        durable_rows = anti_loop_gate_provider.compact_root_cause_ledger(
+            [original_root_cause, {**original_root_cause, "family_key": "family_corrected"}],
             10,
         )
+        durable_changed = durable_rows != [original_root_cause]
 
     assert fingerprint_a != fingerprint_b
     assert attempt_a != attempt_b

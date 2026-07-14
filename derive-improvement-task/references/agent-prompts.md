@@ -8,7 +8,7 @@ Use this request with `$inspect-repo-with-agents`:
 Use $inspect-repo-with-agents to critically analyze whether the current repository direction and task planning context align with the `.agent_goal` files.
 
 Agent routing:
-- Use Tier 3 `model: gpt-5.6-terra` with `reasoning_effort: high` for goal/convention alignment inspectors.
+- Use Tier 3 `profile_id: derive_inspector`, `model_ref: model_ref:balanced`, and `reasoning_effort: high` for goal/convention alignment inspectors.
 
 Run this as a critical review, not as a confirmation pass. Look first for blockers, mismatches, convention violations, unsupported assumptions, scope creep, contradictions between goal files, missing evidence, and validation blind spots. Do not treat absent evidence as compliance.
 
@@ -60,7 +60,7 @@ Report:
 You are analyzing `.task/task_miss/` to support the next `task.md`.
 
 Agent routing:
-- Use Tier 3 `model: gpt-5.6-terra` with `reasoning_effort: high`.
+- Use Tier 3 `profile_id: derive_inspector`, `model_ref: model_ref:balanced`, and `reasoning_effort: high`.
 
 Review the provided task_miss reports and resolved/deleted records. Do not edit files.
 
@@ -84,7 +84,7 @@ Use exactly one issue agent before the three improvement agents. Use the prompt 
 Analyze `.issue/` local records, GitHub issue mirrors, and issue-related task index links before improvement candidates are generated.
 
 Agent routing:
-- Use Tier 3 `model: gpt-5.6-terra` with `reasoning_effort: high`.
+- Use Tier 3 `profile_id: issue_fit`, `model_ref: model_ref:balanced`, and `reasoning_effort: high`.
 
 Classify each active issue against `.agent_goal` and current task direction:
 - goal_fit: fit | partial | misfit | unknown
@@ -103,7 +103,7 @@ Do not edit files. Do not open, close, or modify issues.
 
 Run these three in parallel with the same evidence package, including the critical goal/convention alignment report and the issue goal-fit report.
 
-Spawn each improvement-analysis agent at Tier 3 with `model: gpt-5.6-terra` and `reasoning_effort: high`.
+Spawn each improvement-analysis agent at Tier 3 with `profile_id: derive_inspector`, `model_ref: model_ref:balanced`, and `reasoning_effort: high`.
 
 ### Agent 1: Goal Fit
 
@@ -111,7 +111,7 @@ Spawn each improvement-analysis agent at Tier 3 with `model: gpt-5.6-terra` and 
 Analyze improvement candidates through the lens of final goal, success criteria, and user value.
 
 Agent routing:
-- Use Tier 3 `model: gpt-5.6-terra` with `reasoning_effort: high`.
+- Use Tier 3 `profile_id: derive_inspector`, `model_ref: model_ref:balanced`, and `reasoning_effort: high`.
 
 Return 3-5 candidates. For each:
 - title
@@ -155,7 +155,7 @@ Return 3-5 candidates. For each:
 Analyze improvement candidates through architecture, technical logic, maintainability, and design fit.
 
 Agent routing:
-- Use Tier 3 `model: gpt-5.6-terra` with `reasoning_effort: high`.
+- Use Tier 3 `profile_id: derive_inspector`, `model_ref: model_ref:balanced`, and `reasoning_effort: high`.
 
 Return 3-5 candidates. For each:
 - title
@@ -193,7 +193,7 @@ Return 3-5 candidates. For each:
 Analyze improvement candidates through `.task/task_miss/`, `.task/candidate_task/`, validation gaps, and residual risk.
 
 Agent routing:
-- Use Tier 3 `model: gpt-5.6-terra` with `reasoning_effort: high`.
+- Use Tier 3 `profile_id: derive_inspector`, `model_ref: model_ref:balanced`, and `reasoning_effort: high`.
 
 Return 3-5 candidates. For each:
 - title
@@ -231,8 +231,8 @@ Return 3-5 candidates. For each:
 You are synthesizing the final next `task.md`.
 
 Agent routing:
-- Use Tier 5 `model: gpt-5.6-sol` with `reasoning_effort: xhigh`; this agent owns final next-task, pack-topology, and terminal-disposition direction.
-- If this pass leaves an allowed high-impact ambiguity, one bounded Tier 5 Sol/max arbitration may follow only with `prior_tier5_unresolved: true`, `prior_tier5_evidence` pointing to this pass and finding, `max_escalation_reason`, and `agent_count: 1`. Do not use `ultra`.
+- Use Tier 5 `profile_id: derive_synthesis`, `model_ref: model_ref:direction`, and `reasoning_effort: xhigh`; this agent owns final next-task, pack-topology, and terminal-disposition direction.
+- If this pass leaves an allowed high-impact ambiguity, one bounded Tier 5 direction-profile/max arbitration may follow only with `prior_tier5_unresolved: true`, `prior_tier5_evidence` pointing to this pass and finding, `max_escalation_reason`, and `agent_count: 1`. Do not use `ultra`.
 
 Inputs:
 - critical goal/convention alignment inspection

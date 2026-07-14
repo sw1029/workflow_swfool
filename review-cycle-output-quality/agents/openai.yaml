@@ -1,4 +1,4 @@
 interface:
   display_name: "Review Cycle Output Quality"
   short_description: "Direct qualitative review of cycle outputs"
-  default_prompt: "Use $review-cycle-output-quality with exactly one read-only Tier 4 Terra/xhigh reviewer and explicit routing-enforcement evidence before deriving the next task; this advisory reviewer must not use Sol."
+  default_prompt: "Use $review-cycle-output-quality with exactly one read-only Tier 4 configured reviewer and explicit model-binding and routing-enforcement evidence before deriving the next task."

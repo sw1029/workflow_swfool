@@ -56,30 +56,8 @@ def provider_failure_class(value: dict[str, Any]) -> str | None:
 
 
 def normalized_mitigation_name(value: str) -> str | None:
-    lowered = value.strip().lower().replace("-", "_").replace(" ", "_")
-    if not lowered:
-        return None
-    if lowered in {"structured_output", "json_schema", "response_format"}:
-        return "structured_output"
-    if lowered in {"window_reduce", "window_reduced", "smaller_window"}:
-        return "window_reduce"
-    if lowered in {"timeout_budget_increase", "timeout_increase", "timeout_extended", "longer_timeout"}:
-        return "timeout_budget_increase"
-    if lowered in {"backoff_retry>=3", "backoff_retry_3", "retry>=3", "retries>=3"}:
-        return "backoff_retry>=3"
-    if lowered in {"model_fallback", "fallback_model", "alternate_model"}:
-        return "model_fallback"
-    if "structured" in lowered:
-        return "structured_output"
-    if "window" in lowered and ("reduce" in lowered or "smaller" in lowered):
-        return "window_reduce"
-    if "timeout" in lowered and any(token in lowered for token in ("increase", "extend", "budget", "longer")):
-        return "timeout_budget_increase"
-    if "backoff" in lowered or "retry" in lowered:
-        return "backoff_retry>=3" if any(token in lowered for token in (">=3", "_3", "3")) else None
-    if "model" in lowered and "fallback" in lowered:
-        return "model_fallback"
-    return None
+    normalized = value.strip()
+    return normalized if normalized else None
 
 
 def mitigation_list(value: Any) -> list[str]:
@@ -92,7 +70,12 @@ def mitigation_list(value: Any) -> list[str]:
     return sorted(set(names))
 
 
-def provider_mitigation_gate(value: dict[str, Any], failure_class: str | None, request_count: int | None) -> dict[str, Any]:
+def provider_mitigation_gate(
+    value: dict[str, Any],
+    failure_class: str | None,
+    request_count: int | None,
+    policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     attempted = mitigation_list(
         first_value(
             value,
@@ -117,12 +100,13 @@ def provider_mitigation_gate(value: dict[str, Any], failure_class: str | None, r
             ),
         )
     )
-    if request_count is not None and request_count >= 3:
-        attempted = sorted(set([*attempted, "backoff_retry>=3"]))
-    required = sorted(MITIGATION_REQUIREMENTS.get(failure_class or "", set()))
+    retry_policy = (policy or {}).get("provider_retry_policy") or {}
+    policy_active = bool(retry_policy.get("supplied"))
+    requirements = retry_policy.get("mitigation_requirements") or {}
+    required = sorted(requirements.get(failure_class or "", set()))
     covered = set(attempted) | set(unavailable)
     missing = sorted(set(required) - covered)
-    transient_failure = failure_class in TRANSIENT_PROVIDER_FAILURE_CLASSES
+    transient_failure = failure_class in set(retry_policy.get("transient_failure_classes") or [])
     return {
         "mitigations_attempted": attempted,
         "mitigations_unavailable": unavailable,
@@ -130,10 +114,27 @@ def provider_mitigation_gate(value: dict[str, Any], failure_class: str | None, r
         "missing_mitigations": missing,
         "mitigation_required": transient_failure and bool(required),
         "mitigation_exhausted": transient_failure and bool(required) and not missing,
+        "evaluation_status": "evaluated" if policy_active else "not_evaluated",
     }
 
 
-def provider_reattempt_gate(value: dict[str, Any]) -> dict[str, Any]:
+def provider_reattempt_gate(
+    value: dict[str, Any],
+    policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    explicit_gate = first_mapping(
+        value,
+        (
+            "provider_reattempt_gate",
+            "anti_loop_progress_gate.provider_reattempt_gate",
+            "result.provider_reattempt_gate",
+        ),
+    )
+    if explicit_gate:
+        return {
+            **explicit_gate,
+            "evaluation_status": explicit_gate.get("evaluation_status") or "evaluated",
+        }
     request_count = number_value(
         first_value(
             value,
@@ -148,7 +149,9 @@ def provider_reattempt_gate(value: dict[str, Any]) -> dict[str, Any]:
         )
     )
     failure_class = provider_failure_class(value)
-    mitigation = provider_mitigation_gate(value, failure_class, request_count)
+    retry_policy = (policy or {}).get("provider_retry_policy") or {}
+    policy_active = bool(retry_policy.get("supplied"))
+    mitigation = provider_mitigation_gate(value, failure_class, request_count, policy)
     authority_allows_retry = boolish(
         first_value(
             value,
@@ -163,8 +166,8 @@ def provider_reattempt_gate(value: dict[str, Any]) -> dict[str, Any]:
             ),
         )
     )
-    transient_failure = failure_class in TRANSIENT_PROVIDER_FAILURE_CLASSES
-    permanent_failure = failure_class in PERMANENT_PROVIDER_FAILURE_CLASSES
+    transient_failure = failure_class in set(retry_policy.get("transient_failure_classes") or [])
+    permanent_failure = failure_class in set(retry_policy.get("permanent_failure_classes") or [])
     mitigation_missing = transient_failure and mitigation["mitigation_required"] and not mitigation["mitigation_exhausted"]
     reattempt_required = transient_failure and mitigation_missing and authority_allows_retry
     seal_allowed = permanent_failure or not mitigation_missing
@@ -178,6 +181,11 @@ def provider_reattempt_gate(value: dict[str, Any]) -> dict[str, Any]:
         "provider_mitigation_required": mitigation_missing,
         "provider_reattempt_required": reattempt_required,
         "provider_retreat_allowed": permanent_failure or (transient_failure and not mitigation_missing),
-        "provider_terminal_seal_allowed": seal_allowed,
-        "provider_terminal_seal_denied_reason": "provider_failure_mitigation_unexhausted" if mitigation_missing else None,
+        "provider_terminal_seal_allowed": policy_active and seal_allowed,
+        "provider_terminal_seal_denied_reason": (
+            "provider_retry_policy_not_supplied"
+            if not policy_active
+            else ("provider_failure_mitigation_unexhausted" if mitigation_missing else None)
+        ),
+        "evaluation_status": "evaluated" if policy_active else "not_evaluated",
     }

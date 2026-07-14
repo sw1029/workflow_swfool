@@ -32,13 +32,6 @@
     },
     {
       "module": "common",
-      "name": "DEFAULT_DOMAIN_ADAPTER_REL_PATH",
-      "category": "path",
-      "expected_type": "str",
-      "expected_value": ".task/domain_adapter.py"
-    },
-    {
-      "module": "common",
       "name": "DISPOSITION_UNIVERSE",
       "category": "disposition",
       "expected_type": "set",
@@ -53,71 +46,8 @@
     },
     {
       "module": "common",
-      "name": "CONSOLIDATION_STREAK_CAP_DEFAULT",
-      "category": "threshold",
-      "expected_type": "int",
-      "expected_value": 2
-    },
-    {
-      "module": "common",
-      "name": "MEASUREMENT_STREAK_CAP_DEFAULT",
-      "category": "threshold",
-      "expected_type": "int",
-      "expected_value": 1
-    },
-    {
-      "module": "common",
-      "name": "MAX_FORWARD_MUTATIONS_DEFAULT",
-      "category": "threshold",
-      "expected_type": "int",
-      "expected_value": 3
-    },
-    {
-      "module": "common",
-      "name": "DETECTION_ONLY_STREAK_CAP_DEFAULT",
-      "category": "threshold",
-      "expected_type": "int",
-      "expected_value": 2
-    },
-    {
-      "module": "common",
-      "name": "UNTRIED_PROMOTION_BUDGET_DEFAULT",
-      "category": "threshold",
-      "expected_type": "int",
-      "expected_value": 2
-    },
-    {
-      "module": "common",
-      "name": "ADAPTER_MANDATE_STREAK_CAP_DEFAULT",
-      "category": "threshold",
-      "expected_type": "int",
-      "expected_value": 3
-    },
-    {
-      "module": "common",
-      "name": "CUMULATIVE_CHAIN_STREAK_CAP_DEFAULT",
-      "category": "threshold",
-      "expected_type": "int",
-      "expected_value": 3
-    },
-    {
-      "module": "common",
-      "name": "INSTRUMENTATION_TRIGGER_THRESHOLD_DEFAULT",
-      "category": "threshold",
-      "expected_type": "int",
-      "expected_value": 2
-    },
-    {
-      "module": "common",
-      "name": "ENVELOPE_THAW_STREAK_CAP_DEFAULT",
-      "category": "threshold",
-      "expected_type": "int",
-      "expected_value": 2
-    },
-    {
-      "module": "common",
       "name": "ROOT_CAUSE_LEDGER_MAX_ROWS_PER_FAMILY_DEFAULT",
-      "category": "threshold",
+      "category": "storage_safety_bound",
       "expected_type": "int",
       "expected_value": 200
     },

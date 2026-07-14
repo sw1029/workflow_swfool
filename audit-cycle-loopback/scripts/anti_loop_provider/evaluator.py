@@ -8,9 +8,37 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
     registry_path = Path(args.registry_path)
     if not registry_path.is_absolute():
         registry_path = root / registry_path
+    finalized_cycle_id = str(getattr(args, "finalized_cycle_id", None) or args.cycle_id)
+    finalized_state, finalized_state_status, finalized_state_error = load_verified_finalized_loopback_state(
+        root,
+        finalized_cycle_id,
+    )
+    finalized_projections = (
+        finalized_state.get("projections")
+        if isinstance(finalized_state.get("projections"), dict)
+        else {}
+    )
+    finalized_registry_rows, finalized_registry_present = finalized_projection_rows(
+        finalized_projections,
+        "family_progress_registry",
+    )
+    finalized_root_cause_rows, finalized_root_cause_present = finalized_projection_rows(
+        finalized_projections,
+        "root_cause_ledger",
+    )
+    finalized_seal_state, finalized_seal_present = finalized_seal_projection(finalized_projections)
+    legacy_registry_rows = load_registry(registry_path)
+    if finalized_state_status == "invalid":
+        registry_rows = []
+        registry_state_source = "invalid_finalized_state"
+    elif finalized_registry_present:
+        registry_rows = finalized_registry_rows
+        registry_state_source = "verified_finalization"
+    else:
+        registry_rows = legacy_registry_rows
+        registry_state_source = "legacy_registry_fallback"
     legacy_family_key = normalize_family_key(args.artifact_family, args.semantic_signature)
     family_key = legacy_family_key
-    registry_rows = load_registry(registry_path)
     existing_cycle = next(
         (row for row in reversed(registry_rows) if row.get("family_key") == family_key and row.get("cycle_id") == args.cycle_id),
         None,
@@ -36,6 +64,59 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
     adapter_registered = bool(adapter_candidates)
     adapter_expected_path = adapter_candidates[0].expanduser().resolve().as_posix() if adapter_candidates else None
     domain_adapter, domain_adapter_path, domain_adapter_error = load_domain_adapter(root, getattr(args, "domain_adapter", None))
+    budget_evaluations = {
+        "same_family_nonsemantic_attempts": budget_evaluation(
+            "same_family_nonsemantic_attempts",
+            getattr(args, "threshold", None),
+            source="caller_or_repository_config",
+        ),
+        "measurement_nonsemantic_attempts": budget_evaluation(
+            "measurement_nonsemantic_attempts",
+            getattr(args, "measurement_streak_cap", None),
+            source="caller_or_repository_config",
+        ),
+        "detection_nonsemantic_attempts": budget_evaluation(
+            "detection_nonsemantic_attempts",
+            getattr(args, "detection_only_streak_cap", None),
+            source="caller_or_repository_config",
+        ),
+        "adapter_mandate_attempts": budget_evaluation(
+            "adapter_mandate_attempts",
+            getattr(args, "adapter_mandate_streak_cap", None),
+            source="caller_or_repository_config",
+        ),
+        "cumulative_stall_attempts": budget_evaluation(
+            "cumulative_stall_attempts",
+            getattr(args, "cumulative_chain_streak_cap", None),
+            source="caller_or_repository_config",
+        ),
+        "envelope_thaw_attempts": budget_evaluation(
+            "envelope_thaw_attempts",
+            getattr(args, "envelope_thaw_streak_cap", None),
+            source="caller_or_repository_config",
+        ),
+        "forward_mutation_attempts": budget_evaluation(
+            "forward_mutation_attempts",
+            getattr(args, "max_forward_mutations", None),
+            source="caller_or_repository_config",
+        ),
+        "consolidation_nonsemantic_attempts": budget_evaluation(
+            "consolidation_nonsemantic_attempts",
+            getattr(args, "consolidation_streak_cap", None),
+            source="caller_or_repository_config",
+        ),
+        "root_cause_repair_attempts": budget_evaluation(
+            "root_cause_repair_attempts",
+            getattr(args, "untried_promotion_budget", None),
+            source="caller_or_repository_config",
+        ),
+        "portfolio_nonsemantic_work": budget_evaluation(
+            "portfolio_nonsemantic_work",
+            None,
+            source=None,
+            applicable=False,
+        ),
+    }
     adapter_load_gate = adapter_wiring_gate(
         registered=adapter_registered,
         loaded=domain_adapter is not None,
@@ -161,11 +242,29 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
     )
     provider_request_count = max(0, int(args.provider_request_count or 0))
     gate_inputs: list[dict[str, Any]] = []
+    if finalized_state_status == "invalid":
+        gate_inputs.append(
+            {
+                "name": "finalized_state_integrity_gate",
+                "gate": "FINALIZED-STATE-INTEGRITY",
+                "status": "block",
+                "constrains_disposition": True,
+                "allowed_dispositions": ["terminal_blocked", "user_escalation"],
+                "finalized_cycle_id": finalized_cycle_id,
+                "error": finalized_state_error,
+            }
+        )
     if bool_value(adapter_load_gate.get("constrains_disposition")):
         gate_inputs.append({"name": "adapter_wiring_gate", **adapter_load_gate})
     for raw_gate in getattr(args, "gate_state_json", []) or []:
         for gate in extract_disposition_gates(load_json_value(root, raw_gate)):
             gate_id = str(gate.get("name") or gate.get("gate") or gate.get("gate_id") or "external_gate")
+            if normalize_root_family_key(gate_id) in {
+                "portfolio_quota",
+                "portfolio_quota_gate",
+            }:
+                gate, portfolio_budget_evaluation = normalize_portfolio_budget_gate(gate)
+                budget_evaluations["portfolio_nonsemantic_work"] = portfolio_budget_evaluation
             gate_inputs.append(bind_artifact_gate(gate_id, gate))
     terminal_self_resolution = terminal_self_resolution_gate(runner_validation, output_delta, *gate_inputs)
     if bool_value(terminal_self_resolution.get("goal_terminal_prohibited")):
@@ -438,11 +537,26 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
         root_key=current_root_key,
         root_family_key=current_root_family_key,
     )
-    instrumentation_threshold = (
-        int(float_value(instrumentation_threshold_value))
-        or int(getattr(args, "instrumentation_trigger_threshold", INSTRUMENTATION_TRIGGER_THRESHOLD_DEFAULT))
-        or INSTRUMENTATION_TRIGGER_THRESHOLD_DEFAULT
+    instrumentation_budget_source = (
+        "adapter"
+        if positive_int_or_none(instrumentation_threshold_value) is not None
+        else "caller_or_repository_config"
     )
+    instrumentation_budget_input = (
+        instrumentation_threshold_value
+        if positive_int_or_none(instrumentation_threshold_value) is not None
+        else getattr(args, "instrumentation_trigger_threshold", None)
+    )
+    instrumentation_budget_evaluation = budget_evaluation(
+        "instrumentation_unobservable_attempts",
+        instrumentation_budget_input,
+        source=instrumentation_budget_source,
+        error=instrumentation_threshold_error,
+    )
+    budget_evaluations["instrumentation_unobservable_attempts"] = (
+        instrumentation_budget_evaluation
+    )
+    instrumentation_threshold = budget_value(instrumentation_budget_evaluation)
     diagnostics_gate = diagnostics_unavailable_gate(
         registry_rows=registry_rows,
         failure_surface_count_key=failure_surface_gate.get("failure_surface_count_key"),
@@ -765,6 +879,9 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
     )
     measurement_progress = bool_value(measurement_details["measurement_progress"])
     measurement_streak_value = int(measurement_details["measurement_streak"])
+    measurement_streak_cap = budget_value(
+        budget_evaluations["measurement_nonsemantic_attempts"]
+    )
     if measurement_progress:
         record_adapter_hook_demand(
             "metric_validity_self_check",
@@ -773,7 +890,8 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
         )
     measurement_progress_allowed = (
         measurement_progress
-        and measurement_streak_value <= args.measurement_streak_cap
+        and measurement_streak_cap is not None
+        and measurement_streak_value <= measurement_streak_cap
         and bool_value(coverage_gate.get("quality_delta_pass"))
         and bool_value(substance_gate.get("substance_delta_pass"))
         and not coverage_reconciliation_blocks
@@ -797,16 +915,31 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
         str(current_blocker_signature).strip().lower(),
         input_state_fingerprint,
     )
+    legacy_attempt_identity = legacy_content_bound_attempt_identity(
+        args.cycle_id,
+        normalize_root_family_key(args.artifact_family),
+        str(current_blocker_signature).strip().lower(),
+        input_state_fingerprint,
+    )
     existing_attempt = next(
         (
             registry_row
             for registry_row in reversed(registry_rows)
             if str(registry_row.get("attempt_identity") or "") == attempt_identity
+            or (
+                str(registry_row.get("cycle_id") or "") == str(args.cycle_id)
+                and str(registry_row.get("input_state_fingerprint") or "") == input_state_fingerprint
+            )
         ),
         None,
     )
     registry_label_correction = False
+    attempt_revision_candidate = 1
+    supersedes_attempt_revision_candidate: int | None = None
+    supersedes_attempt_identity_candidate: str | None = None
     if existing_attempt is not None:
+        previous_attempt_revision = max(1, attempt_revision_value(existing_attempt))
+        attempt_revision_candidate = previous_attempt_revision
         registry_label_correction = any(
             str(existing_attempt.get(field) or "") != str(value or "")
             for field, value in {
@@ -817,6 +950,12 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
                 "blocker_signature": current_blocker_signature,
             }.items()
         )
+        if registry_label_correction:
+            attempt_revision_candidate = previous_attempt_revision + 1
+            supersedes_attempt_revision_candidate = previous_attempt_revision
+            supersedes_attempt_identity_candidate = str(
+                existing_attempt.get("attempt_identity") or attempt_identity
+            )
         existing_cycle = existing_attempt
     elif existing_cycle is not None and existing_cycle.get("attempt_identity"):
         existing_cycle = None
@@ -826,8 +965,17 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
     mutation_kind = blocker_mutation_kind(current_blocker_signature, current_rung, blocker_root_family, latest_blocker)
     previous_forward_count = forward_mutation_streak(registry_rows, family_key)
     current_forward_count = previous_forward_count + (1 if mutation_kind == "forward_mutation" else 0)
-    forward_budget_remaining = max(0, args.max_forward_mutations - current_forward_count)
-    force_implementation_cycle = mutation_kind == "forward_mutation" and forward_budget_remaining == 0
+    forward_mutation_budget = budget_value(budget_evaluations["forward_mutation_attempts"])
+    forward_budget_remaining = (
+        max(0, forward_mutation_budget - current_forward_count)
+        if forward_mutation_budget is not None
+        else None
+    )
+    force_implementation_cycle = (
+        mutation_kind == "forward_mutation"
+        and forward_budget_remaining is not None
+        and forward_budget_remaining == 0
+    )
     disagreement = validator_disagreement_finding(runner_validation, output_delta)
     substance_delta_pass = bool_value(substance_gate.get("substance_delta_pass"))
     metric_evaluation_status = str(
@@ -881,7 +1029,12 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
         if semantic_progress:
             disposition = "open"
             hard_stop = False
-        elif count >= args.threshold:
+        elif (
+            budget_value(budget_evaluations["same_family_nonsemantic_attempts"])
+            is not None
+            and count
+            >= budget_value(budget_evaluations["same_family_nonsemantic_attempts"])
+        ):
             disposition = "provider_or_semantic_transition_or_terminal"
             hard_stop = True
         else:
@@ -920,7 +1073,14 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
     )
     detection_only = artifact_decision_evaluated and task_correction_class == "detection" and not semantic_progress
     detection_streak = detection_only_streak(registry_rows, blocker_root_family, detection_only)
-    requires_correction_or_terminal = detection_streak >= args.detection_only_streak_cap and not semantic_progress
+    detection_streak_cap = budget_value(
+        budget_evaluations["detection_nonsemantic_attempts"]
+    )
+    requires_correction_or_terminal = (
+        detection_streak_cap is not None
+        and detection_streak >= detection_streak_cap
+        and not semantic_progress
+    )
     if requires_correction_or_terminal:
         hard_stop = True
     current_no_goal_distance_delta = artifact_decision_evaluated and not (
@@ -967,8 +1127,15 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
     )
     hook_demand_threshold = hook_demand_threshold_from_value(
         hook_threshold_value,
-        HOOK_DEMAND_THRESHOLD_DEFAULT,
+        None,
     )
+    hook_demand_budget_evaluation = budget_evaluation(
+        "hook_demand_attempts",
+        hook_demand_threshold,
+        source="adapter" if hook_demand_threshold is not None else None,
+        error=hook_threshold_error,
+    )
+    budget_evaluations["hook_demand_attempts"] = hook_demand_budget_evaluation
     adapter_hook_demand = merge_adapter_hook_demand(registry_rows, hook_demand_events, args.cycle_id)
     supplied_adapter_hooks = set()
     if numeric_vector(quality):
@@ -998,7 +1165,7 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
         artifact_family=args.artifact_family,
         contract_unmet=adapter_contract_unmet,
         current_no_delta=current_no_goal_distance_delta,
-        cap=getattr(args, "adapter_mandate_streak_cap", ADAPTER_MANDATE_STREAK_CAP_DEFAULT),
+        cap=getattr(args, "adapter_mandate_streak_cap", None),
         adapter_hook_demand=adapter_hook_demand,
         hook_demand_threshold=hook_demand_threshold,
     )
@@ -1023,7 +1190,7 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
         current_no_delta=current_no_goal_distance_delta,
         high_water=high_water,
         current_cycle_id=args.cycle_id,
-        cap=getattr(args, "cumulative_chain_streak_cap", CUMULATIVE_CHAIN_STREAK_CAP_DEFAULT),
+        cap=getattr(args, "cumulative_chain_streak_cap", None),
     )
     primary_metric_value, primary_metric_error = call_adapter(
         domain_adapter,
@@ -1045,7 +1212,7 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
         previous_value=previous_primary_metric_value(latest),
         rows=registry_rows,
         scope_key=str(chain_gate.get("cumulative_goal_distance_scope_key") or family_key),
-        cap=getattr(args, "cumulative_chain_streak_cap", CUMULATIVE_CHAIN_STREAK_CAP_DEFAULT),
+        cap=getattr(args, "cumulative_chain_streak_cap", None),
         epsilon=args.epsilon,
         provenance=evidence_provenance,
         provenance_hook_provided=evidence_provenance_provided,
@@ -1238,7 +1405,12 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
         if registry_label_correction:
             row["registry_idempotent_replay"] = False
             row["registry_label_correction"] = True
-            row["correction_of_attempt_identity"] = attempt_identity
+            row["correction_of_attempt_identity"] = (
+                supersedes_attempt_identity_candidate or attempt_identity
+            )
+            row["attempt_revision_candidate"] = attempt_revision_candidate
+            row["supersedes_attempt_revision_candidate"] = supersedes_attempt_revision_candidate
+            row["supersedes_attempt_identity_candidate"] = supersedes_attempt_identity_candidate
             return row, compact_registry([*registry_rows, dict(row)], args.max_rows_per_family), True
         return row, registry_rows, False
     registry_row = dict(row)

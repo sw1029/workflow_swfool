@@ -26,6 +26,16 @@ assemble_cycle_report = load_module(
     ROOT / "orchestrate-task-cycle" / "scripts" / "assemble_cycle_report.py",
     "assemble_cycle_report_integrity",
 )
+render_cycle_dashboard = load_module(
+    ROOT / "orchestrate-task-cycle" / "scripts" / "render_cycle_dashboard.py",
+    "render_cycle_dashboard_result_contract_integrity",
+)
+cycle_ledger = load_module(
+    ROOT / "orchestrate-task-cycle" / "scripts" / "cycle_ledger.py",
+    "cycle_ledger_for_result_contract_integrity",
+)
+finalization_contract = importlib.import_module("result_contract_lib.finalization")
+lifecycle_contract = importlib.import_module("result_contract_lib.lifecycle")
 output_delta_contract = load_module(
     ROOT / "orchestrate-task-cycle" / "scripts" / "output_delta_contract.py",
     "output_delta_contract_decision_boundaries",
@@ -45,6 +55,547 @@ anti_loop_provider = importlib.import_module("anti_loop_provider")
 
 def finding_codes(result: dict[str, Any]) -> set[str]:
     return {str(item.get("code")) for item in result.get("findings", [])}
+
+
+def finalized_bundle(
+    root: Path,
+    *,
+    cycle_id: str = "cycle-final",
+    attempt_id: str = "attempt-A",
+    axis_statuses: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    cycle_ledger.init_cycle(root, cycle_id, "task-1", "test finalization")
+    statuses = axis_statuses or {}
+    candidate: dict[str, Any] = {
+        "schema_version": 1,
+        "kind": "cycle_final_candidate",
+        "final_candidate": True,
+        "cycle_id": cycle_id,
+        "attempt_id": attempt_id,
+        "expected_previous_revision": None,
+        "expected_previous_attempt_id": None,
+        "expected_previous_finalization_token": None,
+        "verdict_contract_version": 1,
+        "durable_state_candidate": {"mode": "complete_projection", "projections": {}},
+    }
+    for axis in (
+        "task_acceptance_verdict",
+        "artifact_truth_verdict",
+        "artifact_semantic_verdict",
+        "pack_transition_verdict",
+        "historical_index_verdict",
+        "goal_readiness_verdict",
+    ):
+        candidate[axis] = {"status": statuses.get(axis, "pass"), "evidence_ref": f"{axis}-evidence"}
+    finalized = cycle_ledger.finalize_candidate(root, cycle_id, candidate)
+    receipt = finalized["finalization_receipt"]
+    projection = finalized["snapshot"]["authoritative_projection"]
+    consumption = {
+        field: receipt[field]
+        for field in (
+            "finalization_token",
+            "attempt_id",
+            "attempt_revision",
+            "authoritative_projection_id",
+            "authoritative_projection_digest",
+            "receipt_hash",
+        )
+    }
+    return {
+        "receipt": receipt,
+        "projection": projection,
+        "consumption": consumption,
+        "candidate": candidate,
+        "output": finalized,
+    }
+
+
+def test_direct_finalizer_output_is_consumable_and_binding_mismatch_blocks(tmp_path: Path) -> None:
+    finalized = finalized_bundle(tmp_path)
+    producer_output = finalized["output"]
+    assert finalization_contract.extract_finalization_receipt(producer_output) == finalized["receipt"]
+    projection, receipt, errors = finalization_contract.verified_projection(
+        producer_output,
+        {"workspace_root": str(tmp_path)},
+    )
+    assert errors == []
+    assert receipt == finalized["receipt"]
+    assert projection == finalized["projection"]
+    consumer = {
+        "step": "derive",
+        "derive_mode": "normal",
+        "finalization_receipt": finalized["receipt"],
+        "authoritative_projection": finalized["projection"],
+        "finalization_consumption": finalized["consumption"],
+        "next_task_id": "task-2",
+        "selected_task_source": "task_backlog",
+        "progress_kind": "goal_productive",
+        "semantic_signature": "axis-G",
+        "evidence_paths": ["derive.json"],
+    }
+    accepted = result_contract.validate(
+        "derive",
+        consumer,
+        "block",
+        {"workspace_root": str(tmp_path)},
+    )
+    assert not {code for code in finding_codes(accepted) if code.startswith("finalization_") or code.startswith("authoritative_projection_")}
+
+    mismatched = {
+        **consumer,
+        "finalization_consumption": {**finalized["consumption"], "attempt_revision": 2},
+    }
+    rejected = result_contract.validate(
+        "derive",
+        mismatched,
+        "block",
+        {"workspace_root": str(tmp_path)},
+    )
+    assert "finalization_consumption_binding_mismatch" in finding_codes(rejected)
+
+
+def test_cross_attempt_cas_is_not_same_attempt_supersession(tmp_path: Path) -> None:
+    first = finalized_bundle(tmp_path)
+    first_receipt = first["receipt"]
+    second_candidate = {
+        **first["candidate"],
+        "attempt_id": "attempt-B",
+        "expected_previous_revision": first_receipt["attempt_revision"],
+        "expected_previous_attempt_id": first_receipt["attempt_id"],
+        "expected_previous_finalization_token": first_receipt["finalization_token"],
+    }
+    second = cycle_ledger.finalize_candidate(tmp_path, "cycle-final", second_candidate)
+    second_receipt = second["finalization_receipt"]
+
+    assert second_receipt["attempt_revision"] == 1
+    assert second_receipt["supersedes_revision"] is None
+    assert second_receipt["supersedes_finalization_token"] is None
+    assert finalization_contract.receipt_shape_errors(second_receipt) == []
+
+
+def test_projection_preserves_task_acceptance_separately_from_goal_progress() -> None:
+    projection = {
+        "verdict_contract_version": 1,
+        **{
+            axis: {"status": "pass", "evidence_ref": "evidence-E"}
+            for axis in finalization_contract.VERDICT_AXES
+        },
+        "authoritative_final": "failure",
+    }
+    projection["goal_readiness_verdict"] = {"status": "fail", "evidence_ref": "evidence-G"}
+
+    assert finalization_contract.projection_conclusions(projection) == ("passed", "no_progress")
+
+    projection["goal_readiness_verdict"] = {"status": "not_applicable"}
+    projection["authoritative_final"] = "success"
+    assert finalization_contract.projection_conclusions(projection) == ("passed", "no_progress")
+
+
+def test_report_and_dashboard_share_task_pass_goal_fail_projection(tmp_path: Path) -> None:
+    finalized = finalized_bundle(
+        tmp_path,
+        axis_statuses={"goal_readiness_verdict": "fail"},
+    )
+    validate_event = {
+        "cycle_id": "cycle-final",
+        "step": "validate",
+        "status": "complete",
+        "task_id": "task-1",
+        "validation_verdict": "complete",
+        "progress_verdict": "no_progress",
+        "blockers": [],
+        "finalization_applicability": "required",
+        "finalization_receipt": finalized["receipt"],
+        "authoritative_projection": finalized["projection"],
+    }
+    stage = {
+        "task_id": "task-1",
+        "next_task_id": "task-2",
+        "blockers": [],
+        "events": [
+            validate_event,
+            {"cycle_id": "cycle-final", "step": "issue", "status": "not_applicable", "task_id": "task-1"},
+            {"cycle_id": "cycle-final", "step": "derive", "status": "complete", "task_id": "task-1"},
+            {"cycle_id": "cycle-final", "step": "commit", "status": "complete", "task_id": "task-1"},
+            {"cycle_id": "cycle-final", "step": "dashboard", "status": "complete", "task_id": "task-1"},
+        ],
+    }
+    report = assemble_cycle_report.assemble(
+        context={"workspace_root": str(tmp_path)},
+        stage=stage,
+        validation={
+            **validate_event,
+            "commands": [{"command": "pytest", "status": "passed"}],
+            "evidence_paths": ["validation.json"],
+        },
+        progress={},
+        commit={"task_id": "task-1", "commit_status": "committed"},
+        closeout_commit={},
+    )
+    rows = [
+        {"cycle_id": "cycle-final", "step": "context", "status": "complete", "task_id": "task-1"},
+        validate_event,
+    ]
+    dashboard = render_cycle_dashboard.summarize(
+        rows,
+        {"event_count": len(rows)},
+        "loaded",
+        "cycle-final",
+        tmp_path,
+    )
+
+    assert report["validation_verdict"] == "passed"
+    assert report["progress_verdict"] == "no_progress"
+    assert report["completion_status"] == "not_complete"
+    assert report["authoritative_final"] == "failure"
+    assert dashboard["validation_verdict"] == "passed"
+    assert dashboard["progress_verdict"] == "no_progress"
+    assert dashboard["authoritative_final"] == "failure"
+    assert dashboard["dashboard_status"] == "rendered"
+    assert report["finalization_receipt"]["authoritative_projection_digest"] == dashboard["finalization_receipt"]["authoritative_projection_digest"]
+
+
+def test_dashboard_uses_current_pointer_when_ledger_receipt_echo_is_absent(tmp_path: Path) -> None:
+    finalized = finalized_bundle(tmp_path)
+    rows = [
+        {"cycle_id": "cycle-final", "step": "context", "status": "complete", "task_id": "task-1"},
+        {
+            "cycle_id": "cycle-final",
+            "step": "validate",
+            "status": "complete",
+            "task_id": "task-1",
+            "validation_verdict": "complete",
+            "progress_verdict": "advanced",
+            "finalization_applicability": "required",
+        },
+    ]
+
+    summary = render_cycle_dashboard.summarize(
+        rows,
+        {"event_count": len(rows)},
+        "loaded",
+        "cycle-final",
+        tmp_path,
+    )
+
+    assert summary["dashboard_status"] == "rendered"
+    assert summary["finalization_receipt"] == finalized["receipt"]
+    assert summary["authoritative_projection"] == finalized["projection"]
+
+
+def test_report_and_dashboard_reject_noncurrent_projection_echo(tmp_path: Path) -> None:
+    finalized = finalized_bundle(tmp_path)
+    tampered_projection = {
+        **finalized["projection"],
+        "goal_readiness_verdict": {"status": "fail", "evidence_ref": "other-E"},
+        "authoritative_final": "failure",
+    }
+    validate_event = {
+        "cycle_id": "cycle-final",
+        "step": "validate",
+        "status": "complete",
+        "task_id": "task-1",
+        "validation_verdict": "complete",
+        "progress_verdict": "advanced",
+        "finalization_applicability": "required",
+        "finalization_receipt": finalized["receipt"],
+        "authoritative_projection": tampered_projection,
+    }
+    report = assemble_cycle_report.assemble(
+        context={"workspace_root": str(tmp_path)},
+        stage={"task_id": "task-1", "events": [validate_event]},
+        validation=validate_event,
+        progress={},
+        commit={},
+        closeout_commit={},
+    )
+    dashboard = render_cycle_dashboard.summarize(
+        [validate_event],
+        {"event_count": 1},
+        "loaded",
+        "cycle-final",
+        tmp_path,
+    )
+
+    assert "authoritative_projection_report_input_mismatch" in {
+        row["code"] for row in report["report_findings"]
+    }
+    assert dashboard["dashboard_status"] == "block"
+    assert "dashboard_event_projection_not_current" in {
+        row["code"] for row in dashboard["findings"]
+    }
+    assert report["authoritative_projection"] == finalized["projection"]
+    assert dashboard["authoritative_projection"] == finalized["projection"]
+
+
+def test_report_blocks_missing_and_stale_finalization_receipts(tmp_path: Path) -> None:
+    missing = assemble_cycle_report.assemble(
+        context={"workspace_root": str(tmp_path)},
+        stage={"task_id": "task-1", "blockers": []},
+        validation={
+            "task_id": "task-1",
+            "validation_verdict": "complete",
+            "progress_verdict": "advanced",
+            "blockers": [],
+        },
+        progress={},
+        commit={},
+        closeout_commit={},
+    )
+    assert "finalization_receipt_missing" in {row["code"] for row in missing["report_findings"]}
+
+    first = finalized_bundle(tmp_path)
+    receipt = first["receipt"]
+    correction = {
+        **first["candidate"],
+        "expected_previous_revision": receipt["attempt_revision"],
+        "expected_previous_attempt_id": receipt["attempt_id"],
+        "expected_previous_finalization_token": receipt["finalization_token"],
+        "goal_readiness_verdict": {"status": "fail", "evidence_ref": "goal-E"},
+    }
+    cycle_ledger.finalize_candidate(tmp_path, "cycle-final", correction)
+    stale = assemble_cycle_report.assemble(
+        context={"workspace_root": str(tmp_path)},
+        stage={"task_id": "task-1", "blockers": []},
+        validation={
+            "task_id": "task-1",
+            "validation_verdict": "complete",
+            "progress_verdict": "advanced",
+            "blockers": [],
+            "finalization_receipt": first["receipt"],
+            "authoritative_projection": first["projection"],
+        },
+        progress={},
+        commit={},
+        closeout_commit={},
+    )
+
+    assert "finalization_receipt_current_verification_failed" in {
+        row["code"] for row in stale["report_findings"]
+    }
+
+def test_receipt_rejects_unknown_authoritative_final_even_with_rehashed_body(tmp_path: Path) -> None:
+    finalized = finalized_bundle(tmp_path)
+    malformed = {**finalized["receipt"], "authoritative_final": "optimistic"}
+    malformed["receipt_hash"] = finalization_contract.canonical_digest(
+        {key: value for key, value in malformed.items() if key != "receipt_hash"}
+    )
+
+    assert "finalization_receipt_authoritative_final_invalid" in {
+        row["code"] for row in finalization_contract.receipt_shape_errors(malformed)
+    }
+
+
+def test_governed_validate_requires_candidate_while_legacy_diagnostic_stays_readable() -> None:
+    base = {
+        "step": "validate",
+        "task_id": "task-1",
+        "validation_verdict": "partial",
+        "progress_verdict": "no_progress",
+        "blockers": [],
+        "evidence_paths": ["validation.json"],
+    }
+    legacy = result_contract.validate("validate", base, "block")
+    governed = result_contract.validate(
+        "validate",
+        {**base, "finalization_contract_version": 1, "finalization_applicability": "required"},
+        "block",
+    )
+
+    assert "final_candidate_missing" not in finding_codes(legacy)
+    assert "final_candidate_missing" in finding_codes(governed)
+
+
+def test_ordinary_derive_requires_receipt_but_bootstrap_and_reasoned_repair_do_not() -> None:
+    base = {
+        "step": "derive",
+        "next_task_id": "task-2",
+        "selected_task_source": "task_backlog",
+        "progress_kind": "goal_productive",
+        "semantic_signature": "axis-G",
+        "evidence_paths": ["derive.json"],
+    }
+    ordinary = result_contract.validate("derive", base, "block")
+    bootstrap = result_contract.validate(
+        "derive",
+        {**base, "derive_mode": "initial_init"},
+        "block",
+    )
+    repair = result_contract.validate(
+        "derive",
+        {
+            **base,
+            "finalization_applicability": "not_applicable",
+            "finalization_not_applicable_reason": "no-predecessor-attempt",
+            "prior_final_attempt_exists": False,
+            "transition_kind": "unrelated_state_repair",
+        },
+        "block",
+    )
+
+    assert "finalization_receipt_missing" in finding_codes(ordinary)
+    assert "finalization_receipt_missing" not in finding_codes(bootstrap)
+    assert "finalization_receipt_missing" not in finding_codes(repair)
+
+
+def test_option_inventory_completeness_is_typed_and_does_not_invent_classes() -> None:
+    base = {
+        "step": "validate",
+        "task_id": "task-1",
+        "validation_verdict": "partial",
+        "progress_verdict": "no_progress",
+        "blockers": [],
+        "evidence_paths": ["validation.json"],
+    }
+    complete_absence = {
+        "schema_version": 1,
+        "inventory_status": "complete",
+        "options": [
+            {
+                "option_id": "option-wait",
+                "option_class": "terminal_or_wait",
+                "applicability": "applicable",
+                "evidence_ids": ["authority-E"],
+            }
+        ],
+        "blocker_removing_option_present": False,
+        "blocker_removing_absence_reason": "producer-map-empty",
+        "blocker_removing_absence_evidence_ids": ["producer-map-E"],
+        "options_incomplete": False,
+    }
+    accepted = result_contract.validate("validate", {**base, "option_inventory": complete_absence}, "block")
+    incomplete_terminal = result_contract.validate(
+        "validate",
+        {
+            **base,
+            "terminal_state": True,
+            "option_inventory": {
+                **complete_absence,
+                "inventory_status": "incomplete",
+                "options_incomplete": True,
+            },
+        },
+        "block",
+    )
+    omitted_removing = result_contract.validate(
+        "validate",
+        {
+            **base,
+            "option_inventory": {
+                **complete_absence,
+                "options": [
+                    {
+                        "option_id": "option-grant",
+                        "option_class": "blocker_removing",
+                        "applicability": "applicable",
+                        "evidence_ids": ["producer-map-E"],
+                    }
+                ],
+            },
+        },
+        "block",
+    )
+
+    assert not {code for code in finding_codes(accepted) if code.startswith("option_") or code.startswith("blocker_removing_")}
+    assert "incomplete_options_control_terminal_or_authority" in finding_codes(incomplete_terminal)
+    assert "blocker_removing_option_presence_mismatch" in finding_codes(omitted_removing)
+
+
+def test_operation_matrix_separates_diagnostic_read_from_state_change() -> None:
+    base = {
+        "step": "validate",
+        "task_id": "task-1",
+        "validation_verdict": "partial",
+        "progress_verdict": "no_progress",
+        "blockers": [],
+        "evidence_paths": ["validation.json"],
+    }
+    operations = {
+        operation: {
+            "status": "allowed" if operation == "read_diagnostic" else "blocked",
+            "evidence_ids": [f"{operation}-E"],
+        }
+        for operation in lifecycle_contract.OPERATIONS
+    }
+    matrix = {"schema_version": 1, "matrix_status": "complete", "operations": operations}
+    read_without_matrix = result_contract.validate(
+        "validate",
+        {**base, "requested_operation": "read_diagnostic", "operation_consumed": True},
+        "block",
+    )
+    read_without_authority = result_contract.validate(
+        "validate",
+        {**base, "gate_operation_applicability": matrix, "requested_operation": "read_diagnostic", "operation_consumed": True},
+        "block",
+    )
+    read_contract = {
+        "authority_status": "verified",
+        "safety_status": "verified",
+        "privacy_status": "verified",
+        "provenance_status": "verified",
+        "receipt_ref": "receipt-R",
+        "receipt_hash": "a" * 64,
+    }
+    read_allowed = result_contract.validate(
+        "validate",
+        {
+            **base,
+            "gate_operation_applicability": {**matrix, "read_contract": read_contract},
+            "requested_operation": "read_diagnostic",
+            "operation_consumed": True,
+        },
+        "block",
+    )
+    unknown_operations = {
+        **operations,
+        "promote_or_adopt": {"status": "unknown", "evidence_ids": []},
+    }
+    promotion_unknown = result_contract.validate(
+        "validate",
+        {
+            **base,
+            "gate_operation_applicability": {
+                "schema_version": 1,
+                "matrix_status": "complete",
+                "operations": unknown_operations,
+            },
+            "requested_operation": "promote_or_adopt",
+            "operation_consumed": True,
+        },
+        "block",
+    )
+
+    assert "gate_operation_applicability_missing" in finding_codes(read_without_matrix)
+    assert "read_diagnostic_contract_unverified" in finding_codes(read_without_authority)
+    assert "read_diagnostic_contract_unverified" not in finding_codes(read_allowed)
+    assert "state_changing_operation_scope_unknown" in finding_codes(promotion_unknown)
+    assert "gate_operation_not_allowed_for_consumption" in finding_codes(promotion_unknown)
+
+
+def test_pending_advice_with_explicit_disposition_is_warn_only_and_non_authoritative() -> None:
+    payload = {
+        "step": "validate",
+        "task_id": "task-1",
+        "validation_verdict": "partial",
+        "progress_verdict": "no_progress",
+        "blockers": [],
+        "evidence_paths": ["validation.json"],
+        "active_advice_count": 1,
+        "advice_deferred_reason": "pending-intake-review",
+        "advice_consumption_states": [
+            {
+                "clause_id": "clause-Q",
+                "state": "pending",
+                "consumer_context_id": "consumer-C",
+            }
+        ],
+    }
+    result = result_contract.validate("validate", payload, "warn")
+
+    assert "active_advice_unhandled" not in finding_codes(result)
+    assert result["status"] != "block"
+    assert payload["validation_verdict"] == "partial"
+    assert "authoritative_final" not in payload
 
 
 def test_validate_accepts_explicit_empty_blockers() -> None:
@@ -106,9 +657,10 @@ def test_report_assembler_output_is_directly_contract_validatable() -> None:
     assert validated["status"] != "block", validated
 
 
-def test_report_assembler_recognizes_validator_complete_vocabulary() -> None:
+def test_report_assembler_recognizes_validator_complete_vocabulary(tmp_path: Path) -> None:
+    finalized = finalized_bundle(tmp_path)
     report = assemble_cycle_report.assemble(
-        context={},
+        context={"workspace_root": str(tmp_path)},
         stage={
             "task_id": "task-1",
             "next_task_id": "task-2",
@@ -130,6 +682,8 @@ def test_report_assembler_recognizes_validator_complete_vocabulary() -> None:
             "progress_axes": {"behavior": "advanced"},
             "validation_commands": [{"command": "python -m pytest -q", "status": "passed"}],
             "evidence_paths": ["validation.json"],
+            "finalization_receipt": finalized["receipt"],
+            "authoritative_projection": finalized["projection"],
         },
         progress={},
         commit={"task_id": "task-1", "commit_status": "committed", "evidence_paths": ["commit.json"]},
@@ -140,9 +694,10 @@ def test_report_assembler_recognizes_validator_complete_vocabulary() -> None:
     assert report["validation_verdict"] == "passed"
 
 
-def test_report_completion_rejects_cross_task_closure_and_failed_commit() -> None:
+def test_report_completion_rejects_cross_task_closure_and_failed_commit(tmp_path: Path) -> None:
+    finalized = finalized_bundle(tmp_path)
     report = assemble_cycle_report.assemble(
-        context={},
+        context={"workspace_root": str(tmp_path)},
         stage={
             "task_id": "task-a",
             "next_task_id": "task-b",
@@ -161,30 +716,39 @@ def test_report_completion_rejects_cross_task_closure_and_failed_commit() -> Non
             "progress_axes": {"behavior": "advanced"},
             "commands": [{"command": "pytest", "status": "failed"}],
             "evidence_paths": ["validation.json"],
+            "finalization_receipt": finalized["receipt"],
+            "authoritative_projection": finalized["projection"],
         },
         progress={},
         commit={"task_id": "task-other", "commit_status": "failed", "commit_skipped_reason": "tests failed"},
         closeout_commit={},
     )
 
-    validated = result_contract.validate("report", report, "block")
+    validated = result_contract.validate("report", report, "block", {"workspace_root": str(tmp_path)})
 
     assert report["completion_status"] == "not_complete"
     assert "report_completion_evidence_incomplete" in finding_codes(validated)
     assert validated["status"] == "block"
 
 
-def test_report_assembler_blocks_placeholder_only_completion() -> None:
+def test_report_assembler_blocks_placeholder_only_completion(tmp_path: Path) -> None:
+    finalized = finalized_bundle(tmp_path)
     report = assemble_cycle_report.assemble(
-        context={},
+        context={"workspace_root": str(tmp_path)},
         stage={},
-        validation={"validation_verdict": "complete", "progress_verdict": "advanced", "blockers": []},
+        validation={
+            "validation_verdict": "complete",
+            "progress_verdict": "advanced",
+            "blockers": [],
+            "finalization_receipt": finalized["receipt"],
+            "authoritative_projection": finalized["projection"],
+        },
         progress={},
         commit={},
         closeout_commit={},
     )
 
-    validated = result_contract.validate("report", report, "block")
+    validated = result_contract.validate("report", report, "block", {"workspace_root": str(tmp_path)})
 
     assert report["completion_status"] == "not_complete"
     assert "report_completion_evidence_incomplete" in finding_codes(validated)

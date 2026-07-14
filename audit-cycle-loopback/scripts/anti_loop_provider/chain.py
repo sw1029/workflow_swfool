@@ -65,18 +65,26 @@ def adapter_mandate_gate(
     artifact_family: str,
     contract_unmet: list[str],
     current_no_delta: bool,
-    cap: int,
+    cap: int | None,
     adapter_hook_demand: list[dict[str, Any]] | None = None,
-    hook_demand_threshold: int = HOOK_DEMAND_THRESHOLD_DEFAULT,
+    hook_demand_threshold: int | None = None,
 ) -> dict[str, Any]:
     streak = adapter_missing_streak(rows, artifact_family, contract_unmet, current_no_delta)
-    required = bool(contract_unmet) and current_no_delta and streak >= max(1, cap)
-    threshold = max(1, int(hook_demand_threshold or HOOK_DEMAND_THRESHOLD_DEFAULT))
+    cap_contract = budget_evaluation("adapter_mandate_attempts", cap, source="caller_or_repository_config")
+    cap_value = budget_value(cap_contract)
+    required = bool(contract_unmet) and current_no_delta and cap_value is not None and streak >= cap_value
+    hook_contract = budget_evaluation(
+        "hook_demand_attempts",
+        hook_demand_threshold,
+        source="adapter_or_repository_config",
+    )
+    threshold = budget_value(hook_contract)
     demand_rows = [item for item in (adapter_hook_demand or []) if isinstance(item, dict)]
     demanded_hooks = sorted(
         normalize_hook_id(item.get("hook_id"))
         for item in demand_rows
         if normalize_hook_id(item.get("hook_id"))
+        and threshold is not None
         and int(float_value(item.get("decision_relevant_skip_count")) or 0) >= threshold
     )
     hook_supply_required = bool(demanded_hooks)
@@ -84,7 +92,9 @@ def adapter_mandate_gate(
         "gate": "G-ADAPTER",
         "adapter_mandate_required": required,
         "adapter_missing_streak": streak,
-        "adapter_missing_streak_cap": max(1, cap),
+        "adapter_missing_streak_cap": cap_value,
+        "budget_evaluation": cap_contract,
+        "budget_evaluation_status": cap_contract["budget_evaluation_status"],
         "adapter_contract_unmet": contract_unmet,
         "quality_high_water_unimproved": current_no_delta,
         "status": "block" if required else ("warn" if contract_unmet or demand_rows else "ok"),
@@ -96,6 +106,8 @@ def adapter_mandate_gate(
             {
                 "adapter_hook_demand": demand_rows,
                 "hook_demand_threshold": threshold,
+                "hook_demand_budget_evaluation": hook_contract,
+                "hook_demand_threshold_unverified": threshold is None,
                 "hook_supply_required": hook_supply_required,
                 "demanded_hooks": demanded_hooks,
             }
@@ -240,15 +252,23 @@ def cumulative_goal_distance_gate(
     current_no_delta: bool,
     high_water: dict[str, Any],
     current_cycle_id: str,
-    cap: int,
+    cap: int | None,
 ) -> dict[str, Any]:
     scope_key = cumulative_goal_distance_scope_key(artifact_family, root_family_key, facet_root_map_missing)
+    budget_contract = budget_evaluation(
+        "cumulative_stall_attempts",
+        cap,
+        source="caller_or_repository_config",
+    )
+    cap_value = budget_value(budget_contract)
     if not current_no_delta:
         return {
             "gate": "G-CHAIN",
             "cumulative_goal_distance_scope_key": scope_key,
             "cumulative_goal_distance_stall_streak": 0,
-            "cumulative_goal_distance_stall_cap": max(1, cap),
+            "cumulative_goal_distance_stall_cap": cap_value,
+            "budget_evaluation": budget_contract,
+            "budget_evaluation_status": budget_contract["budget_evaluation_status"],
             "cumulative_goal_distance_stalled": False,
             "high_water_vector": numeric_vector(high_water),
             "high_water_last_improved_cycle": current_cycle_id,
@@ -265,12 +285,14 @@ def cumulative_goal_distance_gate(
             last_improved_cycle = str(row.get("cycle_id") or "") or None
             break
         streak += 1
-    stalled = current_no_delta and streak >= max(1, cap)
+    stalled = current_no_delta and cap_value is not None and streak >= cap_value
     return {
         "gate": "G-CHAIN",
         "cumulative_goal_distance_scope_key": scope_key,
         "cumulative_goal_distance_stall_streak": streak,
-        "cumulative_goal_distance_stall_cap": max(1, cap),
+        "cumulative_goal_distance_stall_cap": cap_value,
+        "budget_evaluation": budget_contract,
+        "budget_evaluation_status": budget_contract["budget_evaluation_status"],
         "cumulative_goal_distance_stalled": stalled,
         "high_water_vector": numeric_vector(high_water),
         "high_water_last_improved_cycle": last_improved_cycle,
@@ -333,9 +355,11 @@ def chain_stall_forced_retarget_gate(
 ) -> dict[str, Any]:
     stalled = bool_value(chain_gate.get("cumulative_goal_distance_stalled"))
     streak = int_metric(chain_gate.get("cumulative_goal_distance_stall_streak"))
-    cap = max(1, int_metric(chain_gate.get("cumulative_goal_distance_stall_cap")) or 1)
+    cap = positive_int_or_none(chain_gate.get("cumulative_goal_distance_stall_cap"))
     lateral = blocker_mutation in {"facet_rename", "lateral", "repeat"}
-    force = stalled and lateral and streak >= cap * 2
+    # The repository-supplied stall cap is the sole numeric policy boundary.
+    # Do not derive a second generic threshold from it.
+    force = stalled and lateral and cap is not None and streak >= cap
     options: list[dict[str, Any]] = []
     if force and bool_value(adapter_gate.get("adapter_wiring_defect")):
         options.append(
@@ -440,7 +464,7 @@ def normalize_primary_metric_gate(
     previous_value: float,
     rows: list[dict[str, Any]],
     scope_key: str,
-    cap: int,
+    cap: int | None,
     epsilon: float,
     provenance: dict[str, str],
     provenance_hook_provided: bool,
@@ -485,7 +509,13 @@ def normalize_primary_metric_gate(
         source.get("primary_metric_stalled")
         or (value.get("primary_metric_stalled") if isinstance(value, dict) else False)
     )
-    stalled = adapter_stalled or (not moved and zero_streak >= max(1, cap))
+    budget_contract = budget_evaluation(
+        "primary_metric_stall_attempts",
+        cap,
+        source="caller_or_repository_config",
+    )
+    cap_value = budget_value(budget_contract)
+    stalled = adapter_stalled or (not moved and cap_value is not None and zero_streak >= cap_value)
     return {
         "gate": "G-CHAIN-PRIMARY-METRIC",
         "metric_id": metric_id,
@@ -498,7 +528,9 @@ def normalize_primary_metric_gate(
         "attested_only_movement": attested_only,
         "primary_metric_scope_key": scope_key,
         "primary_metric_zero_movement_streak": zero_streak,
-        "primary_metric_stall_cap": max(1, cap),
+        "primary_metric_stall_cap": cap_value,
+        "budget_evaluation": budget_contract,
+        "budget_evaluation_status": budget_contract["budget_evaluation_status"],
         "primary_metric_stalled": stalled,
         "evaluation_status": "pass" if moved else "fail",
         "status": "block" if stalled else ("warn" if attested_only else ("pass" if moved else "ok")),

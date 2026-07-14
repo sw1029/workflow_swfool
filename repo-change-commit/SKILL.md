@@ -1,6 +1,6 @@
 ---
 name: repo-change-commit
-description: "Inspect a local Git repository's implementation state and create an intentional commit, using fixed Tier 1 `gpt-5.6-terra/low` when commit finalization is delegated. Separate intentional source changes from generated or local-only files, enforce goal-aware readiness, stage only coherent files, include issue or goal/task references, and coordinate Git state with issue-tracked or `/goal` task cycles."
+description: "Inspect a local Git repository's implementation state and create an intentional commit, using Tier 1 `model_ref:balanced`/low when commit finalization is delegated. Separate intentional source changes from generated or local-only files, enforce goal-aware readiness, stage only coherent files, include issue or goal/task references, and coordinate Git state with issue-tracked or `/goal` task cycles."
 ---
 
 # Repo Change Commit
@@ -16,10 +16,10 @@ When invoked from `$orchestrate-task-cycle`, treat commit finalization as the au
 ## Routing Policy
 
 - When called from `$orchestrate-task-cycle`, consume the canonical orchestration reference [workflow-routing.md](../orchestrate-task-cycle/references/workflow-routing.md) as caller context, but keep commit finalization's own fixed routing below.
-- Treat commit finalization as Tier 1 low-reasoning work. When invoked through a subagent or delegated skill call, request `model: gpt-5.6-terra` with `reasoning_effort: low`.
+- Treat commit finalization as Tier 1 low-reasoning work. When invoked through a subagent or delegated skill call, request `model_ref: model_ref:balanced` with `reasoning_effort: low` under `configured-tiered-routing-v3`.
 - Apply the same fixed `reasoning_effort: low` to Git status classification, `.gitignore` noise cleanup, staging decisions, commit-message assembly, and actual `git commit` execution performed by this skill.
 - Do not inherit high/xhigh code-analysis or validation routing from caller workflows. Expensive code review should already have happened before this skill runs.
-- If tooling cannot enforce model/effort, include the Terra/low request in the prompt and report prompt-only or inherited-unverified routing. Do not claim enforced Terra execution.
+- Keep runtime model bindings in caller configuration or a repository adapter. If the binding is absent, retain `model_configuration_status: reference_only`; if tooling cannot enforce the resolved model/effort, report `routing_enforcement: prompt_only|inherited_unverified` and a limitation. Never claim enforced routing or actual-model execution from an abstract reference alone.
 
 ## Workflow
 
@@ -87,7 +87,7 @@ When invoked from `$orchestrate-task-cycle`, treat commit finalization as the au
    - Do not close issues from this skill. `$manage-implementation-issues` closes or archives issues only after verification evidence exists.
    - Run `git commit` only when the user asked for a commit. Afterward, report `git log -1 --oneline` and the remaining `git status --short --branch`.
    - Report both the pre-commit/base hash when known and the created commit hash. The created commit hash is the authoritative finalization result.
-   - Report `agent_routing_applicability: deterministic_only` when commit work ran directly. When delegated, include the Tier 1 profile, requested model/effort, reason codes, and routing enforcement or limitation.
+   - Report `agent_routing_applicability: deterministic_only` when commit work ran directly. When delegated, include the Tier 1 profile, requested model reference, model-configuration status, requested model/effort when resolved, reason codes, and routing enforcement or limitation.
 
 ## Commit Message Guidance
 

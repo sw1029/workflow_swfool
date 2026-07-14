@@ -15,8 +15,23 @@ def apply_disposition_and_findings(ns: dict[str, Any]) -> dict[str, Any]:
     row["disposition_intersection_basis"] = basis
     row["consolidation_streak"] = streak
     row["consolidation_reduces_goal_distance"] = False
-    row["consolidation_streak_cap"] = args.consolidation_streak_cap
+    consolidation_streak_cap = budget_value(
+        budget_evaluations["consolidation_nonsemantic_attempts"]
+    )
+    row["consolidation_streak_cap"] = consolidation_streak_cap
+    row["consolidation_budget_evaluation"] = budget_evaluations[
+        "consolidation_nonsemantic_attempts"
+    ]
     findings = list(row.get("findings") or [])
+    if row.get("budget_unverified"):
+        findings.append(
+            {
+                "severity": "warn",
+                "code": "policy_budget_unverified",
+                "message": "one or more replay/nonsemantic decision budgets were not supplied; counters remain observations, grant no budget-based progress credit, and create no threshold hard stop.",
+                "evidence": {"budget_ids": row["budget_unverified"]},
+            }
+        )
     rejected_self_reports = [
         {
             "hypothesized_root_cause": entry.get("hypothesized_root_cause"),
@@ -202,11 +217,16 @@ def apply_disposition_and_findings(ns: dict[str, Any]) -> dict[str, Any]:
                 "evidence": reachability_gate,
             }
         )
-    envelope_thaw_cap = int(getattr(args, "envelope_thaw_streak_cap", ENVELOPE_THAW_STREAK_CAP_DEFAULT)) or ENVELOPE_THAW_STREAK_CAP_DEFAULT
+    envelope_thaw_cap = budget_value(budget_evaluations["envelope_thaw_attempts"])
     if row["envelope_thaw_item_required"]:
         findings.append(
             {
-                "severity": "block" if envelope_thaw_streak >= envelope_thaw_cap else "warn",
+                "severity": (
+                    "block"
+                    if envelope_thaw_cap is not None
+                    and envelope_thaw_streak >= envelope_thaw_cap
+                    else "warn"
+                ),
                 "code": "envelope_thaw_item_required",
                 "message": "acceptance is unreachable under a frozen envelope and no thaw item is reserved; preserve a thaw condition or staged thaw schedule before another envelope-internal task.",
                 "evidence": {
@@ -335,14 +355,18 @@ def apply_disposition_and_findings(ns: dict[str, Any]) -> dict[str, Any]:
                 "evidence": {"root_cause_duplicate_hypotheses": row["root_cause_duplicate_hypotheses"][:5]},
             }
         )
-    if streak >= args.consolidation_streak_cap and "consolidation" in row["effective_allowed_dispositions"]:
+    if (
+        consolidation_streak_cap is not None
+        and streak >= consolidation_streak_cap
+        and "consolidation" in row["effective_allowed_dispositions"]
+    ):
         row["effective_allowed_dispositions"] = [item for item in row["effective_allowed_dispositions"] if item != "consolidation"]
         findings.append(
             {
                 "severity": "block",
                 "code": "consolidation_streak_capped",
                 "message": "consolidation is governance-only and does not reduce goal distance; repeated consolidation is capped.",
-                "evidence": {"consolidation_streak": streak, "cap": args.consolidation_streak_cap},
+                "evidence": {"consolidation_streak": streak, "cap": consolidation_streak_cap},
             }
         )
     if bool_value(dispatch_gate.get("dispatch_required")):
@@ -361,7 +385,9 @@ def apply_disposition_and_findings(ns: dict[str, Any]) -> dict[str, Any]:
         row["measurement_goal_productive_allowed"] = False
         row["requires_non_measurement_goal_productive"] = True
         reason = "measurement_without_coverage_quality_delta"
-        if measurement_streak_value > args.measurement_streak_cap:
+        if measurement_streak_cap is None:
+            reason = "measurement_budget_unverified"
+        elif measurement_streak_value > measurement_streak_cap:
             reason = "measurement_streak_capped"
         elif coverage_reconciliation_blocks:
             reason = "coverage_quality_delta_reconciliation_failed"
@@ -373,12 +399,12 @@ def apply_disposition_and_findings(ns: dict[str, Any]) -> dict[str, Any]:
                 "code": reason,
                 "message": (
                     "measurement/oracle work cannot be promoted to goal_productive without both G-COV and G-SUBSTANCE deltas, "
-                    "and is capped to one measurement transition per root_key/root_family."
+                    "and needs an explicit repository-owned budget before any measurement-only credit."
                 ),
                 "evidence": {
                     "root_key": current_root_key,
                     "measurement_streak": measurement_streak_value,
-                    "cap": args.measurement_streak_cap,
+                    "cap": measurement_streak_cap,
                     "coverage_quality_delta_gate": coverage_gate,
                     "coverage_quality_delta_reconciliation_gate": coverage_reconciliation_gate,
                     "substance_delta_gate": substance_gate,
@@ -418,7 +444,7 @@ def apply_disposition_and_findings(ns: dict[str, Any]) -> dict[str, Any]:
                     "blocker_root_family": blocker_root_family,
                     "task_correction_class": task_correction_class,
                     "detection_only_streak": detection_streak,
-                    "cap": args.detection_only_streak_cap,
+                    "cap": detection_streak_cap,
                 },
             }
         )

@@ -76,8 +76,8 @@ Represent cross-component compatibility as directed edges:
 
 | Source | Relation | Target | Version Range | Compatibility | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| `scripts/build_index.py` | produces_schema | `schema:index-record` | `>=v20260522-1` | compatible | `tests/...` | JSONL records consumed by loader |
-| `dataset_loader.py` | consumes_schema | `schema:index-record` | `>=v20260522-1` | compatible | review | Loader assumes `work_id` and `episode_id` |
+| `module_ref_A` | produces_schema | `schema:artifact_A` | `>=version_ref_A` | compatible | `evidence_ref_A` | Structured records consumed by another component |
+| `module_ref_B` | consumes_schema | `schema:artifact_A` | `>=version_ref_A` | compatible | `evidence_ref_B` | Consumer requires `field_id_A` and `field_id_B` |
 ```
 
 Use these common relations:

@@ -1,4 +1,4 @@
 interface:
   display_name: "Inspect OOM Risk"
   short_description: "Find repo OOM risk surfaces"
-  default_prompt: "Use $inspect-oom-risk with Tier 3 Terra/high code-resource analysis and Tier 4 Terra/xhigh important review, then return prioritized findings without taking final direction authority."
+  default_prompt: "Use $inspect-oom-risk with configured Tier 3 analysis and Tier 4 important-review routing, then return prioritized findings without taking final direction authority."

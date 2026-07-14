@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -9,10 +10,39 @@ from typing import Any
 
 
 POLICY_PATH = Path(__file__).resolve().parents[1] / "references" / "model-effort-profiles.json"
+MODEL_REF_PREFIX = "model_ref:"
+EVIDENCE_ID_FIELDS = ("event_id", "run_id", "artifact_id", "ledger_event_id")
+
+
+def validate_policy(policy: dict[str, Any]) -> dict[str, Any]:
+    models = policy.get("models")
+    tiers = policy.get("tiers")
+    binding_contract = policy.get("model_binding_contract")
+    if not isinstance(models, dict) or not models:
+        raise ValueError("routing policy models must be a non-empty object")
+    model_refs = {str(value) for value in models.values()}
+    if any(not value.startswith(MODEL_REF_PREFIX) for value in model_refs):
+        raise ValueError("global routing policy models must use abstract model_ref values")
+    if not isinstance(tiers, dict) or not tiers:
+        raise ValueError("routing policy tiers must be a non-empty object")
+    for tier_id, tier in tiers.items():
+        if not isinstance(tier, dict) or str(tier.get("model") or "") not in model_refs:
+            raise ValueError(f"routing tier {tier_id} must reference policy models")
+    if not isinstance(binding_contract, dict):
+        raise ValueError("routing policy model_binding_contract is required")
+    if binding_contract.get("request_field") != "model_bindings":
+        raise ValueError("routing policy model binding request field is unsupported")
+    max_policy = policy.get("max_escalation")
+    if not isinstance(max_policy, dict) or str(max_policy.get("model") or "") not in model_refs:
+        raise ValueError("max escalation must use a policy model_ref")
+    return policy
 
 
 def load_policy(path: Path = POLICY_PATH) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("routing policy must be a JSON object")
+    return validate_policy(value)
 
 
 def load_json_arg(value: str | None) -> dict[str, Any]:
@@ -56,8 +86,87 @@ def valid_evidence_reference(value: Any) -> bool:
         return bool(value) and all(valid_evidence_reference(item) for item in value)
     if not isinstance(value, dict):
         return False
-    locator_fields = ("path", "event_id", "run_id", "artifact_id", "ledger_event_id")
-    return any(evidence_present(value.get(field)) for field in locator_fields)
+    return any(evidence_present(value.get(field)) for field in EVIDENCE_ID_FIELDS)
+
+
+def sanitized_evidence_reference(value: Any) -> Any:
+    if isinstance(value, list):
+        return [sanitized_evidence_reference(item) for item in value if valid_evidence_reference(item)]
+    if not isinstance(value, dict):
+        return None
+    return {field: value[field] for field in EVIDENCE_ID_FIELDS if evidence_present(value.get(field))}
+
+
+def sanitized_prior_tier5_evidence(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    allowed = {
+        *EVIDENCE_ID_FIELDS,
+        "profile_id",
+        "routing_tier",
+        "requested_model_ref",
+        "requested_model",
+        "model_configuration_status",
+        "requested_reasoning_effort",
+        "unresolved_finding_id",
+    }
+    return {key: item for key, item in value.items() if key in allowed}
+
+
+def receipt_hash(value: dict[str, Any]) -> str:
+    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def resolve_model_binding(
+    model_ref: str,
+    request: dict[str, Any],
+    policy: dict[str, Any],
+) -> tuple[str, str, dict[str, str] | None, list[dict[str, Any]]]:
+    contract = policy["model_binding_contract"]
+    raw_bindings = request.get(str(contract["request_field"]))
+    if raw_bindings is None:
+        return model_ref, "reference_only", None, []
+    if not isinstance(raw_bindings, dict):
+        return model_ref, "invalid", None, [{"code": "model_bindings_invalid"}]
+
+    known_refs = {str(value) for value in policy["models"].values()}
+    unknown_refs = sorted(str(key) for key in raw_bindings if str(key) not in known_refs)
+    violations: list[dict[str, Any]] = []
+    if unknown_refs:
+        violations.append({"code": "unknown_model_binding_refs", "model_refs": unknown_refs})
+
+    binding = raw_bindings.get(model_ref)
+    if not isinstance(binding, dict):
+        violations.append({"code": "model_binding_missing", "model_ref": model_ref})
+        return model_ref, "invalid", None, violations
+
+    model = binding.get("model")
+    binding_id = binding.get("binding_id")
+    source = binding.get("source")
+    source_values = {str(item) for item in contract.get("binding_source_values", [])}
+    if not isinstance(model, str) or not model.strip() or model.strip().startswith(MODEL_REF_PREFIX):
+        violations.append({"code": "model_binding_model_invalid", "model_ref": model_ref})
+    if not isinstance(binding_id, str) or not binding_id.strip():
+        violations.append({"code": "model_binding_id_missing", "model_ref": model_ref})
+    if str(source or "") not in source_values:
+        violations.append(
+            {
+                "code": "model_binding_source_invalid",
+                "model_ref": model_ref,
+                "source": source,
+            }
+        )
+    if violations:
+        return model_ref, "invalid", None, violations
+    receipt_body = {
+        "model_ref": model_ref,
+        "model_sha256": hashlib.sha256(model.strip().encode("utf-8")).hexdigest(),
+        "binding_id": binding_id.strip(),
+        "source": str(source),
+    }
+    receipt = {**receipt_body, "receipt_sha256": receipt_hash(receipt_body)}
+    return model.strip(), "resolved", receipt, []
 
 
 def valid_prior_tier5_evidence(value: Any, policy: dict[str, Any]) -> bool:
@@ -67,7 +176,7 @@ def valid_prior_tier5_evidence(value: Any, policy: dict[str, Any]) -> bool:
     return (
         str(value.get("profile_id") or "") == str(max_policy["required_evidence_profile"])
         and value.get("routing_tier") == int(max_policy["tier"])
-        and str(value.get("requested_model") or "") == str(max_policy["model"])
+        and str(value.get("requested_model_ref") or value.get("requested_model") or "") == str(max_policy["model"])
         and str(value.get("requested_reasoning_effort") or "") == str(policy["tiers"][str(max_policy["tier"])]["effort"])
         and evidence_present(value.get("unresolved_finding_id"))
     )
@@ -97,7 +206,11 @@ def select_route(
     signals, unknown_signals = normalized_signals(request.get("signals"), allowed_signals)
     signal_request_present = any(signals.values())
     raw_signal_evidence = request.get("signal_evidence") if isinstance(request.get("signal_evidence"), dict) else {}
-    signal_evidence = {str(key): value for key, value in raw_signal_evidence.items() if str(key) in allowed_signals}
+    signal_evidence = {
+        str(key): sanitized_evidence_reference(value)
+        for key, value in raw_signal_evidence.items()
+        if str(key) in allowed_signals and valid_evidence_reference(value)
+    }
     reasons = ["profile_default"]
     violations: list[dict[str, Any]] = []
     tier = int(profile["default_tier"])
@@ -120,7 +233,7 @@ def select_route(
 
     for signal in policy.get("tier5_signal_evidence_required", []):
         signal = str(signal)
-        if signals.get(signal) and not valid_evidence_reference(signal_evidence.get(signal)):
+        if signals.get(signal) and not valid_evidence_reference(raw_signal_evidence.get(signal)):
             violations.append({"code": "tier5_signal_evidence_missing", "signal": signal})
             signals[signal] = False
 
@@ -152,13 +265,15 @@ def select_route(
         reasons.append("profile_max_clamp")
 
     tier_spec = policy["tiers"][str(tier)]
-    model = str(tier_spec["model"])
+    model_ref = str(tier_spec["model"])
     effort = str(tier_spec["effort"])
     request_max = bool(request.get("request_max"))
     if request_max:
         max_policy = policy["max_escalation"]
         max_reason = str(request.get("max_escalation_reason") or "").strip()
-        prior_tier5_evidence = request.get(str(max_policy["required_evidence_field"]))
+        prior_tier5_evidence = sanitized_prior_tier5_evidence(
+            request.get(str(max_policy["required_evidence_field"]))
+        )
         agent_count = request.get("agent_count")
         max_allowed = (
             bool(profile.get("allow_max"))
@@ -169,7 +284,7 @@ def select_route(
             and agent_count == int(max_policy["required_agent_count"])
         )
         if max_allowed:
-            model = str(max_policy["model"])
+            model_ref = str(max_policy["model"])
             effort = str(max_policy["effort"])
             reasons.append("bounded_max_escalation")
         else:
@@ -188,11 +303,20 @@ def select_route(
     if unknown_signals:
         violations.append({"code": "unknown_routing_signals", "signals": unknown_signals})
 
+    model, model_configuration_status, model_binding_receipt, binding_violations = resolve_model_binding(
+        model_ref,
+        request,
+        policy,
+    )
+    violations.extend(binding_violations)
+
     result = {
         "policy_id": policy["policy_id"],
         "profile_id": profile_id,
         "routing_tier": tier,
+        "requested_model_ref": model_ref,
         "requested_model": model,
+        "model_configuration_status": model_configuration_status,
         "requested_reasoning_effort": effort,
         "routing_reason_codes": list(dict.fromkeys(reasons)),
         "routing_signals": {key: value for key, value in signals.items() if value},
@@ -200,6 +324,8 @@ def select_route(
         "dynamic_routing": bool(signal_request_present or request_max),
         "routing_violations": violations,
     }
+    if model_binding_receipt is not None:
+        result["model_binding_receipt"] = model_binding_receipt
     if ownership_required:
         result["final_direction_ownership"] = ownership
     if request_max:
@@ -303,8 +429,9 @@ def validate_claim(
 
     tier_spec = policy["tiers"][str(tier)]
     model = str(claim.get("requested_model") or "")
+    model_ref = str(claim.get("requested_model_ref") or "")
     effort = str(claim.get("requested_reasoning_effort") or "")
-    expected_model = str(tier_spec["model"])
+    expected_model_ref = str(tier_spec["model"])
     expected_effort = str(tier_spec["effort"])
     if effort == str(policy["max_escalation"]["effort"]):
         max_policy = policy["max_escalation"]
@@ -320,11 +447,71 @@ def validate_claim(
             findings.append({"code": "max_escalation_reason_missing"})
         if claim.get("agent_count") != int(max_policy["required_agent_count"]):
             findings.append({"code": "max_agent_count_invalid", "agent_count": claim.get("agent_count")})
-        expected_model = str(max_policy["model"])
+        expected_model_ref = str(max_policy["model"])
         expected_effort = str(max_policy["effort"])
 
-    if model != expected_model:
-        findings.append({"code": "tier_model_mismatch", "routing_tier": tier, "expected_model": expected_model, "requested_model": model})
+    configuration_status = str(claim.get("model_configuration_status") or "")
+    binding_contract = policy["model_binding_contract"]
+    allowed_statuses = {str(item) for item in binding_contract.get("configuration_status_values", [])}
+    if not model_ref and model == expected_model_ref:
+        model_ref = model
+    if not configuration_status and model == expected_model_ref:
+        configuration_status = "reference_only"
+    if model_ref != expected_model_ref:
+        findings.append(
+            {
+                "code": "tier_model_ref_mismatch",
+                "routing_tier": tier,
+                "expected_model_ref": expected_model_ref,
+                "requested_model_ref": model_ref,
+            }
+        )
+    if configuration_status not in allowed_statuses:
+        findings.append(
+            {
+                "code": "model_configuration_status_invalid",
+                "model_configuration_status": configuration_status or None,
+            }
+        )
+    elif configuration_status == "reference_only":
+        if model != expected_model_ref:
+            findings.append(
+                {
+                    "code": "tier_model_mismatch",
+                    "routing_tier": tier,
+                    "expected_model": expected_model_ref,
+                    "requested_model": model,
+                }
+            )
+        if claim.get("routing_enforcement") == "enforced":
+            findings.append({"code": "unresolved_model_binding_for_enforced_route", "model_ref": expected_model_ref})
+    elif configuration_status == "resolved":
+        receipt = claim.get("model_binding_receipt")
+        if not isinstance(receipt, dict):
+            findings.append({"code": "model_binding_receipt_missing", "model_ref": expected_model_ref})
+        else:
+            if str(receipt.get("model_ref") or "") != expected_model_ref:
+                findings.append({"code": "model_binding_receipt_ref_mismatch", "model_ref": receipt.get("model_ref")})
+            if not str(receipt.get("binding_id") or "").strip():
+                findings.append({"code": "model_binding_id_missing", "model_ref": expected_model_ref})
+            allowed_sources = {str(item) for item in binding_contract.get("binding_source_values", [])}
+            if str(receipt.get("source") or "") not in allowed_sources:
+                findings.append({"code": "model_binding_source_invalid", "source": receipt.get("source")})
+            expected_model_sha256 = hashlib.sha256(model.encode("utf-8")).hexdigest()
+            if str(receipt.get("model_sha256") or "") != expected_model_sha256:
+                findings.append({"code": "model_binding_model_digest_mismatch", "model_ref": expected_model_ref})
+            receipt_body = {
+                "model_ref": receipt.get("model_ref"),
+                "model_sha256": receipt.get("model_sha256"),
+                "binding_id": receipt.get("binding_id"),
+                "source": receipt.get("source"),
+            }
+            if str(receipt.get("receipt_sha256") or "") != receipt_hash(receipt_body):
+                findings.append({"code": "model_binding_receipt_hash_mismatch", "model_ref": expected_model_ref})
+        if not model or model.startswith(MODEL_REF_PREFIX):
+            findings.append({"code": "resolved_model_binding_value_missing", "model_ref": expected_model_ref})
+    elif configuration_status == "invalid":
+        findings.append({"code": "model_binding_invalid", "model_ref": expected_model_ref})
     if effort != expected_effort:
         findings.append({"code": "tier_effort_mismatch", "routing_tier": tier, "expected_effort": expected_effort, "requested_reasoning_effort": effort})
     if effort in policy.get("prohibited_delegated_efforts", []):
@@ -333,12 +520,16 @@ def validate_claim(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Select a governed GPT-5.6 model/effort tier for an orchestrated agent role.")
+    parser = argparse.ArgumentParser(description="Select a governed configured model/effort tier for an orchestrated agent role.")
     parser.add_argument("--profile", required=True)
     parser.add_argument("--request", help="JSON object, JSON file, or '-' for stdin.")
+    parser.add_argument("--model-bindings", help="Optional model-ref binding JSON object or file.")
     args = parser.parse_args(argv)
     try:
-        result = select_route(args.profile, load_json_arg(args.request))
+        request = load_json_arg(args.request)
+        if args.model_bindings:
+            request["model_bindings"] = load_json_arg(args.model_bindings)
+        result = select_route(args.profile, request)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(json.dumps({"status": "error", "error": str(exc)}, ensure_ascii=False, indent=2))
         return 2

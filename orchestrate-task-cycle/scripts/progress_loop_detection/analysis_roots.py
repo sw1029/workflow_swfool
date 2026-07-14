@@ -50,13 +50,26 @@ class RootMetricMixin:
                 "root_key_produced_domain_delta": root_key_delta,
                 "root_family_produced_domain_delta": root_family_delta,
                 "detection_only_streak_count": detection_streak,
-                "detection_balance_required": bool(primary_root_family) and detection_streak >= DETECTION_ONLY_STREAK_CAP and not root_family_delta,
-                "root_axis_disabled": bool(primary_root_axis) and root_axis_gov_count >= self.root_axis_threshold and not root_axis_delta,
-                "root_key_disabled": bool(primary_root_key) and root_key_gov_count >= self.root_axis_threshold and not root_key_delta,
+                "detection_balance_required": bool(primary_root_family)
+                and self.detection_only_streak_cap is not None
+                and detection_streak >= self.detection_only_streak_cap
+                and not root_family_delta,
+                "root_axis_disabled": bool(primary_root_axis)
+                and self.root_axis_threshold is not None
+                and root_axis_gov_count >= self.root_axis_threshold
+                and not root_axis_delta,
+                "root_key_disabled": bool(primary_root_key)
+                and self.root_axis_threshold is not None
+                and root_key_gov_count >= self.root_axis_threshold
+                and not root_key_delta,
             }
         )
         self.state["autonomous_retarget_disabled"] = self.state["root_axis_disabled"] or self.state["root_key_disabled"]
-        self.state["repeated_root_keys"] = [{"root_key": key, "count": count} for key, count in counters["root_key"].most_common() if count >= 2]
+        self.state["repeated_root_keys"] = [
+            {"root_key": key, "count": count}
+            for key, count in counters["root_key"].most_common()
+            if self.recurrence_threshold is not None and count >= self.recurrence_threshold
+        ]
 
     def _has_domain_delta(self, items: list[dict[str, Any]]) -> bool:
         return any(

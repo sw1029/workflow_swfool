@@ -1,13 +1,15 @@
 ---
 name: validate-task-completion
-description: "Run a common pre-close task completion gate combining repository/OOM audits, environment checks, execution logs, task_miss and issue state, advice usage, code conventions, semantic structure movement, task-index traceability, and agent logs into a `complete`, `partial`, or `failed` verdict. Use Tier 4 `gpt-5.6-terra/xhigh` for completion-controlling repository and OOM review; completion validation does not own future direction and is capped at Tier 4. Use before declaring task completion, closing a workflow cycle, promoting or deleting artifacts, or reporting final completion."
+description: "Run a common pre-close task completion gate combining repository/OOM audits, environment checks, execution logs, task_miss and issue state, advice usage, code conventions, semantic structure movement, task-index traceability, and agent logs into a `complete`, `partial`, or `failed` candidate. Use before declaring task completion, closing a workflow cycle, promoting or deleting artifacts, or reporting final completion; governed cycles require orchestrator finalization and a verified receipt before consumption."
 ---
 
 # Validate Task Completion
 
 ## Overview
 
-Use this skill as the final gate before saying a repository task is done. It gathers evidence from the task lifecycle, runs or verifies required audits, and writes a durable validation report with one verdict: `complete`, `partial`, or `failed`.
+Use this skill as the final evaluation gate before saying a repository task is done. It gathers evidence from the task lifecycle, runs or verifies required audits, and produces one verdict candidate: `complete`, `partial`, or `failed`.
+
+In a governed cycle, evaluate without publishing current registry, ledger, seal, index, or final report truth. Emit the final candidate described in [completion-gates.md](references/completion-gates.md); `$orchestrate-task-cycle` is the sole owner of revision assignment, supersession, atomic current-state publication, and the content-bound finalization receipt. A candidate or draft report is not authoritative and cannot be consumed by derive, dashboard, handoff, or completion reporting.
 
 Also report task progress separately from validation correctness. A task can be validly complete for its narrow scope while still making only safety or no-live progress toward the final goal.
 
@@ -20,10 +22,10 @@ When `task.md`, a caller packet, or active workflow evidence references `.agent_
 ## Agent Routing Policy
 
 - When called from `$orchestrate-task-cycle`, consume the canonical orchestration reference [workflow-routing.md](../orchestrate-task-cycle/references/workflow-routing.md) as caller context, but keep completion validation's own routing below.
-- Treat completion validation repository audits as Tier 4 important work review. Invoke `$inspect-repo-with-agents` with `model: gpt-5.6-terra` and `reasoning_effort: xhigh`.
+- Treat completion validation repository audits as Tier 4 important work review. Invoke `$inspect-repo-with-agents` with `profile_id: completion_review`, `model_ref: model_ref:balanced`, and `reasoning_effort: xhigh`; resolve the runtime model only from caller or repository configuration.
 - Treat relevant completion OOM audits the same way through `$inspect-oom-risk`.
 - Keep ID-only traceability correction routed through `$manage-task-state-index` with fixed `reasoning_effort: medium`.
-- If a tool cannot enforce model/effort, encode the request in the prompt and record prompt-only or inherited-unverified routing in the validation report. Do not claim Terra execution or use delegated `ultra`.
+- If a tool cannot enforce model/effort, encode the profile/reference request in the prompt and record reference-only, prompt-only, or inherited-unverified routing in the validation report. Do not claim configured-model execution or use delegated `ultra`.
 
 ## Domain Adapter Contract
 
@@ -84,7 +86,7 @@ Do not define identifier surfaces, meaning floors, regeneration commands, storag
 
 5. Run repository audit.
    - Use `$inspect-repo-with-agents` to audit requirement coverage, regressions, maintainability, tests, and generalization gaps.
-   - Invoke this repository audit on Terra at `reasoning_effort: xhigh`.
+   - Invoke this repository audit with the configured `completion_review` profile at `reasoning_effort: xhigh`.
    - Include both existing code and changed code when implementation occurred.
    - Include `.agent_goal/goal_schema_contract.md`, `.schema/`, and `.contract/` when the task touches shared schemas, module/script contracts, serialized artifacts, CLI/script I/O, producers, consumers, versions, or compatibility.
    - Include task-referenced `.agent_advice` when present. Audit whether implementation and task artifacts handled the advice as non-GT planning evidence and did not use it to override GT, authority, or repository facts.
@@ -94,7 +96,7 @@ Do not define identifier surfaces, meaning floors, regeneration commands, storag
 
 6. Run OOM-risk audit when relevant.
    - Use `$inspect-oom-risk` when the task touches large data loading, model inference/training, batching, concurrency, caches, build/test memory pressure, containers, GPU/VRAM, or unbounded accumulation.
-   - Invoke relevant OOM-risk audit on Terra at `reasoning_effort: xhigh`.
+   - Invoke relevant OOM-risk audit with the configured `completion_review` profile at `reasoning_effort: xhigh`.
    - If no plausible memory-risk surface exists, mark the OOM gate `not_applicable`.
    - If OOM audit is relevant but not run, cap the verdict at `partial`.
 
@@ -216,8 +218,8 @@ Do not define identifier surfaces, meaning floors, regeneration commands, storag
    - If ID audit finds high-severity broken links, multiple active tasks, missing validation/run/audit evidence links, or unsafe candidate/miss deletion ambiguity, cap the verdict at `partial` or `failed` depending on whether the missing traceability blocks the task objective.
    - Separately decide `progress_verdict` and emit the unique close-time `authoritative_progress_verdict`. Also preserve evidence-bound task acceptance, artifact truth, artifact semantic, pack transition, historical index, and goal readiness verdict axes; a transition failure does not erase implementation acceptance, and semantic failure cannot become goal progress. `$audit-cycle-loopback` owns the earlier `authoritative_semantic_progress`; validation may preserve or downgrade it but never upgrade `false` or a hard stop to `advanced`.
    - A session-audit finding is advisory even when it names canonical evidence. Only a separate deterministic comparator contract may establish a cross-source mismatch that downgrades or blocks. Session audit cannot create pass/completion/progress, expand authority, or validate itself as required for close.
-     - `advanced`: the task unlocked a new execution/readiness/goal state, supplied or validated previously missing evidence, produced useful dataset/KG artifacts, improved qualitative output, or materially reduced an active blocker, and the evidence includes `terminal_outcome_changed=true` or strict observed `changed_vs_previous=true` plus `semantic_progress=true`.
-     - `safety_only`: the task passed by proving fail-closed, no-live, non-dispatchable, or guardrail behavior without supplying source-backed evidence, producing dataset/KG artifacts, advancing readiness, or reducing the final-goal blocker.
+     - `advanced`: the task unlocked a new execution/readiness/goal state, supplied or validated previously missing evidence, produced useful primary goal artifacts, improved qualitative output, or materially reduced an active blocker, and the evidence includes `terminal_outcome_changed=true` or strict observed `changed_vs_previous=true` plus `semantic_progress=true`.
+     - `safety_only`: the task passed by proving fail-closed, no-live, non-dispatchable, or guardrail behavior without supplying source-backed evidence, producing primary goal artifacts, advancing readiness, or reducing the final-goal blocker.
      - `no_progress`: the task produced no new durable evidence or repeated already-proven safety checks without a new blocker-state transition.
      - `regressed`: the task weakened or broke a required state, contract, validation gate, safety boundary, or goal requirement.
    - Do not classify progress as `advanced` merely because a new input kind was named. Evidence-family progress requires a non-empty supplied artifact path, `produced_domain_delta=true`, or another validated positive domain/output artifact.
@@ -228,17 +230,18 @@ Do not define identifier surfaces, meaning floors, regeneration commands, storag
    - Do not classify repeated `terminal_blocked`/recheck closeout as `advanced`. If `terminal_escalation_gate.escalation_required=true`, a valid completion must record `user_escalation`, exactly one missing input, and family seal evidence; otherwise cap the verdict at `partial` or `failed` depending on the task objective.
    - Do not let `validation_verdict: complete` imply final-goal progress when `progress_verdict` is `safety_only` or `no_progress`.
 
-12. Write a validation report.
-   - Create `.task/validation/YYYYMMDD-HHMMSS-task-validation.md`.
-   - Include task ID if known, validation verdict, progress verdict, gate statuses, evidence paths, commands, audit summaries, active misses, and required follow-ups.
-   - Update `$manage-task-state-index` with a `validation` artifact whose status is `passed`, `partial`, or `failed`.
-   - Use `$record-agent-work-log` when the user requested durable logging of the validation work itself or when this report closes a larger agent cycle.
+12. Prepare the final candidate and report projection.
+   - Include task ID if known, validation verdict, progress verdict, gate statuses, opaque evidence IDs, command outcome summaries, audit summaries, active misses, and required follow-ups.
+   - In a governed cycle, emit `schema_version: 1`, `kind: cycle_final_candidate`, `final_candidate: true`, stable cycle/attempt identity, the explicit expected-previous tuple, all six evidence-bound verdict axes, and one complete durable-state projection or typed-operation set. Do not assign revision, supersession, authoritative-final, token, commit-status, or receipt fields.
+   - Keep report text, timestamps, labels, raw paths, quotations, and other trace-only material outside decision-bound candidate content. Do not write `.task/validation`, update the task index, or publish current state before finalization.
+   - Let `$orchestrate-task-cycle` validate and finalize the exact candidate. After it issues and re-verifies a committed current receipt, materialize any validation report or index projection only as a receipt-bound consumer projection. On finalization failure, retain no new current report/index truth; a non-authoritative diagnostic draft may be discarded or kept outside current-state selectors.
+   - For an explicitly standalone validation with no governed predecessor/final attempt, record `finalization_applicability: not_applicable` and an opaque reason. This exception cannot authorize derive, promotion, or a final completion claim for a governed cycle.
 
 13. Report the outcome.
    - Lead with the verdict.
    - For `partial` or `failed`, list blockers before summarizing completed work.
    - Include completion-audit `policy_id`, `profile_id`, `routing_tier`, requested model/effort, routing reason codes/signals, `routing_violations` even when empty, routing enforcement, actual model/effort when exposed, and limitations; distinguish deterministic-only gates from delegated audits.
-   - Include the validation report path and the updated task index path.
+   - Include the verified finalization receipt/projection identity and receipt-bound validation report or task-index references when finalization applies. If only a candidate exists, state that finalization and final reporting remain pending.
 
 ## Validation Report Shape
 

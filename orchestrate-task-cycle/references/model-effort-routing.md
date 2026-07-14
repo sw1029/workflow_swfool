@@ -1,40 +1,57 @@
-# Tiered GPT-5.6 Model And Effort Routing
+# Tiered Configured Model And Effort Routing
 
-Use [model-effort-profiles.json](model-effort-profiles.json) as the executable policy and `scripts/model_effort_router.py` as the deterministic selector. Use this file for selection semantics and ownership boundaries.
+Use [model-effort-profiles.json](model-effort-profiles.json) as the executable policy and `scripts/model_effort_router.py` as the deterministic selector. Keep role/tier policy global and keep runtime model bindings in caller configuration or a repository adapter.
 
 ## Tier Contract
 
-| Tier | Model | Effort | Work class |
+| Tier | Model reference | Effort | Work class |
 | --- | --- | --- | --- |
-| `1` | `gpt-5.6-terra` | `low` | Mechanical, reversible finalization |
-| `2` | `gpt-5.6-terra` | `medium` | Routine bounded implementation or bookkeeping |
-| `3` | `gpt-5.6-terra` | `high` | Complex analysis, planning, or high-reliability implementation |
-| `4` | `gpt-5.6-terra` | `xhigh` | Decisive review, completion control, or cross-contract analysis without final direction authority |
-| `5` | `gpt-5.6-sol` | `xhigh` | Final core-direction, architecture, task topology, or terminal arbitration |
+| `1` | `model_ref:balanced` | `low` | Mechanical, reversible finalization |
+| `2` | `model_ref:balanced` | `medium` | Routine bounded implementation or bookkeeping |
+| `3` | `model_ref:balanced` | `high` | Complex analysis, planning, or high-reliability implementation |
+| `4` | `model_ref:balanced` | `xhigh` | Decisive review, completion control, or cross-contract analysis without final direction authority |
+| `5` | `model_ref:direction` | `xhigh` | Final core-direction, architecture, task topology, or terminal arbitration |
 
-Deterministic scripts and direct shell commands are outside Tiers 1-5. Record them as `agent_routing_applicability: deterministic_only`.
+Treat model references as abstract routing identities, not runnable provider model names. Deterministic scripts and direct shell commands are outside Tiers 1-5; record them as `agent_routing_applicability: deterministic_only`.
 
-## Sol Boundary
+## Direction Boundary
 
-Use Tier 5 Sol only when the agent owns a final direction-changing decision, not merely because the work is difficult.
+Use the Tier 5 direction profile only when the agent owns a final direction-changing decision, not merely because the work is difficult.
 
 Suitable Tier 5 surfaces:
 
 - final next-`task.md` synthesis and candidate selection;
 - final GT/authority conflict resolution;
-- task-pack insertion/reordering/supersession or terminal disposition selection;
+- task-pack insertion, reordering, supersession, or terminal disposition selection;
 - final architecture direction that changes future module or contract ownership;
 - security direction decisions or terminal/user-escalation arbitration.
 
-Keep these on Terra even when important:
+Keep code writing, analysis, review, candidate generation, ID/index work, and Git finalization on the bounded non-direction profiles even when important. Tier 4 is the boundary for agents that judge evidence but do not own the final future direction.
 
-- code writing, including high-reliability core logic;
-- repository, OOM, issue, task-miss, validation-set, or code analysis;
-- qualitative review and completion validation;
-- candidate generation and recommendation-only architecture analysis;
-- ID/index work and Git finalization.
+## Model Binding Contract
 
-Tier 4 is the boundary for agents that judge evidence but do not own the final future direction. Do not upgrade an ordinary worker or reviewer to Sol.
+Resolve abstract model references through `model_bindings` supplied by the caller or a repository adapter. Do not put provider names or deployment-specific model identifiers in this global skill.
+
+Each binding is keyed by a policy model reference and contains:
+
+```json
+{
+  "model_ref:balanced": {
+    "model": "runtime-model-alpha",
+    "binding_id": "binding-alpha",
+    "source": "caller_configuration"
+  }
+}
+```
+
+Use only `caller_configuration` or `repository_adapter` as `source`. Treat binding identifiers as opaque. The selector emits:
+
+- `requested_model_ref`: stable abstract policy identity;
+- `requested_model`: the resolved runtime value, or the abstract reference when no binding was supplied;
+- `model_configuration_status`: `resolved`, `reference_only`, or `invalid`;
+- `model_binding_receipt` when resolved, including a SHA-256 of the resolved model value and a canonical receipt hash bound to the model reference, binding ID, source, and model digest.
+
+Allow `reference_only` for planning and prompt-only evidence. Reject `routing_enforcement: enforced` unless the model configuration is `resolved` and the content-bound binding receipt revalidates against the selected model reference and requested model value. Invalid, incomplete, unknown, conflicting, or tampered bindings fail closed.
 
 ## Dynamic Selection
 
@@ -44,7 +61,7 @@ Select the role profile first. Each profile defines `default_tier`, `min_tier`, 
 model_effort_routing.profiles.<profile_id>
 ```
 
-Accepted fields are `final_direction_ownership`, `signals`, `signal_evidence`, `request_max`, `max_escalation_reason`, `prior_tier5_evidence`, and `agent_count`. The selector may promote within the profile bounds; it never bypasses the role maximum. Direct `requested_tier` overrides are prohibited so a caller cannot bypass the signal contract.
+Accepted fields are `final_direction_ownership`, `signals`, `signal_evidence`, `request_max`, `max_escalation_reason`, `prior_tier5_evidence`, `agent_count`, and the caller-owned `model_bindings`. The selector may promote within profile bounds; it never bypasses the role maximum. Direct `requested_tier` overrides are prohibited.
 
 Promotion signals:
 
@@ -52,24 +69,24 @@ Promotion signals:
 - Tier 4 floor: `completion_controlling`, `compatibility_controlling`, `irreversible_cleanup`, `cross_contract_conflict`.
 - Tier 5 floor: both `direction_setting` and `final_decision`, or one of `gt_authority_conflict`, `terminal_disposition`, `task_pack_topology_change`, `architecture_direction_change`, `security_direction_decision`.
 
-Do not infer these signals from prose, file names, task labels, or model self-assessment. A profile capable of optional Tier 5 promotion must explicitly classify `final_direction_ownership: true|false`; omission is a routing violation. The caller or owning skill must supply booleans with evidence. Every Tier 5 signal requires `signal_evidence.<signal>` as a structured reference object containing `path`, `event_id`, `run_id`, `artifact_id`, or `ledger_event_id`; a bare string is invalid. Without valid evidence the signal is disabled and the selector emits `tier5_signal_evidence_missing`. Unknown signals, direct tier overrides, ownership/signal contradictions, and requests outside profile bounds produce routing violations.
+Do not infer signals from prose, file names, task labels, or model self-assessment. A profile capable of optional Tier 5 promotion must explicitly classify `final_direction_ownership: true|false`. Every Tier 5 signal requires `signal_evidence.<signal>` as a structured reference object containing an opaque `event_id`, `run_id`, `artifact_id`, or `ledger_event_id`; a bare string is invalid. Unknown signals, direct tier overrides, ownership/signal contradictions, missing signal evidence, and requests outside profile bounds are routing violations.
 
 Use the selector directly when needed:
 
 ```bash
 python3 scripts/model_effort_router.py \
   --profile schema_planning \
-  --request '{"final_direction_ownership":true,"signals":{"architecture_direction_change":true},"signal_evidence":{"architecture_direction_change":{"path":".schema/decision-004.md"}}}'
+  --request '{"final_direction_ownership":true,"signals":{"architecture_direction_change":true},"signal_evidence":{"architecture_direction_change":{"artifact_id":"evidence-004"}}}'
 ```
 
-## Max And Ultra
+## Bounded Maximum And Prohibited Delegation
 
-Tier 5 defaults to Sol `xhigh`. Use Sol `max` only when all conditions hold:
+Tier 5 defaults to the direction model reference at `xhigh`. Use `max` only when all conditions hold:
 
 - the selected profile allows max;
-- a Tier 5 Sol/xhigh pass already ran;
+- a Tier 5 direction-profile `xhigh` pass already ran;
 - `prior_tier5_unresolved=true`;
-- `prior_tier5_evidence` is a structured reference containing a path/event locator, `profile_id: derive_synthesis`, `routing_tier: 5`, `requested_model: gpt-5.6-sol`, `requested_reasoning_effort: xhigh`, and `unresolved_finding_id`;
+- `prior_tier5_evidence` contains an opaque locator, `profile_id: derive_synthesis`, `routing_tier: 5`, `requested_model_ref: model_ref:direction`, `requested_reasoning_effort: xhigh`, and `unresolved_finding_id`;
 - `max_escalation_reason` names the unresolved high-impact ambiguity;
 - exactly one arbitration agent runs.
 
@@ -80,14 +97,15 @@ Do not use `max` as a phase default or parallel fanout. Do not use delegated `ul
 For agent-capable phases, record `agent_routing_applicability: delegated|deterministic_only|delegation_unavailable`. Delegated results record:
 
 - `policy_id`, `profile_id`, `routing_tier`;
-- `requested_model`, `requested_reasoning_effort`;
+- `requested_model_ref`, `requested_model`, `model_configuration_status`, and optional `model_binding_receipt`;
+- `requested_reasoning_effort`;
 - `routing_reason_codes`, non-empty `routing_signals` plus `routing_signal_evidence` when dynamically promoted, and `routing_violations` even when empty;
 - `routing_enforcement: enforced|prompt_only|inherited_unverified`;
 - optional `actual_model` and `actual_reasoning_effort` when exposed;
 - `routing_limitation` when not enforced;
-- max precondition evidence when Sol `max` ran.
+- max precondition evidence when bounded `max` ran.
 
-Do not claim the requested model or effort actually ran without runtime evidence. Higher tiers do not grant broader authority, write scope, network permission, validation ownership, or permission to weaken acceptance.
+Do not claim the requested model or effort actually ran without runtime evidence. Do not claim enforced routing from `reference_only` configuration. Higher tiers do not grant broader authority, write scope, network permission, validation ownership, or permission to weaken acceptance.
 
 ## Default Phase Mapping
 

@@ -22,6 +22,7 @@ transition = load_module(SCRIPTS / "validate_cycle_transition.py", "workflow_pha
 dashboard = load_module(SCRIPTS / "render_cycle_dashboard.py", "workflow_phase_dashboard")
 packets = load_module(SCRIPTS / "render_subskill_packet.py", "workflow_phase_packets")
 result_contract = load_module(SCRIPTS / "result_contract.py", "workflow_phase_result_contract")
+cycle_ledger = load_module(SCRIPTS / "cycle_ledger.py", "workflow_phase_cycle_ledger")
 
 
 EXPECTED_ORDER = [
@@ -129,6 +130,18 @@ def test_packet_routing_reference_is_workspace_relative_and_preindex_is_determin
     assert Path(packet["routing_reference"]).resolve() == (ORCHESTRATOR / "references" / "workflow-routing.md").resolve()
     assert '"/home/swfool/' not in packet_source
     assert packet["routing"]["agent_routing_applicability"] == "deterministic_only"
+
+
+def test_packets_bind_validate_derive_dashboard_and_report_to_finalization_receipt() -> None:
+    validate_packet = packets.packet_for("validate", {}, {})
+    derive_packet = packets.packet_for("derive", {}, {})
+    dashboard_packet = packets.packet_for("dashboard", {}, {})
+    report_packet = packets.packet_for("report", {}, {})
+
+    assert any("cycle_final_candidate" in item for item in validate_packet["required_outputs"])
+    assert any("finalization_consumption" in item for item in derive_packet["required_outputs"])
+    assert any("current_finalization.json" in item for item in dashboard_packet["required_inputs"])
+    assert any("authoritative_projection_digest convergence" in item for item in report_packet["required_outputs"])
 
 
 def test_acceptance_provenance_is_fail_closed() -> None:
@@ -291,3 +304,74 @@ def test_initial_init_is_documented_as_a_separate_bootstrap_transaction() -> Non
     assert "separate bootstrap transaction" in skill
     assert "separate bootstrap transaction" in routing
     assert "separate bootstrap transaction" in interfaces
+
+
+def finalized_transition_event(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    cycle_ledger.init_cycle(root, "cycle-T", "task-1", "transition finalization")
+    candidate: dict[str, Any] = {
+        "schema_version": 1,
+        "kind": "cycle_final_candidate",
+        "final_candidate": True,
+        "cycle_id": "cycle-T",
+        "attempt_id": "attempt-T",
+        "expected_previous_revision": None,
+        "expected_previous_attempt_id": None,
+        "expected_previous_finalization_token": None,
+        "verdict_contract_version": 1,
+        "durable_state_candidate": {"mode": "complete_projection", "projections": {}},
+    }
+    for axis in result_contract.VERDICT_AXES:
+        candidate[axis] = {"status": "pass", "evidence_ref": f"{axis}-E"}
+    finalized = cycle_ledger.finalize_candidate(root, "cycle-T", candidate)
+    event = {
+        "step": "validate",
+        "status": "complete",
+        "cycle_id": "cycle-T",
+        "finalization_applicability": "required",
+        "finalization_receipt": finalized["finalization_receipt"],
+        "authoritative_projection": finalized["authoritative_projection"],
+    }
+    return event, candidate
+
+
+def test_prederive_consumes_current_receipt_and_rejects_missing_or_stale(tmp_path: Path) -> None:
+    validate_event, candidate = finalized_transition_event(tmp_path)
+    stage = completed_steps(*transition.TRANSITION_REQUIREMENTS["pre_derive"])
+    stage["steps"]["validate"] = validate_event
+    accepted = transition.validate(
+        {"workspace_root": str(tmp_path)},
+        stage,
+        "pre_derive",
+        {"target": "derive", **packets.routing_profile("derive_synthesis")},
+    )
+    assert not {
+        code
+        for code in finding_codes(accepted)
+        if "finalization_receipt" in code or "authoritative_projection" in code
+    }
+
+    missing_stage = completed_steps(*transition.TRANSITION_REQUIREMENTS["pre_derive"])
+    missing = transition.validate(
+        {"workspace_root": str(tmp_path)},
+        missing_stage,
+        "pre_derive",
+        {"target": "derive", **packets.routing_profile("derive_synthesis")},
+    )
+    assert "pre_derive_finalization_receipt_missing" in finding_codes(missing)
+
+    receipt = validate_event["finalization_receipt"]
+    correction = {
+        **candidate,
+        "expected_previous_revision": receipt["attempt_revision"],
+        "expected_previous_attempt_id": receipt["attempt_id"],
+        "expected_previous_finalization_token": receipt["finalization_token"],
+        "goal_readiness_verdict": {"status": "fail", "evidence_ref": "goal-E"},
+    }
+    cycle_ledger.finalize_candidate(tmp_path, "cycle-T", correction)
+    stale = transition.validate(
+        {"workspace_root": str(tmp_path)},
+        stage,
+        "pre_derive",
+        {"target": "derive", **packets.routing_profile("derive_synthesis")},
+    )
+    assert "finalization_receipt_current_verification_failed" in finding_codes(stale)

@@ -60,9 +60,30 @@ def build_base_packet(ns: dict[str, Any]) -> dict[str, Any]:
         }),
         "input_state_fingerprint": input_state_fingerprint,
         "attempt_identity": attempt_identity,
+        "attempt_identity_version": 2,
+        "legacy_attempt_identity": legacy_attempt_identity,
+        "attempt_revision_candidate": attempt_revision_candidate,
+        "supersedes_attempt_revision_candidate": supersedes_attempt_revision_candidate,
+        "supersedes_attempt_identity_candidate": supersedes_attempt_identity_candidate,
         "registry_label_correction": registry_label_correction,
         "semantic_signature": args.semantic_signature,
         "provider_request_count": provider_request_count,
+        "budget_evaluations": budget_evaluations,
+        "budget_evaluation_status": (
+            "budget_unverified"
+            if any(
+                contract.get("budget_evaluation_status") == "budget_unverified"
+                for contract in budget_evaluations.values()
+                if isinstance(contract, dict)
+            )
+            else "evaluated"
+        ),
+        "budget_unverified": sorted(
+            budget_id
+            for budget_id, contract in budget_evaluations.items()
+            if isinstance(contract, dict)
+            and contract.get("budget_evaluation_status") == "budget_unverified"
+        ),
         "quality_vector": quality,
         "quality_delta_policy": public_quality_delta_policy(quality_delta_policy),
         "previous_high_water_mark": prev_high,
@@ -141,6 +162,12 @@ def build_base_packet(ns: dict[str, Any]) -> dict[str, Any]:
         "report_body_divergence": body_divergence,
         "same_family_micro_hardening_count": count,
         "micro_hardening_count": count,
+        "same_family_nonsemantic_budget": budget_value(
+            budget_evaluations["same_family_nonsemantic_attempts"]
+        ),
+        "same_family_budget_evaluation": budget_evaluations[
+            "same_family_nonsemantic_attempts"
+        ],
         "recommended_disposition": disposition,
         "hard_stop_required": hard_stop,
         "evidence_class": evidence_class,
@@ -150,7 +177,10 @@ def build_base_packet(ns: dict[str, Any]) -> dict[str, Any]:
         "measurement_streak": measurement_streak_value,
         "measurement_progress_streak_for_root_key": measurement_details["measurement_progress_streak_for_root_key"],
         "measurement_progress_streak_for_root_family": measurement_details["measurement_progress_streak_for_root_family"],
-        "measurement_streak_cap": args.measurement_streak_cap,
+        "measurement_streak_cap": measurement_streak_cap,
+        "measurement_budget_evaluation": budget_evaluations[
+            "measurement_nonsemantic_attempts"
+        ],
         "measurement_check_ids": sorted(current_check_ids),
         "measurement_frontiers_observed": sorted(current_frontiers),
         "measurement_progress_basis": measurement_details["measurement_progress_basis"],
@@ -158,6 +188,7 @@ def build_base_packet(ns: dict[str, Any]) -> dict[str, Any]:
         "blocker_root_family": blocker_root_family,
         "blocker_ladder_rung": current_rung,
         "blocker_mutation_kind": mutation_kind,
+        "forward_mutation_budget": forward_mutation_budget,
         "forward_mutation_budget_remaining": forward_budget_remaining,
         "terminal_outcome_changed": outcome_changed,
         "observed_delta_class": delta_class,
@@ -166,7 +197,10 @@ def build_base_packet(ns: dict[str, Any]) -> dict[str, Any]:
         "task_correction_class": task_correction_class,
         "detection_only": detection_only,
         "detection_only_streak_for_root_family": detection_streak,
-        "detection_only_streak_cap": args.detection_only_streak_cap,
+        "detection_only_streak_cap": detection_streak_cap,
+        "detection_budget_evaluation": budget_evaluations[
+            "detection_nonsemantic_attempts"
+        ],
         "requires_correction_or_terminal": requires_correction_or_terminal,
         "validator_integrity_gate": validator_gate,
         "evidence_provenance_gate": evidence_gate,
@@ -229,6 +263,13 @@ def build_base_packet(ns: dict[str, Any]) -> dict[str, Any]:
             "error": domain_adapter_error,
         },
         "registry_path": rel_path(root, registry_path),
+        "finalized_state_cycle_id": finalized_cycle_id,
+        "finalized_state_status": finalized_state_status,
+        "finalized_state_error": finalized_state_error,
+        "registry_state_source": registry_state_source,
+        "finalization_required": True,
+        "finalization_state": "candidate",
+        "authoritative_consumption_allowed": False,
         "evidence_paths": evidence_paths,
         "not_goal_truth": True,
         "not_gold": True,

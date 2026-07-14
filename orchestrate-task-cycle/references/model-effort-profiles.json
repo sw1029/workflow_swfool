@@ -1,9 +1,29 @@
 {
-  "schema_version": 2,
-  "policy_id": "gpt-5.6-tiered-routing-v2",
+  "schema_version": 3,
+  "policy_id": "configured-tiered-routing-v3",
   "models": {
-    "balanced": "gpt-5.6-terra",
-    "direction": "gpt-5.6-sol"
+    "balanced": "model_ref:balanced",
+    "direction": "model_ref:direction"
+  },
+  "model_binding_contract": {
+    "request_field": "model_bindings",
+    "configuration_owner": "caller_or_repository_adapter",
+    "binding_key_space": "models.values",
+    "binding_required_fields": [
+      "model",
+      "binding_id",
+      "source"
+    ],
+    "binding_source_values": [
+      "caller_configuration",
+      "repository_adapter"
+    ],
+    "configuration_status_values": [
+      "reference_only",
+      "resolved",
+      "invalid"
+    ],
+    "enforced_requires_status": "resolved"
   },
   "supported_efforts": [
     "low",
@@ -23,27 +43,27 @@
   ],
   "tiers": {
     "1": {
-      "model": "gpt-5.6-terra",
+      "model": "model_ref:balanced",
       "effort": "low",
       "work_class": "mechanical_reversible"
     },
     "2": {
-      "model": "gpt-5.6-terra",
+      "model": "model_ref:balanced",
       "effort": "medium",
       "work_class": "routine_bounded"
     },
     "3": {
-      "model": "gpt-5.6-terra",
+      "model": "model_ref:balanced",
       "effort": "high",
       "work_class": "complex_analysis_or_high_reliability"
     },
     "4": {
-      "model": "gpt-5.6-terra",
+      "model": "model_ref:balanced",
       "effort": "xhigh",
       "work_class": "decisive_review_or_cross_contract_analysis"
     },
     "5": {
-      "model": "gpt-5.6-sol",
+      "model": "model_ref:direction",
       "effort": "xhigh",
       "max_effort": "max",
       "work_class": "core_direction_or_terminal_arbitration"
@@ -120,7 +140,7 @@
   ],
   "max_escalation": {
     "tier": 5,
-    "model": "gpt-5.6-sol",
+    "model": "model_ref:direction",
     "effort": "max",
     "required_signal": "prior_tier5_unresolved",
     "required_evidence_field": "prior_tier5_evidence",

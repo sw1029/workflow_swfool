@@ -74,6 +74,84 @@ def normalize_task_kind(value: Any) -> str:
 def normalize_task_kinds(values: Any) -> set[str]:
     return {kind for kind in (normalize_task_kind(item) for item in list_values(values)) if kind}
 
+
+def normalize_portfolio_budget_gate(gate: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Require an adapter/caller-bound portfolio budget before restriction."""
+    updated = dict(gate)
+    budget_id = str(updated.get("portfolio_budget_id") or updated.get("budget_id") or "").strip()
+    raw_status = str(
+        updated.get("budget_evaluation_status")
+        or updated.get("evaluation_status")
+        or ""
+    ).strip().lower()
+    source = str(
+        updated.get("budget_source")
+        or updated.get("source")
+        or updated.get("provided_by")
+        or ""
+    ).strip().lower()
+    threshold_supplied = any(
+        updated.get(key) is not None
+        for key in (
+            "threshold_ratio",
+            "portfolio_threshold_ratio",
+            "quota_ratio",
+            "quota",
+            "budget_value",
+        )
+    )
+    evaluated = bool(
+        budget_id
+        and (
+            raw_status in {"evaluated", "pass", "supplied", "verified"}
+            or (
+                threshold_supplied
+                and source
+                in {
+                    "adapter",
+                    "authority",
+                    "authority_contract",
+                    "caller",
+                    "config",
+                    "repository_config",
+                    "project_contract",
+                }
+            )
+        )
+    )
+    contract = {
+        "budget_id": budget_id or None,
+        "budget_value": next(
+            (
+                updated.get(key)
+                for key in (
+                    "budget_value",
+                    "threshold_ratio",
+                    "portfolio_threshold_ratio",
+                    "quota_ratio",
+                    "quota",
+                )
+                if updated.get(key) is not None
+            ),
+            None,
+        ),
+        "evaluation_status": "evaluated" if evaluated else "budget_unverified",
+        "budget_evaluation_status": "evaluated" if evaluated else "budget_unverified",
+        "source": source or None,
+        "reason_code": None if evaluated else "portfolio_budget_not_content_bound",
+    }
+    updated["budget_evaluation"] = contract
+    updated["budget_evaluation_status"] = contract["budget_evaluation_status"]
+    if not evaluated:
+        updated["observed_portfolio_quota_exceeded"] = bool_value(
+            updated.get("portfolio_quota_exceeded")
+        )
+        updated["constrains_disposition"] = False
+        updated["hard_stop_required"] = False
+        updated["hard_gate"] = False
+        updated["status"] = "not_evaluated"
+    return updated, contract
+
 def gate_allowed_dispositions(name: str, gate: dict[str, Any]) -> set[str]:
     explicit = normalize_dispositions(gate.get("allowed_dispositions"))
     if explicit:
@@ -148,6 +226,7 @@ def extract_disposition_gates(value: Any) -> list[dict[str, Any]]:
         "semantic_signature_gate",
         "adapter_wiring_gate",
         "chain_stall_forced_retarget_gate",
+        "portfolio_quota_gate",
     )
     gates = []
     for name in gate_names:

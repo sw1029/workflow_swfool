@@ -43,6 +43,8 @@ def _build_handoff(packet: dict[str, Any], root: Path, output: Path | None) -> d
     return {
         "handoff_contract_version": 1,
         "applicability": "required",
+        "finalization_required": True,
+        "authoritative_consumption_allowed": False,
         "packet_ref": rel_path(root, output),
         "packet_sha256": _file_sha256(output),
         "artifact_id": packet.get("artifact_id"),
@@ -55,13 +57,120 @@ def _build_handoff(packet: dict[str, Any], root: Path, output: Path | None) -> d
         "allowed_next_action_classes": packet.get("allowed_next_action_classes") or [],
         "compatible_gate_ids": compatible_ids,
         "incompatible_gate_ids": incompatible_ids,
+        "durable_mutation_candidate_sha256": (
+            packet.get("durable_mutation_candidate") or {}
+        ).get("candidate_sha256"),
     }
+
+
+def _build_durable_mutation_candidate(
+    packet: dict[str, Any],
+    registry_rows: list[dict[str, Any]],
+    should_write: bool,
+    root: Path,
+    registry_path: Path,
+    *,
+    legacy_write_requested: bool,
+) -> dict[str, Any]:
+    candidate_row = next(
+        (
+            row
+            for row in reversed(registry_rows)
+            if str(row.get("attempt_identity") or "") == str(packet.get("attempt_identity") or "")
+        ),
+        None,
+    )
+    registry_payload = {
+        "rows": [
+            bounded_durable_projection(row)
+            for row in registry_rows
+            if isinstance(row, dict)
+        ]
+    }
+    ledger_payload = {
+        "rows": [
+            bounded_durable_projection(row)
+            for row in packet.get("root_cause_ledger_projection") or []
+            if isinstance(row, dict)
+        ]
+    }
+    seal_projection = packet.get("sealed_blocker_families_projection")
+    seal_payload = {
+        "state": bounded_durable_projection(seal_projection)
+        if isinstance(seal_projection, dict)
+        else {"schema_version": "sealed-blocker-families-v1", "families": []}
+    }
+    mutations: list[dict[str, Any]] = [
+        {
+            "operation_type": "replace_projection",
+            "target_id": "family_progress_registry",
+            "target_ref": rel_path(root, registry_path),
+            "payload": registry_payload,
+            "payload_sha256": canonical_json_sha256(registry_payload),
+            "candidate_row_sha256": (
+                canonical_json_sha256(bounded_durable_projection(candidate_row))
+                if isinstance(candidate_row, dict)
+                else None
+            ),
+        },
+        {
+            "operation_type": "replace_projection",
+            "target_id": "root_cause_ledger",
+            "target_ref": packet.get("root_cause_ledger_path"),
+            "payload": ledger_payload,
+            "payload_sha256": canonical_json_sha256(ledger_payload),
+        },
+        {
+            "operation_type": "replace_projection",
+            "target_id": "sealed_blocker_families",
+            "target_ref": packet.get("hypothesis_exhaustion_seal_path")
+            or ".task/sealed_blocker_families.json",
+            "payload": seal_payload,
+            "payload_sha256": canonical_json_sha256(seal_payload),
+        },
+    ]
+    state_changed = bool(
+        should_write
+        or packet.get("root_cause_ledger_update_candidate")
+        or packet.get("hypothesis_exhaustion_seal_candidate")
+    )
+    candidate = {
+        "contract_version": 1,
+        "mode": "typed_operations",
+        "producer": "audit-cycle-loopback",
+        "status": "prepared_not_finalized" if state_changed else "no_change_candidate",
+        "finalization_owner": "orchestrate-task-cycle",
+        "finalization_receipt_required": True,
+        "legacy_write_requested": legacy_write_requested,
+        "attempt_identity": packet.get("attempt_identity"),
+        "attempt_revision_candidate": packet.get("attempt_revision_candidate"),
+        "supersedes_attempt_revision_candidate": packet.get(
+            "supersedes_attempt_revision_candidate"
+        ),
+        "operations": mutations,
+    }
+    candidate["candidate_sha256"] = canonical_json_sha256(candidate)
+    return candidate
+
+
+def _write_candidate_packet(path: Path, packet: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(
+        json.dumps(packet, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(temporary, path)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Compute a conservative anti-loop progress gate packet.")
     parser.add_argument("--root", default=".")
     parser.add_argument("--cycle-id", required=True)
+    parser.add_argument(
+        "--finalized-cycle-id",
+        help="Cycle whose helper-verified current finalization supplies prior registry/ledger/seal projections; defaults to --cycle-id.",
+    )
     parser.add_argument("--task-id", default="unknown")
     parser.add_argument("--artifact-family", default="unknown")
     parser.add_argument("--semantic-signature", default="unknown")
@@ -88,27 +197,31 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root-cause-repair-attempted", action="store_true", help="Mark the supplied root-cause hypothesis as explicitly attempted by this cycle.")
     parser.add_argument("--root-cause-repair-task-id", help="Task id for the repair attempt targeting the supplied root-cause hypothesis.")
     parser.add_argument("--root-cause-actionable", action="store_true", help="Assert the supplied root-cause hypothesis is actionable; untried promotion still requires structural fields or provenance evidence.")
-    parser.add_argument("--untried-promotion-budget", type=int, default=UNTRIED_PROMOTION_BUDGET_DEFAULT, help="Same-family vacuous untried repairs allowed before hypothesis_exhausted=true.")
+    parser.add_argument("--untried-promotion-budget", type=int, help="Repository-supplied same-family vacuous-repair budget; absent means budget_unverified and cannot exhaust the family.")
     parser.add_argument("--measurement-check-id", action="append", default=[], help="Stable check/oracle ID introduced or exercised by this cycle.")
     parser.add_argument("--measurement-check-ids-json", help="Path or JSON list/dict containing check or oracle IDs.")
     parser.add_argument("--measurement-frontier", action="append", default=[], help="Named measurement frontier observed by this cycle.")
-    parser.add_argument("--measurement-streak-cap", type=int, default=MEASUREMENT_STREAK_CAP_DEFAULT)
-    parser.add_argument("--detection-only-streak-cap", type=int, default=DETECTION_ONLY_STREAK_CAP_DEFAULT)
-    parser.add_argument("--adapter-mandate-streak-cap", type=int, default=ADAPTER_MANDATE_STREAK_CAP_DEFAULT)
-    parser.add_argument("--cumulative-chain-streak-cap", type=int, default=CUMULATIVE_CHAIN_STREAK_CAP_DEFAULT)
-    parser.add_argument("--instrumentation-trigger-threshold", type=int, default=INSTRUMENTATION_TRIGGER_THRESHOLD_DEFAULT)
-    parser.add_argument("--envelope-thaw-streak-cap", type=int, default=ENVELOPE_THAW_STREAK_CAP_DEFAULT)
+    parser.add_argument("--measurement-streak-cap", type=int, help="Repository-supplied measurement/nonsemantic budget.")
+    parser.add_argument("--detection-only-streak-cap", type=int, help="Repository-supplied detection-only budget.")
+    parser.add_argument("--adapter-mandate-streak-cap", type=int, help="Repository-supplied adapter-mandate budget.")
+    parser.add_argument("--cumulative-chain-streak-cap", type=int, help="Repository-supplied cumulative stall budget.")
+    parser.add_argument("--instrumentation-trigger-threshold", type=int, help="Caller/config instrumentation-attempt budget; an adapter hook may override it.")
+    parser.add_argument("--envelope-thaw-streak-cap", type=int, help="Repository-supplied envelope-thaw omission budget.")
     parser.add_argument("--blocker-signature", help="Stable current blocker signature before suffix normalization.")
     parser.add_argument("--blocker-rung", help="Current capability-ladder rung for the blocker family.")
-    parser.add_argument("--max-forward-mutations", type=int, default=MAX_FORWARD_MUTATIONS_DEFAULT)
-    parser.add_argument("--consolidation-streak-cap", type=int, default=CONSOLIDATION_STREAK_CAP_DEFAULT)
+    parser.add_argument("--max-forward-mutations", type=int, help="Repository-supplied forward-mutation attempt budget.")
+    parser.add_argument("--consolidation-streak-cap", type=int, help="Repository-supplied governance-only consolidation budget.")
     parser.add_argument("--registry-path", default=REGISTRY_REL_PATH)
     parser.add_argument("--root-cause-ledger-path", default=ROOT_CAUSE_LEDGER_REL_PATH)
-    parser.add_argument("--threshold", type=int, default=3)
+    parser.add_argument("--threshold", type=int, help="Repository-supplied same-family nonsemantic budget; absent never creates a threshold hard stop.")
     parser.add_argument("--epsilon", type=float, default=1e-9)
     parser.add_argument("--max-rows-per-family", type=int, default=200)
     parser.add_argument("--max-root-cause-rows-per-family", type=int, default=ROOT_CAUSE_LEDGER_MAX_ROWS_PER_FAMILY_DEFAULT)
-    parser.add_argument("--write-registry", action="store_true")
+    parser.add_argument(
+        "--write-registry",
+        action="store_true",
+        help="Compatibility flag: prepare registry/ledger/seal mutations for orchestrator finalization; never write authoritative state directly.",
+    )
     parser.add_argument("--output")
     args = parser.parse_args(argv)
 
@@ -117,11 +230,12 @@ def main(argv: list[str] | None = None) -> int:
     registry_path = Path(args.registry_path)
     if not registry_path.is_absolute():
         registry_path = root / registry_path
-    if args.write_registry and should_write:
-        write_registry(registry_path, registry_rows)
-        packet["registry_updated"] = True
-    else:
-        packet["registry_updated"] = False
+    packet["registry_updated"] = False
+    packet["registry_update_candidate"] = bool(should_write)
+    packet["registry_update_status"] = (
+        "prepared_not_finalized" if should_write else "no_change_candidate"
+    )
+    packet["write_registry_deferred"] = bool(args.write_registry)
     packet["decision_contract_version"] = 1
     packet["progress_verdict"] = _packet_progress_verdict(packet)
     packet["terminal_state"] = packet.get("recommended_disposition")
@@ -138,13 +252,20 @@ def main(argv: list[str] | None = None) -> int:
         and row.get("gate_id")
         and row.get("gate_compatibility_status") == "compatible"
     )
+    packet["durable_mutation_candidate"] = _build_durable_mutation_candidate(
+        packet,
+        registry_rows,
+        should_write,
+        root,
+        registry_path,
+        legacy_write_requested=bool(args.write_registry),
+    )
     output: Path | None = None
     if args.output:
         output = Path(args.output)
         if not output.is_absolute():
             output = root / output
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps(packet, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        _write_candidate_packet(output, packet)
     packet["anti_loop_handoff"] = _build_handoff(packet, root, output)
     json.dump(packet, sys.stdout, ensure_ascii=False, indent=2, sort_keys=True)
     sys.stdout.write("\n")

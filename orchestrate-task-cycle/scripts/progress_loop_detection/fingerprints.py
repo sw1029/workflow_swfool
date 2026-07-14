@@ -4,107 +4,142 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .constants import *
-from .values import *
 from .io_utils import *
 from .provider import provider_failure_class
+from .values import *
 
-def input_fingerprint(root: Path, value: dict[str, Any]) -> dict[str, Any]:
-    raw_paths = collect_path_values(value, INPUT_PATH_FIELD_NAMES)
+
+def _artifact_policy(policy: dict[str, Any] | None) -> dict[str, Any]:
+    value = (policy or {}).get("artifact_policy")
+    return value if isinstance(value, dict) else {}
+
+
+def input_fingerprint(
+    root: Path,
+    value: dict[str, Any],
+    policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    explicit = first_value(
+        value,
+        (
+            "consumed_input_fp",
+            "feature_symbol.consumed_input_fp",
+            "workflow_feature_symbol.consumed_input_fp",
+        ),
+    )
+    if isinstance(explicit, str) and explicit.strip():
+        return {"consumed_input_fp": explicit.strip(), "input_manifest_count": None}
+
+    artifact = _artifact_policy(policy)
+    raw_paths = collect_by_key(value, set(artifact.get("input_path_fields") or []))
     existing = resolve_existing_paths(root, raw_paths)
+    allowed_names = set(artifact.get("input_manifest_names") or [])
     digest_parts: list[str] = []
-    source_paths: list[str] = []
+    source_count = 0
     for path in existing:
         candidates = [path]
         if path.is_dir():
-            candidates = [path / name for name in INPUT_MANIFEST_NAMES]
+            candidates = [path / name for name in sorted(allowed_names)]
         for candidate in candidates:
-            if not candidate.is_file() or candidate.name not in INPUT_MANIFEST_NAMES:
+            if not candidate.is_file() or candidate.name not in allowed_names:
                 continue
             digest = file_digest(candidate)
             if digest:
-                source_paths.append(rel_path(root, candidate))
-                digest_parts.append(f"{rel_path(root, candidate)}:{digest}")
-    inline_parts: list[str] = []
-    for key in ("input_manifest", "hash_summary", "source_manifest", "input_lineage"):
+                source_count += 1
+                digest_parts.append(digest)
+    for key in artifact.get("inline_input_fields") or []:
         raw = value.get(key)
         if isinstance(raw, (dict, list)):
             try:
-                inline_parts.append(json.dumps(raw, ensure_ascii=False, sort_keys=True))
+                digest_parts.append(json.dumps(raw, ensure_ascii=False, sort_keys=True))
             except TypeError:
                 continue
-    if inline_parts:
-        digest_parts.append(f"inline:{stable_digest(inline_parts)}")
-    fingerprint = stable_digest(digest_parts)[:32] if digest_parts else "none"
     return {
-        "consumed_input_fp": fingerprint,
-        "input_manifest_paths": source_paths[:12],
-        "input_manifest_count": len(source_paths),
+        "consumed_input_fp": stable_digest(digest_parts)[:32] if digest_parts else "none",
+        "input_manifest_count": source_count,
     }
 
 
-def target_unit_fingerprint(value: dict[str, Any]) -> dict[str, Any]:
-    values = collect_by_key(value, TARGET_UNIT_KEYS)
-    fingerprint = stable_digest(values)[:32] if values else "none"
+def target_unit_fingerprint(
+    value: dict[str, Any],
+    policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    explicit = first_value(
+        value,
+        (
+            "target_unit_fp",
+            "feature_symbol.target_unit_fp",
+            "workflow_feature_symbol.target_unit_fp",
+        ),
+    )
+    if isinstance(explicit, str) and explicit.strip():
+        count = number_value(
+            first_value(value, ("target_unit_count", "feature_symbol.target_unit_count"))
+        )
+        return {"target_unit_fp": explicit.strip(), "target_unit_count": count}
+    keys = set(_artifact_policy(policy).get("target_unit_keys") or [])
+    values = collect_by_key(value, keys) if keys else []
     return {
-        "target_unit_fp": fingerprint,
+        "target_unit_fp": stable_digest(values)[:32] if values else "none",
         "target_unit_count": len(values),
-        "target_unit_sample_digest": stable_digest(values[:12])[:16] if values else None,
     }
 
 
-def workflow_feature_symbol(root: Path, value: dict[str, Any], blockers: list[str], axis: str | None) -> dict[str, Any]:
-    input_part = input_fingerprint(root, value)
-    target_part = target_unit_fingerprint(value)
+def workflow_feature_symbol(
+    root: Path,
+    value: dict[str, Any],
+    blockers: list[str],
+    axis: str | None,
+    policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    explicit = first_mapping(value, ("workflow_feature_symbol", "feature_symbol"))
+    if isinstance(explicit.get("symbol"), str) and explicit["symbol"].strip():
+        return {
+            "symbol": explicit["symbol"].strip(),
+            "scope": str(explicit.get("scope") or "workflow_loop"),
+            "consumed_input_fp": explicit.get("consumed_input_fp") or "none",
+            "input_manifest_count": number_value(explicit.get("input_manifest_count")),
+            "target_unit_fp": explicit.get("target_unit_fp") or "none",
+            "target_unit_count": number_value(explicit.get("target_unit_count")),
+            "blocker_root_axis": explicit.get("blocker_root_axis") or axis or "unknown",
+            "blocker_count": len(blockers),
+        }
+    input_part = input_fingerprint(root, value, policy)
+    target_part = target_unit_fingerprint(value, policy)
     blocker_root_axis = axis or "unknown"
-    symbol = stable_digest([input_part["consumed_input_fp"], target_part["target_unit_fp"], blocker_root_axis])[:24]
+    symbol = stable_digest(
+        [input_part["consumed_input_fp"], target_part["target_unit_fp"], blocker_root_axis]
+    )[:24]
     return {
         "symbol": f"wf:{symbol}",
         "scope": "workflow_loop",
         "consumed_input_fp": input_part["consumed_input_fp"],
-        "input_manifest_paths": input_part["input_manifest_paths"],
         "input_manifest_count": input_part["input_manifest_count"],
         "target_unit_fp": target_part["target_unit_fp"],
         "target_unit_count": target_part["target_unit_count"],
-        "target_unit_sample_digest": target_part["target_unit_sample_digest"],
         "blocker_root_axis": blocker_root_axis,
         "blocker_count": len(blockers),
     }
 
 
-def output_candidate_paths(root: Path, value: dict[str, Any]) -> list[Path]:
-    raw_paths = collect_path_values(value, PATH_FIELD_NAMES)
-    existing = resolve_existing_paths(root, raw_paths)
-    candidates: list[Path] = []
-    seen: set[str] = set()
-    for path in existing:
-        expanded = [path]
-        if path.is_file() and path.name == "done.ok":
-            expanded.append(path.parent)
-        for item in expanded:
-            key = item.resolve().as_posix()
-            if key not in seen:
-                candidates.append(item)
-                seen.add(key)
-    return candidates
+def output_candidate_paths(
+    root: Path,
+    value: dict[str, Any],
+    policy: dict[str, Any] | None = None,
+) -> list[Path]:
+    keys = set(_artifact_policy(policy).get("path_fields") or [])
+    raw_paths = collect_by_key(value, keys) if keys else []
+    return resolve_existing_paths(root, raw_paths)
 
 
-def kg_identity(record: Any, kind: str) -> str | None:
+def _record_identity(record: Any, fields: list[str]) -> str | None:
     if not isinstance(record, dict):
         return None
-    keys = NODE_ID_KEYS if kind == "nodes" else EDGE_ID_KEYS
-    for key in keys:
-        value = record.get(key)
-        if value is not None and str(value).strip():
-            return str(value).strip()
-    if kind == "edges":
-        values = [str(record.get(key)).strip() for key in EDGE_ENDPOINT_KEYS if record.get(key) is not None and str(record.get(key)).strip()]
-        if len(values) >= 3:
-            return "|".join(values)
-    return None
+    values = [str(record[field]).strip() for field in fields if field in record and str(record[field]).strip()]
+    return "|".join(values) if values else None
 
 
-def jsonl_identity_summary(path: Path, kind: str) -> dict[str, Any]:
+def _jsonl_summary(path: Path, identity_fields: list[str]) -> dict[str, Any]:
     count = 0
     identities: list[str] = []
     try:
@@ -114,10 +149,10 @@ def jsonl_identity_summary(path: Path, kind: str) -> dict[str, Any]:
                     continue
                 count += 1
                 try:
-                    value = json.loads(line)
+                    record = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                identity = kg_identity(value, kind)
+                identity = _record_identity(record, identity_fields)
                 if identity:
                     identities.append(identity)
     except OSError:
@@ -128,111 +163,155 @@ def jsonl_identity_summary(path: Path, kind: str) -> dict[str, Any]:
     }
 
 
-def kg_node_edge_summary(root: Path, paths: list[Path]) -> dict[str, Any]:
-    kg_paths: list[Path] = []
-    seen: set[str] = set()
+def _configured_artifact_summary(
+    paths: list[Path],
+    policy: dict[str, Any] | None,
+) -> dict[str, Any]:
+    file_kinds = _artifact_policy(policy).get("file_kinds") or []
+    configs = {item["file_name"]: item for item in file_kinds if isinstance(item, dict)}
+    candidates: dict[str, tuple[Path, dict[str, Any]]] = {}
     for path in paths:
-        candidates: list[Path] = []
-        if path.is_file() and path.name in KG_NODE_EDGE_FILES:
-            candidates.append(path)
-        elif path.is_file() and path.name == "done.ok":
-            candidates.extend([path.parent / "kg_nodes.jsonl", path.parent / "kg_edges.jsonl"])
+        if path.is_file() and path.name in configs:
+            candidates[path.resolve().as_posix()] = (path, configs[path.name])
         elif path.is_dir():
-            candidates.extend([path / "kg_nodes.jsonl", path / "kg_edges.jsonl"])
-            for pattern in ("kg_nodes.jsonl", "kg_edges.jsonl"):
-                found = 0
-                for discovered in path.rglob(pattern):
-                    candidates.append(discovered)
-                    found += 1
-                    if found >= 80:
-                        break
-        for candidate in candidates:
-            if not candidate.is_file():
-                continue
-            key = candidate.resolve().as_posix()
-            if key not in seen:
-                kg_paths.append(candidate)
-                seen.add(key)
+            for file_name, config in configs.items():
+                candidate = path / file_name
+                if candidate.is_file():
+                    candidates[candidate.resolve().as_posix()] = (candidate, config)
 
-    node_count = 0
-    edge_count = 0
+    record_count = 0
     fingerprint_parts: list[str] = []
-    for path in sorted(kg_paths):
-        kind = "nodes" if path.name == "kg_nodes.jsonl" else "edges"
-        summary = jsonl_identity_summary(path, kind)
-        if kind == "nodes":
-            node_count += int(summary["count"])
-        else:
-            edge_count += int(summary["count"])
+    observed_kind_ids: list[str] = []
+    for _, (path, config) in sorted(candidates.items()):
+        summary = _jsonl_summary(path, list(config.get("identity_fields") or []))
+        record_count += int(summary["count"])
+        observed_kind_ids.append(str(config["kind_id"]))
         fingerprint_parts.append(
-            f"{rel_path(root, path)}:{kind}:{summary['count']}:{summary.get('identity_digest') or 'no_ids'}"
+            f"{config['kind_id']}:{summary['count']}:{summary.get('identity_digest') or file_digest(path) or 'none'}"
         )
     return {
-        "kg_paths": [rel_path(root, path) for path in sorted(kg_paths)],
-        "node_count": node_count,
-        "edge_count": edge_count,
-        "node_edge_record_count": node_count + edge_count,
-        "node_edge_fingerprint": stable_digest(fingerprint_parts)[:32] if fingerprint_parts else None,
+        "artifact_fingerprint": stable_digest(fingerprint_parts)[:32] if fingerprint_parts else None,
+        "artifact_record_count": record_count,
+        "observed_kind_ids": sorted(set(observed_kind_ids)),
     }
 
 
-def node_edge_counts_from_value(value: dict[str, Any]) -> dict[str, int]:
-    counts = first_value(value, ("output_delta.counts", "counts", "validation_summary", "implementation_summary.output_counts"))
-    if not isinstance(counts, dict):
-        return {"node_count": 0, "edge_count": 0}
-    node_count = number_value(counts.get("kg_nodes") or counts.get("kg_node_count") or counts.get("node_count") or counts.get("character_node_count")) or 0
-    edge_count = number_value(counts.get("kg_edges") or counts.get("kg_edge_count") or counts.get("edge_count")) or 0
-    return {"node_count": node_count, "edge_count": edge_count}
+def _configured_counts(value: dict[str, Any], policy: dict[str, Any] | None) -> dict[str, int]:
+    aliases = _artifact_policy(policy).get("count_fields") or {}
+    counts_mapping = first_mapping(
+        value,
+        ("output_delta.counts", "counts", "validation_summary", "implementation_summary.output_counts"),
+    )
+    counts: dict[str, int] = {}
+    for metric_id, candidates in aliases.items():
+        for candidate in candidates:
+            count = number_value(counts_mapping.get(candidate))
+            if count is not None:
+                counts[str(metric_id)] = count
+                break
+    return counts
 
 
 def terminal_record_like(value: dict[str, Any]) -> bool:
     if boolish(value.get("legitimate_terminal_blocker")) or boolish(value.get("terminal_blocker")):
         return True
-    status = first_value(value, ("output_delta_status", "output_delta.status", "validation_verdict", "completion_status", "result_status"))
-    if isinstance(status, str) and any(token in status.lower() for token in ("terminal", "fail_closed", "fail-closed", "blocked_provider")):
+    status = first_value(
+        value,
+        ("output_delta_status", "output_delta.status", "validation_verdict", "completion_status", "result_status"),
+    )
+    if isinstance(status, str) and any(
+        token in status.lower() for token in ("terminal", "fail_closed", "fail-closed", "blocked")
+    ):
         return True
     failure = provider_failure_class(value)
-    request_count = number_value(first_value(value, ("provider_request_count", "failure_autopsy.provider_request_count", "result.provider_request_count")))
-    return bool(failure and request_count and request_count > 1)
+    request_count = number_value(
+        first_value(value, ("provider_request_count", "failure_autopsy.provider_request_count", "result.provider_request_count"))
+    )
+    return bool(failure and request_count)
 
 
-def observed_output_class(root: Path, value: dict[str, Any], previous: dict[str, Any] | None = None) -> dict[str, Any]:
-    paths = output_candidate_paths(root, value)
-    summary = kg_node_edge_summary(root, paths)
-    count_fallback = node_edge_counts_from_value(value)
-    previous_fingerprint = (previous or {}).get("node_edge_fingerprint")
-    previous_count_fingerprint = (previous or {}).get("node_edge_count_fingerprint")
-    count_fingerprint = stable_digest([str(count_fallback["node_count"]), str(count_fallback["edge_count"])])[:32]
-    output_class = "unknown"
+def _explicit_observation(value: dict[str, Any]) -> dict[str, Any]:
+    observed = first_mapping(
+        value,
+        (
+            "observed_output",
+            "output_observation",
+            "output_delta.observed_output",
+            "output_delta_gate.observed_output",
+        ),
+    )
+    raw_class = str(observed.get("observed_output_class") or "").strip().lower()
+    if not raw_class:
+        return {}
+    compatibility_classes = {
+        "semantic_delta": "material_delta",
+        "changed_semantic_output": "material_delta",
+        "primary_output_delta": "material_delta",
+    }
+    output_class = compatibility_classes.get(raw_class, raw_class)
+    if output_class not in {"material_delta", "metadata_only", "terminal_record", "not_evaluated"}:
+        output_class = "not_evaluated"
+    return {
+        "observed_output_class": output_class,
+        "observed_output_reason": str(observed.get("observed_output_reason") or "explicit_observation"),
+        "artifact_fingerprint": observed.get("artifact_fingerprint"),
+        "artifact_count_fingerprint": observed.get("artifact_count_fingerprint"),
+        "artifact_record_count": number_value(observed.get("artifact_record_count")) or 0,
+        "record_counts": observed.get("record_counts") if isinstance(observed.get("record_counts"), dict) else {},
+        "evaluation_status": "not_evaluated" if output_class == "not_evaluated" else "evaluated",
+    }
+
+
+def observed_output_class(
+    root: Path,
+    value: dict[str, Any],
+    previous: dict[str, Any] | None = None,
+    policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    explicit = _explicit_observation(value)
+    if explicit:
+        return explicit
+    artifact = _artifact_policy(policy)
+    if not artifact.get("path_fields") or not artifact.get("file_kinds"):
+        return {
+            "observed_output_class": "not_evaluated",
+            "observed_output_reason": "artifact_policy_not_supplied",
+            "artifact_fingerprint": None,
+            "artifact_count_fingerprint": None,
+            "artifact_record_count": 0,
+            "record_counts": {},
+            "evaluation_status": "not_evaluated",
+        }
+
+    paths = output_candidate_paths(root, value, policy)
+    summary = _configured_artifact_summary(paths, policy)
+    counts = _configured_counts(value, policy)
+    count_fingerprint = stable_digest([f"{key}:{counts[key]}" for key in sorted(counts)])[:32] if counts else None
+    previous_fingerprint = (previous or {}).get("artifact_fingerprint")
+    previous_count_fingerprint = (previous or {}).get("artifact_count_fingerprint")
+    material_count = summary["artifact_record_count"] or sum(counts.values())
+    output_class = "not_evaluated"
     reason = "no_observable_output_artifact"
-    if summary["node_edge_record_count"] > 0:
-        if previous_fingerprint and previous_fingerprint == summary["node_edge_fingerprint"]:
-            output_class = "metadata_only"
-            reason = "node_edge_paths_unchanged_since_registry"
-        else:
-            output_class = "node_edge_delta"
-            reason = "node_edge_paths_observed"
-    elif count_fallback["node_count"] + count_fallback["edge_count"] > 0:
-        if previous_count_fingerprint and previous_count_fingerprint == count_fingerprint:
-            output_class = "metadata_only"
-            reason = "node_edge_counts_unchanged_since_registry"
-        else:
-            output_class = "node_edge_delta"
-            reason = "node_edge_counts_observed"
+    if material_count > 0:
+        unchanged = bool(
+            (summary["artifact_fingerprint"] and previous_fingerprint == summary["artifact_fingerprint"])
+            or (count_fingerprint and previous_count_fingerprint == count_fingerprint)
+        )
+        output_class = "metadata_only" if unchanged else "material_delta"
+        reason = "artifact_observation_unchanged" if unchanged else "artifact_observation_changed"
     elif paths:
         output_class = "terminal_record" if terminal_record_like(value) else "metadata_only"
-        reason = "artifacts_present_without_node_edge_delta"
+        reason = "configured_artifacts_without_material_records"
     elif terminal_record_like(value):
         output_class = "terminal_record"
         reason = "terminal_record_observed"
     return {
         "observed_output_class": output_class,
         "observed_output_reason": reason,
-        "observable_artifact_paths": [rel_path(root, path) for path in paths[:20]],
-        "node_edge_fingerprint": summary["node_edge_fingerprint"],
-        "node_edge_count_fingerprint": count_fingerprint if count_fallback["node_count"] + count_fallback["edge_count"] > 0 else None,
-        "node_count": summary["node_count"] or count_fallback["node_count"],
-        "edge_count": summary["edge_count"] or count_fallback["edge_count"],
-        "node_edge_record_count": summary["node_edge_record_count"] or count_fallback["node_count"] + count_fallback["edge_count"],
-        "kg_paths": summary["kg_paths"],
+        "artifact_fingerprint": summary["artifact_fingerprint"],
+        "artifact_count_fingerprint": count_fingerprint,
+        "artifact_record_count": material_count,
+        "record_counts": counts,
+        "observed_kind_ids": summary["observed_kind_ids"],
+        "evaluation_status": "not_evaluated" if output_class == "not_evaluated" else "evaluated",
     }

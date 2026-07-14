@@ -1,5 +1,21 @@
 # Completion Gate Matrix
 
+## Governed Final Candidate Contract
+
+Evaluate all gates before any current-state write. Emit one JSON candidate with:
+
+- `schema_version: 1`, `kind: cycle_final_candidate`, and `final_candidate: true`;
+- opaque `cycle_id` and stable `attempt_id`;
+- `expected_previous_revision`, `expected_previous_attempt_id`, and `expected_previous_finalization_token`, all null for first publication or all bound to the verified current pointer;
+- `verdict_contract_version: 1` and the existing `task_acceptance_verdict`, `artifact_truth_verdict`, `artifact_semantic_verdict`, `pack_transition_verdict`, `historical_index_verdict`, and `goal_readiness_verdict` axes, each with a closed status and bounded opaque evidence references;
+- `durable_state_candidate.mode: complete_projection | typed_operations`, with complete payloads rather than digest-only mutations.
+
+When a typed-operation candidate declares `contract_version` or `producer`, require both (`contract_version: 1` and an opaque producer), every operation's `payload_sha256`, and the whole candidate's `candidate_sha256`. Anonymous legacy typed-operation candidates remain compatibility inputs bound by the final snapshot digest, but they do not satisfy a versioned producer schema claim.
+
+Keep the six axes independent. Task acceptance never implies artifact semantic or goal readiness success. Preserve or downgrade earlier negative semantic evidence; never upgrade it. Do not include owner-only `attempt_revision`, `supersedes_revision`, `supersedes_finalization_token`, `authoritative_final`, `finalization_token`, `state_commit_status`, or receipt fields.
+
+The orchestrator finalizer validates candidate hashes and privacy, compares the complete expected-previous tuple, assigns same-attempt revision/supersession, publishes one content-addressed snapshot through a compare-and-swap current pointer, and returns a committed content-bound receipt. A finalization error leaves the prior current pointer authoritative. Consumers must verify that current receipt and echo its token, attempt/revision, projection ID/digest, and receipt hash before deriving, promoting, reporting, or closing.
+
 ## Gate Status Values
 
 Use these values in validation reports:

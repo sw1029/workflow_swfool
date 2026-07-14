@@ -103,6 +103,9 @@ def routing_request_for(profile_id: str, context: dict[str, Any], stage: dict[st
     merged: dict[str, Any] = {"signals": {}}
     for source in (context, stage):
         routing = source.get("model_effort_routing") if isinstance(source.get("model_effort_routing"), dict) else {}
+        model_bindings = routing.get("model_bindings") if isinstance(routing.get("model_bindings"), dict) else {}
+        if model_bindings:
+            merged.setdefault("model_bindings", {}).update(model_bindings)
         profiles = routing.get("profiles") if isinstance(routing.get("profiles"), dict) else {}
         profile_request = profiles.get(profile_id) if isinstance(profiles.get(profile_id), dict) else {}
         profile_signals = profile_request.get("signals") if isinstance(profile_request.get("signals"), dict) else {}
@@ -309,6 +312,7 @@ def packet_for(
             "policy_path": str(MODEL_EFFORT_PROFILE_PATH),
             "models": MODEL_EFFORT_POLICY["models"],
             "tiers": MODEL_EFFORT_POLICY["tiers"],
+            "model_binding_contract": MODEL_EFFORT_POLICY["model_binding_contract"],
             "dynamic_routing_input": {
                 "path": "model_effort_routing.profiles.<profile_id>",
                     "fields": ["final_direction_ownership", "signals", "signal_evidence", "request_max", "max_escalation_reason", "prior_tier5_evidence", "agent_count"],
@@ -321,7 +325,9 @@ def packet_for(
                     "policy_id",
                     "profile_id",
                     "routing_tier",
+                    "requested_model_ref",
                     "requested_model",
+                    "model_configuration_status",
                     "requested_reasoning_effort",
                     "routing_reason_codes",
                     "routing_violations",
@@ -856,7 +862,7 @@ def packet_for(
                     "synthesis": route("derive_synthesis"),
                     "exceptional_arbitration": route("exceptional_arbitration"),
                     "id_consistency": route("id_index"),
-                    "max_requires": "Tier 5 Sol/xhigh ran first, prior_tier5_unresolved=true, prior_tier5_evidence, one agent, and max_escalation_reason",
+                    "max_requires": "Tier 5 direction-profile/xhigh ran first, prior_tier5_unresolved=true, prior_tier5_evidence, one agent, and max_escalation_reason",
                 },
                 "required_inputs": [
                     "validated completed-task evidence",
@@ -874,6 +880,7 @@ def packet_for(
                     "anti-loop progress gate with changed_vs_previous, semantic_progress, same-family micro-hardening count, and recommended disposition",
                     "hash-bound anti-loop handoff; or a reasoned not_applicable contract only for initial/standalone derive",
                     "six preserved verdict axes from validation, pack transition, index, and goal readiness",
+                    "verified current cycle_finalization_receipt and receipt-bound authoritative_projection for ordinary predecessor consumption",
                     "Part J anti-loop findings: scenario_uncovered, acceptance_inversion, command_provenance_missing, repeated blocker_opacity, predetermined_unreachable, floor_edge_envelope, and instrumentation_first_fire",
                     "Part K lineage/comparison findings: expectation_lineage_stale, parity_unverified, majority_vote_adoption without axis classification, measured_but_disqualified, repeated resolution_downgrade, and report_key_divergence",
                     "output_delta gate result with produced_domain_delta, metadata_only, and effective_progress_kind when available",
@@ -919,6 +926,8 @@ def packet_for(
                     "consumed_anti_loop_packet_sha256 or anti_loop_handoff_consumption receipt exactly echoing the required handoff",
                     "promotion_origin plus initial/predecessor receipt reference when promoting an item",
                     "retry_axis matching the failed verdict axis when retry work is selected",
+                    "finalization_receipt plus finalization_consumption echoing finalization_token, attempt_id, attempt_revision, authoritative_projection_id, authoritative_projection_digest, and receipt_hash",
+                    "authoritative_projection exactly matching the verified immutable finalization snapshot",
                     "loop_breaker_disposition",
                     "evidence_paths",
                     "used_advice or advice disposition rationale when active advice is in scope",
@@ -999,6 +1008,9 @@ def packet_for(
                     "validation_verdict",
                     "progress_verdict",
                     "progress_axes",
+                    "finalization_contract_version=1, finalization_applicability=required, schema_version=1, kind=cycle_final_candidate, and final_candidate=true for governed completion validation",
+                    "cycle_id, attempt_id, and explicit expected_previous_revision/expected_previous_attempt_id/expected_previous_finalization_token including null first-publication values",
+                    "durable_state_candidate prepared without registry, ledger, seal, or current-pointer mutation",
                     "verdict_contract_version=1 plus task_acceptance_verdict, artifact_truth_verdict, artifact_semantic_verdict, pack_transition_verdict, historical_index_verdict, and goal_readiness_verdict with evidence refs",
                     "decision_contract_version=1, exact decision artifact identity, and explicit required/consumed compatibility gate scopes",
                     "verification_axes and full consumer invocation receipts when required by acceptance",
@@ -1078,6 +1090,7 @@ def packet_for(
                 "required_inputs": [
                     "stage.jsonl with explicit canonical step/status rows",
                     "current_stage.json snapshot when present",
+                    "verified current_finalization.json pointer and immutable snapshot when a finalized attempt exists",
                     "current task/completed task/next task IDs",
                     "validation and progress verdicts/axes",
                     "issue and commit results",
@@ -1090,6 +1103,7 @@ def packet_for(
                     "event_count and explicit current_stage_event_count",
                     "snapshot_status",
                     "validation_verdict and progress_verdict",
+                    "authoritative_final, authoritative_projection, finalization_receipt, and exact finalization_consumption echo when finalized truth exists",
                     "blockers including explicit []",
                     "dashboard_path",
                     "evidence_paths",
@@ -1098,6 +1112,7 @@ def packet_for(
                     "malformed ledger JSON is an error, never a skipped row",
                     "noncanonical or incomplete event envelopes remain visible in a separate section",
                     "dashboard never upgrades validation or progress truth",
+                    "dashboard projects the verified current-finalization pointer; a later ledger echo cannot replace or contradict it",
                 ],
             }
         )
@@ -1106,6 +1121,15 @@ def packet_for(
             {
                 "skill": "$orchestrate-task-cycle",
                 "routing": {"language": "Korean", "template": "references/cycle-report-template.md"},
+                "required_inputs": [
+                    "verified current cycle_finalization_receipt and authoritative_projection for any predecessor final attempt",
+                    "report inputs whose legacy validation/progress fields converge with the receipt-bound projection",
+                ],
+                "required_outputs": [
+                    "authoritative_final and authoritative_projection from the verified immutable snapshot",
+                    "finalization_receipt and exact finalization_consumption echo",
+                    "report/dashboard authoritative_projection_digest convergence",
+                ],
                 "required_fields_order": [
                     "기준 GT",
                     "비-GT 방향성 문서",

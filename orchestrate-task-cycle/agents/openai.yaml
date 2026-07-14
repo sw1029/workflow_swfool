@@ -1,4 +1,4 @@
 interface:
   display_name: "Orchestrate Task Cycle"
   short_description: "Run governed cycles with routing gates"
-  default_prompt: "Use $orchestrate-task-cycle in Korean with deterministic Tier 1-5 GPT-5.6 routing: Terra for Tier 1-4 work and Sol only for Tier 5 final direction, architecture, task-pack topology, or terminal arbitration."
+  default_prompt: "Use $orchestrate-task-cycle to run one governed repository task cycle with configured routing, source-separated evidence, finalization-receipt gates, and Korean reporting."

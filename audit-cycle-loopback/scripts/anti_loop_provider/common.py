@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import difflib
 import fnmatch
 import hashlib
 import inspect
@@ -19,19 +18,24 @@ REGISTRY_REL_PATH = ".task/anti_loop/family_progress_registry.jsonl"
 ROOT_CAUSE_LEDGER_REL_PATH = ".task/anti_loop/root_cause_ledger.jsonl"
 SCHEMA_VERSION = "anti-loop-progress-gate-v1"
 DOMAIN_ADAPTER_ENV = "TASK_CYCLE_DOMAIN_ADAPTER_PATH"
-DEFAULT_DOMAIN_ADAPTER_REL_PATH = ".task/domain_adapter.py"
+# Compatibility exports for callers that imported the former policy defaults.
+# ``None`` is intentional: repository adapter locations and decision budgets
+# must be supplied by the caller, environment, or repository configuration.
+DEFAULT_DOMAIN_ADAPTER_REL_PATH: str | None = None
 DISPOSITION_UNIVERSE = {"goal_productive", "consolidation", "terminal_blocked", "user_escalation"}
 SAFETY_VALVES = {"terminal_blocked", "user_escalation"}
-CONSOLIDATION_STREAK_CAP_DEFAULT = 2
-MEASUREMENT_STREAK_CAP_DEFAULT = 1
-MAX_FORWARD_MUTATIONS_DEFAULT = 3
-DETECTION_ONLY_STREAK_CAP_DEFAULT = 2
-UNTRIED_PROMOTION_BUDGET_DEFAULT = 2
-ADAPTER_MANDATE_STREAK_CAP_DEFAULT = 3
-CUMULATIVE_CHAIN_STREAK_CAP_DEFAULT = 3
-INSTRUMENTATION_TRIGGER_THRESHOLD_DEFAULT = 2
-HOOK_DEMAND_THRESHOLD_DEFAULT = 2
-ENVELOPE_THAW_STREAK_CAP_DEFAULT = 2
+CONSOLIDATION_STREAK_CAP_DEFAULT: int | None = None
+MEASUREMENT_STREAK_CAP_DEFAULT: int | None = None
+MAX_FORWARD_MUTATIONS_DEFAULT: int | None = None
+DETECTION_ONLY_STREAK_CAP_DEFAULT: int | None = None
+UNTRIED_PROMOTION_BUDGET_DEFAULT: int | None = None
+ADAPTER_MANDATE_STREAK_CAP_DEFAULT: int | None = None
+CUMULATIVE_CHAIN_STREAK_CAP_DEFAULT: int | None = None
+INSTRUMENTATION_TRIGGER_THRESHOLD_DEFAULT: int | None = None
+HOOK_DEMAND_THRESHOLD_DEFAULT: int | None = None
+ENVELOPE_THAW_STREAK_CAP_DEFAULT: int | None = None
+# This is a serialization/storage-hygiene bound, not a progress or terminal
+# decision budget. It may compact history but cannot change a gate verdict.
 ROOT_CAUSE_LEDGER_MAX_ROWS_PER_FAMILY_DEFAULT = 200
 ROOT_STEERING_DOC_NAMES = {"task_advice.md", "skill_advice.md", "task_doctor_steering.md"}
 # Domain quality axes are adapter-owned.  The empty tuple is retained as a

@@ -8,8 +8,8 @@ Use this prompt when `$derive-improvement-task` needs one additional read-only i
 You are analyzing implementation issues before the next `task.md` is derived.
 
 Agent routing:
-- Use Tier 3 `model: gpt-5.6-terra` with `reasoning_effort: high`.
-- Report whether routing was enforced, prompt-only, or inherited-unverified. Do not use `ultra`.
+- Use `configured-tiered-routing-v3` Tier 3 `model_ref: model_ref:balanced` with `reasoning_effort: high`.
+- Resolve runtime model bindings only from caller configuration or a repository adapter. Report the model-configuration status and whether routing was enforced, prompt-only, or inherited-unverified. `reference_only` cannot prove enforced or actual-model execution. Do not use `ultra`.
 
 Review:
 - `.agent_goal/final_goal.md`

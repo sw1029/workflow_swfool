@@ -101,6 +101,14 @@ class LoopbackAuditRule(TargetContractRule):
             streak_count = int(str(count_value))
         except (TypeError, ValueError):
             streak_count = None
+        same_family_budget_status = str(
+            deep_get(result, "same_family_budget_evaluation.budget_evaluation_status") or ""
+        ).lower()
+        same_family_budget_value = value_for(result, "same_family_nonsemantic_budget")
+        try:
+            same_family_budget = int(str(same_family_budget_value))
+        except (TypeError, ValueError):
+            same_family_budget = None
         if evidence_class == "insufficient_evidence" and not (measurement_progress_allowed or forward_mutation_progress) and (disposition != "conservative_hold" or not hard_stop):
             add(
                 findings,
@@ -108,13 +116,25 @@ class LoopbackAuditRule(TargetContractRule):
                 "loopback_insufficient_not_fail_closed",
                 "`loopback_audit` insufficient evidence must use conservative_hold with hard_stop_required=true.",
             )
-        if streak_count is not None and streak_count >= 3 and not semantic_progress and not hard_stop and not (measurement_progress_allowed or forward_mutation_progress):
+        if (
+            streak_count is not None
+            and same_family_budget_status == "evaluated"
+            and same_family_budget is not None
+            and same_family_budget > 0
+            and streak_count >= same_family_budget
+            and not semantic_progress
+            and not hard_stop
+            and not (measurement_progress_allowed or forward_mutation_progress)
+        ):
             add(
                 findings,
                 "block" if mode == "block" else "warn",
                 "loopback_streak_without_hard_stop",
-                "`loopback_audit` same-family micro-hardening count >=3 without semantic progress must hard-stop.",
-                {"same_family_micro_hardening_count": streak_count},
+                "`loopback_audit` reached its explicitly evaluated same-family nonsemantic budget without semantic progress and must hard-stop.",
+                {
+                    "same_family_micro_hardening_count": streak_count,
+                    "same_family_nonsemantic_budget": same_family_budget,
+                },
             )
         if forward_mutation_progress and (forward_mutation_vacuous or not terminal_outcome_changed) and not hard_stop:
             add(

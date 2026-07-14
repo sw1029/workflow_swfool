@@ -1,4 +1,4 @@
 interface:
   display_name: "Validate Task Completion"
   short_description: "Validate completion and routing gates"
-  default_prompt: "Use $validate-task-completion with Tier 4 Terra/xhigh completion audits to validate progress, advice handling, routing constraints, code conventions, structure movement, logs, issues, and task-index evidence; do not use Sol for this non-direction-setting gate."
+  default_prompt: "Use $validate-task-completion to evaluate completion and progress separately, emit the governed six-axis final candidate without durable publication, and require orchestrator finalization plus a verified receipt before any close or downstream consumption."

@@ -39,7 +39,6 @@ class ProgressAggregationMixin:
         self.state.update(
             {
                 "progress_items": progress_items,
-                "last_two": progress_items[:2],
                 "counters": counters,
                 "supplied_input_paths": supplied_input_paths,
                 "provider_reattempt_records": provider_reattempt_records,
@@ -69,7 +68,7 @@ class ProgressAggregationMixin:
         if isinstance(feature, dict) and feature.get("symbol"):
             symbol = str(feature["symbol"])
             counters["feature_symbol"].update([symbol])
-            observed_class = str((observed or {}).get("observed_output_class") or "unknown")
+            observed_class = str((observed or {}).get("observed_output_class") or "not_evaluated")
             counters["feature_symbol_output_class"].update([observed_class])
             if observed_class in {"metadata_only", "terminal_record"}:
                 counters["feature_symbol_no_delta"].update([symbol])
@@ -99,20 +98,22 @@ class ProgressAggregationMixin:
 
     def _derive_repetition_lists(self) -> None:
         counters = self.state["counters"]
+        recurrence = self.recurrence_threshold
+        reached = lambda count: recurrence is not None and count >= recurrence
         repeated = {
-            "repeated_blockers": [{"blocker": key, "count": count} for key, count in counters["blocker"].most_common() if count >= 2],
-            "repeated_signatures": [{"blocker_signature": key, "count": count} for key, count in counters["signature"].most_common() if count >= 2],
-            "repeated_semantic_signatures": [{"semantic_signature": key, "count": count} for key, count in counters["semantic"].most_common() if count >= 2],
-            "repeated_feature_symbols": [{"feature_symbol": key, "count": count} for key, count in counters["feature_symbol"].most_common() if count >= 2],
+            "repeated_blockers": [{"blocker": key, "count": count} for key, count in counters["blocker"].most_common() if reached(count)],
+            "repeated_signatures": [{"blocker_signature": key, "count": count} for key, count in counters["signature"].most_common() if reached(count)],
+            "repeated_semantic_signatures": [{"semantic_signature": key, "count": count} for key, count in counters["semantic"].most_common() if reached(count)],
+            "repeated_feature_symbols": [{"feature_symbol": key, "count": count} for key, count in counters["feature_symbol"].most_common() if reached(count)],
             "recurring_no_delta_feature_symbols": [
                 {"feature_symbol": key, "count": count}
                 for key, count in counters["feature_symbol_no_delta"].most_common()
-                if count >= 2
+                if reached(count)
             ],
             "over_threshold_feature_symbols": [
                 {"feature_symbol": key, "count": count}
                 for key, count in counters["feature_symbol_no_delta"].most_common()
-                if count >= self.feature_symbol_threshold
+                if self.feature_symbol_threshold is not None and count >= self.feature_symbol_threshold
             ],
         }
         repeated["feature_terminal_history"] = self._feature_terminal_history(repeated["recurring_no_delta_feature_symbols"])
@@ -121,7 +122,7 @@ class ProgressAggregationMixin:
     def _feature_terminal_history(self, recurring: list[dict[str, Any]]) -> list[dict[str, Any]]:
         progress_items = self.state["progress_items"]
         matches: list[dict[str, Any]] = []
-        for repeated in recurring[:3]:
+        for repeated in recurring:
             symbol = repeated["feature_symbol"]
             source_item = next(
                 (item for item in progress_items if isinstance(item.get("feature_symbol"), dict) and item["feature_symbol"].get("symbol") == symbol),

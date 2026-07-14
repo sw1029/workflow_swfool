@@ -68,6 +68,11 @@ def test_canonical_step_order_matches_transition_contract() -> None:
     assert cycle_ledger.DEFAULT_STEPS == EXPECTED_STEPS
 
 
+def test_long_inline_json_is_not_misclassified_as_a_path() -> None:
+    payload = {"artifact_id": "artifact_" + ("A" * 1024)}
+    assert cycle_ledger.load_json_value(json.dumps(payload)) == payload
+
+
 def initialize_with_context(root: Path, cycle_id: str, task_id: str = "task-1", reason: str = "init") -> None:
     cycle_ledger.init_cycle(root, cycle_id, task_id, reason)
     cycle_ledger.append_event(
@@ -442,3 +447,399 @@ def test_versionless_legacy_rows_remain_readable(tmp_path: Path) -> None:
             cycle_id,
             {"step": "validate", "status": "complete"},
         )
+
+
+def final_candidate(
+    cycle_id: str,
+    attempt_id: str,
+    *,
+    expected_receipt: dict[str, Any] | None = None,
+    goal_status: str = "pass",
+    state_marker: str = "state_A",
+) -> dict[str, Any]:
+    expected_receipt = expected_receipt or {}
+    axes = {
+        axis: {"status": "pass", "evidence_ref": f"evidence_{index}"}
+        for index, axis in enumerate(cycle_ledger.VERDICT_AXES, start=1)
+    }
+    axes["goal_readiness_verdict"] = {
+        "status": goal_status,
+        "evidence_ref": "evidence_goal",
+    }
+    return {
+        "schema_version": 1,
+        "kind": "cycle_final_candidate",
+        "final_candidate": True,
+        "cycle_id": cycle_id,
+        "attempt_id": attempt_id,
+        "expected_previous_revision": expected_receipt.get("attempt_revision"),
+        "expected_previous_attempt_id": expected_receipt.get("attempt_id"),
+        "expected_previous_finalization_token": expected_receipt.get("finalization_token"),
+        "verdict_contract_version": 1,
+        **axes,
+        "durable_state_candidate": {
+            "mode": "complete_projection",
+            "projections": {
+                "registry_projection": {"artifact_id": state_marker},
+                "ledger_projection": [{"evidence_id": f"evidence_{state_marker}"}],
+            },
+        },
+    }
+
+
+def test_finalization_happy_path_is_content_bound_and_exact_retry_is_idempotent(tmp_path: Path) -> None:
+    cycle_id = "cycle-final-A"
+    initialize_with_context(tmp_path, cycle_id, task_id="task_A")
+    candidate = final_candidate(cycle_id, "attempt_A")
+
+    first = cycle_ledger.finalize_candidate(tmp_path, cycle_id, candidate)
+    repeated = cycle_ledger.finalize_candidate(tmp_path, cycle_id, candidate)
+    receipt = first["receipt"]
+    snapshot_path = tmp_path / receipt["snapshot_ref"]
+
+    assert first["idempotent"] is False
+    assert repeated["idempotent"] is True
+    assert first["finalization_receipt"] == receipt
+    assert repeated["finalization_receipt"] == receipt
+    assert repeated["receipt"] == receipt
+    assert first["authoritative_projection"] == first["snapshot"]["authoritative_projection"]
+    assert receipt["attempt_revision"] == 1
+    assert receipt["supersedes_revision"] is None
+    assert receipt["state_commit_status"] == "committed"
+    assert receipt["authoritative_final"] == "success"
+    assert hashlib.sha256(snapshot_path.read_bytes()).hexdigest() == receipt["finalization_token"]
+    assert receipt["snapshot_sha256"] == receipt["finalization_token"]
+    verified = cycle_ledger.verify_finalization_receipt(tmp_path, cycle_id, receipt)
+    assert verified["valid"] is True
+    assert verified["snapshot"]["authoritative_projection_digest"] == receipt["authoritative_projection_digest"]
+    loaded = cycle_ledger.load_current_finalized_state(tmp_path, cycle_id)
+    assert loaded["valid"] is True
+    assert loaded["durable_state_candidate"] == candidate["durable_state_candidate"]
+    assert loaded["receipt"] == receipt
+    assert len(list(snapshot_path.parent.glob("*.json"))) == 1
+
+    trace_only_retry = {**candidate, "intermediate_observation": {"checked_at": "trace_B", "family_label": "family_B"}}
+    trace_only_repeated = cycle_ledger.finalize_candidate(tmp_path, cycle_id, trace_only_retry)
+    assert trace_only_repeated["idempotent"] is True
+    assert trace_only_repeated["receipt"] == receipt
+    assert len(list(snapshot_path.parent.glob("*.json"))) == 1
+
+
+def test_same_attempt_correction_supersedes_revision_and_preserves_task_pass_goal_failure(tmp_path: Path) -> None:
+    cycle_id = "cycle-final-B"
+    initialize_with_context(tmp_path, cycle_id, task_id="task_B")
+    first = cycle_ledger.finalize_candidate(
+        tmp_path,
+        cycle_id,
+        final_candidate(cycle_id, "attempt_B"),
+    )
+    corrected_candidate = final_candidate(
+        cycle_id,
+        "attempt_B",
+        expected_receipt=first["receipt"],
+        goal_status="fail",
+        state_marker="state_B",
+    )
+    corrected_candidate["intermediate_observation"] = {
+        "evidence_id": "evidence_intermediate_A",
+        "semantic_progress": True,
+        "progress_verdict": "advanced",
+    }
+    corrected_candidate["durable_state_candidate"]["projections"]["registry_projection"].update(
+        {
+            "semantic_progress": False,
+            "authoritative_semantic_progress": False,
+            "goal_productive": False,
+            "progress_verdict": "no_progress",
+        }
+    )
+    contradictory = json.loads(json.dumps(corrected_candidate))
+    contradictory["durable_state_candidate"]["projections"]["registry_projection"]["semantic_progress"] = True
+    with pytest.raises(ValueError, match="contradicts the final artifact semantic verdict"):
+        cycle_ledger.finalize_candidate(tmp_path, cycle_id, contradictory)
+    assert cycle_ledger.load_current_finalized_state(tmp_path, cycle_id)["receipt"] == first["receipt"]
+
+    corrected = cycle_ledger.finalize_candidate(tmp_path, cycle_id, corrected_candidate)
+    receipt = corrected["receipt"]
+    projection = corrected["snapshot"]["authoritative_projection"]
+    registry_projection = corrected["snapshot"]["durable_state_candidate"]["projections"]["registry_projection"]
+
+    assert receipt["attempt_revision"] == 2
+    assert receipt["supersedes_revision"] == 1
+    assert receipt["supersedes_finalization_token"] == first["receipt"]["finalization_token"]
+    assert receipt["authoritative_final"] == "failure"
+    assert projection["task_acceptance_verdict"]["status"] == "pass"
+    assert projection["goal_readiness_verdict"]["status"] == "fail"
+    assert registry_projection["semantic_progress"] is False
+    assert registry_projection["goal_productive"] is False
+    assert registry_projection["progress_verdict"] == "no_progress"
+    assert "intermediate_observation" not in corrected["snapshot"]
+    with pytest.raises(ValueError, match="stale"):
+        cycle_ledger.verify_finalization_receipt(tmp_path, cycle_id, first["receipt"])
+    assert cycle_ledger.verify_finalization_receipt(tmp_path, cycle_id, receipt)["valid"] is True
+
+
+def test_finalization_rejects_source_metadata_before_any_durable_publication(tmp_path: Path) -> None:
+    cycle_id = "cycle-final-private"
+    initialize_with_context(tmp_path, cycle_id, task_id="task_private")
+    candidate = final_candidate(cycle_id, "attempt_private")
+    candidate["durable_state_candidate"] = {
+        "mode": "typed_operations",
+        "operations": [
+            {
+                "operation_type": "replace_projection",
+                "target_id": "registry_A",
+                "target_ref": ".task/state_A.json",
+                "payload": {
+                    "artifact_id": "artifact_A",
+                    "source_path": "source/private_A.txt",
+                    "direct_quote": "private body A",
+                },
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match="prohibited source metadata"):
+        cycle_ledger.finalize_candidate(tmp_path, cycle_id, candidate)
+
+    assert not cycle_ledger.current_finalization_path(tmp_path, cycle_id).exists()
+    assert not cycle_ledger.finalizations_dir(tmp_path, cycle_id).exists()
+
+    axis_candidate = final_candidate(cycle_id, "attempt_private_axis")
+    axis_candidate["artifact_truth_verdict"] = {
+        "status": "pass",
+        "evidence_ref": "source/private_B.json",
+    }
+    with pytest.raises(ValueError, match="path-like string"):
+        cycle_ledger.finalize_candidate(tmp_path, cycle_id, axis_candidate)
+
+    assert not cycle_ledger.current_finalization_path(tmp_path, cycle_id).exists()
+    assert not cycle_ledger.finalizations_dir(tmp_path, cycle_id).exists()
+
+
+def test_finalization_verifies_typed_operation_hashes_and_unique_targets(tmp_path: Path) -> None:
+    cycle_id = "cycle-final-operation-binding"
+    initialize_with_context(tmp_path, cycle_id, task_id="task_operation_binding")
+    candidate = final_candidate(cycle_id, "attempt_operation_binding")
+    payload = {"artifact_id": "artifact_A"}
+    operation = {
+        "operation_type": "replace_projection",
+        "target_id": "registry_A",
+        "payload": payload,
+        "payload_sha256": cycle_ledger.canonical_sha256(payload),
+    }
+    durable_candidate = {
+        "contract_version": 1,
+        "mode": "typed_operations",
+        "producer": "producer_A",
+        "operations": [operation],
+    }
+    durable_candidate["candidate_sha256"] = cycle_ledger.canonical_sha256(durable_candidate)
+    candidate["durable_state_candidate"] = durable_candidate
+
+    finalized = cycle_ledger.finalize_candidate(tmp_path, cycle_id, candidate)
+    assert finalized["receipt"]["authoritative_final"] == "success"
+
+    missing_hash_cycle_id = "cycle-final-operation-missing-hash"
+    initialize_with_context(tmp_path, missing_hash_cycle_id, task_id="task_operation_missing_hash")
+    missing_hash = final_candidate(missing_hash_cycle_id, "attempt_operation_missing_hash")
+    missing_hash["durable_state_candidate"] = {
+        "contract_version": 1,
+        "mode": "typed_operations",
+        "producer": "producer_A",
+        "operations": [
+            {
+                "operation_type": "replace_projection",
+                "target_id": "registry_A",
+                "payload": payload,
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="requires payload_sha256"):
+        cycle_ledger.finalize_candidate(tmp_path, missing_hash_cycle_id, missing_hash)
+    assert not cycle_ledger.current_finalization_path(tmp_path, missing_hash_cycle_id).exists()
+
+    missing_candidate_hash_cycle_id = "cycle-final-operation-missing-candidate-hash"
+    initialize_with_context(
+        tmp_path,
+        missing_candidate_hash_cycle_id,
+        task_id="task_operation_missing_candidate_hash",
+    )
+    missing_candidate_hash = final_candidate(
+        missing_candidate_hash_cycle_id,
+        "attempt_operation_missing_candidate_hash",
+    )
+    missing_candidate_hash["durable_state_candidate"] = {
+        "contract_version": 1,
+        "mode": "typed_operations",
+        "producer": "producer_A",
+        "operations": [operation],
+    }
+    with pytest.raises(ValueError, match="requires candidate_sha256"):
+        cycle_ledger.finalize_candidate(
+            tmp_path,
+            missing_candidate_hash_cycle_id,
+            missing_candidate_hash,
+        )
+    assert not cycle_ledger.current_finalization_path(
+        tmp_path, missing_candidate_hash_cycle_id
+    ).exists()
+
+    tampered_cycle_id = "cycle-final-operation-tamper"
+    initialize_with_context(tmp_path, tampered_cycle_id, task_id="task_operation_tamper")
+    tampered = final_candidate(tampered_cycle_id, "attempt_operation_tamper")
+    tampered["durable_state_candidate"] = {
+        "mode": "typed_operations",
+        "operations": [{**operation, "payload": {"artifact_id": "artifact_B"}}],
+    }
+    with pytest.raises(ValueError, match="payload_sha256 mismatch"):
+        cycle_ledger.finalize_candidate(tmp_path, tampered_cycle_id, tampered)
+    assert not cycle_ledger.current_finalization_path(tmp_path, tampered_cycle_id).exists()
+
+    duplicate_cycle_id = "cycle-final-operation-duplicate"
+    initialize_with_context(tmp_path, duplicate_cycle_id, task_id="task_operation_duplicate")
+    duplicate = final_candidate(duplicate_cycle_id, "attempt_operation_duplicate")
+    duplicate["durable_state_candidate"] = {
+        "mode": "typed_operations",
+        "operations": [operation, {**operation, "operation_type": "append_projection"}],
+    }
+    with pytest.raises(ValueError, match="target_id is duplicated"):
+        cycle_ledger.finalize_candidate(tmp_path, duplicate_cycle_id, duplicate)
+    assert not cycle_ledger.current_finalization_path(tmp_path, duplicate_cycle_id).exists()
+
+def test_failure_before_pointer_publish_leaves_prior_truth_unchanged_and_retry_recovers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cycle_id = "cycle-final-C"
+    initialize_with_context(tmp_path, cycle_id, task_id="task_C")
+    first = cycle_ledger.finalize_candidate(
+        tmp_path,
+        cycle_id,
+        final_candidate(cycle_id, "attempt_C"),
+    )
+    correction = final_candidate(
+        cycle_id,
+        "attempt_C",
+        expected_receipt=first["receipt"],
+        goal_status="fail",
+        state_marker="state_C",
+    )
+    correction["durable_state_candidate"] = {
+        "mode": "typed_operations",
+        "operations": [
+            {
+                "operation_type": "replace_projection",
+                "target_id": "registry_A",
+                "payload": {"artifact_id": "artifact_registry_B"},
+            },
+            {
+                "operation_type": "append_projection",
+                "target_id": "root_ledger_A",
+                "payload": {"evidence_id": "evidence_root_B"},
+            },
+            {
+                "operation_type": "replace_projection",
+                "target_id": "seal_A",
+                "payload": {"artifact_id": "artifact_seal_B"},
+            },
+            {
+                "operation_type": "replace_projection",
+                "target_id": "current_A",
+                "payload": {"artifact_id": "artifact_current_B"},
+            },
+        ],
+    }
+    pointer_path = cycle_ledger.current_finalization_path(tmp_path, cycle_id)
+    pointer_before = pointer_path.read_bytes()
+    original_atomic_write = cycle_ledger.atomic_write_text
+
+    def fail_pointer_publish(path: Path, content: str) -> None:
+        if path == pointer_path:
+            raise OSError("injected pointer publication failure")
+        original_atomic_write(path, content)
+
+    monkeypatch.setattr(cycle_ledger, "atomic_write_text", fail_pointer_publish)
+    with pytest.raises(OSError, match="injected pointer"):
+        cycle_ledger.finalize_candidate(tmp_path, cycle_id, correction)
+
+    assert pointer_path.read_bytes() == pointer_before
+    assert cycle_ledger.verify_finalization_receipt(tmp_path, cycle_id, first["receipt"])["valid"] is True
+    still_current = cycle_ledger.load_current_finalized_state(tmp_path, cycle_id)
+    assert still_current["durable_state_candidate"] == final_candidate(
+        cycle_id,
+        "attempt_C",
+    )["durable_state_candidate"]
+    monkeypatch.setattr(cycle_ledger, "atomic_write_text", original_atomic_write)
+    recovered = cycle_ledger.finalize_candidate(tmp_path, cycle_id, correction)
+    assert recovered["receipt"]["attempt_revision"] == 2
+    assert recovered["receipt"]["authoritative_final"] == "failure"
+    assert cycle_ledger.load_current_finalized_state(tmp_path, cycle_id)["durable_state_candidate"] == correction[
+        "durable_state_candidate"
+    ]
+    assert len(list(cycle_ledger.finalizations_dir(tmp_path, cycle_id).glob("*.json"))) == 2
+
+
+def test_stale_cas_and_tampered_receipt_fail_closed_without_publishing(tmp_path: Path) -> None:
+    cycle_id = "cycle-final-D"
+    initialize_with_context(tmp_path, cycle_id, task_id="task_D")
+    first = cycle_ledger.finalize_candidate(
+        tmp_path,
+        cycle_id,
+        final_candidate(cycle_id, "attempt_D"),
+    )
+    stale = final_candidate(
+        cycle_id,
+        "attempt_D",
+        expected_receipt=first["receipt"],
+        goal_status="fail",
+        state_marker="state_D",
+    )
+    stale["expected_previous_finalization_token"] = "0" * 64
+    snapshot_count = len(list(cycle_ledger.finalizations_dir(tmp_path, cycle_id).glob("*.json")))
+
+    with pytest.raises(ValueError, match="does not match current pointer"):
+        cycle_ledger.finalize_candidate(tmp_path, cycle_id, stale)
+    assert len(list(cycle_ledger.finalizations_dir(tmp_path, cycle_id).glob("*.json"))) == snapshot_count
+
+    tampered = dict(first["receipt"])
+    tampered["authoritative_final"] = "failure"
+    with pytest.raises(ValueError, match="receipt hash mismatch"):
+        cycle_ledger.verify_finalization_receipt(tmp_path, cycle_id, tampered)
+    assert cycle_ledger.verify_finalization_receipt(tmp_path, cycle_id, first["receipt"])["valid"] is True
+
+
+def test_concurrent_corrections_publish_one_current_revision_and_preserve_history(tmp_path: Path) -> None:
+    cycle_id = "cycle-final-E"
+    initialize_with_context(tmp_path, cycle_id, task_id="task_E")
+    first = cycle_ledger.finalize_candidate(
+        tmp_path,
+        cycle_id,
+        final_candidate(cycle_id, "attempt_E"),
+    )
+    candidates = [
+        final_candidate(
+            cycle_id,
+            "attempt_E",
+            expected_receipt=first["receipt"],
+            goal_status="fail",
+            state_marker=state_marker,
+        )
+        for state_marker in ("state_E1", "state_E2")
+    ]
+
+    def publish(candidate: dict[str, Any]) -> tuple[str, Any]:
+        try:
+            return "published", cycle_ledger.finalize_candidate(tmp_path, cycle_id, candidate)
+        except ValueError as exc:
+            return "rejected", str(exc)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(publish, candidates))
+
+    assert sorted(status for status, _ in outcomes) == ["published", "rejected"]
+    assert any("does not match current pointer" in str(value) for status, value in outcomes if status == "rejected")
+    current = cycle_ledger.load_current_finalized_state(tmp_path, cycle_id)
+    assert current["receipt"]["attempt_revision"] == 2
+    assert current["receipt"]["supersedes_revision"] == 1
+    assert len(list(cycle_ledger.finalizations_dir(tmp_path, cycle_id).glob("*.json"))) == 2

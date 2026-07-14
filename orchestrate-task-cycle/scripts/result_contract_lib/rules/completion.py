@@ -1755,7 +1755,7 @@ class CompletionValidationRule(TargetContractRule):
                 and (
                     boolish(produced_domain_delta)
                     or observed_delta_class
-                    in {"node_edge_delta", "semantic_delta", "changed_semantic_output", "primary_output_delta"}
+                    in {"material_delta", "semantic_delta", "changed_semantic_output", "primary_output_delta"}
                 )
             )
         )

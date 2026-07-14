@@ -40,7 +40,7 @@ def terminal_outcome_changed(output_delta: Any, changed_vs_previous: bool, seman
     strict_semantic = bool_value(semantic) if semantic is not None else semantic_progress
     if bool_value(metadata):
         return False
-    if observed in {"node_edge_delta", "semantic_delta", "changed_semantic_output", "primary_output_delta"}:
+    if observed in {"material_delta", "semantic_delta", "changed_semantic_output", "primary_output_delta"}:
         return strict_changed and strict_semantic
     if produced is not None and not bool_value(produced):
         return False
