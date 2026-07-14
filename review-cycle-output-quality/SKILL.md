@@ -39,7 +39,7 @@ Ask the reviewer to directly open and inspect the named artifacts. The reviewer 
 
 Prefer caller-supplied adapter packets over reviewer-local domain assumptions. The reviewer may consume these optional hooks only through opaque ids, scalars, and enums:
 
-- `substance_density(metric_id, **context) -> dict`: optional N1 helper returning `referent_meaning_ratio`, `opaque_surrogate_ratio`, and adapter-owned `floor` for a metric target. The adapter owns what counts as referent meaning, opaque surrogate, and threshold. If absent, fail quiet with `substance_density_unchecked=true` and keep existing semantic-readiness/substance review behavior.
+- `substance_density(metric_id, **context) -> dict`: optional N1 helper returning `referent_meaning_ratio`, `opaque_surrogate_ratio`, adapter-owned `floor`, and bounded referential-substance scalars when available: `evaluation_status`, meaningful/opaque counts, incompatible-collision count, possible-false-split count, and ambiguity-preserved count. The adapter owns referent compatibility, collision, false-split, ambiguity, and threshold semantics. Consume this existing hook after non-empty/locator/link presence has been observed; those structural facts never imply meaningful referential substance. Missing or malformed optional output fails quiet with `substance_density_unchecked=true` and `evaluation_status=insufficient_evidence|invalid_contract` as appropriate, without creating pass, completion, authority, or verification.
 - `output_body_locator(manifest, **context) -> dict`: optional S2 helper returning producer-declared body locations such as `body_dir`, `required_files`, opaque schema/layout ids, and optional evidence refs. Use it before any artifact-present or empty judgment. If declared required files exist at the producer-declared body location, do not mark the output `missing_or_empty` only because a fixed legacy path is empty. If the hook is absent or malformed, fail quiet to existing fixed-path lookup and record `path_binding=fixed_only` / `output_body_locator_unverified`; if manifest layout differs from reviewer expectations, record `layout_drift=true` and fall back to the producer-declared path without inventing repo-specific paths.
 - `landed_feature_inventory(**context) -> dict`: optional P1 helper returning adapter-owned landed feature classes and the authorized set expected on a representative output. The reviewer compares only opaque class ids against output-manifest `feature_classes_present` when available. If absent, fail quiet and keep existing output-quality review behavior.
 - `feature_presence_evidence(feature_class, artifact_root, **context) -> dict`: optional Q2 helper returning `presence_field`, `observed_count`, `min_count`, `artifact_body_present`, and optional opaque evidence ids for a representative output body. When supplied, P1 `present` is true only when `artifact_body_present=true` and `observed_count >= min_count`; metadata-only pointers, manifests, or other artifact existence cannot satisfy presence. If absent, fail quiet to existing P1 review and record `presence_basis=manifest_declaration_only` when the manifest is the only basis.
@@ -128,9 +128,17 @@ Return a JSON-compatible summary and, when durable evidence is required, write a
   "feature_regressed_artifact": false,
   "constraint_forced_vacuity": false,
   "substance_density_unchecked": false,
+  "substance_density_evaluation_status": "meaningful|not_meaningful|not_applicable|insufficient_evidence|invalid_contract",
   "referent_meaning_ratio": null,
   "opaque_surrogate_ratio": null,
   "substance_density_floor": null,
+  "referential_substance_counts": {
+    "meaningful": 0,
+    "opaque": 0,
+    "incompatible_collision": 0,
+    "possible_false_split": 0,
+    "ambiguity_preserved": 0
+  },
   "vacuity_cause": "production_constraint|missing_producer_capability|unknown|not_applicable",
   "surface_corrective_noop": false,
   "semantic_ready": "true|false|unknown",
@@ -183,6 +191,17 @@ Return a JSON-compatible summary and, when durable evidence is required, write a
     "field_class_map_missing": false,
     "review_sample_count": 0,
     "surface_field_defect_matrix": {},
+    "field_class_results": [
+      {
+        "field_class_id": "axis_X",
+        "applicability_status": "applicable|not_applicable|insufficient_evidence|invalid_contract",
+        "review_status": "pass|fail|not_observed|not_evaluated",
+        "observed_count": 0,
+        "locator_status": "present|missing|not_applicable|not_evaluated",
+        "referential_substance_status": "meaningful|not_meaningful|not_applicable|insufficient_evidence|invalid_contract",
+        "defect_counts": {}
+      }
+    ],
     "excerpt_policy": "counts_only|authority_allows_excerpts|not_applicable"
   },
   "pass_with_unobserved_axes": false,
@@ -222,7 +241,7 @@ Use `review_status` as the owning skill result status. When the orchestration le
 - When `coverage_quality_delta_reconciliation_gate.status=block`, report the disagreement and cap measurement/oracle/rung progress unless strict changed-and-semantic primary-output evidence independently proves progress.
 - When `substance_delta_gate` is supplied and `substance_delta_pass=false` or `status=missing`, cap measurement/oracle/rung progress at `governance_only` unless strict changed-and-semantic output-delta evidence independently proves primary-output progress.
 - When `landed_feature_inventory` is supplied, use `feature_presence_evidence` as the Q2 body anchor when available. If `artifact_body_present=false` or the representative body file is missing, set `artifact_body_missing=true` and fail-close the landed-feature review instead of accepting manifest declarations. If the body exists but `observed_count < min_count`, or presence relies only on `metadata_only` pointers or other artifact existence, set `synthesis_not_materialized=true`, increment `feature_regression_count`, preserve `feature_regressed_artifact=true`, and cap all axis deltas derived from that artifact at `governance_only`. If the Q2 hook is absent, fail quiet to the existing manifest comparison, set `presence_basis=manifest_declaration_only`, and do not infer body fields locally. Do not double-count Q2 separately from P1; it is the present-condition for the same landed-feature inheritance gate.
-- When `substance_density` is supplied for a passed link, coverage, or response metric, apply this N1 flow: metric passed -> density hook present? if no, set `substance_density_unchecked=true` and fail quiet to existing review semantics; if yes, compare `referent_meaning_ratio` with adapter `floor`; if below floor, set `constraint_forced_vacuity=true`, cap affected metric progress at `governance_only`, and route `vacuity_cause=production_constraint` to persistence-policy repair or `vacuity_cause=missing_producer_capability` to producer supply. If the metric itself is tautological, route through G-OENV instead of N1.
+- When `substance_density` is supplied for a passed link, coverage, or response metric, apply this N1 flow: structural presence observed -> evaluate referential substance -> compare only an applicable, sufficiently evidenced projection with the adapter floor. Locator/link/non-empty presence alone remains `insufficient_evidence` for meaning. Opaque referents, incompatible collisions, possible false splits, or unresolved substance prevent a meaningful pass for the affected field class. If below floor, set `constraint_forced_vacuity=true`, cap affected metric progress at `governance_only`, and route `vacuity_cause=production_constraint` to persistence-policy repair or `vacuity_cause=missing_producer_capability` to producer supply. If the metric itself is tautological, route through G-OENV instead of N1.
 - When `vacuous_corrective_gate.surface_corrective_noop=true`, report `surface_corrective_noop: true`, cite the affected lanes, and do not count those attempted rows as semantic or produced output delta.
 - When `goal_axis_map` is supplied and any active measurable goal has zero mapped axes, set `goal_axis_completeness_gate.evaluation_status=fail`, set `pass_with_unobserved_axes=true`, cite the unobserved goals, and cap review-backed progress for those goals. Recommend adapter axis supply, explicit residual scope, terminal blocker, or user escalation; do not let the review's overall pass wording consume the affected target.
 - When `goal_axis_map` is absent, set `goal_axis_completeness_gate.evaluation_status=not_evaluated` or omit the gate. Missing optional axis mapping is fail-quiet unless acceptance/caller packets require it.
@@ -231,7 +250,7 @@ Use `review_status` as the owning skill result status. When the orchestration le
 - When an artifact satisfies a `live_run` criterion only through a derived artifact, code contract, or report, set `acceptance_diluted=true` and cap review-backed progress for that criterion.
 - When the reviewed change is guard/verifier/report-only hardening over the same target artifact and no fresh run id exists, set `verifier_surface_hardening=true`; do not describe it as primary-output progress.
 - When the run disposition is `candidate_degraded`, preserve it as quality-miss evidence and do not call it acceptable/canonical output unless independent verification evidence is supplied for the consumed axes.
-- When `surface_field_classes` is supplied, cover every listed producer-written surface string field class, not only summaries or the most visible field. Set `surface_field_review_status=fail` when scalar defects are nonzero, preserve `surface_field_defect_matrix`, and recommend producer/field repair, residual descope, terminal blocker, or user escalation as appropriate. Missing field class maps are `field_class_map_missing=true` and fail quiet.
+- When `surface_field_classes` is supplied, emit one `field_class_results` row for every listed active class, not only summaries or the most visible field. An applicable class that is absent, `not_observed`, `not_evaluated`, referentially unresolved, or has nonzero scalar defects prevents aggregate `surface_field_review_status=pass`; a representative class cannot mask it. Explicit adapter-owned `not_applicable` rows are excluded rather than failed. Preserve scalar `surface_field_defect_matrix` and recommend producer/field repair, producer supply, residual descope, terminal blocker, or user escalation as appropriate. Missing field class maps are `field_class_map_missing=true` and fail quiet; they do not fabricate an aggregate pass.
 - When `surface_quality_suspected=true`, `semantic_ready=false`, `placeholder_event_found=true`, or `surface_entity_suspected=true` affects the primary output, set `progress_cap: governance_only` unless strict changed-and-semantic output-delta evidence independently proves primary-output progress.
 - Do not double-count Part M and Part N: Part M harvest/preflight fields decide whether the execution-context exit contract was safe to consume; N1 decides whether the landed output target carries adapter-owned meaning after that exit. Preserve both when supplied, but use one blocking reason per affected progress claim.
 - When pronoun-only, particle-attached, common-noun, placeholder, or repeated-generic labels affect primary entities/events, set `surface_quality_suspected=true`, set `surface_entity_suspected=true`, add both codes when applicable, and cap progress at `governance_only` unless strict changed-and-semantic output-delta evidence proves otherwise.

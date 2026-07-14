@@ -20,6 +20,8 @@ PROCESSED_CANDIDATE_THRESHOLD = 200
 VERSIONED_FAMILY_THRESHOLD = 12
 TRACE_LABEL_RE = re.compile(r"(?:^|[-_:])(cycle|task|run|gen|generation|v)[-_:]?(?:\d+|[0-9a-f]{6,})|20\d{6,}", re.IGNORECASE)
 CYCLE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+OPAQUE_ID_MAX_LENGTH = 128
+INDEPENDENT_EVIDENCE_STATUSES = {"independent", "independently_verified"}
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -73,6 +75,18 @@ def first_present(event: dict[str, Any], paths: tuple[str, ...]) -> Any:
     return None
 
 
+def bounded_opaque_id(value: Any) -> str | None:
+    """Accept only bounded scalar identifiers; never stringify containers."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or len(text) > OPAQUE_ID_MAX_LENGTH:
+        return None
+    if any(ord(character) < 32 or ord(character) == 127 for character in text):
+        return None
+    return text
+
+
 def is_metadata_only(event: dict[str, Any]) -> bool:
     metadata_only = first_present(event, ("metadata_only", "output_delta.metadata_only", "output_delta_gate.metadata_only"))
     produced = first_present(event, ("produced_domain_delta", "output_delta.produced_domain_delta", "output_delta_gate.produced_domain_delta"))
@@ -86,9 +100,13 @@ def is_metadata_only(event: dict[str, Any]) -> bool:
 
 
 def stable_scope_value(value: Any) -> str:
-    text = str(value or "").strip().lower()
+    raw = bounded_opaque_id(value)
+    if raw is None:
+        return ""
+    text = raw.lower()
     text = TRACE_LABEL_RE.sub("", text)
-    return re.sub(r"[-_:]+", "-", text).strip("-")
+    normalized = re.sub(r"[-_:]+", "-", text).strip("-")
+    return normalized if bounded_opaque_id(normalized) is not None else ""
 
 
 def family_scope(event: dict[str, Any]) -> dict[str, str]:
@@ -107,14 +125,129 @@ def same_family_scope(event: dict[str, Any], scope: dict[str, str]) -> bool:
     return all(candidate.get(key) == value for key, value in scope.items())
 
 
+def execution_scope(event: dict[str, Any]) -> dict[str, str]:
+    """Minimum producer-run scope; taxonomy and values remain adapter-owned."""
+    return {
+        "goal_axis": stable_scope_value(first_present(event, ("goal_axis", "profile_scope.goal_axis"))),
+        "producer_lineage": stable_scope_value(first_present(event, ("producer_lineage", "profile_scope.producer_lineage"))),
+        "artifact_class": stable_scope_value(first_present(event, ("observed_artifact_class", "artifact_class", "profile_scope.artifact_class"))),
+        "decision_lane": stable_scope_value(first_present(event, ("current_decision_lane", "decision_lane", "profile_scope.decision_lane"))),
+    }
+
+
+def same_execution_scope(event: dict[str, Any], scope: dict[str, str]) -> bool:
+    candidate = execution_scope(event)
+    return all(candidate.get(key) == value for key, value in scope.items())
+
+
+def fresh_run_id(event: dict[str, Any]) -> str | None:
+    if boolish(first_present(event, ("replayed", "run_replayed", "carried_forward_run"))):
+        return None
+    value = first_present(event, ("run_id", "execution.run_id", "run.run_id", "fresh_run_id"))
+    return bounded_opaque_id(value)
+
+
+def _independent_status(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in INDEPENDENT_EVIDENCE_STATUSES
+    if not isinstance(value, dict):
+        return False
+    status = first_present(
+        value,
+        ("evidence_provenance", "provenance", "status", "evaluation_status"),
+    )
+    return isinstance(status, str) and status.strip().lower() in INDEPENDENT_EVIDENCE_STATUSES
+
+
+def _axis_bound_independent_evidence(value: Any, goal_axis: str) -> bool:
+    """Consume generic provenance only when its row/key names the current goal axis."""
+    if isinstance(value, dict):
+        row_axis = stable_scope_value(
+            first_present(value, ("goal_axis", "goal_axis_id", "axis_id"))
+        )
+        if row_axis:
+            return row_axis == goal_axis and _independent_status(value)
+        for raw_axis, row in value.items():
+            if stable_scope_value(raw_axis) == goal_axis and _independent_status(row):
+                return True
+        return False
+    if isinstance(value, list):
+        return any(
+            isinstance(row, dict)
+            and stable_scope_value(first_present(row, ("goal_axis", "goal_axis_id", "axis_id"))) == goal_axis
+            and _independent_status(row)
+            for row in value
+        )
+    return False
+
+
+def semantic_goal_movement(event: dict[str, Any], current_goal_axis: str | None = None) -> bool:
+    if is_metadata_only(event):
+        return False
+    event_goal_axis = stable_scope_value(first_present(event, ("goal_axis", "profile_scope.goal_axis")))
+    expected_goal_axis = stable_scope_value(current_goal_axis) if current_goal_axis is not None else event_goal_axis
+    if not event_goal_axis or not expected_goal_axis or event_goal_axis != expected_goal_axis:
+        return False
+    semantic_provenance = first_present(
+        event,
+        (
+            "semantic_movement_evidence_class",
+            "semantic_evidence_provenance",
+        ),
+    )
+    independently_consumable = boolish(event.get("independent_semantic_evidence")) or (
+        isinstance(semantic_provenance, str) and _independent_status(semantic_provenance)
+    )
+    if isinstance(semantic_provenance, (dict, list)):
+        independently_consumable = independently_consumable or _axis_bound_independent_evidence(
+            semantic_provenance,
+            expected_goal_axis,
+        )
+    generic_provenance = event.get("evidence_provenance")
+    independently_consumable = independently_consumable or _axis_bound_independent_evidence(
+        generic_provenance,
+        expected_goal_axis,
+    )
+    verified_fields = event.get("independently_verified_fields")
+    if isinstance(verified_fields, (list, tuple, set)):
+        independently_consumable = independently_consumable or any(
+            stable_scope_value(field) == expected_goal_axis for field in verified_fields
+        )
+    if fresh_run_id(event) is None or not independently_consumable:
+        return False
+    authoritative = first_present(event, ("authoritative_semantic_progress", "semantic_progress_authoritative"))
+    if authoritative is not None:
+        return boolish(authoritative)
+    produced = first_present(event, ("produced_domain_delta", "output_delta.produced_domain_delta"))
+    changed = first_present(event, ("changed_vs_previous", "output_delta.changed_vs_previous"))
+    semantic = first_present(event, ("semantic_progress", "output_delta.semantic_progress"))
+    return boolish(produced) and boolish(changed) and boolish(semantic)
+
+
+def cycle_groups(events: list[dict[str, Any]]) -> list[tuple[str, list[dict[str, Any]]]]:
+    groups: dict[str, list[dict[str, Any]]] = {}
+    order: list[str] = []
+    for index, event in enumerate(events):
+        cycle_id = (
+            bounded_opaque_id(event.get("cycle_id"))
+            or bounded_opaque_id(event.get("event_id"))
+            or f"event_{index + 1}"
+        )
+        if cycle_id not in groups:
+            groups[cycle_id] = []
+            order.append(cycle_id)
+        groups[cycle_id].append(event)
+    return [(cycle_id, groups[cycle_id]) for cycle_id in order]
+
+
 def current_cycle_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return the latest cycle's observable cost events without family guessing."""
     if not events:
         return []
-    latest_cycle_id = str(events[-1].get("cycle_id") or "").strip()
+    latest_cycle_id = bounded_opaque_id(events[-1].get("cycle_id"))
     if not latest_cycle_id:
         return list(events)
-    selected = [event for event in events if str(event.get("cycle_id") or "").strip() == latest_cycle_id]
+    selected = [event for event in events if bounded_opaque_id(event.get("cycle_id")) == latest_cycle_id]
     return selected or list(events)
 
 
@@ -254,6 +387,89 @@ def analyze(
     profile_scope_unverified = not all(latest_scope.values())
     scoped_events = [event for event in events if same_family_scope(event, latest_scope)] if not profile_scope_unverified else []
     decision_events = scoped_events if not profile_scope_unverified else []
+    latest_execution_scope = execution_scope(events[-1]) if events else execution_scope({})
+    missing_execution_scope_fields = sorted(key for key, value in latest_execution_scope.items() if not value)
+    execution_scope_known = not missing_execution_scope_fields
+    execution_scoped_events = [event for event in events if same_execution_scope(event, latest_execution_scope)] if execution_scope_known else []
+    raw_starvation_window = first_present(
+        events[-1] if events else {},
+        ("execution_starvation_window", "profile_contract.execution_starvation_window"),
+    )
+    try:
+        if isinstance(raw_starvation_window, bool) or raw_starvation_window is None:
+            raise ValueError
+        execution_starvation_window: int | None = int(raw_starvation_window)
+        if execution_starvation_window < 1:
+            raise ValueError
+        execution_starvation_window_status = "supplied"
+    except (TypeError, ValueError):
+        execution_starvation_window = None
+        execution_starvation_window_status = "not_supplied" if raw_starvation_window is None else "malformed"
+    execution_scope_evidence_required = list(missing_execution_scope_fields)
+    if execution_starvation_window is None:
+        execution_scope_evidence_required.append("execution_starvation_window")
+    execution_scope_known = not execution_scope_evidence_required
+    recent_global_groups = cycle_groups(events)[-execution_starvation_window:] if execution_starvation_window else []
+    recent_global_events = [event for _, group in recent_global_groups for event in group]
+    recent_execution_events = [
+        event for event in recent_global_events if same_execution_scope(event, latest_execution_scope)
+    ] if execution_scope_known else []
+    recent_run_ids = sorted({run_id for event in recent_execution_events if (run_id := fresh_run_id(event))})
+    if not execution_scope_known:
+        execution_starvation_status = "scope_unknown"
+        execution_starvation: bool | None = None
+    elif recent_run_ids:
+        execution_starvation_status = "absent"
+        execution_starvation = False
+    else:
+        execution_starvation_status = "present"
+        execution_starvation = True
+
+    current_goal_axis = latest_execution_scope["goal_axis"]
+    goal_axis_events = [
+        event
+        for event in events
+        if current_goal_axis
+        and stable_scope_value(first_present(event, ("goal_axis", "profile_scope.goal_axis"))) == current_goal_axis
+    ]
+    goal_axis_groups = cycle_groups(goal_axis_events)
+    goal_axis_no_semantic_movement_streak = 0
+    for _, group in reversed(goal_axis_groups):
+        if any(semantic_goal_movement(event, current_goal_axis) for event in group):
+            break
+        goal_axis_no_semantic_movement_streak += 1
+    goal_axis_projection = {
+        "status": "evaluated" if current_goal_axis else "scope_unknown",
+        "goal_axis": current_goal_axis or None,
+        "cycle_count": len(goal_axis_groups),
+        "family_ids": sorted(
+            {
+                stable_scope_value(first_present(event, ("root_family_key", "blocker_root_family", "profile_scope.root_family_key")))
+                for event in goal_axis_events
+                if stable_scope_value(first_present(event, ("root_family_key", "blocker_root_family", "profile_scope.root_family_key")))
+            }
+        ),
+        "semantic_movement_cycle_count": sum(
+            1
+            for _, group in goal_axis_groups
+            if any(semantic_goal_movement(event, current_goal_axis) for event in group)
+        ),
+        "producer_run_cycle_count": sum(
+            1 for _, group in goal_axis_groups if any(fresh_run_id(event) for event in group)
+        ),
+        "safety_or_governance_cycle_count": sum(
+            1
+            for _, group in goal_axis_groups
+            if any(
+                str(event.get("progress_verdict") or "").lower() == "safety_only"
+                or str(first_present(event, ("effective_progress_kind", "progress_kind")) or "").lower() == "governance_only"
+                for event in group
+            )
+        ),
+        "no_semantic_movement_streak": goal_axis_no_semantic_movement_streak,
+        "family_change_resets_streak": False,
+        "hard_gate": False,
+    }
     progress_values = [str(event.get("progress_verdict")).lower() for event in decision_events if event.get("progress_verdict")]
     progress_kinds = [str(first_present(event, ("effective_progress_kind", "progress_kind"))).lower() for event in decision_events if first_present(event, ("effective_progress_kind", "progress_kind"))]
     global_blockers = [str(item) for event in events for item in (event.get("blockers") or [])]
@@ -306,6 +522,26 @@ def analyze(
         if str(event.get("validation_profile")).lower() == "full_chain" and not event.get("escalation_reason")
     ]
     findings: list[dict[str, Any]] = []
+    if execution_starvation_status == "scope_unknown":
+        findings.append(
+            {
+                "severity": "warn",
+                "code": "execution_scope_unknown",
+                "message": "Execution starvation cannot be decided until the minimum producer-run scope is supplied.",
+                "evidence": {"missing_scope_fields": execution_scope_evidence_required},
+                "recommendation": "supply_evidence_path",
+            }
+        )
+    elif execution_starvation_status == "present":
+        findings.append(
+            {
+                "severity": "warn",
+                "code": "execution_starvation",
+                "message": "No fresh run id was observed in the scoped recent-cycle window.",
+                "evidence": {"window": execution_starvation_window, "recent_cycle_run_id_count": 0},
+                "recommendation": "resume_primary_output",
+            }
+        )
     if len(progress_values) >= 2 and progress_values[-2:] == ["safety_only", "safety_only"]:
         findings.append({"severity": "warn", "code": "consecutive_safety_only", "message": "The last two progress verdicts are safety_only."})
     if len(progress_events) >= 2 and all(is_metadata_only(event) for event in progress_events[-2:]):
@@ -401,7 +637,7 @@ def analyze(
     unique_new_artifact_ids = sorted(artifact_identities - set(unique_unchanged_artifact_ids))
     fresh_stage_event_ids = sorted(
         {
-            str(event.get("event_id") or f"ledger_event_{index + 1}")
+            bounded_opaque_id(event.get("event_id")) or f"ledger_event_{index + 1}"
             for index, event in enumerate(cost_events)
             if not boolish(event.get("replayed"))
         }
@@ -427,6 +663,10 @@ def analyze(
         )
     recommendations: list[str] = []
     codes = {item["code"] for item in findings}
+    if "execution_scope_unknown" in codes:
+        recommendations.append("supply_evidence_path")
+    if "execution_starvation" in codes:
+        recommendations.append("resume_primary_output")
     if "consecutive_safety_only" in codes and repeated_blockers:
         recommendations.append("supply_evidence_path_or_bounded_preflight")
     if "consecutive_metadata_only" in codes:
@@ -443,7 +683,8 @@ def analyze(
     if "hypothesis_exhausted" in codes:
         recommendations.append("stop_with_blocker")
     recommendation = recommendations[0] if recommendations else "continue"
-    effective_task_id = task_id or str(first_present(events[-1], ("task_id", "owner_task_id")) or "") if events else (task_id or "")
+    event_task_id = first_present(events[-1], ("task_id", "owner_task_id")) if events else None
+    effective_task_id = bounded_opaque_id(task_id) or bounded_opaque_id(event_task_id)
     return {
         "format_version": 1,
         "step": "cycle_efficiency_profile",
@@ -466,6 +707,17 @@ def analyze(
         "profile_scope_unverified": profile_scope_unverified,
         "family_scoped_event_count": len(scoped_events),
         "family_scoped_hard_gate": False,
+        "goal_axis_stagnation_projection": goal_axis_projection,
+        "execution_scope": latest_execution_scope,
+        "execution_scope_status": "evaluated" if execution_scope_known else "scope_unknown",
+        "scope_evidence_required": execution_scope_evidence_required,
+        "execution_starvation_status": execution_starvation_status,
+        "execution_starvation": execution_starvation,
+        "recent_cycle_run_ids": recent_run_ids,
+        "recent_cycle_run_id_count": len(recent_run_ids),
+        "execution_starvation_window": execution_starvation_window,
+        "execution_starvation_window_status": execution_starvation_window_status,
+        "execution_candidate_priority_boost": execution_starvation is True,
         "global_aggregate": {
             "blocker_counts": dict(Counter(global_blockers)),
             "blocker_signature_counts": dict(Counter(global_blocker_signatures)),

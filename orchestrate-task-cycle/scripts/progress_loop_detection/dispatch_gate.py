@@ -34,13 +34,18 @@ def provider_scale_dispatch_gate(value: dict[str, Any], coverage_gate: dict[str,
         )
     )
     provider_count = provider_count or 0
+    coverage_status = str(
+        coverage_gate.get("evaluation_status") or coverage_gate.get("status") or "not_evaluated"
+    ).strip().lower()
     current = coverage_gate.get("current_quality_vector") if isinstance(coverage_gate.get("current_quality_vector"), dict) else {}
-    current_all_zero = bool(current) and all((number_value(metric_value) or 0) <= 0 for metric_value in current.values())
+    decision_evaluated = coverage_status in {"evaluated", "pass", "block"}
+    current_all_zero = decision_evaluated and bool(current) and all((number_value(metric_value) or 0) <= 0 for metric_value in current.values())
     previous_all_zero = boolish(coverage_gate.get("previous_high_water_all_zero") or coverage_gate.get("high_water_all_zero"))
     dispatch_required = provider_count == 0 and previous_all_zero and current_all_zero
     return {
         "gate": "G-DISPATCH",
         "provider_request_count": provider_count,
+        "coverage_evaluation_status": coverage_status,
         "high_water_all_zero": previous_all_zero and current_all_zero,
         "dispatch_required": dispatch_required,
         "hard_stop_required": dispatch_required,

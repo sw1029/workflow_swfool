@@ -173,7 +173,30 @@ class ProgressAggregationMixin:
     def _coverage_gate_result(self, items: list[dict[str, Any]]) -> dict[str, Any]:
         improved = sorted({str(field) for item in items for field in (item.get("improved_fields") or []) if field})
         passed = any(boolish(item.get("quality_delta_pass")) for item in items)
-        return {"gate": "G-COV", "quality_delta_pass": passed, "improved_fields": improved, "status": "pass" if passed else "block"}
+        statuses = {
+            str(item.get("evaluation_status") or item.get("status") or "not_evaluated").strip().lower()
+            for item in items
+        }
+        if "invalid_contract" in statuses:
+            status = "invalid_contract"
+        elif "insufficient_evidence" in statuses:
+            status = "insufficient_evidence"
+        elif passed:
+            status = "pass"
+        elif items and statuses <= {"not_applicable"}:
+            status = "not_applicable"
+        elif not items or statuses <= {"not_evaluated", "missing"}:
+            status = "not_evaluated"
+        else:
+            status = "block"
+        effective_pass = status == "pass" and passed
+        return {
+            "gate": "G-COV",
+            "quality_delta_pass": effective_pass,
+            "improved_fields": improved if effective_pass else [],
+            "evaluation_status": status,
+            "status": status,
+        }
 
     def _dispatch_gate_result(self, items: list[dict[str, Any]]) -> dict[str, Any]:
         required = any(boolish(item.get("dispatch_required")) for item in items)

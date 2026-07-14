@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any
 
@@ -7,44 +8,7 @@ from .constants import *
 from .values import *
 from .io_utils import *
 from .provider import *
-
-
-def _quality_policy_items(value: Any) -> list[str]:
-    if isinstance(value, str):
-        value = [value]
-    if not isinstance(value, (list, tuple, set)):
-        return []
-    return [str(item).strip() for item in value if str(item).strip()]
-
-
-def normalize_quality_delta_policy(value: Any) -> dict[str, Any]:
-    if isinstance(value, (list, tuple, set)):
-        raw_keys = value
-        raw_aliases: Any = {}
-    elif isinstance(value, dict):
-        raw_keys = (
-            value.get("keys")
-            or value.get("quality_delta_keys")
-            or value.get("metric_keys")
-            or value.get("axes")
-            or []
-        )
-        raw_aliases = (
-            value.get("aliases")
-            or value.get("quality_metric_aliases")
-            or value.get("metric_aliases")
-            or {}
-        )
-    else:
-        raw_keys = []
-        raw_aliases = {}
-    keys = list(dict.fromkeys(_quality_policy_items(raw_keys)))
-    aliases: dict[str, list[str]] = {}
-    for key in keys:
-        supplied = _quality_policy_items(raw_aliases.get(key)) if isinstance(raw_aliases, dict) else []
-        aliases[key] = list(dict.fromkeys([key, *supplied]))
-    return {"keys": keys, "aliases": aliases, "supplied": bool(keys)}
-
+from output_delta_contract import normalize_quality_delta_policy, policy_items as _quality_policy_items
 
 def quality_delta_policy_from_value(value: dict[str, Any]) -> dict[str, Any]:
     policy = first_mapping(
@@ -178,6 +142,86 @@ def output_delta_gate(value: dict[str, Any], observed: dict[str, Any] | None = N
     }
 
 
+def _numeric_metric(mapping: dict[str, Any], key: str, aliases: dict[str, Any]) -> tuple[bool, float | None]:
+    for candidate in aliases.get(key, [key]):
+        if candidate not in mapping:
+            continue
+        value = mapping.get(candidate)
+        if isinstance(value, bool):
+            return False, None
+        if isinstance(value, (int, float)):
+            try:
+                numeric = float(value)
+            except OverflowError:
+                return False, None
+            return (True, numeric) if math.isfinite(numeric) else (False, None)
+        if isinstance(value, str):
+            try:
+                numeric = float(value.strip())
+                return (True, numeric) if math.isfinite(numeric) else (False, None)
+            except ValueError:
+                return False, None
+        return False, None
+    return False, None
+
+
+def _evaluate_quality_delta(
+    quality: dict[str, Any],
+    previous: dict[str, Any],
+    policy_value: Any,
+) -> dict[str, Any]:
+    policy = normalize_quality_delta_policy(policy_value)
+    keys = policy["keys"]
+    current: dict[str, float] = {}
+    previous_values: dict[str, float] = {}
+    missing: list[str] = []
+    previous_binding_count = sum(
+        1
+        for key in keys
+        if any(candidate in previous for candidate in policy["aliases"].get(key, [key]))
+    )
+    baseline_absent = bool(keys) and previous_binding_count == 0
+    for key in keys:
+        current_present, current_value = _numeric_metric(quality, key, policy["aliases"])
+        previous_present, previous_value = _numeric_metric(previous, key, policy["aliases"])
+        if current_present and current_value is not None:
+            current[key] = current_value
+        if previous_present and previous_value is not None:
+            previous_values[key] = previous_value
+        elif baseline_absent:
+            previous_values[key] = 0.0
+        if not current_present or (not previous_present and not baseline_absent):
+            missing.append(key)
+    invalid = list(policy["invalid_contract_fields"])
+    insufficient = sorted(set([*policy["insufficient_evidence_fields"], *missing]))
+    evaluated = bool(keys) and not invalid and not insufficient
+    improved = [key for key in keys if evaluated and current[key] > previous_values[key]]
+    if policy.get("policy_contract_invalid") or invalid:
+        evaluation_status = "invalid_contract"
+    elif insufficient:
+        evaluation_status = "insufficient_evidence"
+    elif not policy["supplied"]:
+        evaluation_status = "not_evaluated"
+    elif not keys and policy["not_applicable_fields"]:
+        evaluation_status = "not_applicable"
+    else:
+        evaluation_status = "evaluated"
+    return {
+        "gate": "G-COV",
+        "quality_delta_pass": bool(improved),
+        "improved_fields": improved,
+        "current_quality_vector": current,
+        "previous_quality_vector": previous_values,
+        "quality_delta_policy": policy,
+        "quality_delta_policy_supplied": policy["supplied"],
+        "not_applicable_fields": policy["not_applicable_fields"],
+        "insufficient_evidence_fields": insufficient,
+        "invalid_contract_fields": invalid,
+        "evaluation_status": evaluation_status,
+        "status": "pass" if improved else ("block" if evaluation_status == "evaluated" else evaluation_status),
+    }
+
+
 def coverage_quality_delta_gate(value: dict[str, Any]) -> dict[str, Any]:
     gate = first_mapping(
         value,
@@ -191,7 +235,13 @@ def coverage_quality_delta_gate(value: dict[str, Any]) -> dict[str, Any]:
         ),
     )
     if gate:
-        return gate
+        policy_value = gate.get("quality_delta_policy") or quality_delta_policy_from_value(value)
+        policy = normalize_quality_delta_policy(policy_value)
+        if not policy["supplied"] and not policy.get("policy_contract_invalid"):
+            return gate
+        quality = first_mapping(gate, ("current_quality_vector", "quality_vector"))
+        previous = first_mapping(gate, ("previous_high_water_vector", "previous_quality_vector", "high_water_mark"))
+        return {**gate, **_evaluate_quality_delta(quality, previous, policy)}
     quality = first_mapping(value, ("quality_vector", "output_delta.quality_vector", "output_delta_gate.quality_vector"))
     previous = first_mapping(
         value,
@@ -200,25 +250,4 @@ def coverage_quality_delta_gate(value: dict[str, Any]) -> dict[str, Any]:
     if not quality:
         return {}
     policy = quality_delta_policy_from_value(value)
-
-    def metric(mapping: dict[str, Any], key: str) -> float:
-        for candidate in policy["aliases"].get(key, [key]):
-            if candidate in mapping:
-                return float_number(mapping.get(candidate)) or 0.0
-        return 0
-
-    keys = policy["keys"]
-    current = {key: metric(quality, key) for key in keys}
-    previous_values = {key: metric(previous, key) for key in keys}
-    improved = [key for key in keys if current[key] > previous_values[key]]
-    return {
-        "gate": "G-COV",
-        "quality_delta_pass": bool(improved),
-        "improved_fields": improved,
-        "current_quality_vector": current,
-        "previous_quality_vector": previous_values,
-        "quality_delta_policy": policy,
-        "quality_delta_policy_supplied": policy["supplied"],
-        "evaluation_status": "evaluated" if keys else "not_evaluated",
-        "status": "pass" if improved else ("block" if keys else "not_evaluated"),
-    }
+    return _evaluate_quality_delta(quality, previous, policy)

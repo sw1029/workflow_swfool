@@ -85,6 +85,21 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
             return bool(value)
         return True
 
+    runner_validation = load_json_value(root, getattr(args, "runner_validation_json", None))
+    output_delta = load_json_value(root, getattr(args, "output_delta_json", None))
+    quality_delta_policy_value, quality_delta_policy_error = call_adapter(
+        domain_adapter,
+        "quality_delta_policy",
+        root=root,
+        artifact_paths=[rel_path(root, path) for path in paths],
+        decision_artifact_ref=decision_artifact_ref,
+        quality_vector={},
+        output_delta=output_delta,
+        runner_validation=runner_validation,
+        applicability_preflight=True,
+    )
+    quality_delta_policy = normalize_quality_delta_policy(quality_delta_policy_value)
+
     quality, evidence_paths, insufficient_reason, quality_hook_receipt = (
         (
             {},
@@ -100,6 +115,50 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
         if domain_adapter_error
         else compute_quality(root, paths, domain_adapter, decision_artifact_ref)
     )
+    if not quality_delta_policy.get("applicability_supplied"):
+        legacy_policy_value, legacy_policy_error = call_adapter(
+            domain_adapter,
+            "quality_delta_policy",
+            root=root,
+            artifact_paths=[rel_path(root, path) for path in paths],
+            decision_artifact_ref=decision_artifact_ref,
+            quality_vector=quality,
+            output_delta=output_delta,
+            runner_validation=runner_validation,
+            applicability_preflight=False,
+        )
+        legacy_policy = normalize_quality_delta_policy(legacy_policy_value)
+        if legacy_policy.get("supplied"):
+            quality_delta_policy = legacy_policy
+            quality_delta_policy_error = legacy_policy_error
+    coverage_compatibility = {
+        "gate_id": "coverage_quality_delta_gate",
+        "artifact_id": decision_artifact_ref.get("artifact_id"),
+        "artifact_sha256": decision_artifact_ref.get("artifact_sha256"),
+        "gate_compatibility_status": (
+            "compatible"
+            if bool_value(decision_artifact_ref.get("scope_verified"))
+            and quality_delta_policy.get("supplied")
+            and not quality_delta_policy_error
+            else "not_evaluated"
+        ),
+        "compatibility_basis": (
+            "artifact_identity_not_verified"
+            if not bool_value(decision_artifact_ref.get("scope_verified"))
+            else "quality_delta_policy_error"
+            if quality_delta_policy_error
+            else "quality_delta_policy"
+            if quality_delta_policy.get("supplied")
+            else "mapping_not_supplied"
+        ),
+        "compatibility_evidence_ref": None,
+    }
+    gate_compatibility_results.append(coverage_compatibility)
+    quality_delta_policy = apply_quality_policy_compatibility(
+        quality_delta_policy,
+        coverage_compatibility,
+        policy_error=quality_delta_policy_error,
+    )
     provider_request_count = max(0, int(args.provider_request_count or 0))
     gate_inputs: list[dict[str, Any]] = []
     if bool_value(adapter_load_gate.get("constrains_disposition")):
@@ -108,18 +167,6 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
         for gate in extract_disposition_gates(load_json_value(root, raw_gate)):
             gate_id = str(gate.get("name") or gate.get("gate") or gate.get("gate_id") or "external_gate")
             gate_inputs.append(bind_artifact_gate(gate_id, gate))
-    runner_validation = load_json_value(root, getattr(args, "runner_validation_json", None))
-    output_delta = load_json_value(root, getattr(args, "output_delta_json", None))
-    quality_delta_policy_value, quality_delta_policy_error = call_adapter(
-        domain_adapter,
-        "quality_delta_policy",
-        root=root,
-        artifact_paths=[rel_path(root, path) for path in paths],
-        quality_vector=quality,
-        output_delta=output_delta,
-        runner_validation=runner_validation,
-    )
-    quality_delta_policy = normalize_quality_delta_policy(quality_delta_policy_value)
     terminal_self_resolution = terminal_self_resolution_gate(runner_validation, output_delta, *gate_inputs)
     if bool_value(terminal_self_resolution.get("goal_terminal_prohibited")):
         gate_inputs.append(
@@ -251,6 +298,43 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
         prev_high = {**prev_high, **previous_adapter_high}
         previous_baseline_source = "domain_adapter.previous_accepted_fp"
     prev_high = quality_high_water_for_policy(prev_high, quality_delta_policy)
+    coverage_gate = coverage_quality_delta_gate(
+        quality,
+        prev_high,
+        provider_request_count,
+        args.epsilon,
+        quality_delta_policy,
+    )
+    if quality_delta_policy_error:
+        coverage_gate["quality_delta_policy_error"] = quality_delta_policy_error
+    metric_evaluation_status = str(coverage_gate.get("evaluation_status") or "not_evaluated")
+    compatibility_status = str(
+        coverage_compatibility.get("gate_compatibility_status") or "not_evaluated"
+    ).strip().lower()
+    compatibility_basis = str(
+        coverage_compatibility.get("compatibility_basis") or ""
+    ).strip().lower()
+    compatibility_invalid = compatibility_basis in {
+        "adapter_hook_return_contract_invalid",
+        "adapter_hook_identity_echo_invalid",
+        "gate_artifact_compatibility_signature_incompatible",
+        "hook_error",
+    }
+    artifact_decision_scope_allowed = bool(
+        decision_artifact_ref.get("scope_verified")
+        and compatibility_status != "incompatible"
+        and not compatibility_invalid
+    )
+    coverage_gate["gate_compatibility"] = coverage_compatibility
+    coverage_gate["gate_compatibility_status"] = compatibility_status
+    coverage_gate["artifact_decision_scope_allowed"] = artifact_decision_scope_allowed
+    coverage_gate["metric_evaluation_status"] = metric_evaluation_status
+    if metric_evaluation_status in {"not_applicable", "insufficient_evidence", "invalid_contract"}:
+        coverage_gate["evaluation_status"] = metric_evaluation_status
+    coverage_gate["decision_contribution_allowed"] = bool(
+        artifact_decision_scope_allowed
+        and metric_evaluation_status == "evaluated"
+    )
     changed_vs_previous = bool(prev_fingerprint and quality.get("current_output_fingerprint") != prev_fingerprint)
     facet_map_error: str | None = None
     facet_map_value = load_json_value(root, getattr(args, "facet_root_map_json", None))
@@ -266,12 +350,10 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
             facet_map_value = None
     facet_root_map = normalize_facet_root_map(facet_map_value)
     preliminary_changed = bool(prev_fingerprint and quality.get("current_output_fingerprint") != prev_fingerprint)
-    preliminary_semantic = False if insufficient_reason else semantic_progress_from_high_water(
-        quality,
-        prev_high,
-        provider_request_count,
-        args.epsilon,
-        quality_delta_policy,
+    preliminary_semantic = bool(
+        not insufficient_reason
+        and coverage_gate.get("decision_contribution_allowed")
+        and coverage_gate.get("quality_delta_pass")
     )
     current_terminal_outcome_key = terminal_outcome_key(output_delta, preliminary_changed, preliminary_semantic)
     raw_root_family_key = collapse_root_family(facet_root_map, current_root_key, args.semantic_signature, args.artifact_family)
@@ -375,15 +457,6 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
     current_check_ids.update(extract_check_ids(measurement_ids_value, runner_validation, output_delta, quality, gate_inputs))
     current_frontiers = {frontier_key(item) for item in getattr(args, "measurement_frontier", []) or [] if item}
     current_frontiers.update(extract_frontier_observations(runner_validation, output_delta, quality, gate_inputs))
-    coverage_gate = coverage_quality_delta_gate(
-        quality,
-        prev_high,
-        provider_request_count,
-        args.epsilon,
-        quality_delta_policy,
-    )
-    if quality_delta_policy_error:
-        coverage_gate["quality_delta_policy_error"] = quality_delta_policy_error
     substance_value = load_json_value(root, getattr(args, "substance_metrics_json", None))
     if substance_value is None:
         substance_value, substance_error = call_adapter(
@@ -479,12 +552,6 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
             substance_gate["producer_attested_fields"] = attested_substance_fields
             substance_gate["self_grounded_fields"] = substance_self_grounded
             substance_gate["attested_only_movement"] = bool(attested_substance_fields and not independent_substance_fields)
-    coverage_gate = bind_artifact_gate(
-        "coverage_quality_delta_gate",
-        coverage_gate,
-        pass_fields=("quality_delta_pass",),
-        computed_from_decision_artifact=True,
-    )
     substance_gate = bind_artifact_gate(
         "substance_delta_gate",
         substance_gate,
@@ -555,7 +622,7 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
     )
     output_delta_coverage_gate = find_coverage_quality_delta_gate(output_delta)
     coverage_reconciliation_gate = coverage_quality_delta_reconciliation_gate(coverage_gate, output_delta_coverage_gate, args.epsilon)
-    if not bool_value(coverage_gate.get("decision_contribution_allowed")):
+    if not bool_value(coverage_gate.get("artifact_decision_scope_allowed")):
         coverage_reconciliation_gate = apply_gate_artifact_compatibility(
             coverage_reconciliation_gate,
             coverage_gate.get("gate_compatibility") or {},
@@ -564,7 +631,7 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
     if coverage_reconciliation_blocks:
         gate_inputs.append({"name": "coverage_quality_delta_reconciliation_gate", **coverage_reconciliation_gate})
     dispatch_gate = provider_scale_dispatch_gate(prev_high, coverage_gate, provider_request_count)
-    if not bool_value(coverage_gate.get("decision_contribution_allowed")):
+    if not bool_value(coverage_gate.get("artifact_decision_scope_allowed")):
         dispatch_gate = apply_gate_artifact_compatibility(
             dispatch_gate,
             coverage_gate.get("gate_compatibility") or {},
@@ -763,7 +830,22 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
     force_implementation_cycle = mutation_kind == "forward_mutation" and forward_budget_remaining == 0
     disagreement = validator_disagreement_finding(runner_validation, output_delta)
     substance_delta_pass = bool_value(substance_gate.get("substance_delta_pass"))
-    artifact_decision_evaluated = bool_value(coverage_gate.get("decision_contribution_allowed"))
+    metric_evaluation_status = str(
+        coverage_gate.get("metric_evaluation_status") or "not_evaluated"
+    )
+    producer_absence_observed = bool(
+        metric_evaluation_status == "not_evaluated"
+        and not quality_delta_policy.get("supplied")
+        and insufficient_reason
+    )
+    coverage_gate["producer_absence_observed"] = producer_absence_observed
+    artifact_decision_evaluated = bool_value(
+        coverage_gate.get("artifact_decision_scope_allowed")
+    ) and metric_stall_observation_allowed(
+        metric_evaluation_status,
+        policy_supplied=bool(quality_delta_policy.get("supplied")),
+        producer_absence_reason=insufficient_reason,
+    )
 
     if not artifact_decision_evaluated:
         semantic_progress = False

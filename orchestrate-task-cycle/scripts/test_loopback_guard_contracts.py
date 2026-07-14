@@ -1786,7 +1786,11 @@ def test_actual_artifact_report_body_divergence_blocks_close() -> None:
     assert any(item.get("code") == "report_body_divergence" for item in result["findings"])
     automatic = result_contract.validate(
         "validate",
-        validate_packet(actual_artifact={"metric_M": 1}, validation_report={"metric_M": 2}),
+        validate_packet(
+            body_projection_fingerprint="a" * 64,
+            actual_artifact={"metric_M": 1},
+            validation_report={"body_projection_fingerprint": "a" * 64, "metric_M": 2},
+        ),
         "block",
     )
     assert any(item.get("code") == "report_body_divergence" for item in automatic["findings"])

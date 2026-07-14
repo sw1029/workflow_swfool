@@ -271,7 +271,13 @@ The JSON is authoritative. The Markdown render is for scanability and must use t
         "progress_verdict": null,
         "progress_kind": null,
         "semantic_signature": null,
-        "blocker_signature": null
+        "blocker_signature": null,
+        "expectation_comparison": {
+          "status": "match|miss|not_evaluated|not_applicable",
+          "mismatched_axes": [],
+          "evidence_ids": [],
+          "remaining_pack_review": "continue|reorder|replace|split|pause|terminal_candidate"
+        }
       }
     }
   ],
@@ -334,7 +340,7 @@ Each record should include:
 - `comparison_parity_contract`: optional Part K K2 fields for comparison/adoption items. Preserve `parity_axes` and per-axis status `controlled`, `measured`, or `unknown`; unknown axes set `parity_unverified`.
 - `adoption_axis_contract`: optional Part K K3 fields for adoption decisions. Preserve `required_output_classes`, axis classification `gating` or `tradable`, `majority_vote_adoption`, `provisional_adoption`, and `measured_but_disqualified`.
 - `resolution_downgrade_contract`: optional Part K K4 fields for required versus observed evidence resolution. Preserve `resolution_downgrade` and `surrogate_resolution_basis` when a high-resolution contract was satisfied only by surrogate evidence.
-- `report_key_integrity_contract`: optional Part K K5 fields for duplicate terminal keys inside a report. Divergent duplicate values block consumption.
+- `report_key_integrity_contract`: optional Part K K5 fields for duplicate terminal keys bound to the same canonical body projection across one or more report surfaces. Divergent duplicate values or projection fingerprints block consumption; unrelated reports without a shared projection identity fail quiet.
 - `narrowed`: `true` only when the item intentionally covers less than the original target.
 - `narrow_reason`: required when `narrowed=true`.
 - `residual_item_id`: required when `narrowed=true`; it must point to another open pack item that preserves the remaining target.
@@ -419,6 +425,10 @@ If the item result has `unreachable_within_cycle=true`, do not mark a small smok
 If the item result has `basis_overclaim=true`, consume the affected metric only at the downgraded actual basis class. It cannot support independent high-water/progress until basis-compatible input evidence exists.
 
 If the item result has nonzero `surface_field_defect_matrix` counts, preserve producer-supply or field-repair residual work unless authority, residual descope, terminal blocker, or user escalation says those fields are out of scope.
+
+Before consuming a promoted item or promoting its successor, compare the existing expectation fields with the actual result: `progress_target` with `result.progress_verdict`, `progress_kind_expected` with `result.progress_kind`, expected semantic/blocker signatures with their result signatures, and `adoption_axis_contract.required_output_classes` with observed output classes when supplied. Store the bounded comparison under the existing `result.expectation_comparison`; do not duplicate the expectation inputs. Missing actual evidence is `not_evaluated`, not `match` or `miss`.
+
+`status=miss` is planning evidence, not an automatic task failure. It requires an explicit remaining-pack review using the existing mutation/status paths represented by `continue|reorder|replace|split|pause|terminal_candidate`. Do not auto-consume the remaining pack from the stale plan. When producer output was expected but repeated actual results are metadata/governance-only, `continue` is not a valid review outcome without a fresh producer-supply or expectation-rebaseline basis. A matching comparison preserves ordinary consume/promote behavior. Missing or malformed comparison blocks only the dependent pack transition; it does not globally fail-close unrelated validation.
 
 ## Pack Transactions
 
@@ -695,7 +705,8 @@ Task packs must preserve expectation/comparison lineage without adding project-s
 - Comparison parity: comparison/adoption items require `parity_axes` with per-axis `controlled`, `measured`, or `unknown`. Unknown axes set `parity_unverified` and keep adoption provisional.
 - Adoption axis semantics: adoption axes are `gating` or `tradable` before measurement. Failed gating axes block adoption regardless of tradable wins; the candidate remains `measured_but_disqualified`.
 - Resolution downgrade: high-resolution contracts such as id/set/intersection evidence cannot be consumed from lower-resolution count/ratio/ordinal surrogates unless the contract is revised or residual high-resolution scope remains open.
-- Report key integrity: duplicate terminal keys with divergent values inside one report set `report_key_divergence` and block pass/close/adoption/baseline/comparison consumption until repaired. Matching duplicate terminal keys remain warn-only schema debt and do not consume or block the item by themselves.
+- Report key integrity: duplicate terminal keys with divergent values under one canonical body projection, whether inside one report or across report surfaces, set `report_key_divergence` and block pass/close/adoption/baseline/comparison consumption until repaired. Matching duplicate terminal keys remain warn-only schema debt and do not consume or block the item by themselves. Reports without a shared projection identity/field scope are not compared globally.
+- Pack expectation comparison: evaluate existing expected fields against actual result evidence before transition. `miss` preserves the completed result but requires explicit review of the remaining pack; `not_evaluated` cannot authorize auto-consume or successor promotion. Repeated expected-producer versus metadata-only outcomes cannot select `continue` without fresh producer/expectation evidence.
 
 ## Part L Workflow Gates
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -66,8 +67,16 @@ def _positive_decision_claim(target: str, result: dict[str, Any]) -> bool:
     validation_verdict = str(value_for(result, "validation_verdict") or "").strip().lower()
     progress_verdict = str(value_for(result, "progress_verdict") or "").strip().lower()
     progress_kind = str(value_for(result, "progress_kind") or "").strip().lower()
+    completion_status = str(first_present(result, ["completion_status", "report.completion_status", "result.completion_status"]) or "").strip().lower()
+    pack_transition_status = str(
+        first_present(result, ["pack_transition_verdict.status", "pack_transition_status", "result.pack_transition_verdict.status"])
+        or ""
+    ).strip().lower()
     return bool(
         (target == "validate" and validation_verdict in {"complete", "pass", "passed", "success"})
+        or completion_status in {"complete", "complete_verified", "closed", "promoted"}
+        or pack_transition_status in {"pass", "passed", "promoted", "complete"}
+        or boolish(first_present(result, ["pack_transition_applied", "successor_auto_promoted", "promotion_applied"]))
         or progress_verdict == "advanced"
         or progress_kind == "goal_productive"
         or boolish(first_present(result, ["semantic_progress", "authoritative_semantic_progress"]))
@@ -78,6 +87,112 @@ def _positive_decision_claim(target: str, result: dict[str, Any]) -> bool:
 def _full_sha256(value: Any) -> bool:
     normalized = str(value or "").strip().lower().removeprefix("sha256:")
     return len(normalized) == 64 and all(character in "0123456789abcdef" for character in normalized)
+
+
+def _opaque_scalar(value: Any, *, max_length: int = 256) -> bool:
+    return bool(
+        isinstance(value, str)
+        and 0 < len(value.strip()) <= max_length
+        and not any(ord(character) < 32 or ord(character) == 127 for character in value.strip())
+    )
+
+
+def _opaque_string_items(value: Any) -> tuple[list[str], bool]:
+    if value is None:
+        return [], True
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, (list, tuple, set)):
+        return [], False
+    items = [item.strip() for item in value if _opaque_scalar(item)]
+    return items, len(items) == len(value)
+
+
+def _finite_numeric(value: Any) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except (OverflowError, TypeError, ValueError):
+        return False
+
+
+def _declared_values(data: dict[str, Any], paths: tuple[str, ...]) -> list[Any]:
+    values: list[Any] = []
+    for path in paths:
+        current: Any = data
+        declared = True
+        for part in path.split("."):
+            if not isinstance(current, dict) or part not in current:
+                declared = False
+                break
+            current = current[part]
+        if declared:
+            values.append(current)
+    return values
+
+
+def _metric_gate_signature(gate: Any) -> tuple[Any, ...]:
+    if not isinstance(gate, dict):
+        return ("invalid_gate",)
+    raw_status = gate.get("evaluation_status") if gate.get("evaluation_status") is not None else gate.get("status")
+    status = raw_status.strip().lower() if isinstance(raw_status, str) else "invalid_contract"
+    improved, improved_valid = _opaque_string_items(gate.get("improved_fields"))
+    summaries: list[tuple[str, tuple[str, ...], bool]] = []
+    for field in ("not_applicable_fields", "insufficient_evidence_fields", "invalid_contract_fields"):
+        items, valid = _opaque_string_items(gate.get(field))
+        summaries.append((field, tuple(sorted(set(items))), valid))
+    policy = gate.get("quality_delta_policy")
+    policy_signature: tuple[Any, ...] = ("missing",)
+    if isinstance(policy, dict):
+        declared_value = policy.get("declared_keys") if policy.get("declared_keys") is not None else policy.get("keys")
+        declared, declared_valid = _opaque_string_items(declared_value)
+        mapping = policy.get("applicability")
+        rows: list[tuple[str, str]] = []
+        mapping_valid = mapping is None or isinstance(mapping, dict)
+        if isinstance(mapping, dict):
+            for metric_id, row in mapping.items():
+                if not _opaque_scalar(metric_id) or not isinstance(row, dict):
+                    mapping_valid = False
+                    continue
+                raw_row_status = row.get("evaluation_status")
+                row_status = raw_row_status.strip().lower() if isinstance(raw_row_status, str) else "invalid_contract"
+                rows.append((metric_id.strip(), row_status))
+        elif mapping is None:
+            rows = [(metric_id, "applicable") for metric_id in declared]
+        policy_signature = (
+            tuple(sorted(set(declared))),
+            declared_valid,
+            tuple(sorted(rows)),
+            mapping_valid,
+            boolish(policy.get("policy_contract_invalid")),
+        )
+    vectors: list[tuple[str, tuple[tuple[str, str], ...], bool]] = []
+    for field in ("current_quality_vector", "previous_high_water_vector", "previous_quality_vector"):
+        value = gate.get(field)
+        if value is None:
+            vectors.append((field, (), True))
+            continue
+        if not isinstance(value, dict):
+            vectors.append((field, (), False))
+            continue
+        safe: list[tuple[str, str]] = []
+        valid = True
+        for metric_id, observation in value.items():
+            if not _opaque_scalar(metric_id) or not _finite_numeric(observation):
+                valid = False
+                continue
+            safe.append((metric_id.strip(), repr(float(observation))))
+        vectors.append((field, tuple(sorted(safe)), valid))
+    return (
+        status,
+        boolish(gate.get("quality_delta_pass")),
+        tuple(sorted(set(improved))),
+        improved_valid,
+        tuple(summaries),
+        policy_signature,
+        tuple(vectors),
+    )
 
 
 def validate_decision_identity_and_compatibility(
@@ -284,22 +399,58 @@ def validate_verification_axes(
         ["verification_axes", "evidence_provenance_gate.verification_axes", "verification_source_separation_gate.verification_axes"],
     )
     axes = axes_value if isinstance(axes_value, list) else []
-    if not axes:
-        return
     severity = "block" if mode == "block" or target in {"validate", "report"} else "warn"
-    required_ids = {
-        str(item)
-        for item in list_values(first_present(result, ["required_verification_axis_ids", "verification_axis_contract.required_axis_ids"]))
-    }
+    required_values = first_present(result, ["required_verification_axis_ids", "verification_axis_contract.required_axis_ids"])
+    required_items, required_ids_valid = _opaque_string_items(required_values)
+    required_ids = set(required_items)
+    positive_claim = _positive_decision_claim(target, result)
+    required_contract_consumed = boolish(
+        first_present(
+            result,
+            [
+                "verification_axis_contract.required_for_acceptance",
+                "verification_axis_contract.decision_contribution_allowed",
+                "verification_axes_required",
+            ],
+        )
+    )
+    if not required_ids_valid:
+        add(
+            findings,
+            severity if positive_claim or required_contract_consumed else "warn",
+            "verification_axis_required_ids_invalid",
+            "Required verification-axis IDs must be bounded opaque strings.",
+        )
+    if required_contract_consumed and (not required_ids or not axes):
+        add(
+            findings,
+            severity if positive_claim else "warn",
+            "verification_axis_contract_missing",
+            "A required verification-axis contract needs bounded required IDs and axis rows before decision consumption.",
+        )
+    if not axes:
+        if required_ids and positive_claim:
+            add(
+                findings,
+                severity,
+                "required_verification_axis_not_evaluated",
+                "A required verification axis is not evaluated and cannot be consumed as pass.",
+                {"axis_ids": sorted(required_ids)},
+            )
+        return
     observed: dict[str, dict[str, Any]] = {}
+    observed_provenance: dict[str, str] = {}
     for axis in axes:
-        if not isinstance(axis, dict) or not non_empty(axis.get("axis_id")):
+        if not isinstance(axis, dict) or not _opaque_scalar(axis.get("axis_id")):
             add(findings, severity, "verification_axis_identity_missing", "Verification axis rows require axis_id.")
             continue
-        axis_id = str(axis.get("axis_id"))
+        axis_id = axis["axis_id"].strip()
         observed[axis_id] = axis
-        coupling = str(axis.get("coupling_status") or "unknown").strip().lower()
-        provenance = str(axis.get("evidence_provenance") or "not_evaluated").strip().lower()
+        coupling_value = axis.get("coupling_status")
+        provenance_value = axis.get("evidence_provenance")
+        coupling = coupling_value.strip().lower() if isinstance(coupling_value, str) else "unknown"
+        provenance = provenance_value.strip().lower() if isinstance(provenance_value, str) else "not_evaluated"
+        observed_provenance[axis_id] = provenance if provenance in EVIDENCE_PROVENANCE_STATUSES else "not_evaluated"
         if coupling not in COUPLING_STATUSES:
             add(findings, severity, "verification_axis_coupling_invalid", "Verification coupling status is invalid.", {"axis_id": axis_id})
         if provenance not in EVIDENCE_PROVENANCE_STATUSES:
@@ -311,6 +462,69 @@ def validate_verification_axes(
                 "verification_axis_independent_without_disjoint_inputs",
                 "Independently verified evidence requires disjoint verification inputs.",
                 {"axis_id": axis_id, "coupling_status": coupling},
+            )
+        lineage_scalar_fields = (
+            "producer_function_id",
+            "verifier_function_id",
+            "producer_input_fingerprint",
+            "verifier_input_fingerprint",
+        )
+        lineage_scalars: dict[str, str] = {}
+        lineage_valid = True
+        for field in lineage_scalar_fields:
+            value = axis.get(field)
+            if value is None:
+                lineage_scalars[field] = ""
+            elif _opaque_scalar(value):
+                lineage_scalars[field] = value.strip()
+            else:
+                lineage_scalars[field] = ""
+                lineage_valid = False
+        producer_items, producer_ids_valid = _opaque_string_items(axis.get("producer_input_ids"))
+        verifier_items, verifier_ids_valid = _opaque_string_items(axis.get("verifier_input_ids"))
+        lineage_valid = lineage_valid and producer_ids_valid and verifier_ids_valid
+        if not lineage_valid:
+            add(
+                findings,
+                severity if provenance == "independently_verified" else "warn",
+                "verification_axis_lineage_invalid",
+                "Verification lineage requires bounded opaque function, fingerprint, and input IDs.",
+                {"axis_id": axis_id},
+            )
+        producer_function_id = lineage_scalars["producer_function_id"]
+        verifier_function_id = lineage_scalars["verifier_function_id"]
+        producer_input_fingerprint = lineage_scalars["producer_input_fingerprint"]
+        verifier_input_fingerprint = lineage_scalars["verifier_input_fingerprint"]
+        producer_input_ids = set(producer_items)
+        verifier_input_ids = set(verifier_items)
+        comparable_lineage_basis = bool(
+            producer_function_id
+            and verifier_function_id
+            and (
+                (producer_input_fingerprint and verifier_input_fingerprint)
+                or (producer_input_ids and verifier_input_ids)
+            )
+        )
+        declared_disjoint_but_coupled = bool(
+            (producer_function_id and producer_function_id == verifier_function_id)
+            or (producer_input_fingerprint and producer_input_fingerprint == verifier_input_fingerprint)
+            or (producer_input_ids and verifier_input_ids and producer_input_ids & verifier_input_ids)
+        )
+        if provenance == "independently_verified" and (declared_disjoint_but_coupled or not lineage_valid):
+            add(
+                findings,
+                severity,
+                "verification_axis_independent_with_coupled_lineage",
+                "Independent evidence cannot reuse the producer function or its decision inputs, even when coupling_status is declared disjoint.",
+                {"axis_id": axis_id},
+            )
+        if provenance == "independently_verified" and not comparable_lineage_basis:
+            add(
+                findings,
+                severity,
+                "verification_axis_independent_without_lineage_basis",
+                "Independent evidence requires at least one comparable producer/verifier lineage pair.",
+                {"axis_id": axis_id},
             )
         semantic_axis = boolish(axis.get("semantic_axis")) or str(axis.get("axis_kind") or "").lower() in {
             "semantic",
@@ -328,9 +542,9 @@ def validate_verification_axes(
         axis_id
         for axis_id in required_ids
         if axis_id not in observed
-        or str(observed[axis_id].get("evidence_provenance") or "not_evaluated").lower() == "not_evaluated"
+        or observed_provenance.get(axis_id, "not_evaluated") == "not_evaluated"
     )
-    if not_evaluated and _positive_decision_claim(target, result):
+    if not_evaluated and positive_claim:
         add(
             findings,
             severity,
@@ -338,6 +552,790 @@ def validate_verification_axes(
             "A required verification axis is not evaluated and cannot be consumed as pass.",
             {"axis_ids": not_evaluated},
         )
+
+
+def validate_metric_applicability_consumption(
+    target: str,
+    result: dict[str, Any],
+    mode: str,
+    findings: list[dict[str, Any]],
+) -> None:
+    gate_paths = (
+        "coverage_quality_delta_gate",
+        "quality_delta_gate",
+        "anti_loop_progress_gate.coverage_quality_delta_gate",
+        "output_delta.coverage_quality_delta_gate",
+        "result.coverage_quality_delta_gate",
+    )
+    gate_values = _declared_values(result, gate_paths)
+    gate = next((value for value in gate_values if isinstance(value, dict)), None)
+    if not isinstance(gate, dict):
+        return
+    severity = "block" if mode == "block" or target in {"validate", "report"} else "warn"
+    gate_signatures = {_metric_gate_signature(value) for value in gate_values}
+    duplicate_gate_claim = any(
+        isinstance(value, dict)
+        and (
+            boolish(value.get("quality_delta_pass"))
+            or bool(value.get("improved_fields"))
+            or boolish(value.get("decision_contribution_allowed"))
+        )
+        for value in gate_values
+    ) or any(
+        boolish(first_present(result, [path]))
+        for path in (
+            "coverage_quality_delta_required",
+            "metric_applicability_required",
+            "result.coverage_quality_delta_required",
+            "result.metric_applicability_required",
+        )
+    )
+    if len(gate_signatures) > 1:
+        add(
+            findings,
+            severity if duplicate_gate_claim else "warn",
+            "metric_applicability_gate_conflict",
+            "Duplicate metric-applicability gate surfaces must converge before any metric decision is consumed.",
+        )
+    raw_evaluation_status = gate.get("evaluation_status")
+    if raw_evaluation_status is None:
+        raw_evaluation_status = gate.get("status")
+    evaluation_status = raw_evaluation_status.strip().lower() if isinstance(raw_evaluation_status, str) else ""
+    evaluation_status_invalid = evaluation_status not in {
+        "evaluated",
+        "not_applicable",
+        "insufficient_evidence",
+        "invalid_contract",
+        "not_evaluated",
+    }
+    summary_by_status: dict[str, set[str]] = {}
+    summary_contract_invalid = False
+    for status, field in (
+        ("not_applicable", "not_applicable_fields"),
+        ("insufficient_evidence", "insufficient_evidence_fields"),
+        ("invalid_contract", "invalid_contract_fields"),
+    ):
+        items, valid = _opaque_string_items(gate.get(field))
+        summary_by_status[status] = set(items)
+        if not valid:
+            summary_contract_invalid = True
+            add(findings, "warn", "metric_applicability_summary_invalid", "Metric-applicability summaries require bounded opaque metric IDs.")
+    excluded = set().union(*summary_by_status.values())
+    policy = gate.get("quality_delta_policy")
+    policy_by_status = {
+        "applicable": set(),
+        "not_applicable": set(),
+        "insufficient_evidence": set(),
+        "invalid_contract": set(),
+    }
+    policy_contract_invalid = False
+    applicability_proof_present = False
+    declared_ids: set[str] = set()
+    if isinstance(policy, dict):
+        policy_contract_invalid = boolish(policy.get("policy_contract_invalid"))
+        for field in ("not_applicable_fields", "insufficient_evidence_fields", "invalid_contract_fields"):
+            items, valid = _opaque_string_items(policy.get(field))
+            excluded.update(items)
+            policy_contract_invalid = policy_contract_invalid or not valid
+        applicability = policy.get("applicability")
+        declared_values = policy.get("declared_keys") if policy.get("declared_keys") is not None else policy.get("keys")
+        declared_items, declared_valid = _opaque_string_items(declared_values)
+        policy_contract_invalid = policy_contract_invalid or not declared_valid or len(set(declared_items)) != len(declared_items)
+        declared_ids = set(declared_items)
+        if applicability is not None:
+            if not isinstance(applicability, dict):
+                policy_contract_invalid = True
+            else:
+                allowed = {"applicable", "not_applicable", "insufficient_evidence", "invalid_contract"}
+                mapping_ids = {
+                    key.strip()
+                    for key in applicability
+                    if _opaque_scalar(key)
+                }
+                if mapping_ids != declared_ids or len(mapping_ids) != len(applicability):
+                    policy_contract_invalid = True
+                for metric_id in declared_items:
+                    row = applicability.get(metric_id)
+                    if not isinstance(row, dict):
+                        policy_contract_invalid = True
+                        policy_by_status["invalid_contract"].add(metric_id)
+                        continue
+                    row_status = row.get("evaluation_status")
+                    if not isinstance(row_status, str) or row_status.strip().lower() not in allowed:
+                        policy_contract_invalid = True
+                        policy_by_status["invalid_contract"].add(metric_id)
+                        continue
+                    normalized_status = row_status.strip().lower()
+                    policy_by_status[normalized_status].add(metric_id)
+                applicability_proof_present = bool(declared_ids) and not policy_contract_invalid
+        elif declared_ids:
+            policy_by_status["applicable"].update(declared_ids)
+            applicability_proof_present = not policy_contract_invalid
+        elif boolish(policy.get("supplied")):
+            policy_contract_invalid = True
+        excluded.update(
+            policy_by_status["not_applicable"],
+            policy_by_status["insufficient_evidence"],
+            policy_by_status["invalid_contract"],
+        )
+    elif policy is not None:
+        policy_contract_invalid = True
+    improved_items, improved_valid = _opaque_string_items(gate.get("improved_fields"))
+    consumed = set(improved_items)
+    vector_contract_invalid = False
+    vector_ids: dict[str, set[str]] = {}
+    for vector_name in ("current_quality_vector", "previous_high_water_vector", "previous_quality_vector"):
+        vector = gate.get(vector_name)
+        if vector is None:
+            vector_ids[vector_name] = set()
+            continue
+        if not isinstance(vector, dict):
+            vector_ids[vector_name] = set()
+            vector_contract_invalid = True
+            continue
+        safe_ids = {key.strip() for key in vector if _opaque_scalar(key)}
+        vector_ids[vector_name] = safe_ids
+        if len(safe_ids) != len(vector) or any(not _finite_numeric(value) for value in vector.values()):
+            vector_contract_invalid = True
+        consumed.update(safe_ids & excluded)
+    gate_id = gate.get("gate") if _opaque_scalar(gate.get("gate")) else "G-COV"
+    required_gate_items: list[str] = []
+    for path in ("required_gate_ids", "decision.required_gate_ids", "required_decision_gate_ids", "result.required_gate_ids"):
+        items, _ = _opaque_string_items(first_present(result, [path]))
+        required_gate_items.extend(items)
+    consumed_gate_items: list[str] = []
+    for field in ("decision_consumed_gate_ids", "consumed_gate_ids", "decision_gate_ids", "residual_gate_ids", "hard_stop_gate_ids"):
+        items, _ = _opaque_string_items(first_present(result, [field, f"decision.{field}"]))
+        consumed_gate_items.extend(items)
+    gate_required = any(
+        boolish(first_present(result, [path]))
+        for path in (
+            "coverage_quality_delta_required",
+            "metric_applicability_required",
+            "result.coverage_quality_delta_required",
+            "result.metric_applicability_required",
+        )
+    ) or gate_id in required_gate_items
+    gate_consumed = bool(
+        boolish(gate.get("quality_delta_pass"))
+        or improved_items
+        or bool(excluded & consumed)
+        or boolish(gate.get("decision_contribution_allowed"))
+        or boolish(first_present(result, ["coverage_quality_delta_consumed", "metric_applicability_consumed"]))
+        or gate_id in consumed_gate_items
+    )
+    claim_relevant = gate_required or gate_consumed
+    positive_metric_claim = boolish(gate.get("quality_delta_pass")) or bool(improved_items)
+    if not improved_valid:
+        add(
+            findings,
+            severity if claim_relevant else "warn",
+            "metric_applicability_consumed_ids_invalid",
+            "Consumed metric IDs must be bounded opaque strings.",
+        )
+    if claim_relevant and not applicability_proof_present:
+        add(
+            findings,
+            severity,
+            "metric_applicability_proof_missing",
+            "A metric-dependent decision requires artifact-metric applicability evidence; absence is insufficient_evidence.",
+        )
+    if positive_metric_claim and evaluation_status == "evaluated":
+        current_ids = vector_ids["current_quality_vector"]
+        previous_ids = vector_ids["previous_high_water_vector"] | vector_ids["previous_quality_vector"]
+        if not current_ids or not previous_ids or not set(improved_items) <= current_ids or not set(improved_items) <= previous_ids:
+            vector_contract_invalid = True
+    if vector_contract_invalid:
+        add(
+            findings,
+            severity if claim_relevant else "warn",
+            "metric_vector_contract_invalid",
+            "Consumed metric vectors require bounded metric IDs and finite numeric observations.",
+        )
+    vector_metric_ids = set().union(*vector_ids.values())
+    applicable_ids = policy_by_status["applicable"]
+    pass_claim = boolish(gate.get("quality_delta_pass"))
+    metric_claim_inconsistent = bool(
+        (pass_claim and not improved_items)
+        or (not pass_claim and improved_items)
+        or (improved_items and not set(improved_items) <= applicable_ids)
+        or (vector_metric_ids and not vector_metric_ids <= declared_ids)
+    )
+    if metric_claim_inconsistent:
+        add(
+            findings,
+            severity if claim_relevant else "warn",
+            "metric_delta_claim_inconsistent",
+            "Metric pass, improved IDs, applicability rows, and consumed vectors must describe the same metric set.",
+        )
+    summary_divergence = policy_contract_invalid or summary_contract_invalid or evaluation_status_invalid
+    for status in ("not_applicable", "invalid_contract"):
+        expected = policy_by_status[status]
+        if not expected <= summary_by_status[status]:
+            summary_divergence = True
+    expected_insufficient = policy_by_status["insufficient_evidence"]
+    if not expected_insufficient <= summary_by_status["insufficient_evidence"]:
+        summary_divergence = True
+    for metric_id in summary_by_status["not_applicable"]:
+        if metric_id not in policy_by_status["not_applicable"]:
+            summary_divergence = True
+    for metric_id in summary_by_status["invalid_contract"]:
+        if metric_id not in policy_by_status["invalid_contract"]:
+            summary_divergence = True
+    for metric_id in summary_by_status["insufficient_evidence"]:
+        if metric_id not in policy_by_status["insufficient_evidence"] and not (
+            metric_id in policy_by_status["applicable"] and evaluation_status == "insufficient_evidence"
+        ):
+            summary_divergence = True
+    if evaluation_status == "evaluated" and (
+        policy_by_status["insufficient_evidence"]
+        or policy_by_status["invalid_contract"]
+        or not policy_by_status["applicable"]
+    ):
+        summary_divergence = True
+    if evaluation_status == "not_applicable" and (
+        policy_by_status["applicable"]
+        or policy_by_status["insufficient_evidence"]
+        or policy_by_status["invalid_contract"]
+        or not policy_by_status["not_applicable"]
+    ):
+        summary_divergence = True
+    if evaluation_status == "insufficient_evidence" and policy_by_status["invalid_contract"]:
+        summary_divergence = True
+    if summary_divergence:
+        add(
+            findings,
+            severity if claim_relevant else "warn",
+            "metric_applicability_summary_divergence",
+            "Metric-applicability rows and derived summaries must converge before decision consumption.",
+        )
+    if excluded & consumed or evaluation_status in {"not_applicable", "insufficient_evidence", "invalid_contract", "not_evaluated"} and (
+        boolish(gate.get("quality_delta_pass")) or bool(gate.get("improved_fields"))
+    ):
+        add(
+            findings,
+            severity if claim_relevant else "warn",
+            "nonapplicable_metric_consumed",
+            "Non-applicable, insufficient, or invalid metrics cannot enter decision vectors, high-water movement, or stall accounting.",
+            {"metric_ids": sorted(excluded & consumed), "evaluation_status": evaluation_status},
+        )
+    if evaluation_status == "invalid_contract":
+        add(findings, severity if claim_relevant else "warn", "metric_applicability_invalid_contract", "A malformed or conflicting metric-applicability contract cannot support a metric-dependent decision.")
+    elif evaluation_status == "insufficient_evidence":
+        add(findings, severity if claim_relevant else "warn", "metric_applicability_insufficient_evidence", "Missing metric/body evidence is insufficient_evidence, not pass or fail.")
+    elif evaluation_status == "not_evaluated" and claim_relevant:
+        add(
+            findings,
+            severity,
+            "metric_applicability_insufficient_evidence",
+            "A required or consumed metric gate cannot remain not_evaluated.",
+        )
+
+
+def validate_task_pack_expectation_comparison(
+    target: str,
+    result: dict[str, Any],
+    mode: str,
+    findings: list[dict[str, Any]],
+) -> None:
+    severity = "block" if mode == "block" or target in {"validate", "derive", "report"} else "warn"
+    expectation_fields = (
+        "progress_target",
+        "progress_kind_expected",
+        "semantic_signature_expected",
+        "blocker_signature_expected",
+        "required_output_classes",
+    )
+    expectation_declared = any(
+        first_present(result, [field, f"task_pack_item.{field}"]) is not None
+        for field in expectation_fields
+    ) or first_present(result, ["adoption_axis_contract.required_output_classes", "task_pack_item.adoption_axis_contract.required_output_classes"]) is not None
+    transition_claimed = any(
+        boolish(first_present(result, [path]))
+        for path in (
+            "task_pack_auto_consume",
+            "successor_auto_promoted",
+            "pack_transition_applied",
+            "result.pack_transition_applied",
+            "task_pack_item.result.pack_transition_applied",
+            "task_pack_result.pack_transition_applied",
+            "result.task_pack_item.result.pack_transition_applied",
+            "result.task_pack_result.pack_transition_applied",
+        )
+    )
+    comparison_paths = (
+        "expectation_comparison",
+        "task_pack_item.result.expectation_comparison",
+        "task_pack_result.expectation_comparison",
+        "result.expectation_comparison",
+        "result.task_pack_item.result.expectation_comparison",
+        "result.task_pack_result.expectation_comparison",
+    )
+    comparison_values = _declared_values(result, comparison_paths)
+    comparison = next((value for value in comparison_values if isinstance(value, dict)), None)
+    comparison_signatures: set[tuple[Any, ...]] = set()
+    for value in comparison_values:
+        if not isinstance(value, dict):
+            comparison_signatures.add(("invalid_contract",))
+            continue
+        raw_comparison_status = value.get("status")
+        raw_comparison_review = value.get("remaining_pack_review")
+        mismatch_items, mismatch_valid = _opaque_string_items(value.get("mismatched_axes"))
+        comparison_signatures.add(
+            (
+                raw_comparison_status.strip().lower() if isinstance(raw_comparison_status, str) else "invalid_contract",
+                raw_comparison_review.strip().lower() if isinstance(raw_comparison_review, str) else "invalid_contract",
+                tuple(sorted(set(mismatch_items))),
+                mismatch_valid,
+            )
+        )
+    duplicate_field_paths = {
+        "progress_target_expected": (
+            "progress_target",
+            "task_pack_item.progress_target",
+        ),
+        "progress_verdict_actual": (
+            "progress_verdict",
+            "task_pack_item.result.progress_verdict",
+            "task_pack_result.progress_verdict",
+            "result.progress_verdict",
+        ),
+        "progress_kind_expected": (
+            "progress_kind_expected",
+            "task_pack_item.progress_kind_expected",
+        ),
+        "progress_kind_actual": (
+            "progress_kind",
+            "task_pack_item.result.progress_kind",
+            "task_pack_result.progress_kind",
+            "result.progress_kind",
+            "result.task_pack_item.result.progress_kind",
+        ),
+        "semantic_signature_expected": (
+            "semantic_signature_expected",
+            "task_pack_item.semantic_signature_expected",
+        ),
+        "semantic_signature_actual": (
+            "semantic_signature",
+            "task_pack_item.result.semantic_signature",
+            "task_pack_result.semantic_signature",
+            "result.semantic_signature",
+        ),
+        "blocker_signature_expected": (
+            "blocker_signature_expected",
+            "task_pack_item.blocker_signature_expected",
+        ),
+        "blocker_signature_actual": (
+            "blocker_signature",
+            "task_pack_item.result.blocker_signature",
+            "task_pack_result.blocker_signature",
+            "result.blocker_signature",
+        ),
+    }
+    duplicate_result_conflict = False
+    for paths in duplicate_field_paths.values():
+        values = _declared_values(result, paths)
+        normalized = [value.strip() for value in values if _opaque_scalar(value)]
+        if len(normalized) != len(values) or len(set(normalized)) > 1:
+            duplicate_result_conflict = True
+    for paths in (
+        (
+            "required_output_classes",
+            "adoption_axis_contract.required_output_classes",
+            "task_pack_item.adoption_axis_contract.required_output_classes",
+        ),
+        (
+            "observed_output_classes",
+            "result.observed_output_classes",
+            "task_pack_item.result.observed_output_classes",
+            "task_pack_result.observed_output_classes",
+        ),
+    ):
+        values = _declared_values(result, paths)
+        normalized_sets: set[tuple[str, ...]] = set()
+        for value in values:
+            items, valid = _opaque_string_items(value)
+            if not valid:
+                duplicate_result_conflict = True
+            else:
+                normalized_sets.add(tuple(sorted(set(items))))
+        if len(normalized_sets) > 1:
+            duplicate_result_conflict = True
+    if len(comparison_signatures) > 1 or duplicate_result_conflict:
+        add(
+            findings,
+            severity,
+            "task_pack_expectation_surface_conflict",
+            "Duplicate task-pack expectation/result surfaces must converge before the remaining pack can transition.",
+        )
+    if not isinstance(comparison, dict):
+        if expectation_declared or transition_claimed:
+            add(
+                findings,
+                severity,
+                "task_pack_expectation_comparison_missing",
+                "Declared task-pack expectations or a pack transition require an expectation comparison before the remaining pack is consumed.",
+            )
+        return
+    raw_status = comparison.get("status")
+    status = raw_status.strip().lower() if isinstance(raw_status, str) else ""
+    allowed_statuses = {"match", "miss", "not_evaluated", "not_applicable"}
+    allowed_reviews = {"continue", "reorder", "replace", "split", "pause", "terminal_candidate"}
+    raw_review = comparison.get("remaining_pack_review")
+    review = raw_review.strip().lower() if isinstance(raw_review, str) else ""
+    if status not in allowed_statuses:
+        add(findings, severity, "task_pack_expectation_status_invalid", "Task-pack expectation comparison status is invalid.")
+        return
+    expected_actual_pairs = (
+        ("progress_target", "progress_verdict"),
+        ("progress_kind_expected", "progress_kind"),
+        ("semantic_signature_expected", "semantic_signature"),
+        ("blocker_signature_expected", "blocker_signature"),
+    )
+    detected_mismatches: list[str] = []
+    actual_evidence_missing = False
+    expectation_contract_invalid = False
+    for expected_field, actual_field in expected_actual_pairs:
+        expected = first_present(result, [expected_field, f"task_pack_item.{expected_field}"])
+        actual = first_present(result, [actual_field, f"task_pack_item.result.{actual_field}", f"result.{actual_field}"])
+        if expected is not None:
+            if not _opaque_scalar(expected):
+                expectation_contract_invalid = True
+            if actual is None:
+                actual_evidence_missing = True
+                detected_mismatches.append(f"{expected_field}:actual_missing")
+            elif not _opaque_scalar(actual):
+                expectation_contract_invalid = True
+            elif _opaque_scalar(expected) and expected.strip() != actual.strip():
+                detected_mismatches.append(f"{expected_field}:{actual_field}")
+    required_output_value = first_present(result, ["required_output_classes", "adoption_axis_contract.required_output_classes", "task_pack_item.adoption_axis_contract.required_output_classes"])
+    observed_output_value = first_present(result, ["observed_output_classes", "result.observed_output_classes", "task_pack_item.result.observed_output_classes"])
+    required_output_items, required_outputs_valid = _opaque_string_items(required_output_value)
+    observed_output_items, observed_outputs_valid = _opaque_string_items(observed_output_value)
+    required_outputs = set(required_output_items)
+    observed_outputs = set(observed_output_items)
+    expectation_contract_invalid = expectation_contract_invalid or not required_outputs_valid or not observed_outputs_valid
+    if required_outputs and not observed_outputs:
+        actual_evidence_missing = True
+    if required_outputs and not required_outputs <= observed_outputs:
+        detected_mismatches.append("required_output_classes:observed_output_classes")
+    declared_mismatches, mismatched_axes_valid = _opaque_string_items(comparison.get("mismatched_axes"))
+    expectation_contract_invalid = expectation_contract_invalid or not mismatched_axes_valid
+    if expectation_contract_invalid:
+        add(
+            findings,
+            severity,
+            "task_pack_expectation_contract_invalid",
+            "Task-pack expectation comparison requires bounded opaque expected, actual, output-class, and mismatch-axis IDs.",
+        )
+    if status == "match" and (detected_mismatches or declared_mismatches):
+        add(
+            findings,
+            severity,
+            "task_pack_expectation_false_match",
+            "Task-pack expectation comparison cannot report match when expected and actual fields diverge.",
+            {"detected_mismatches": detected_mismatches, "declared_mismatches": declared_mismatches},
+        )
+    actual_value_mismatch = bool(detected_mismatches) and not actual_evidence_missing
+    if expectation_declared and status == "not_applicable" or actual_value_mismatch and status != "miss":
+        add(
+            findings,
+            severity,
+            "task_pack_expectation_status_mismatch",
+            "Declared and observable task-pack expectations cannot be bypassed with a non-miss comparison status.",
+            {"detected_mismatch_fields": detected_mismatches},
+        )
+    if actual_evidence_missing and status != "not_evaluated":
+        add(
+            findings,
+            severity,
+            "task_pack_expectation_actual_missing_status",
+            "Missing actual evidence requires expectation status not_evaluated before the remaining pack is reviewed.",
+            {"detected_mismatches": detected_mismatches},
+        )
+    if status == "miss" and review not in allowed_reviews:
+        add(findings, severity, "task_pack_expectation_miss_unreviewed", "Expectation miss requires an explicit review of the remaining pack.")
+    if (
+        status in {"miss", "not_evaluated"}
+        or bool(detected_mismatches)
+        or expectation_contract_invalid
+    ) and transition_claimed:
+        add(findings, severity, "task_pack_expectation_unresolved_transition", "An expectation miss or unevaluated comparison cannot auto-consume the remaining pack.")
+    miss_streak = first_present(result, ["expectation_miss_streak", "task_pack_item.result.expectation_miss_streak"])
+    miss_streak_cap = first_present(
+        result,
+        ["expectation_miss_streak_cap", "task_pack_item.expectation_miss_streak_cap"],
+    )
+    try:
+        threshold_reached = (
+            miss_streak is not None
+            and miss_streak_cap is not None
+            and int(miss_streak) >= max(1, int(miss_streak_cap))
+        )
+    except (TypeError, ValueError):
+        threshold_reached = False
+    repeated_miss = boolish(
+        first_present(
+            result,
+            ["repeated_expectation_miss", "task_pack_item.result.repeated_expectation_miss"],
+        )
+    ) or threshold_reached
+    producer_expected_value = first_present(result, ["progress_kind_expected", "task_pack_item.progress_kind_expected"])
+    producer_expected = isinstance(producer_expected_value, str) and producer_expected_value.strip().lower() == "goal_productive"
+    progress_kind_value = first_present(result, ["progress_kind", "result.progress_kind"])
+    metadata_actual = boolish(first_present(result, ["metadata_only", "result.metadata_only"])) or (
+        isinstance(progress_kind_value, str) and progress_kind_value.strip().lower() == "governance_only"
+    )
+    if status == "miss" and review == "continue" and producer_expected and metadata_actual and repeated_miss:
+        add(
+            findings,
+            severity,
+            "task_pack_repeated_metadata_miss_auto_continue",
+            "Repeated metadata-only results against an expected producer output require pack reordering, replacement, split, pause, or terminal review before continue.",
+        )
+
+
+def validate_state_projection(
+    target: str,
+    result: dict[str, Any],
+    mode: str,
+    findings: list[dict[str, Any]],
+) -> None:
+    severity = "block" if mode == "block" or target in {"validate", "derive", "report"} else "warn"
+    projection_required = boolish(
+        first_present(
+            result,
+            [
+                "state_projection_required",
+                "lifecycle_transition_result.state_projection_required",
+                "result.state_projection_required",
+            ],
+        )
+    )
+    transition_trigger_fields = (
+        "lifecycle_transition_applied",
+        "authority_projection_applied",
+        "task_projection_applied",
+        "task_index_projection_applied",
+        "state_projection_consumed",
+        "successor_auto_promoted",
+        "promotion_applied",
+        "pack_transition_applied",
+    )
+    dependent_transition = projection_required or any(
+        boolish(first_present(result, [field, f"lifecycle_transition_result.{field}", f"result.{field}"]))
+        for field in transition_trigger_fields
+    )
+    projection = first_present(
+        result,
+        ["state_projection", "lifecycle_transition_result.state_projection", "result.state_projection"],
+    )
+    if not isinstance(projection, dict):
+        if dependent_transition:
+            add(
+                findings,
+                severity,
+                "state_projection_missing",
+                "A declared authority/task/index transition requires its state projection receipt.",
+            )
+        return
+    status = str(projection.get("projection_status") or "").strip().lower()
+    allowed = {"current", "stale_projection", "not_evaluated", "conflict"}
+    if status not in allowed:
+        add(findings, severity if dependent_transition else "warn", "state_projection_status_invalid", "State projection status is invalid.")
+        return
+    epoch_value = projection.get("projection_epoch")
+    source_decision_value = projection.get("source_decision_id")
+    epoch = epoch_value.strip() if _opaque_scalar(epoch_value) else ""
+    source_decision_id = source_decision_value.strip() if _opaque_scalar(source_decision_value) else ""
+    surface_epochs = projection.get("surface_epochs") if isinstance(projection.get("surface_epochs"), dict) else {}
+    missing_current: list[str] = []
+    if status == "current":
+        if not epoch:
+            missing_current.append("projection_epoch")
+        if not source_decision_id:
+            missing_current.append("source_decision_id")
+        for surface in ("authority", "task", "index"):
+            surface_epoch = surface_epochs.get(surface)
+            if not _opaque_scalar(surface_epoch) or surface_epoch.strip() != epoch:
+                missing_current.append(f"surface_epochs.{surface}")
+        for digest_field in ("authority_digest", "task_digest", "index_digest"):
+            if not _full_sha256(projection.get(digest_field)):
+                missing_current.append(digest_field)
+        if missing_current:
+            add(
+                findings,
+                severity if dependent_transition else "warn",
+                "state_projection_false_current",
+                "A current state projection requires one source decision, one shared epoch, and valid authority/task/index digests.",
+                {"invalid_fields": missing_current},
+            )
+    projection_not_current = status in {"stale_projection", "not_evaluated", "conflict"} or bool(missing_current)
+    if projection_not_current and dependent_transition:
+        add(
+            findings,
+            severity,
+            "state_projection_not_current",
+            "A stale, unevaluated, or conflicting authority/task/index projection cannot support transition, execution, close, or promotion.",
+            {"projection_status": "false_current" if missing_current else status, "repair_first": bool(source_decision_id)},
+        )
+    if projection_not_current and dependent_transition and source_decision_id and boolish(result.get("user_input_required")):
+        add(
+            findings,
+            severity,
+            "state_projection_repair_precedes_user_reask",
+            "The source decision is known; repair stale task/index projections before asking the user to repeat it.",
+        )
+
+
+def _forward_test_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = first_present(result, ["skill_forward_test", "skill_forward_tests", "validation.skill_forward_test", "result.skill_forward_test"])
+    if isinstance(raw, dict):
+        rows = raw.get("rows") if isinstance(raw.get("rows"), list) else [raw]
+    else:
+        rows = raw if isinstance(raw, list) else []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def validate_advice_consumption_and_forward_tests(
+    target: str,
+    result: dict[str, Any],
+    mode: str,
+    findings: list[dict[str, Any]],
+) -> None:
+    severity = "block" if mode == "block" or target in {"validate", "report"} else "warn"
+    raw_states = first_present(result, ["advice_consumption_states", "advice_consumption_state", "consumption_state", "result.advice_consumption_states"])
+    malformed_state_rows: list[Any] = []
+    if isinstance(raw_states, dict):
+        if "rows" in raw_states:
+            if isinstance(raw_states.get("rows"), list):
+                candidate_rows = raw_states["rows"]
+            else:
+                candidate_rows = []
+                malformed_state_rows.append(raw_states.get("rows"))
+        else:
+            candidate_rows = [raw_states]
+    elif isinstance(raw_states, list):
+        candidate_rows = raw_states
+    elif raw_states is None:
+        candidate_rows = []
+    else:
+        candidate_rows = []
+        malformed_state_rows.append(raw_states)
+    state_rows = [row for row in candidate_rows if isinstance(row, dict)]
+    malformed_state_rows.extend(row for row in candidate_rows if not isinstance(row, dict))
+    if malformed_state_rows:
+        positive_malformed = any(
+            isinstance(row, str) and row.strip().lower() in {"wired", "verified"}
+            for row in malformed_state_rows
+        )
+        add(
+            findings,
+            severity if positive_malformed else "warn",
+            "advice_consumption_state_unverified",
+            "Malformed advice-consumption state cannot establish clause wiring or verification.",
+        )
+    forward_rows = _forward_test_rows(result)
+    forward_by_clause = {
+        row["clause_id"].strip(): row
+        for row in forward_rows
+        if _opaque_scalar(row.get("clause_id"))
+    }
+    verified_clause_ids: set[str] = set()
+    positive_clause_ids: set[str] = set()
+    for row in state_rows:
+        clause_value = row.get("clause_id") if row.get("clause_id") is not None else row.get("advice_clause_id")
+        clause_id = clause_value.strip() if _opaque_scalar(clause_value) else ""
+        state = str(row.get("state") or "").strip().lower()
+        if state not in {"pending", "wired", "verified"}:
+            positive_like_state = isinstance(row.get("state"), str) and row["state"].strip().lower().startswith(("wire", "verif", "complete"))
+            add(
+                findings,
+                severity if positive_like_state else "warn",
+                "advice_consumption_state_invalid",
+                "Advice clause consumption state is invalid.",
+                {"clause_id": clause_id or None},
+            )
+            continue
+        if state in {"wired", "verified"}:
+            if clause_id:
+                positive_clause_ids.add(clause_id)
+            wired = bool(
+                clause_id
+                and _opaque_scalar(row.get("consumer_context_id") or row.get("consumer_id"))
+                and boolish(row.get("invocation_completed"))
+                and boolish(row.get("return_contract_valid"))
+                and boolish(
+                    row.get("consumer_identity_echo_valid")
+                    or row.get("identity_echo_valid")
+                    or row.get("artifact_identity_echo_valid")
+                )
+                and boolish(row.get("decision_path_consumed"))
+                and _opaque_scalar(row.get("consumer_receipt_ref"))
+                and _full_sha256(row.get("consumer_receipt_sha256"))
+                and not boolish(row.get("documentation_only"))
+                and not boolish(row.get("hook_declared_only"))
+            )
+            if not wired:
+                add(
+                    findings,
+                    severity,
+                    "advice_clause_wired_without_consumer_receipt",
+                    "Copied text, task creation, hook declaration, or self-attestation cannot establish wired advice consumption.",
+                    {"clause_id": clause_id or None},
+                )
+        if state == "verified":
+            verified_clause_ids.add(clause_id)
+            if clause_id not in forward_by_clause:
+                add(findings, severity, "advice_clause_verified_without_forward_test", "Verified advice consumption requires a clause-bound forward-test receipt.", {"clause_id": clause_id or None})
+
+    allowed_layer_statuses = {"pass", "passed", "fail", "failed", "not_evaluated", "deferred"}
+    for row in forward_rows:
+        clause_value = row.get("clause_id")
+        scenario_value = row.get("scenario_id")
+        clause_id = clause_value.strip() if _opaque_scalar(clause_value) else ""
+        scenario_id = scenario_value.strip() if _opaque_scalar(scenario_value) else ""
+        positive_claim = clause_id in positive_clause_ids or str(row.get("verification_claim") or "").lower() in {"wired", "verified", "complete"}
+        precondition_ids = row.get("precondition_ids")
+        preconditions_valid = isinstance(precondition_ids, list) and bool(precondition_ids) and all(
+            _opaque_scalar(item) for item in precondition_ids
+        )
+        injected_fault_valid = _opaque_scalar(row.get("injected_fault_class"))
+        expected = row.get("expected_decision_state")
+        observed = row.get("observed_decision_state")
+        decisions_present = _opaque_scalar(expected) and _opaque_scalar(observed)
+        layer_values = {
+            key: str(row.get(key) or "").strip().lower()
+            for key in ("contract_test_status", "consumer_test_status", "forward_scenario_status", "regression_status")
+        }
+        invalid_layers = [key for key, value in layer_values.items() if value not in allowed_layer_statuses]
+        if not clause_id or not scenario_id or invalid_layers or not preconditions_valid or not injected_fault_valid or not decisions_present:
+            add(
+                findings,
+                severity if positive_claim else "warn",
+                "skill_forward_test_malformed",
+                "Forward-test rows require clause/scenario IDs, opaque preconditions, an injected fault class, expected/observed decisions, and all four bounded layer statuses.",
+                {
+                    "clause_id": clause_id or None,
+                    "invalid_layers": invalid_layers,
+                    "preconditions_valid": preconditions_valid,
+                    "injected_fault_valid": injected_fault_valid,
+                    "decisions_present": decisions_present,
+                },
+            )
+            continue
+        all_pass = all(value in {"pass", "passed"} for value in layer_values.values())
+        receipt_valid = _opaque_scalar(row.get("consumer_receipt_ref")) and _full_sha256(row.get("consumer_receipt_sha256"))
+        runtime_deferred = str(row.get("runtime_forward_verification") or result.get("runtime_forward_verification") or "").strip() == "deferred_by_explicit_single_skill_constraint"
+        positive_claim = clause_id in verified_clause_ids or str(row.get("verification_claim") or "").lower() in {"verified", "complete"}
+        if positive_claim and (not all_pass or expected != observed or not receipt_valid or runtime_deferred):
+            add(
+                findings,
+                severity,
+                "skill_forward_test_verified_without_full_receipt",
+                "A verified claim requires contract, external consumer, negative forward-decision, and happy-path regression evidence bound to the same clause/scenario.",
+                {"clause_id": clause_id, "runtime_forward_verification_deferred": runtime_deferred},
+            )
 
 
 def validate_verdict_axes(
@@ -587,7 +1585,11 @@ def _validate(
         add(findings, severity, "missing_required_field", f"`{target}` result is missing `{field}`.", {"field": field})
 
     validate_decision_identity_and_compatibility(target, result, mode, findings)
+    validate_metric_applicability_consumption(target, result, mode, findings)
     validate_verification_axes(target, result, mode, findings)
+    validate_task_pack_expectation_comparison(target, result, mode, findings)
+    validate_state_projection(target, result, mode, findings)
+    validate_advice_consumption_and_forward_tests(target, result, mode, findings)
     validate_verdict_axes(target, result, mode, findings)
 
     if target in AGENT_ROUTING_TARGETS:
@@ -744,7 +1746,7 @@ def _validate(
             findings,
             report_key_severity,
             "report_key_divergence",
-            "`report_key_divergence` means one report contains duplicate terminal keys with divergent values; pass/close/adoption/baseline/comparison consumption is invalid until the report is repaired.",
+            "`report_key_divergence` means one canonical projection has divergent duplicate terminal keys across one or more report surfaces; pass/close/adoption/baseline/comparison consumption is invalid until the reports converge.",
             {"auto_detected": auto_report_key_divergences[:20], "explicit_report_key_divergence": explicit_report_key_divergence},
         )
     if auto_report_key_duplicate_matches:

@@ -132,6 +132,16 @@ This contract defines `.agent_advice/` artifacts. Advice is direction evidence, 
 - `rejected`: advice conflicts with a higher-priority source or is unsafe/unsupported.
 - `deferred`: advice is plausible but blocked by missing evidence, user decision, or prerequisite work.
 
+## Clause Consumption State
+
+Advice-container lifecycle and per-clause consumption are separate. A clause may carry `pending|wired|verified` only as non-GT workflow metadata:
+
+- `pending`: default. Copied wording, task creation, contract documentation, hook declaration, import success, or advice `applied` lifecycle alone remains pending.
+- `wired`: a named external consumer invoked the clause-bound hook/value and used it in the decision path. Require opaque clause/consumer IDs, a bounded receipt ref plus full SHA-256, successful invocation/return/identity echo, and `decision_path_consumed=true`.
+- `verified`: all wired evidence plus a fresh clause-bound negative decision-boundary scenario, expected/observed decision agreement, and a happy-path regression pass. Documentation-only or a single unit test cannot establish it.
+
+Missing optional `consumption_state` output fails quiet. Malformed, conflicting, or self-attested positive state becomes `consumption_state_unverified`; it never creates pass, completion, authority, or advice verification. Store only opaque IDs, enums, hashes, and scalar defects in durable packets. Do not copy raw advice bodies, prompts, responses, source locators, or identifying metadata into a consumption receipt.
+
 ## Index Fields
 
 Record advice in `.agent_advice/index.jsonl` and `$manage-task-state-index`:

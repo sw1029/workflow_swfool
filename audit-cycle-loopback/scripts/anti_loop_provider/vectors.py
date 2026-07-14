@@ -95,7 +95,14 @@ def find_coverage_quality_delta_gate(value: Any) -> dict[str, Any] | None:
 def coverage_gate_pass_value(gate: dict[str, Any]) -> bool | None:
     status = str(gate.get("status") or "").strip().lower()
     evaluation_status = str(gate.get("evaluation_status") or "").strip().lower()
-    if status in {"not_evaluated", "not_applicable", "missing"} or evaluation_status == "not_evaluated":
+    non_boolean_statuses = {
+        "not_evaluated",
+        "not_applicable",
+        "insufficient_evidence",
+        "invalid_contract",
+        "missing",
+    }
+    if status in non_boolean_statuses or evaluation_status in non_boolean_statuses:
         return None
     if "quality_delta_pass" in gate:
         return bool_value(gate.get("quality_delta_pass"))
@@ -118,7 +125,11 @@ def compact_coverage_gate(gate: dict[str, Any] | None) -> dict[str, Any] | None:
     return {
         "quality_delta_pass": coverage_gate_pass_value(gate),
         "status": gate.get("status"),
+        "evaluation_status": gate.get("evaluation_status"),
         "improved_fields": list_values(gate.get("improved_fields")),
+        "not_applicable_fields": list_values(gate.get("not_applicable_fields")),
+        "insufficient_evidence_fields": list_values(gate.get("insufficient_evidence_fields")),
+        "invalid_contract_fields": list_values(gate.get("invalid_contract_fields")),
         "current_quality_vector": coverage_gate_vector(gate, "current_quality_vector", "quality_vector"),
         "previous_high_water_vector": coverage_gate_vector(
             gate,
@@ -140,6 +151,8 @@ def coverage_quality_delta_reconciliation_gate(local_gate: dict[str, Any], exter
         }
     local_pass = coverage_gate_pass_value(local_gate)
     external_pass = coverage_gate_pass_value(external_gate)
+    local_status = str(local_gate.get("evaluation_status") or local_gate.get("status") or "").strip().lower()
+    external_status = str(external_gate.get("evaluation_status") or external_gate.get("status") or "").strip().lower()
     pass_disagreement = external_pass is not None and local_pass is not None and external_pass != local_pass
     local_current = coverage_gate_vector(local_gate, "current_quality_vector", "quality_vector")
     external_current = coverage_gate_vector(external_gate, "current_quality_vector", "quality_vector")
@@ -153,10 +166,23 @@ def coverage_quality_delta_reconciliation_gate(local_gate: dict[str, Any], exter
                     "output_delta_value": external_current[key],
                 }
             )
-    blocked = pass_disagreement or bool(value_conflicts)
+    invalid_contract = "invalid_contract" in {local_status, external_status}
+    insufficient_evidence = "insufficient_evidence" in {local_status, external_status}
+    both_not_applicable = local_status == external_status == "not_applicable"
+    blocked = pass_disagreement or bool(value_conflicts) or invalid_contract
+    if blocked:
+        status = "invalid_contract" if invalid_contract and not (pass_disagreement or value_conflicts) else "block"
+    elif insufficient_evidence:
+        status = "insufficient_evidence"
+    elif both_not_applicable:
+        status = "not_applicable"
+    elif local_pass is None or external_pass is None:
+        status = "not_evaluated"
+    else:
+        status = "pass"
     return {
         "gate": "R-GCOV",
-        "status": "block" if blocked else "pass",
+        "status": status,
         "compared_sources": ["audit_cycle_loopback", "output_delta"],
         "validator_disagreement": pass_disagreement,
         "gcov_metric_name_collision": bool(value_conflicts),

@@ -28,6 +28,30 @@ Common `upsert` fields:
 
 Lifecycle fields use the existing `fields` object: `record_class` (`mutable_alias` or `immutable_snapshot`), `snapshot_digest`, `snapshot_path`, `canonical_id`, and optional `alias_path`. Historical records compare only to their own immutable snapshot body/digest. Active switches return `lifecycle_transition_result` with ordered booleans for previous snapshot preservation, previous active supersede, new canonical add, alias update, link update, and index render.
 
+When a caller-owned decision must project across authority, canonical task, and index surfaces, `lifecycle_transition_result` may also carry this bounded optional object:
+
+```json
+{
+  "state_projection": {
+    "projection_epoch": "cycle_C",
+    "source_decision_id": "packet_K",
+    "surface_epochs": {
+      "authority": "cycle_C",
+      "task": "cycle_C",
+      "index": "cycle_C"
+    },
+    "authority_digest": "full-sha256",
+    "task_digest": "full-sha256",
+    "index_digest": "full-sha256",
+    "projection_status": "current"
+  }
+}
+```
+
+Allowed `projection_status` values are `current`, `stale_projection`, `not_evaluated`, and `conflict`. `current` requires one non-empty source decision, all three surface epochs equal to the canonical epoch, and valid digests. A missing surface or unequal epoch is `stale_projection`; malformed or contradictory bindings are `conflict`; absent evidence is `not_evaluated`. When the source decision is present, repair stale projections against that same decision before asking the user again. This object is transition evidence only: it cannot create authority, task selection, completion, or verification. Ordinary index-only scans omit it and retain their existing behavior.
+
+Before a dependent cross-surface transition, the caller emits `state_projection_required: true`. It may set `authority_projection_applied`, `task_projection_applied`, and `task_index_projection_applied` only after each named surface is current for the same source decision. These trigger/receipt fields require the bounded object above; they are not substitutes for it. Missing or malformed projection evidence fails quiet for unrelated index-only work and fails closed only for the dependent transition.
+
 Migration correction events may carry `fields.link_tombstones`, a list of exact `{rel,id}` pairs. Apply each tombstone only to that artifact's merged link projection before adding links from the same event. The historical link events remain byte-identical. This bounded suffix semantics is valid only under the sealed migration contract in [legacy-migration.md](legacy-migration.md).
 
 Mapped legacy projections preserve changed source tokens in bounded `fields.legacy_original_event|status|type` objects containing the exact source `token` and mapping `reason_code`. Migration correction events carry a deterministic `fields.migration_correction_event_id`; non-independent quarantine manifest entries bind those IDs and their canonical event SHA-256 values under the sealed migration contract.

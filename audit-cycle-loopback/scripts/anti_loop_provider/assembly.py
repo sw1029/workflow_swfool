@@ -64,7 +64,7 @@ def build_base_packet(ns: dict[str, Any]) -> dict[str, Any]:
         "semantic_signature": args.semantic_signature,
         "provider_request_count": provider_request_count,
         "quality_vector": quality,
-        "quality_delta_policy": quality_delta_policy,
+        "quality_delta_policy": public_quality_delta_policy(quality_delta_policy),
         "previous_high_water_mark": prev_high,
         "high_water_mark": high_water,
         "coverage_quality_delta_gate": coverage_gate,

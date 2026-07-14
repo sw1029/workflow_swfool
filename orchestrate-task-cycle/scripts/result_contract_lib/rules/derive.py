@@ -55,6 +55,51 @@ from ..common import (
 
 
 HANDOFF_APPLICABILITY = {"required", "not_applicable", "missing_required"}
+OPAQUE_ID_MAX_LENGTH = 128
+EXECUTION_STARVATION_STATUSES = {"present", "absent", "scope_unknown"}
+EXECUTION_SCOPE_RECOVERY_TASK_KINDS = (
+    INSTRUMENTATION_TASK_KINDS
+    | CLASSIFICATION_REPAIR_TASK_KINDS
+    | BLOCKER_CONTRACT_REPAIR_TASK_KINDS
+)
+
+
+def _bounded_opaque_id(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or len(text) > OPAQUE_ID_MAX_LENGTH:
+        return None
+    if any(ord(character) < 32 or ord(character) == 127 for character in text):
+        return None
+    return text
+
+
+def _nonnegative_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _declared_values(data: dict[str, object], paths: tuple[str, ...]) -> list[object]:
+    """Return every explicitly declared path, including empty/malformed values."""
+    values: list[object] = []
+    for path in paths:
+        current: object = data
+        declared = True
+        for part in path.split("."):
+            if not isinstance(current, dict) or part not in current:
+                declared = False
+                break
+            current = current[part]
+        if declared:
+            values.append(current)
+    return values
+
+
+def _bounded_id_items(value: object) -> tuple[set[str], bool]:
+    if not isinstance(value, list):
+        return set(), False
+    items = [normalized for item in value if (normalized := _bounded_opaque_id(item)) is not None]
+    return set(items), len(items) == len(value) and len(items) == len(set(items))
 
 
 def _workspace_root(context: RuleContext) -> Path:
@@ -644,6 +689,300 @@ class DeriveRule(TargetContractRule):
         allowed_task_kinds = allowed_task_kinds_from_basis(disposition_basis)
         selected_kind = selected_task_kind_value(result)
         terminal_selected = selected_source == "terminal_blocked" or has_value(result, "terminal_blocker")
+        starvation_status_paths = (
+            "execution_starvation_status",
+            "cycle_efficiency_profile.execution_starvation_status",
+            "anti_loop_progress_gate.execution_starvation_status",
+            "anti_loop_progress_gate.cycle_efficiency_profile.execution_starvation_status",
+            "result.cycle_efficiency_profile.execution_starvation_status",
+        )
+        starvation_status_values = _declared_values(
+            result,
+            starvation_status_paths,
+        )
+        normalized_starvation_status_items = [
+            text.lower()
+            for value in starvation_status_values
+            if (text := _bounded_opaque_id(value)) is not None
+            and text.lower() in EXECUTION_STARVATION_STATUSES
+        ]
+        normalized_starvation_statuses = set(normalized_starvation_status_items)
+        starvation_status_malformed = len(normalized_starvation_status_items) != len(starvation_status_values)
+        starvation_status_conflict = len(normalized_starvation_statuses) > 1
+        if starvation_status_malformed:
+            add(
+                findings,
+                "warn",
+                "derive_execution_starvation_status_malformed",
+                "Malformed execution-starvation status is consumed conservatively as scope_unknown; raw input is not retained.",
+            )
+        if starvation_status_conflict:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_execution_starvation_status_conflict",
+                "Duplicate execution-starvation status surfaces must converge before derive consumes them.",
+            )
+        scope_status_values = _declared_values(
+            result,
+            (
+                "execution_scope_status",
+                "cycle_efficiency_profile.execution_scope_status",
+                "anti_loop_progress_gate.execution_scope_status",
+                "anti_loop_progress_gate.cycle_efficiency_profile.execution_scope_status",
+                "result.cycle_efficiency_profile.execution_scope_status",
+            ),
+        )
+        normalized_scope_status_items = [
+            text.lower()
+            for value in scope_status_values
+            if (text := _bounded_opaque_id(value)) is not None
+            and text.lower() in {"evaluated", "scope_unknown"}
+        ]
+        normalized_scope_statuses = set(normalized_scope_status_items)
+        scope_status_malformed = len(normalized_scope_status_items) != len(scope_status_values)
+        scope_status_conflict = len(normalized_scope_statuses) > 1
+        if scope_status_malformed:
+            add(
+                findings,
+                "warn",
+                "derive_execution_scope_status_malformed",
+                "Malformed execution-scope status is consumed conservatively as scope_unknown; raw input is not retained.",
+            )
+        if scope_status_conflict:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_execution_scope_status_conflict",
+                "Duplicate execution-scope status surfaces must converge before derive consumes them.",
+            )
+        scope_starvation_status_conflict = bool(
+            ("scope_unknown" in normalized_scope_statuses and normalized_starvation_statuses & {"present", "absent"})
+            or ("evaluated" in normalized_scope_statuses and "scope_unknown" in normalized_starvation_statuses)
+        )
+        if scope_starvation_status_conflict:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_execution_scope_status_conflict",
+                "Execution-scope and starvation status surfaces must describe the same decision state.",
+            )
+        scope_evidence_values = _declared_values(
+            result,
+            (
+                "scope_evidence_required",
+                "cycle_efficiency_profile.scope_evidence_required",
+                "anti_loop_progress_gate.scope_evidence_required",
+                "anti_loop_progress_gate.cycle_efficiency_profile.scope_evidence_required",
+                "result.cycle_efficiency_profile.scope_evidence_required",
+            ),
+        )
+        normalized_scope_evidence = [_bounded_id_items(value) for value in scope_evidence_values]
+        scope_evidence_malformed = any(not valid for _, valid in normalized_scope_evidence)
+        scope_evidence_sets = {tuple(sorted(items)) for items, valid in normalized_scope_evidence if valid}
+        scope_evidence_conflict = len(scope_evidence_sets) > 1
+        scope_evidence_required = set(next(iter(scope_evidence_sets), ()))
+        if scope_evidence_malformed or scope_evidence_conflict:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_execution_scope_evidence_conflict",
+                "Scope-evidence requirements must be bounded and converge across duplicate profile surfaces.",
+            )
+        execution_scope_unknown = bool(
+            starvation_status_malformed
+            or starvation_status_conflict
+            or scope_status_malformed
+            or scope_status_conflict
+            or scope_starvation_status_conflict
+            or "scope_unknown" in normalized_starvation_statuses
+            or "scope_unknown" in normalized_scope_statuses
+            or scope_evidence_required
+        )
+        execution_starvation_status = (
+            "scope_unknown"
+            if execution_scope_unknown
+            else next(iter(normalized_starvation_statuses), "")
+        )
+        if "evaluated" in normalized_scope_statuses and scope_evidence_required:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_execution_scope_evidence_conflict",
+                "Evaluated execution scope cannot retain unresolved scope-evidence requirements.",
+            )
+        if execution_starvation_status == "scope_unknown" and not scope_evidence_required:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_execution_scope_evidence_missing",
+                "scope_unknown requires bounded scope-evidence fields before a recovery task can be selected.",
+            )
+        if execution_starvation_status == "scope_unknown" and (
+            terminal_selected or selected_kind not in EXECUTION_SCOPE_RECOVERY_TASK_KINDS
+        ):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_execution_scope_unknown_unrecovered",
+                "Execution scope_unknown permits only bounded scope-evidence recovery; terminal and ordinary continuation remain unavailable.",
+                {"terminal_selected": terminal_selected, "recovery_kind_selected": selected_kind in EXECUTION_SCOPE_RECOVERY_TASK_KINDS},
+            )
+
+        goal_projection_values = _declared_values(
+            result,
+            (
+                "goal_axis_stagnation_projection",
+                "cycle_efficiency_profile.goal_axis_stagnation_projection",
+                "anti_loop_progress_gate.goal_axis_stagnation_projection",
+                "anti_loop_progress_gate.cycle_efficiency_profile.goal_axis_stagnation_projection",
+                "result.cycle_efficiency_profile.goal_axis_stagnation_projection",
+            ),
+        )
+        if goal_projection_values:
+            goal_projection_value = goal_projection_values[0]
+            projection_valid = isinstance(goal_projection_value, dict)
+            projection_status = ""
+            family_ids: list[object] = []
+            cycle_count = semantic_count = producer_count = no_movement_streak = None
+            family_change_resets = None
+            if isinstance(goal_projection_value, dict):
+                projection_status_value = goal_projection_value.get("status")
+                projection_status_text = _bounded_opaque_id(projection_status_value)
+                projection_status = projection_status_text.lower() if projection_status_text else ""
+                goal_axis = _bounded_opaque_id(goal_projection_value.get("goal_axis"))
+                raw_family_ids = goal_projection_value.get("family_ids")
+                family_ids = raw_family_ids if isinstance(raw_family_ids, list) else []
+                family_ids_valid = bool(
+                    isinstance(raw_family_ids, list)
+                    and all(_bounded_opaque_id(item) is not None for item in raw_family_ids)
+                    and len(raw_family_ids) == len(set(raw_family_ids))
+                )
+                cycle_count = goal_projection_value.get("cycle_count")
+                semantic_count = goal_projection_value.get("semantic_movement_cycle_count")
+                producer_count = goal_projection_value.get("producer_run_cycle_count")
+                no_movement_streak = goal_projection_value.get("no_semantic_movement_streak")
+                family_change_resets = goal_projection_value.get("family_change_resets_streak")
+                counts_valid = all(
+                    _nonnegative_int(value)
+                    for value in (cycle_count, semantic_count, producer_count, no_movement_streak)
+                )
+                projection_valid = bool(
+                    projection_status in {"evaluated", "scope_unknown"}
+                    and family_ids_valid
+                    and family_change_resets is False
+                    and counts_valid
+                    and semantic_count <= producer_count <= cycle_count
+                    and no_movement_streak <= cycle_count
+                    and (
+                        projection_status == "scope_unknown" and goal_projection_value.get("goal_axis") in (None, "")
+                        or projection_status == "evaluated" and goal_axis is not None
+                    )
+                )
+            projection_signatures: set[tuple[object, ...]] = set()
+            duplicate_projection_malformed = False
+            for candidate in goal_projection_values:
+                if not isinstance(candidate, dict):
+                    duplicate_projection_malformed = True
+                    continue
+                candidate_status = _bounded_opaque_id(candidate.get("status"))
+                candidate_goal_axis = _bounded_opaque_id(candidate.get("goal_axis"))
+                candidate_families = candidate.get("family_ids")
+                candidate_family_items, candidate_families_valid = _bounded_id_items(candidate_families)
+                candidate_counts = tuple(
+                    candidate.get(field)
+                    for field in (
+                        "cycle_count",
+                        "semantic_movement_cycle_count",
+                        "producer_run_cycle_count",
+                        "no_semantic_movement_streak",
+                    )
+                )
+                if (
+                    candidate_status is None
+                    or not candidate_families_valid
+                    or not all(_nonnegative_int(value) for value in candidate_counts)
+                    or candidate.get("family_change_resets_streak") is not False
+                ):
+                    duplicate_projection_malformed = True
+                    continue
+                projection_signatures.add(
+                    (
+                        candidate_status.lower(),
+                        candidate_goal_axis,
+                        tuple(sorted(candidate_family_items)),
+                        *candidate_counts,
+                        False,
+                    )
+                )
+            if duplicate_projection_malformed or len(projection_signatures) != 1:
+                add(
+                    findings,
+                    "block" if mode == "block" else "warn",
+                    "derive_goal_axis_stagnation_projection_conflict",
+                    "Duplicate goal-axis stagnation projections must be valid and converge before derive consumes movement claims.",
+                )
+                projection_valid = False
+            if not projection_valid:
+                add(
+                    findings,
+                    "block" if mode == "block" else "warn",
+                    "derive_goal_axis_stagnation_projection_invalid",
+                    "Derive cannot consume malformed or family-resetting goal-axis stagnation evidence; raw input is not retained.",
+                )
+            projection_implies_unjustified_reset = bool(
+                projection_valid
+                and cycle_count
+                and semantic_count == 0
+                and no_movement_streak != cycle_count
+            )
+            explicit_reset = boolish(
+                first_present(
+                    result,
+                    [
+                        "goal_axis_stagnation_reset",
+                        "goal_axis_streak_reset",
+                        "reset_goal_axis_stagnation",
+                        "goal_axis_stagnation_projection.reset_applied",
+                        "cycle_efficiency_profile.goal_axis_stagnation_projection.reset_applied",
+                    ],
+                )
+            )
+            semantic_progress_claimed = boolish(
+                first_present(
+                    result,
+                    [
+                        "semantic_progress",
+                        "output_delta.semantic_progress",
+                        "output_delta_gate.semantic_progress",
+                        "result.output_delta.semantic_progress",
+                    ],
+                )
+            )
+            verified_current_movement = bool(
+                projection_valid
+                and projection_status == "evaluated"
+                and semantic_count is not None
+                and semantic_count > 0
+                and producer_count is not None
+                and producer_count >= semantic_count
+                and no_movement_streak == 0
+            )
+            if projection_implies_unjustified_reset or (
+                (explicit_reset or semantic_progress_claimed) and not verified_current_movement
+            ):
+                add(
+                    findings,
+                    "block" if mode == "block" else "warn",
+                    "derive_goal_axis_stagnation_unjustified_reset",
+                    "Family change, an explicit reset, or semantic-progress wording cannot reset goal-axis stagnation without verified current-axis producer movement.",
+                    {
+                        "family_change_observed": len(family_ids) > 1,
+                        "explicit_reset_claimed": explicit_reset,
+                        "semantic_progress_claimed": semantic_progress_claimed,
+                        "verified_current_movement": verified_current_movement,
+                    },
+                )
         scenario_uncovered = boolish(
             first_present(
                 result,

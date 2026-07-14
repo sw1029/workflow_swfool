@@ -1,7 +1,54 @@
 from __future__ import annotations
 
+import math
+
 from ..base import RuleContext, TargetContractRule
 from ..common import add, boolish, first_present, has_value, non_empty, value_for
+
+
+def _nonzero_scalar(value: object) -> bool:
+    if isinstance(value, dict):
+        return any(_nonzero_scalar(child) for child in value.values())
+    if isinstance(value, list):
+        return any(_nonzero_scalar(child) for child in value)
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value != 0
+
+
+def _finite_nonnegative_number(value: object) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(float(value)) and value >= 0
+    except (OverflowError, TypeError, ValueError):
+        return False
+
+
+def _scalar_counts_valid(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    for child in value.values():
+        if isinstance(child, dict):
+            if not _scalar_counts_valid(child):
+                return False
+        elif not _finite_nonnegative_number(child):
+            return False
+    return True
+
+
+def _opaque_id(value: object, *, max_length: int = 256) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if not normalized or len(normalized) > max_length:
+        return None
+    if any(ord(character) < 32 or ord(character) == 127 for character in normalized):
+        return None
+    if not normalized[0].isascii() or not normalized[0].isalnum() or any(
+        not character.isascii() or not (character.isalnum() or character in "._-")
+        for character in normalized
+    ):
+        return None
+    return normalized
 
 
 class QualitativeReviewRule(TargetContractRule):
@@ -144,3 +191,322 @@ class QualitativeReviewRule(TargetContractRule):
                 "qualitative_review_blocked_reason_missing",
                 "Blocked/not_applicable qualitative review requires a concrete blocker, skipped reason, or delegation unavailable reason.",
             )
+        surface_gate = first_present(
+            result,
+            [
+                "surface_field_review_gate",
+                "quality_review.surface_field_review_gate",
+                "qualitative_review.surface_field_review_gate",
+                "result.surface_field_review_gate",
+                "result.quality_review.surface_field_review_gate",
+            ],
+        )
+        surface_required = any(
+            boolish(first_present(result, [path]))
+            for path in (
+                "surface_field_review_required",
+                "surface_field_review_gate.required_for_acceptance",
+                "surface_field_review_gate.decision_contribution_allowed",
+                "quality_review.surface_field_review_required",
+                "quality_review.surface_field_review_gate.required_for_acceptance",
+                "quality_review.surface_field_review_gate.decision_contribution_allowed",
+                "qualitative_review.surface_field_review_required",
+                "qualitative_review.surface_field_review_gate.required_for_acceptance",
+                "qualitative_review.surface_field_review_gate.decision_contribution_allowed",
+                "result.surface_field_review_required",
+                "result.surface_field_review_gate.required_for_acceptance",
+                "result.surface_field_review_gate.decision_contribution_allowed",
+                "result.quality_review.surface_field_review_required",
+                "result.quality_review.surface_field_review_gate.required_for_acceptance",
+                "result.quality_review.surface_field_review_gate.decision_contribution_allowed",
+            )
+        )
+        if surface_required and not isinstance(surface_gate, dict):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "qualitative_review_surface_required_missing",
+                "A required active-surface review gate must be present before an acceptance decision.",
+            )
+        if isinstance(surface_gate, dict):
+            aggregate_status_value = surface_gate.get("surface_field_review_status")
+            aggregate_status = (
+                aggregate_status_value.strip().lower()
+                if isinstance(aggregate_status_value, str)
+                else "invalid_contract"
+            )
+            if aggregate_status not in {"pass", "fail", "not_applicable", "not_evaluated", "invalid_contract"}:
+                aggregate_status = "invalid_contract"
+            aggregate_pass = aggregate_status == "pass"
+            surface_claim_relevant = aggregate_pass or surface_required
+            if surface_required and aggregate_status not in {"pass", "not_applicable"}:
+                add(
+                    findings,
+                    "block" if mode == "block" else "warn",
+                    "qualitative_review_surface_required_not_passed",
+                    "A required active-surface review must pass or be explicitly not_applicable before acceptance.",
+                    {"surface_field_review_status": "invalid_contract" if aggregate_status == "invalid_contract" else aggregate_status},
+                )
+            classes_value = surface_gate.get("surface_field_classes")
+            malformed_class_ids = False
+            classes: list[str] = []
+            if isinstance(classes_value, list):
+                for item in classes_value:
+                    normalized = _opaque_id(item)
+                    if normalized is None:
+                        malformed_class_ids = True
+                    else:
+                        classes.append(normalized)
+            elif classes_value is not None:
+                malformed_class_ids = True
+            rows_value = surface_gate.get("field_class_results")
+            if isinstance(rows_value, dict):
+                rows = []
+                for key, value in rows_value.items():
+                    field_class_id = _opaque_id(key)
+                    if field_class_id is None or not isinstance(value, dict):
+                        malformed_class_ids = True
+                        continue
+                    rows.append(dict(value, field_class_id=field_class_id))
+            else:
+                rows = rows_value if isinstance(rows_value, list) else []
+                if rows_value is not None and not isinstance(rows_value, list):
+                    malformed_class_ids = True
+            if any(not isinstance(row, dict) for row in rows):
+                malformed_class_ids = True
+                rows = [row for row in rows if isinstance(row, dict)]
+            row_ids = [
+                normalized
+                for row in rows
+                if (normalized := _opaque_id(row.get("field_class_id"))) is not None
+            ]
+            if any(_opaque_id(row.get("field_class_id")) is None for row in rows):
+                malformed_class_ids = True
+            rows_by_id = {
+                normalized: row
+                for row in rows
+                if (normalized := _opaque_id(row.get("field_class_id"))) is not None
+            }
+            unresolved: list[dict[str, object]] = []
+            if malformed_class_ids:
+                unresolved.append({"field_class_id": None, "reason": "field_class_id_malformed"})
+            if boolish(surface_gate.get("field_class_map_missing")):
+                unresolved.append({"field_class_id": None, "reason": "field_class_map_missing"})
+            inventory_not_applicable = str(
+                surface_gate.get("surface_field_inventory_status")
+                or surface_gate.get("surface_field_review_status")
+                or ""
+            ).strip().lower() == "not_applicable"
+            if surface_claim_relevant and not classes and not inventory_not_applicable:
+                unresolved.append({"field_class_id": None, "reason": "field_class_inventory_empty"})
+            if aggregate_pass and inventory_not_applicable:
+                unresolved.append({"field_class_id": None, "reason": "not_applicable_inventory_marked_pass"})
+            duplicate_ids = sorted(
+                {
+                    field_id
+                    for field_id in {*classes, *row_ids}
+                    if classes.count(field_id) > 1 or row_ids.count(field_id) > 1
+                }
+            )
+            unresolved.extend(
+                {"field_class_id": field_id, "reason": "duplicate_or_conflicting_rows"}
+                for field_id in duplicate_ids
+            )
+            allowed_applicability = {"applicable", "not_applicable", "insufficient_evidence", "invalid_contract"}
+            allowed_review = {"pass", "fail", "not_observed", "not_evaluated"}
+            allowed_substance = {"meaningful", "not_meaningful", "not_applicable", "insufficient_evidence", "invalid_contract"}
+            matrix_value = surface_gate.get("surface_field_defect_matrix")
+            if matrix_value is None:
+                matrix_value = first_present(
+                    result,
+                    [
+                        "surface_field_defect_matrix",
+                        "quality_review.surface_field_defect_matrix",
+                        "qualitative_review.surface_field_defect_matrix",
+                    ],
+                )
+            matrix_by_id: dict[str, dict[str, object]] = {}
+            matrix_malformed = False
+            if matrix_value is not None:
+                if not isinstance(matrix_value, dict):
+                    matrix_malformed = True
+                else:
+                    for key, counts in matrix_value.items():
+                        field_class_id = _opaque_id(key)
+                        if field_class_id is None or not _scalar_counts_valid(counts):
+                            matrix_malformed = True
+                            continue
+                        matrix_by_id[field_class_id] = counts
+            if matrix_malformed:
+                unresolved.append({"field_class_id": None, "reason": "defect_matrix_malformed"})
+            for field_class_id in classes:
+                row = rows_by_id.get(field_class_id)
+                if not row:
+                    unresolved.append({"field_class_id": field_class_id, "reason": "row_missing"})
+                    continue
+                applicability = str(row.get("applicability_status") or "applicable").strip().lower()
+                review_value = str(row.get("review_status") or "not_evaluated").strip().lower()
+                substance = str(row.get("referential_substance_status") or "").strip().lower()
+                if applicability not in allowed_applicability or review_value not in allowed_review or (substance and substance not in allowed_substance):
+                    unresolved.append({"field_class_id": field_class_id, "reason": "invalid_status"})
+                    continue
+                if applicability == "not_applicable":
+                    continue
+                observed_count = row.get("observed_count")
+                row_defect_counts = row.get("defect_counts")
+                defect_counts_valid = _scalar_counts_valid(row_defect_counts)
+                matrix_counts = matrix_by_id.get(field_class_id)
+                matrix_conflict = matrix_value is not None and (
+                    matrix_counts is None or not defect_counts_valid or matrix_counts != row_defect_counts
+                )
+                locator_status = str(row.get("locator_status") or "").strip().lower()
+                locator_present = locator_status == "present"
+                referential_not_applicable = locator_status == "not_applicable" and substance == "not_applicable"
+                referential_unresolved = not referential_not_applicable and (
+                    not locator_present or substance != "meaningful"
+                )
+                if (
+                    applicability != "applicable"
+                    or review_value != "pass"
+                    or not isinstance(observed_count, int)
+                    or isinstance(observed_count, bool)
+                    or observed_count <= 0
+                    or referential_unresolved
+                    or not defect_counts_valid
+                    or _nonzero_scalar(row_defect_counts)
+                    or matrix_conflict
+                ):
+                    unresolved.append(
+                        {
+                            "field_class_id": field_class_id,
+                            "reason": (
+                                "defect_projection_conflict"
+                                if matrix_conflict
+                                else "not_substantively_reviewed"
+                                if referential_unresolved
+                                else "not_fully_reviewed"
+                            ),
+                        }
+                    )
+            if unresolved:
+                add(
+                    findings,
+                    ("block" if mode == "block" else "warn") if surface_claim_relevant else "warn",
+                    "qualitative_review_surface_class_bypass",
+                    "An aggregate or required surface review cannot hide an active field class that was not observed and referentially reviewed.",
+                    {"unresolved_field_classes": unresolved},
+                )
+        density_status_value = first_present(
+            result,
+            [
+                "substance_density_evaluation_status",
+                "substance_density_gate.evaluation_status",
+                "quality_review.substance_density_evaluation_status",
+                "quality_review.substance_density_gate.evaluation_status",
+                "qualitative_review.substance_density_evaluation_status",
+                "qualitative_review.substance_density_gate.evaluation_status",
+                "result.substance_density_evaluation_status",
+                "result.substance_density_gate.evaluation_status",
+                "result.quality_review.substance_density_evaluation_status",
+                "result.quality_review.substance_density_gate.evaluation_status",
+            ],
+        )
+        density_required = any(
+            boolish(first_present(result, [path]))
+            for path in (
+                "substance_density_required",
+                "substance_density_gate.required_for_acceptance",
+                "substance_density_gate.decision_contribution_allowed",
+                "quality_review.substance_density_required",
+                "quality_review.substance_density_gate.required_for_acceptance",
+                "quality_review.substance_density_gate.decision_contribution_allowed",
+                "qualitative_review.substance_density_required",
+                "qualitative_review.substance_density_gate.required_for_acceptance",
+                "qualitative_review.substance_density_gate.decision_contribution_allowed",
+                "result.substance_density_required",
+                "result.substance_density_gate.required_for_acceptance",
+                "result.substance_density_gate.decision_contribution_allowed",
+                "result.quality_review.substance_density_required",
+                "result.quality_review.substance_density_gate.required_for_acceptance",
+                "result.quality_review.substance_density_gate.decision_contribution_allowed",
+            )
+        )
+        if density_required and density_status_value is None:
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "qualitative_review_substance_density_required_missing",
+                "A required referential-substance projection must be present before an acceptance decision.",
+            )
+        if density_status_value is not None:
+            density_allowed = {
+                "meaningful",
+                "not_meaningful",
+                "not_applicable",
+                "insufficient_evidence",
+                "invalid_contract",
+            }
+            density_status_candidate = (
+                density_status_value.strip().lower()
+                if isinstance(density_status_value, str)
+                else "invalid_contract"
+            )
+            density_status = (
+                density_status_candidate
+                if density_status_candidate in density_allowed
+                else "invalid_contract"
+            )
+            density_counts = first_present(
+                result,
+                [
+                    "referential_substance_counts",
+                    "quality_review.referential_substance_counts",
+                    "qualitative_review.referential_substance_counts",
+                    "result.referential_substance_counts",
+                    "result.quality_review.referential_substance_counts",
+                ],
+            )
+            density_claim_relevant = density_required or density_status in {"meaningful", "not_meaningful"}
+            density_unresolved = density_status not in density_allowed or density_status in {
+                "not_meaningful",
+                "insufficient_evidence",
+                "invalid_contract",
+            }
+            density_not_applicable = density_status == "not_applicable"
+            density_counts_invalid = not density_not_applicable and density_counts is not None and not _scalar_counts_valid(density_counts)
+            meaningful_count = (
+                density_counts.get("meaningful")
+                if isinstance(density_counts, dict)
+                else None
+            )
+            meaningful_status_without_evidence = bool(
+                density_status == "meaningful"
+                and (
+                    not _finite_nonnegative_number(meaningful_count)
+                    or meaningful_count == 0
+                )
+            )
+            density_defects = not density_not_applicable and isinstance(density_counts, dict) and _nonzero_scalar(
+                {
+                    key: density_counts.get(key)
+                    for key in ("opaque", "incompatible_collision", "possible_false_split")
+                }
+            )
+            if not density_not_applicable and (
+                density_unresolved
+                or density_counts_invalid
+                or density_defects
+                or meaningful_status_without_evidence
+            ):
+                add(
+                    findings,
+                    ("block" if mode == "block" else "warn") if density_claim_relevant else "warn",
+                    "qualitative_review_referential_substance_bypass",
+                    "A required or consumed density projection cannot support review while referential substance is unresolved or defective.",
+                    {
+                        "evaluation_status": density_status,
+                        "scalar_counts_invalid": density_counts_invalid,
+                        "scalar_defects_present": bool(density_defects),
+                        "meaningful_evidence_present": not meaningful_status_without_evidence,
+                    },
+                )

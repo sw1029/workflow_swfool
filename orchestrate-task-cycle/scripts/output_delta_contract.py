@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -14,6 +15,53 @@ DEFAULT_CONTRACT_PATHS = (
     ".agent_goal/output_delta_contract.json",
 )
 QUALITY_DELTA_KEYS: tuple[str, ...] = ()
+METRIC_APPLICABILITY_STATUSES = {
+    "applicable",
+    "not_applicable",
+    "insufficient_evidence",
+    "invalid_contract",
+}
+METRIC_POLICY_CONTRACT_ERROR_CODES = {
+    "declared_metric_id_malformed",
+    "metric_alias_contract_malformed",
+    "metric_policy_contract_malformed",
+}
+OPAQUE_ID_MAX_LENGTH = 256
+
+
+def opaque_id(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        return None
+    normalized = value.strip()
+    if not normalized or len(normalized) > OPAQUE_ID_MAX_LENGTH:
+        return None
+    return normalized
+
+
+def applicability_reason_code(value: Any, *, fallback: str | None) -> str | None:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return fallback
+    normalized = opaque_id(value)
+    if normalized is None or not normalized[0].isascii() or not normalized[0].isalnum() or any(
+        not character.isascii() or not (character.isalnum() or character in "._-")
+        for character in normalized
+    ):
+        return "applicability_reason_code_malformed"
+    return normalized
+
+
+def legacy_applicability_projection(value: Any) -> bool:
+    return bool(
+        isinstance(value, dict)
+        and all(
+            isinstance(row, dict)
+            and str(row.get("evaluation_status") or "").strip().lower() == "applicable"
+            and row.get("reason_code") == "legacy_declared_metric"
+            for row in value.values()
+        )
+    )
 
 
 def read_json(path: Path) -> Any:
@@ -76,7 +124,85 @@ def policy_items(value: Any) -> list[str]:
         value = [value]
     if not isinstance(value, (list, tuple, set)):
         return []
-    return [str(item).strip() for item in value if str(item).strip()]
+    return [normalized for item in value if (normalized := opaque_id(item)) is not None]
+
+
+def policy_items_contract(value: Any, *, absent_allowed: bool = False) -> tuple[list[str], bool]:
+    """Return string contract items without stringifying malformed values."""
+    if value is None:
+        return ([], absent_allowed)
+    if isinstance(value, str):
+        normalized = opaque_id(value)
+        return ([normalized], True) if normalized is not None else ([], False)
+    if not isinstance(value, (list, tuple, set)):
+        return ([], False)
+    items: list[str] = []
+    valid = True
+    for item in value:
+        normalized = opaque_id(item)
+        if normalized is None:
+            valid = False
+            continue
+        items.append(normalized)
+    return (items, valid)
+
+
+def opaque_id_list_valid(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return opaque_id(value) is not None
+    return isinstance(value, (list, tuple, set)) and all(
+        opaque_id(item) is not None for item in value
+    )
+
+
+def normalize_metric_applicability(value: Any, *, supplied: bool) -> dict[str, Any]:
+    if not supplied:
+        return {
+            "evaluation_status": "applicable",
+            "reason_code": "legacy_declared_metric",
+            "required_body_class_ids": [],
+            "missing_body_class_ids": [],
+        }
+    if isinstance(value, bool):
+        value = {"evaluation_status": "applicable" if value else "not_applicable"}
+    elif isinstance(value, str):
+        value = {"evaluation_status": value}
+    if not isinstance(value, dict):
+        return {"evaluation_status": "invalid_contract", "reason_code": "applicability_row_malformed"}
+    status = str(value.get("evaluation_status") or value.get("status") or "").strip().lower()
+    boolean_status = value.get("applicable")
+    if isinstance(boolean_status, bool):
+        from_boolean = "applicable" if boolean_status else "not_applicable"
+        if status and status != from_boolean:
+            status = "invalid_contract"
+        elif not status:
+            status = from_boolean
+    required_value = value.get("required_body_class_ids") if "required_body_class_ids" in value else value.get("required_body_classes")
+    missing_value = value.get("missing_body_class_ids") if "missing_body_class_ids" in value else value.get("missing_body_classes")
+    evidence_value = value.get("evidence_ids")
+    required = policy_items(required_value)
+    missing = policy_items(missing_value)
+    opaque_ids_valid = all(
+        opaque_id_list_valid(item) for item in (required_value, missing_value, evidence_value)
+    )
+    if not opaque_ids_valid:
+        status = "invalid_contract"
+    if status == "applicable" and missing:
+        status = "insufficient_evidence"
+    if status not in METRIC_APPLICABILITY_STATUSES:
+        status = "invalid_contract"
+    return {
+        "evaluation_status": status,
+        "reason_code": applicability_reason_code(
+            value.get("reason_code"),
+            fallback="applicability_opaque_id_malformed" if not opaque_ids_valid else None,
+        ),
+        "required_body_class_ids": required,
+        "missing_body_class_ids": missing,
+        "evidence_ids": policy_items(evidence_value),
+    }
 
 
 def normalize_quality_delta_policy(value: Any) -> dict[str, Any]:
@@ -84,48 +210,190 @@ def normalize_quality_delta_policy(value: Any) -> dict[str, Any]:
         raw_keys = value
         raw_aliases: Any = {}
     elif isinstance(value, dict):
-        raw_keys = (
-            value.get("keys")
-            or value.get("quality_delta_keys")
-            or value.get("metric_keys")
-            or value.get("axes")
-            or []
+        raw_keys = next(
+            (
+                value[key]
+                for key in ("declared_keys", "keys", "quality_delta_keys", "metric_keys", "axes")
+                if key in value and value[key] is not None
+            ),
+            [],
         )
-        raw_aliases = (
-            value.get("aliases")
-            or value.get("quality_metric_aliases")
-            or value.get("metric_aliases")
-            or {}
+        raw_aliases = next(
+            (
+                value[key]
+                for key in ("aliases", "quality_metric_aliases", "metric_aliases")
+                if key in value and value[key] is not None
+            ),
+            {},
         )
+        raw_applicability = value.get("applicability")
+        alternate_applicability = value.get("metric_applicability")
+        applicability_flag_conflict = bool(
+            value.get("applicability_supplied") is False
+            and any(
+                mapping is not None and not legacy_applicability_projection(mapping)
+                for mapping in (raw_applicability, alternate_applicability)
+            )
+        )
+        if value.get("applicability_supplied") is False and not applicability_flag_conflict:
+            raw_applicability = None
+            alternate_applicability = None
     else:
         raw_keys = []
         raw_aliases = {}
-    keys = list(dict.fromkeys(policy_items(raw_keys)))
+        raw_applicability = None
+        alternate_applicability = None
+        applicability_flag_conflict = False
+    if not isinstance(value, dict):
+        raw_applicability = None
+        alternate_applicability = None
+        applicability_flag_conflict = False
+    raw_key_items, declared_keys_valid = policy_items_contract(raw_keys)
+    keys = list(dict.fromkeys(raw_key_items))
     aliases: dict[str, list[str]] = {}
-    for key in keys:
-        supplied = policy_items(raw_aliases.get(key)) if isinstance(raw_aliases, dict) else []
-        aliases[key] = list(dict.fromkeys([key, *supplied]))
-    return {"keys": keys, "aliases": aliases, "supplied": bool(keys)}
+    alias_invalid_keys: set[str] = set()
+    alias_contract_valid = isinstance(raw_aliases, dict)
+    if isinstance(raw_aliases, dict):
+        for key in keys:
+            supplied, supplied_valid = policy_items_contract(
+                raw_aliases.get(key),
+                absent_allowed=True,
+            )
+            if not supplied_valid:
+                alias_invalid_keys.add(key)
+            aliases[key] = list(dict.fromkeys([key, *supplied]))
+        for alias_key, alias_value in raw_aliases.items():
+            _, entry_valid = policy_items_contract(alias_value, absent_allowed=True)
+            if opaque_id(alias_key) is None or not entry_valid:
+                alias_contract_valid = False
+                if isinstance(alias_key, str) and alias_key in keys:
+                    alias_invalid_keys.add(alias_key)
+    else:
+        aliases = {key: [key] for key in keys}
+    inherited_error_codes = [
+        code
+        for code in (policy_items(value.get("policy_contract_error_codes")) if isinstance(value, dict) else [])
+        if code in METRIC_POLICY_CONTRACT_ERROR_CODES
+    ]
+    policy_contract_error_codes: list[str] = list(dict.fromkeys(inherited_error_codes))
+    if isinstance(value, dict) and value.get("policy_contract_invalid") and not policy_contract_error_codes:
+        policy_contract_error_codes.append("metric_policy_contract_malformed")
+    if not declared_keys_valid:
+        policy_contract_error_codes.append("declared_metric_id_malformed")
+    if not alias_contract_valid or alias_invalid_keys:
+        policy_contract_error_codes.append("metric_alias_contract_malformed")
+    if applicability_flag_conflict:
+        policy_contract_error_codes.append("metric_policy_contract_malformed")
+    for applicability_value in (raw_applicability, alternate_applicability):
+        if isinstance(applicability_value, dict) and any(
+            opaque_id(metric_id) is None for metric_id in applicability_value
+        ):
+            policy_contract_error_codes.append("metric_policy_contract_malformed")
+    policy_contract_error_codes = list(dict.fromkeys(policy_contract_error_codes))
+    policy_contract_invalid = bool(policy_contract_error_codes)
+    applicability_conflict = (
+        raw_applicability is not None
+        and alternate_applicability is not None
+        and raw_applicability != alternate_applicability
+    )
+    applicability_source = raw_applicability if raw_applicability is not None else alternate_applicability
+    applicability_supplied = applicability_source is not None
+    mapping = applicability_source if isinstance(applicability_source, dict) else {}
+    applicability = {
+        key: normalize_metric_applicability(
+            mapping.get(key),
+            supplied=applicability_supplied,
+        )
+        for key in keys
+    }
+    if applicability_conflict or (applicability_supplied and not isinstance(applicability_source, dict)):
+        for key in keys:
+            applicability[key] = {
+                **applicability[key],
+                "evaluation_status": "invalid_contract",
+                "reason_code": "applicability_mapping_conflict" if applicability_conflict else "applicability_mapping_malformed",
+            }
+    invalid = [key for key in keys if applicability[key]["evaluation_status"] == "invalid_contract"]
+    if policy_contract_invalid:
+        invalid = list(keys)
+    insufficient = [key for key in keys if applicability[key]["evaluation_status"] == "insufficient_evidence"]
+    not_applicable = [key for key in keys if applicability[key]["evaluation_status"] == "not_applicable"]
+    return {
+        "declared_keys": keys,
+        "keys": [] if policy_contract_invalid or invalid else [key for key in keys if applicability[key]["evaluation_status"] == "applicable"],
+        "aliases": aliases,
+        "applicability": applicability,
+        "applicability_supplied": applicability_supplied,
+        "not_applicable_fields": not_applicable,
+        "insufficient_evidence_fields": insufficient,
+        "invalid_contract_fields": invalid,
+        "policy_contract_invalid": policy_contract_invalid,
+        "policy_contract_error_codes": policy_contract_error_codes,
+        "supplied": bool(keys),
+    }
 
 
 def explicit_quality_delta_policy(
     contract: dict[str, Any] | None,
     payload: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    candidates: list[dict[str, Any]] = []
     for source in (payload, contract):
         if not isinstance(source, dict):
             continue
         policy = source.get("quality_delta_policy")
         if policy is not None:
-            return normalize_quality_delta_policy(policy)
-        if source.get("quality_delta_keys") is not None:
-            return normalize_quality_delta_policy(
+            candidates.append(normalize_quality_delta_policy(policy))
+        elif source.get("quality_delta_keys") is not None:
+            candidates.append(normalize_quality_delta_policy(
                 {
                     "keys": source.get("quality_delta_keys"),
                     "aliases": source.get("quality_metric_aliases") or {},
                 }
-            )
-    return normalize_quality_delta_policy(None)
+            ))
+    if not candidates:
+        return normalize_quality_delta_policy(None)
+    comparable = [
+        json.dumps(
+            {
+                "declared_keys": sorted(item["declared_keys"]),
+                "policy_contract_invalid": item["policy_contract_invalid"],
+                "policy_contract_error_codes": sorted(item["policy_contract_error_codes"]),
+                "aliases": {
+                    key: sorted(set(item["aliases"].get(key, [key])))
+                    for key in sorted(item["declared_keys"])
+                },
+                "applicability": {
+                    key: {
+                        "evaluation_status": item["applicability"].get(key, {}).get("evaluation_status"),
+                        "required_body_class_ids": sorted(set(item["applicability"].get(key, {}).get("required_body_class_ids") or [])),
+                        "missing_body_class_ids": sorted(set(item["applicability"].get(key, {}).get("missing_body_class_ids") or [])),
+                    }
+                    for key in sorted(item["declared_keys"])
+                },
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        for item in candidates
+    ]
+    if len(set(comparable)) == 1:
+        return candidates[0]
+    declared = list(dict.fromkeys(key for item in candidates for key in item["declared_keys"]))
+    aliases = {key: list(dict.fromkeys(alias for item in candidates for alias in item["aliases"].get(key, [key]))) for key in declared}
+    return normalize_quality_delta_policy(
+        {
+            "keys": declared,
+            "aliases": aliases,
+            "applicability": {
+                key: {
+                    "evaluation_status": "invalid_contract",
+                    "reason_code": "payload_contract_policy_conflict",
+                }
+                for key in declared
+            },
+        }
+    )
 
 
 def quality_metric_value(
@@ -140,6 +408,34 @@ def quality_metric_value(
     return 0.0
 
 
+def numeric_metric_value(
+    quality: dict[str, Any],
+    key: str,
+    aliases: dict[str, Any] | None = None,
+) -> tuple[bool, float | None]:
+    candidates = policy_items((aliases or {}).get(key)) or [key]
+    for candidate in candidates:
+        if candidate not in quality:
+            continue
+        value = quality.get(candidate)
+        if isinstance(value, bool):
+            return False, None
+        if isinstance(value, (int, float)):
+            try:
+                numeric = float(value)
+            except OverflowError:
+                return False, None
+            return (True, numeric) if math.isfinite(numeric) else (False, None)
+        if isinstance(value, str):
+            try:
+                numeric = float(value.strip())
+                return (True, numeric) if math.isfinite(numeric) else (False, None)
+            except ValueError:
+                return False, None
+        return False, None
+    return False, None
+
+
 def quality_delta_gate(
     current_quality: dict[str, Any],
     previous_quality: dict[str, Any],
@@ -148,13 +444,52 @@ def quality_delta_gate(
 ) -> dict[str, Any]:
     policy = normalize_quality_delta_policy(quality_delta_policy)
     keys = policy["keys"]
-    current = {key: quality_metric_value(current_quality, key, policy["aliases"]) for key in keys}
-    previous = {key: quality_metric_value(previous_quality, key, policy["aliases"]) for key in keys}
+    try:
+        epsilon_value = float(epsilon) if not isinstance(epsilon, bool) else float("nan")
+    except (OverflowError, TypeError, ValueError):
+        epsilon_value = float("nan")
+    epsilon_valid = math.isfinite(epsilon_value) and epsilon_value >= 0
+    effective_epsilon = epsilon_value if epsilon_valid else 0.0
+    current: dict[str, float] = {}
+    previous: dict[str, float] = {}
+    missing: list[str] = []
+    previous_binding_count = sum(
+        1
+        for key in keys
+        if any(candidate in previous_quality for candidate in policy["aliases"].get(key, [key]))
+    )
+    baseline_absent = bool(keys) and previous_binding_count == 0
+    for key in keys:
+        current_present, current_value = numeric_metric_value(current_quality, key, policy["aliases"])
+        previous_present, previous_value = numeric_metric_value(previous_quality, key, policy["aliases"])
+        if current_present and current_value is not None:
+            current[key] = current_value
+        if previous_present and previous_value is not None:
+            previous[key] = previous_value
+        elif baseline_absent:
+            previous[key] = 0.0
+        if not current_present or (not previous_present and not baseline_absent):
+            missing.append(key)
+    invalid = list(policy["invalid_contract_fields"])
+    if not epsilon_valid:
+        invalid = list(dict.fromkeys([*invalid, *policy["declared_keys"]]))
+    insufficient = sorted(set([*policy["insufficient_evidence_fields"], *missing]))
+    evaluated = bool(keys) and not invalid and not insufficient
     improved_fields = [
         key
         for key in keys
-        if current[key] > previous[key] + (epsilon if key.endswith("_ratio") else 0.0)
+        if evaluated and current[key] > previous[key] + (effective_epsilon if key.endswith("_ratio") else 0.0)
     ]
+    if policy.get("policy_contract_invalid") or invalid:
+        evaluation_status = "invalid_contract"
+    elif insufficient:
+        evaluation_status = "insufficient_evidence"
+    elif not policy["supplied"]:
+        evaluation_status = "not_evaluated"
+    elif not keys and policy["not_applicable_fields"]:
+        evaluation_status = "not_applicable"
+    else:
+        evaluation_status = "evaluated"
     return {
         "gate": "G-COV",
         "quality_delta_pass": bool(improved_fields),
@@ -163,8 +498,11 @@ def quality_delta_gate(
         "previous_quality_vector": previous,
         "quality_delta_policy": policy,
         "quality_delta_policy_supplied": policy["supplied"],
-        "evaluation_status": "evaluated" if keys else "not_evaluated",
-        "status": "pass" if improved_fields else ("block" if keys else "not_evaluated"),
+        "not_applicable_fields": policy["not_applicable_fields"],
+        "insufficient_evidence_fields": insufficient,
+        "invalid_contract_fields": invalid,
+        "evaluation_status": evaluation_status,
+        "status": "pass" if improved_fields else ("block" if evaluation_status == "evaluated" else evaluation_status),
     }
 
 
