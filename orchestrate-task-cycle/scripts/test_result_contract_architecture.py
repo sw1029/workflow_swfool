@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import ast
 import sys
 from pathlib import Path
 
@@ -12,6 +13,28 @@ if str(SCRIPT_DIR) not in sys.path:
 import result_contract  # noqa: E402
 from result_contract_lib.base import RuleContext, RuleRegistry, TargetContractRule  # noqa: E402
 from result_contract_lib.registry import default_rule_registry  # noqa: E402
+from result_contract_lib.rules.completion_checks import ORDERED_CHECKS as COMPLETION_CHECKS  # noqa: E402
+from result_contract_lib.rules.derive_checks import ORDERED_CHECKS as DERIVE_CHECKS  # noqa: E402
+
+
+def _logical_lines(path: Path) -> int:
+    return sum(
+        1
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    )
+
+
+def _largest_function(path: Path) -> int:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    return max(
+        (
+            node.end_lineno - node.lineno + 1
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ),
+        default=0,
+    )
 
 
 def empty_context(target: str) -> RuleContext:
@@ -37,6 +60,59 @@ def test_default_registry_has_one_owner_per_target() -> None:
     assert owners["derive"] == ["DeriveRule"]
     assert owners["loopback_audit"] == ["LoopbackAuditRule"]
     assert owners["validate"] == ["CompletionValidationRule"]
+
+
+def test_large_target_rules_use_bounded_ordered_check_modules() -> None:
+    assert [check.__name__ for check in DERIVE_CHECKS] == [
+        "check_anti_loop",
+        "check_task_pack",
+        "check_execution_scope",
+        "check_routing_contracts",
+        "check_routing_safety",
+        "check_routing_outcomes",
+        "check_progress_evidence",
+        "check_progress_policy",
+        "check_provider_setup",
+        "check_provider_outcomes",
+    ]
+    assert [check.__name__ for check in COMPLETION_CHECKS] == [
+        "check_preflight",
+        "check_acceptance_facts",
+        "check_artifact_facts",
+        "check_operation_facts",
+        "check_evaluate",
+        "check_scenarios",
+        "check_change_evidence",
+        "check_closure",
+    ]
+
+    bounded_roots = (
+        SCRIPT_DIR / "result_contract_lib" / "rules" / "derive_checks",
+        SCRIPT_DIR / "result_contract_lib" / "rules" / "completion_checks",
+        SCRIPT_DIR / "result_contract_lib" / "validation_pipeline",
+    )
+    bounded_files = [path for root in bounded_roots for path in root.glob("*.py")]
+    bounded_files.extend(
+        (
+            SCRIPT_DIR / "result_contract.py",
+            SCRIPT_DIR / "result_contract_lib" / "advice.py",
+            SCRIPT_DIR / "result_contract_lib" / "decision.py",
+            SCRIPT_DIR / "result_contract_lib" / "decision_verification.py",
+            SCRIPT_DIR / "result_contract_lib" / "engine.py",
+            SCRIPT_DIR / "result_contract_lib" / "expectations.py",
+            SCRIPT_DIR / "result_contract_lib" / "metric_consumption.py",
+            SCRIPT_DIR / "result_contract_lib" / "policy.py",
+            SCRIPT_DIR / "result_contract_lib" / "receipts.py",
+            SCRIPT_DIR / "result_contract_lib" / "verdicts.py",
+            SCRIPT_DIR / "result_contract_lib" / "rules" / "derive.py",
+            SCRIPT_DIR / "result_contract_lib" / "rules" / "completion.py",
+        )
+    )
+
+    assert all(_logical_lines(path) < 500 for path in bounded_files)
+    assert all(_largest_function(path) <= 140 for path in bounded_files)
+    assert all("import *" not in path.read_text(encoding="utf-8") for path in bounded_files)
+    assert all("globals()" not in path.read_text(encoding="utf-8") for path in bounded_files)
 
 
 def test_rule_registry_supports_focused_extension() -> None:

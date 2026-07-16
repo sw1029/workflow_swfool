@@ -1,18 +1,91 @@
 from __future__ import annotations
 
-from .common import *
+from .runtime_dependencies import (
+    Any,
+    bool_value,
+    first_field_value,
+    re,
+    string_list,
+)
+
+from .evaluation_frame import _require_values
+from .packet_finalization_fields import _finalization_fields
+from .packet_gate_fields import _gate_fields
+from .packet_identity_fields import _identity_fields
+from .packet_progress_fields import _progress_fields
+from .packet_verification_fields import _verification_fields
+
+
+_PACKET_SECTION_BUILDERS = (
+    _identity_fields,
+    _gate_fields,
+    _progress_fields,
+    _verification_fields,
+    _finalization_fields,
+)
+
 
 def build_base_packet(ns: dict[str, Any]) -> dict[str, Any]:
-    globals().update(ns)
+    (
+        adapter_gate,
+        adapter_load_gate,
+        coverage_gate,
+        decision_artifact_ref,
+        gate_inputs,
+        hard_stop,
+        output_delta,
+        primary_metric_gate,
+        quality,
+        runner_validation,
+        semantic_progress,
+        source_separation_gate,
+        validator_gate,
+    ) = _require_values(
+        ns,
+        (
+            "adapter_gate",
+            "adapter_load_gate",
+            "coverage_gate",
+            "decision_artifact_ref",
+            "gate_inputs",
+            "hard_stop",
+            "output_delta",
+            "primary_metric_gate",
+            "quality",
+            "runner_validation",
+            "semantic_progress",
+            "source_separation_gate",
+            "validator_gate",
+        ),
+    )
     integrity_values = [runner_validation, output_delta, quality, *gate_inputs]
-    truth_required = bool_value(first_field_value(integrity_values, {"actual_body_truth_required", "acceptance_required_actual_body_truth"}))
-    truth_basis = str(first_field_value(integrity_values, {"truth_basis", "actual_body_truth_basis"}) or "").strip().lower()
-    body_divergence = bool_value(first_field_value(integrity_values, {"report_body_divergence"}))
-    key_divergence = bool_value(first_field_value(integrity_values, {"report_key_divergence"}))
-    consumer_missing = bool_value((adapter_load_gate.get("consumer_context_conformance") or {}).get("missing_consumer_context_ids"))
-    body_fingerprint = str(decision_artifact_ref.get("body_projection_fingerprint") or "").strip().lower()
+    truth_required = bool_value(
+        first_field_value(
+            integrity_values,
+            {"actual_body_truth_required", "acceptance_required_actual_body_truth"},
+        )
+    )
+    truth_basis = str(
+        first_field_value(integrity_values, {"truth_basis", "actual_body_truth_basis"}) or ""
+    ).strip().lower()
+    body_divergence = bool_value(
+        first_field_value(integrity_values, {"report_body_divergence"})
+    )
+    key_divergence = bool_value(
+        first_field_value(integrity_values, {"report_key_divergence"})
+    )
+    consumer_missing = bool_value(
+        (adapter_load_gate.get("consumer_context_conformance") or {}).get(
+            "missing_consumer_context_ids"
+        )
+    )
+    body_fingerprint = str(
+        decision_artifact_ref.get("body_projection_fingerprint") or ""
+    ).strip().lower()
     exact_body_bound = bool(re.fullmatch(r"[0-9a-f]{64}", body_fingerprint))
-    exact_cohort_bound = bool(string_list(decision_artifact_ref.get("verification_input_ids"))) or bool(
+    exact_cohort_bound = bool(
+        string_list(decision_artifact_ref.get("verification_input_ids"))
+    ) or bool(
         decision_artifact_ref.get("input_fingerprints")
         if isinstance(decision_artifact_ref.get("input_fingerprints"), dict)
         else None
@@ -30,262 +103,23 @@ def build_base_packet(ns: dict[str, Any]) -> dict[str, Any]:
             not bool_value(primary_metric_gate.get("primary_metric_high_water_moved")),
             truth_required and truth_basis in {"", "not_evaluated", "missing", "unknown"},
             bool_value(validator_gate.get("constrains_disposition")),
-            bool_value(source_separation_gate.get("independently_verified_downgraded_fields")),
+            bool_value(
+                source_separation_gate.get("independently_verified_downgraded_fields")
+            ),
         )
     )
-    row = {
-        "schema_version": SCHEMA_VERSION,
-        "handoff_contract_version": 1,
-        "step": "loopback_audit",
-        "cycle_id": args.cycle_id,
-        "task_id": args.task_id,
-        "family_key": family_key,
-        "legacy_family_key": legacy_family_key,
-        "root_key": current_root_key,
-        "root_family_key": current_root_family_key,
-        "artifact_family": args.artifact_family,
-        "decision_artifact_ref": decision_artifact_ref,
-        "artifact_id": decision_artifact_ref.get("artifact_id"),
-        "artifact_class": decision_artifact_ref.get("artifact_class"),
-        "artifact_sha256": decision_artifact_ref.get("artifact_sha256"),
-        "production_lane_identity": decision_artifact_ref.get("production_lane_identity"),
-        "discovery_basis": decision_artifact_ref.get("discovery_basis"),
-        "scope_verified": bool_value(decision_artifact_ref.get("scope_verified")),
-        "advisory_discovery": bool_value(decision_artifact_ref.get("advisory_discovery")),
-        "gate_compatibility_results": gate_compatibility_results,
-        "required_gate_ids": sorted({
-            str(item.get("gate_id"))
-            for item in gate_compatibility_results
-            if item.get("gate_id") and item.get("gate_compatibility_status") == "compatible"
-        }),
-        "decision_consumed_gate_ids": sorted({
-            str(item.get("gate_id"))
-            for item in gate_compatibility_results
-            if item.get("gate_id") and item.get("gate_compatibility_status") == "compatible"
-        }),
-        "decision_excluded_gate_ids": sorted({
-            str(item.get("gate_id"))
-            for item in gate_compatibility_results
-            if item.get("gate_id") and item.get("gate_compatibility_status") != "compatible"
-        }),
-        "input_state_fingerprint": input_state_fingerprint,
-        "attempt_identity": attempt_identity,
-        "attempt_identity_version": 2,
-        "legacy_attempt_identity": legacy_attempt_identity,
-        "attempt_revision_candidate": attempt_revision_candidate,
-        "supersedes_attempt_revision_candidate": supersedes_attempt_revision_candidate,
-        "supersedes_attempt_identity_candidate": supersedes_attempt_identity_candidate,
-        "registry_label_correction": registry_label_correction,
-        "semantic_signature": args.semantic_signature,
-        "provider_request_count": provider_request_count,
-        "budget_evaluations": budget_evaluations,
-        "budget_evaluation_status": (
-            "budget_unverified"
-            if any(
-                contract.get("budget_evaluation_status") == "budget_unverified"
-                for contract in budget_evaluations.values()
-                if isinstance(contract, dict)
-            )
-            else "evaluated"
-        ),
-        "budget_unverified": sorted(
-            budget_id
-            for budget_id, contract in budget_evaluations.items()
-            if isinstance(contract, dict)
-            and contract.get("budget_evaluation_status") == "budget_unverified"
-        ),
-        "quality_vector": quality,
-        "quality_delta_policy": public_quality_delta_policy(quality_delta_policy),
-        "previous_high_water_mark": prev_high,
-        "high_water_mark": high_water,
-        "coverage_quality_delta_gate": coverage_gate,
-        "coverage_quality_delta_reconciliation_gate": coverage_reconciliation_gate,
-        "substance_metrics": numeric_vector(current_substance),
-        "substance_delta_gate": substance_gate,
-        "vacuous_corrective_gate": corrective_gate,
-        "adapter_mandate_gate": adapter_gate,
-        "adapter_mandate_required": bool_value(adapter_gate.get("adapter_mandate_required")),
-        "adapter_missing_streak": adapter_gate.get("adapter_missing_streak"),
-        "adapter_contract_unmet": adapter_contract_unmet,
-        "adapter_wiring_gate": adapter_load_gate,
-        "consumer_context_conformance": adapter_load_gate.get("consumer_context_conformance") or {},
-        "adapter_wiring_defect": bool_value(adapter_load_gate.get("adapter_wiring_defect")),
-        "adapter_loaded": domain_adapter is not None,
-        "adapter_registered": adapter_registered,
-        "adapter_path": domain_adapter_path or adapter_expected_path,
-        "adapter_expected_path": adapter_expected_path,
-        "cumulative_goal_distance_gate": chain_gate,
-        "cumulative_goal_distance_scope_key": chain_gate.get("cumulative_goal_distance_scope_key"),
-        "cumulative_goal_distance_stall_streak": chain_gate.get("cumulative_goal_distance_stall_streak"),
-        "cumulative_goal_distance_stalled": bool_value(chain_gate.get("cumulative_goal_distance_stalled")),
-        "chain_stall_forced_retarget_gate": forced_retarget_gate,
-        "forced_selected_task": forced_selected_task,
-        "forced_selected_task_options": forced_task_options,
-        "high_water_vector": chain_gate.get("high_water_vector"),
-        "high_water_last_improved_cycle": chain_gate.get("high_water_last_improved_cycle"),
-        "acceptance_reachability_gate": reachability_gate,
-        "acceptance_unreachable_under_frozen_config": bool_value(
-            reachability_gate.get("acceptance_unreachable_under_frozen_config")
-        ),
-        "acceptance_verifier_not_evaluated": bool_value(
-            reachability_gate.get("acceptance_verifier_not_evaluated")
-        ),
-        "unverifiable_acceptance_contract": bool_value(
-            reachability_gate.get("unverifiable_acceptance_contract")
-        ),
-        "relaxation_or_escalation_required": bool_value(
-            reachability_gate.get("relaxation_or_escalation_required")
-        ),
-        "residual_gap_policy": reachability_gate.get("residual_gap_policy"),
-        "residual_gap_ratio": reachability_gate.get("residual_gap_ratio"),
-        "marginal_repair": bool_value(reachability_gate.get("marginal_repair")),
-        "oracle_metric_validity_gate": metric_validity_gate,
-        "metric_verifier_not_evaluated": bool_value(
-            metric_validity_gate.get("metric_verifier_not_evaluated")
-        ),
-        "repo_owned_source_roots": repo_owned_source_roots,
-        "repo_owned_source_roots_status": repo_owned_source_roots_status,
-        "repo_owned_source_roots_error": repo_owned_source_roots_error,
-        "facet_root_map_applied": bool(facet_root_map),
-        "facet_root_map_missing": facet_root_map_missing,
-        "facet_root_map_size": len(facet_root_map),
-        "raw_root_family_key": raw_root_family_key,
-        "terminal_outcome_key": current_terminal_outcome_key,
-        "terminal_outcome_family_key": terminal_family_key,
-        "terminal_outcome_family_source": terminal_family_source,
-        "terminal_outcome_family_fallback_applied": terminal_family_fallback,
-        "terminal_outcome_family_previous_count": previous_micro_hardening_count(registry_rows, current_root_family_key),
-        "terminal_outcome_family_previous_cycle_id": (latest_terminal_family or {}).get("cycle_id"),
-        "terminal_self_resolution_gate": terminal_self_resolution,
-        "offline_scope_unverified": bool_value(terminal_self_resolution.get("offline_scope_unverified")),
-        "goal_terminal_prohibited": bool_value(terminal_self_resolution.get("goal_terminal_prohibited")),
-        "advice_freshness_gate": advice_gate,
-        "partial_progress_axes_gate": partial_progress_gate,
-        "structure_metrics_gate": structure_gate,
-        "structure_high_water_key_scope": structure_gate.get("structure_high_water_key_scope"),
-        "structure_global_invariant_metrics": structure_gate.get("structure_global_invariant_metrics") or {},
-        "provider_scale_dispatch_gate": dispatch_gate,
-        "changed_vs_previous": changed_vs_previous,
-        "semantic_progress": semantic_progress,
-        "authoritative_semantic_progress": authoritative_progress,
-        "truth_basis": truth_basis or ("not_evaluated" if truth_required else None),
-        "report_body_divergence": body_divergence,
-        "same_family_micro_hardening_count": count,
-        "micro_hardening_count": count,
-        "same_family_nonsemantic_budget": budget_value(
-            budget_evaluations["same_family_nonsemantic_attempts"]
-        ),
-        "same_family_budget_evaluation": budget_evaluations[
-            "same_family_nonsemantic_attempts"
-        ],
-        "recommended_disposition": disposition,
-        "hard_stop_required": hard_stop,
-        "evidence_class": evidence_class,
-        "insufficient_evidence_reason": insufficient_reason,
-        "measurement_progress": measurement_progress,
-        "measurement_progress_allowed": measurement_progress_allowed,
-        "measurement_streak": measurement_streak_value,
-        "measurement_progress_streak_for_root_key": measurement_details["measurement_progress_streak_for_root_key"],
-        "measurement_progress_streak_for_root_family": measurement_details["measurement_progress_streak_for_root_family"],
-        "measurement_streak_cap": measurement_streak_cap,
-        "measurement_budget_evaluation": budget_evaluations[
-            "measurement_nonsemantic_attempts"
-        ],
-        "measurement_check_ids": sorted(current_check_ids),
-        "measurement_frontiers_observed": sorted(current_frontiers),
-        "measurement_progress_basis": measurement_details["measurement_progress_basis"],
-        "blocker_signature": current_blocker_signature,
-        "blocker_root_family": blocker_root_family,
-        "blocker_ladder_rung": current_rung,
-        "blocker_mutation_kind": mutation_kind,
-        "forward_mutation_budget": forward_mutation_budget,
-        "forward_mutation_budget_remaining": forward_budget_remaining,
-        "terminal_outcome_changed": outcome_changed,
-        "observed_delta_class": delta_class,
-        "forward_mutation_vacuous": forward_mutation_vacuous,
-        "force_implementation_cycle": force_implementation_cycle,
-        "task_correction_class": task_correction_class,
-        "detection_only": detection_only,
-        "detection_only_streak_for_root_family": detection_streak,
-        "detection_only_streak_cap": detection_streak_cap,
-        "detection_budget_evaluation": budget_evaluations[
-            "detection_nonsemantic_attempts"
-        ],
-        "requires_correction_or_terminal": requires_correction_or_terminal,
-        "validator_integrity_gate": validator_gate,
-        "evidence_provenance_gate": evidence_gate,
-        "producer_attested_fields": evidence_gate.get("producer_attested_fields") or [],
-        "independently_verified_fields": evidence_gate.get("independently_verified_fields") or [],
-        "self_grounded_fields": evidence_gate.get("self_grounded_fields") or [],
-        "verification_axes": source_separation_gate.get("verification_axes") or [],
-        "attested_only_movement": bool_value(evidence_gate.get("attested_only_movement")),
-        "primary_metric_gate": primary_metric_gate,
-        "primary_metric_high_water_moved": bool_value(primary_metric_gate.get("primary_metric_high_water_moved")),
-        "primary_metric_zero_movement_streak": primary_metric_gate.get("primary_metric_zero_movement_streak"),
-        "primary_metric_stalled": bool_value(primary_metric_gate.get("primary_metric_stalled")),
-        "c4_user_escalation_backstop_required": c4_user_escalation_backstop_required,
-        "failure_surface_stage_gate": failure_surface_gate,
-        "execution_stage_ladder_status": failure_surface_gate.get("execution_stage_ladder_status"),
-        "last_successful_stage": failure_surface_gate.get("last_successful_stage"),
-        "failure_surface_stage": failure_surface_gate.get("failure_surface_stage"),
-        "failure_surface_count_key": failure_surface_gate.get("failure_surface_count_key"),
-        "terminal_classification_stage_contradiction": bool_value(
-            failure_surface_gate.get("terminal_classification_stage_contradiction")
-        ),
-        "terminal_classification_invalid_for_counting": bool_value(
-            failure_surface_gate.get("terminal_classification_invalid_for_counting")
-        ),
-        "same_input_contract_gate": input_contract_gate,
-        "same_input_contract_violation": bool_value(input_contract_gate.get("same_input_contract_violation")),
-        "diagnostics_unavailable_gate": diagnostics_gate,
-        "diagnostics_unavailable": bool_value(diagnostics_gate.get("diagnostics_unavailable")),
-        "diagnostics_unavailable_streak": diagnostics_gate.get("diagnostics_unavailable_streak"),
-        "instrumentation_supply_required": bool_value(diagnostics_gate.get("instrumentation_supply_required")),
-        "verification_source_separation_gate": source_separation_gate,
-        "verification_input_ids": source_separation_gate.get("verification_input_ids") or [],
-        "producer_input_ids": source_separation_gate.get("producer_input_ids") or [],
-        "verified_artifact_ids": source_separation_gate.get("verified_artifact_ids") or [],
-        "input_fingerprints": source_separation_gate.get("input_fingerprints") or {},
-        "independent_source_separation_status": source_separation_gate.get("independent_source_separation_status"),
-        "independently_verified_downgraded_fields": source_separation_gate.get("independently_verified_downgraded_fields") or [],
-        "root_dominant_parameter_key": root_dominant_parameter_key,
-        "effective_count_key": effective_count_key,
-        "envelope_thaw_item_required": bool_value(reachability_gate.get("envelope_thaw_item_required")),
-        "envelope_thaw_item": reachability_gate.get("envelope_thaw_item"),
-        "envelope_thaw_streak": envelope_thaw_streak,
-        "coupled_verifier_gate": verifier_coupling_gate,
-        "pass_with_coupled_verifier": bool_value(verifier_coupling_gate.get("pass_with_coupled_verifier")),
-        "changed_verifier_source_paths": verifier_coupling_gate.get("changed_verifier_source_paths") or [],
-        "previous_output_fingerprint": prev_fingerprint,
-        "current_output_fingerprint": quality.get("current_output_fingerprint"),
-        "previous_accepted_baseline": {
-            "source": previous_baseline_source,
-            "error": previous_baseline_error,
-            "fingerprint": prev_fingerprint,
-            "quality_vector_override_applied": bool(previous_adapter_high),
-        },
-        "domain_adapter": {
-            "path": domain_adapter_path or adapter_expected_path,
-            "expected_path": adapter_expected_path,
-            "registered": adapter_registered,
-            "loaded": domain_adapter is not None,
-            "status": "loaded" if domain_adapter is not None else ("error" if domain_adapter_error else "not_registered"),
-            "error": domain_adapter_error,
-        },
-        "registry_path": rel_path(root, registry_path),
-        "finalized_state_cycle_id": finalized_cycle_id,
-        "finalized_state_status": finalized_state_status,
-        "finalized_state_error": finalized_state_error,
-        "registry_state_source": registry_state_source,
-        "finalization_required": True,
-        "finalization_state": "candidate",
-        "authoritative_consumption_allowed": False,
-        "evidence_paths": evidence_paths,
-        "not_goal_truth": True,
-        "not_gold": True,
-        "not_ready": True,
-        "updated_at": now_iso(),
-    }
+    state = dict(ns)
+    state.update(
+        {
+            "authoritative_progress": authoritative_progress,
+            "body_divergence": body_divergence,
+            "truth_basis": truth_basis,
+            "truth_required": truth_required,
+        }
+    )
+    row: dict[str, Any] = {}
+    for builder in _PACKET_SECTION_BUILDERS:
+        row.update(builder(state))
     if isinstance(adapter_gate.get("adapter_hook_demand"), list):
         row["adapter_hook_demand"] = adapter_gate.get("adapter_hook_demand") or []
         row["hook_demand_threshold"] = adapter_gate.get("hook_demand_threshold")

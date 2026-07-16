@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import ast
 import hashlib
 import importlib.util
 import json
@@ -33,6 +34,72 @@ def load_cycle_ledger() -> Any:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_provider_public_export_surface_remains_compatible() -> None:
+    provider = load_provider()
+    exports = provider._api.__all__
+
+    assert len(exports) == 266
+    assert hashlib.sha256("\n".join(exports).encode("utf-8")).hexdigest() == (
+        "fa8723502375d4b0c10e63f508539dfe00970bb5bcb231fe0ea300ddb027b14b"
+    )
+
+
+def test_explicit_runtime_modules_are_not_mutated_by_legacy_rebinding() -> None:
+    provider = load_provider()
+    modules = (
+        provider._api.assembly,
+        provider._api.evaluation_finalize,
+        provider._api.evaluator,
+        provider._api.findings,
+        provider._api.root_cause_runtime,
+        *provider._api._STAGE_MODULES,
+    )
+    names_before = {module.__name__: set(module.__dict__) for module in modules}
+
+    provider._api.set_runtime_caches(provider._api.get_runtime_caches())
+
+    assert all("main" not in module.__dict__ for module in modules)
+    assert names_before == {
+        module.__name__: set(module.__dict__)
+        for module in modules
+    }
+
+
+def test_evaluator_runtime_modules_stay_bounded_and_use_explicit_state() -> None:
+    provider_dir = SCRIPT_DIR / "anti_loop_provider"
+    runtime_modules = {
+        provider_dir / "api.py",
+        provider_dir / "assembly.py",
+        provider_dir / "evaluator.py",
+        provider_dir / "findings.py",
+        provider_dir / "root_cause_runtime.py",
+        provider_dir / "runtime_dependencies.py",
+        *provider_dir.glob("evaluation_*.py"),
+        *provider_dir.glob("finding_*.py"),
+        *provider_dir.glob("packet_*_fields.py"),
+        *(provider_dir / "evaluation_stages").glob("*.py"),
+    }
+
+    for path in sorted(runtime_modules):
+        source = path.read_text(encoding="utf-8")
+        logical_lines = [
+            line
+            for line in source.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        assert len(logical_lines) < 500, path.name
+        assert "globals().update(" not in source, path.name
+        assert "locals()" not in source, path.name
+        assert "import *" not in source, path.name
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                assert node.end_lineno is not None
+                assert node.end_lineno - node.lineno + 1 <= 140, (
+                    path.name,
+                    node.name,
+                )
 
 
 def test_generic_material_delta_is_the_positive_observed_class() -> None:

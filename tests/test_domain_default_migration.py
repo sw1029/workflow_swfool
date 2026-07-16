@@ -149,7 +149,7 @@ def test_explicit_adapter_policy_supplies_metric_keys_and_aliases(tmp_path: Path
             [
                 "def quality_vector(**kwargs):",
                 "    ref = kwargs.get('decision_artifact_ref') or {}",
-                "    return {'quality_vector': {'score_alias': 2, 'current_output_fingerprint': 'fp-generic', 'artifact_id': ref.get('artifact_id'), 'artifact_sha256': ref.get('artifact_sha256')}}",
+                "    return {'quality_vector': {'score_alias': 2, 'current_output_fingerprint': 'fp-generic', 'artifact_id': ref.get('artifact_id'), 'artifact_sha256': ref.get('artifact_sha256'), 'production_lane_identity': ref.get('production_lane_identity'), 'body_projection_fingerprint': ref.get('body_projection_fingerprint'), 'verification_input_ids': ref.get('verification_input_ids')}}",
                 "def quality_delta_policy(**kwargs):",
                 "    return {'keys': ['quality_score'], 'aliases': {'quality_score': ['score_alias']}}",
                 "def substance_metrics(**kwargs):",
@@ -175,6 +175,8 @@ def test_explicit_adapter_policy_supplies_metric_keys_and_aliases(tmp_path: Path
                 "artifact_path_or_store_ref": artifact.name,
                 "artifact_sha256": artifact_sha256,
                 "production_lane_identity": "lane_L",
+                "body_projection_fingerprint": artifact_sha256,
+                "verification_input_ids": ["source_cohort_C"],
             },
             sort_keys=True,
         ),

@@ -961,7 +961,14 @@ def test_metric_applicability_insufficient_invalid_and_happy_paths() -> None:
     assert happy["quality_delta_pass"] is True
     assert happy["improved_fields"] == ["metric_M"]
 
-    evaluator_source = (ROOT / "audit-cycle-loopback" / "scripts" / "anti_loop_provider" / "evaluator.py").read_text(encoding="utf-8")
+    evaluator_source = (
+        ROOT
+        / "audit-cycle-loopback"
+        / "scripts"
+        / "anti_loop_provider"
+        / "evaluation_stages"
+        / "setup_quality.py"
+    ).read_text(encoding="utf-8")
     assert evaluator_source.index("applicability_preflight=True") < evaluator_source.index("else compute_quality")
     coverage_mapping = evaluator_source[
         evaluator_source.index("coverage_compatibility = {"):

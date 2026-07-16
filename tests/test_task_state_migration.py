@@ -453,10 +453,11 @@ def test_audit_still_blocks_duplicate_current_task_alias(tmp_path: Path) -> None
     ]
     index.write_bytes(migration._event_bytes(events))
     audit = task_index.audit_index(tmp_path)
-    assert any(
-        issue["code"] == "duplicate_active_path"
-        for issue in audit["current_surface_blockers"]
-    )
+    blocker_codes = [issue["code"] for issue in audit["current_surface_blockers"]]
+    debt_codes = [issue["code"] for issue in audit["historical_debt"]]
+    assert "duplicate_active_path" in blocker_codes
+    assert "current_canonical_id_missing" in blocker_codes
+    assert "duplicate_active_path" not in debt_codes
 
 
 def test_exact_live_shape_stress_reconciles_11_tasks_10_aliases_38_links_and_stale_packs(tmp_path: Path) -> None:

@@ -1,9 +1,175 @@
 from __future__ import annotations
 
-from .common import *
+from .runtime_dependencies import (
+    Any,
+    Path,
+    ROOT_CAUSE_LEDGER_MAX_ROWS_PER_FAMILY_DEFAULT,
+    ROOT_CAUSE_LEDGER_REL_PATH,
+    argparse,
+    bool_value,
+    call_adapter,
+    compact_root_cause_ledger,
+    exhausted_family_seal_record,
+    harden_repo_owned_actionability,
+    load_json_value,
+    normalize_root_cause_hypotheses,
+    normalize_root_cause_slug,
+    now_iso,
+    project_exhausted_family_seal,
+    read_json,
+    read_jsonl,
+    rel_path,
+    root_cause_hypothesis_gate,
+    root_cause_provenance_refs,
+    string_list,
+)
+
+from dataclasses import dataclass as _dataclass
+
+from .evaluation_frame import _require_values
+
+
+@_dataclass(frozen=True)
+class _RootCauseEntryContext:
+    args: argparse.Namespace
+    attempt_identity: str
+    input_state_fingerprint: str
+    family_key: str
+    current_root_key: str
+    current_root_family_key: str
+    current_blocker_signature: str
+    outcome_changed: bool
+    delta_class: str
+    evidence_paths: list[str]
+    root: Path
+    repo_owned_source_roots: list[str]
+
+
+def _build_root_cause_entry(
+    hypothesis: dict[str, Any],
+    context: _RootCauseEntryContext,
+) -> dict[str, Any]:
+    repair_task_id_raw = (
+        hypothesis.get("repair_task_id")
+        or hypothesis.get("task_id")
+        or getattr(context.args, "root_cause_repair_task_id", None)
+    )
+    repair_task_id = str(repair_task_id_raw).strip() if repair_task_id_raw is not None else ""
+    if repair_task_id.lower() in {"", "unknown", "none", "null"}:
+        repair_task_id = ""
+    repair_attempted = (
+        bool_value(hypothesis.get("repair_attempted"))
+        or bool_value(getattr(context.args, "root_cause_repair_attempted", False))
+        or bool(repair_task_id)
+    )
+    hypothesis_evidence_paths = sorted(
+        set(string_list(hypothesis.get("evidence_paths")) + context.evidence_paths)
+    )
+    entry: dict[str, Any] = {
+        "schema_version": "root-cause-hypothesis-ledger-v1",
+        "cycle_id": context.args.cycle_id,
+        "attempt_identity": context.attempt_identity,
+        "input_state_fingerprint": context.input_state_fingerprint,
+        "family_key": str(hypothesis.get("family_key") or context.family_key),
+        "root_key": str(hypothesis.get("root_key") or context.current_root_key),
+        "root_family_key": str(
+            hypothesis.get("root_family_key") or context.current_root_family_key
+        ),
+        "hypothesized_root_cause": normalize_root_cause_slug(
+            hypothesis.get("hypothesized_root_cause")
+        ),
+        "target_surface": str(
+            hypothesis.get("target_surface")
+            or context.current_blocker_signature
+            or context.current_root_key
+        ),
+        "blocker_signature": context.current_blocker_signature,
+        "repair_attempted": repair_attempted,
+        "repair_task_id": repair_task_id or None,
+        "terminal_outcome_changed": context.outcome_changed,
+        "observed_delta_class": hypothesis.get("observed_delta_class") or context.delta_class,
+        "local": bool_value(hypothesis.get("local")),
+        "bounded": bool_value(hypothesis.get("bounded")),
+        "provider_free": bool_value(
+            hypothesis.get("provider_free") or hypothesis.get("provider-free")
+        ),
+        "in_scope": bool_value(hypothesis.get("in_scope")),
+        "authority_allowed": bool_value(hypothesis.get("authority_allowed")),
+        "actionable": bool_value(
+            hypothesis.get("actionable") or hypothesis.get("root_cause_actionable")
+        ),
+        "provenance_refs": root_cause_provenance_refs(
+            {**hypothesis, "evidence_paths": hypothesis_evidence_paths}
+        ),
+        "evidence_paths": hypothesis_evidence_paths,
+        "updated_at": now_iso(),
+    }
+    actionability = harden_repo_owned_actionability(
+        entry,
+        root=context.root,
+        repo_owned_source_roots=context.repo_owned_source_roots,
+    )
+    entry["actionability_status"] = actionability["status"]
+    entry["actionability_basis"] = actionability["basis"]
+    return entry
+
+
+def _apply_exhaustion_seal(
+    row: dict[str, Any],
+    *,
+    root: Path,
+    finalized_state_status: str,
+    finalized_seal_present: bool,
+    finalized_seal_state: dict[str, Any],
+) -> None:
+    seal_path = root / ".task" / "sealed_blocker_families.json"
+    if finalized_state_status == "invalid":
+        existing_seal_state = {}
+        seal_state_source = "invalid_finalized_state"
+    elif finalized_seal_present:
+        existing_seal_state = finalized_seal_state
+        seal_state_source = "verified_finalization"
+    else:
+        existing_seal_state = read_json(seal_path)
+        seal_state_source = "legacy_seal_fallback"
+    if row["hypothesis_exhausted"]:
+        row["hypothesis_exhaustion_seal_path"] = rel_path(root, seal_path)
+        row["hypothesis_exhaustion_seal_status"] = "prepared_not_finalized"
+        row["hypothesis_exhaustion_seal_candidate"] = exhausted_family_seal_record(row)
+        row["sealed_blocker_families_projection"] = project_exhausted_family_seal(
+            existing_seal_state,
+            row,
+        )
+    elif isinstance(existing_seal_state, dict):
+        row["sealed_blocker_families_projection"] = existing_seal_state
+    else:
+        row["sealed_blocker_families_projection"] = {
+            "schema_version": "sealed-blocker-families-v1",
+            "families": [],
+        }
+    row["sealed_blocker_families_state_source"] = seal_state_source
+
 
 def apply_root_cause_ledger(ns: dict[str, Any]) -> tuple[bool, list[dict[str, Any]], list[dict[str, Any]]]:
-    globals().update(ns)
+    (
+        args, attempt_identity, current_blocker_signature, current_root_family_key,
+        current_root_key, current_rung, delta_class, domain_adapter, evidence_paths,
+        family_key, finalized_root_cause_present, finalized_root_cause_rows,
+        finalized_seal_present, finalized_seal_state, finalized_state_status,
+        input_state_fingerprint, outcome_changed, output_delta, paths, quality,
+        repo_owned_source_roots, root, row, runner_validation,
+    ) = _require_values(
+        ns,
+        (
+            'args', 'attempt_identity', 'current_blocker_signature', 'current_root_family_key',
+            'current_root_key', 'current_rung', 'delta_class', 'domain_adapter',
+            'evidence_paths', 'family_key', 'finalized_root_cause_present',
+            'finalized_root_cause_rows', 'finalized_seal_present', 'finalized_seal_state',
+            'finalized_state_status', 'input_state_fingerprint', 'outcome_changed',
+            'output_delta', 'paths', 'quality', 'repo_owned_source_roots', 'root', 'row',
+            'runner_validation',
+        ),
+    )
     root_cause_ledger_path = Path(getattr(args, "root_cause_ledger_path", ROOT_CAUSE_LEDGER_REL_PATH))
     if not root_cause_ledger_path.is_absolute():
         root_cause_ledger_path = root / root_cause_ledger_path
@@ -41,55 +207,24 @@ def apply_root_cause_ledger(ns: dict[str, Any]) -> tuple[bool, list[dict[str, An
                 "actionable": bool_value(getattr(args, "root_cause_actionable", False)),
             }
         )
-    ledger_entries: list[dict[str, Any]] = []
-    for hypothesis in hypotheses:
-        repair_task_id_raw = (
-            hypothesis.get("repair_task_id")
-            or hypothesis.get("task_id")
-            or getattr(args, "root_cause_repair_task_id", None)
-        )
-        repair_task_id = str(repair_task_id_raw).strip() if repair_task_id_raw is not None else ""
-        if repair_task_id.lower() in {"", "unknown", "none", "null"}:
-            repair_task_id = ""
-        repair_attempted = (
-            bool_value(hypothesis.get("repair_attempted"))
-            or bool_value(getattr(args, "root_cause_repair_attempted", False))
-            or bool(repair_task_id)
-        )
-        hypothesis_evidence_paths = sorted(set(string_list(hypothesis.get("evidence_paths")) + evidence_paths))
-        entry: dict[str, Any] = {
-            "schema_version": "root-cause-hypothesis-ledger-v1",
-            "cycle_id": args.cycle_id,
-            "attempt_identity": attempt_identity,
-            "input_state_fingerprint": input_state_fingerprint,
-            "family_key": str(hypothesis.get("family_key") or family_key),
-            "root_key": str(hypothesis.get("root_key") or current_root_key),
-            "root_family_key": str(hypothesis.get("root_family_key") or current_root_family_key),
-            "hypothesized_root_cause": normalize_root_cause_slug(hypothesis.get("hypothesized_root_cause")),
-            "target_surface": str(hypothesis.get("target_surface") or current_blocker_signature or current_root_key),
-            "blocker_signature": current_blocker_signature,
-            "repair_attempted": repair_attempted,
-            "repair_task_id": repair_task_id or None,
-            "terminal_outcome_changed": outcome_changed,
-            "observed_delta_class": hypothesis.get("observed_delta_class") or delta_class,
-            "local": bool_value(hypothesis.get("local")),
-            "bounded": bool_value(hypothesis.get("bounded")),
-            "provider_free": bool_value(hypothesis.get("provider_free") or hypothesis.get("provider-free")),
-            "in_scope": bool_value(hypothesis.get("in_scope")),
-            "authority_allowed": bool_value(hypothesis.get("authority_allowed")),
-            "actionable": bool_value(hypothesis.get("actionable") or hypothesis.get("root_cause_actionable")),
-            "provenance_refs": root_cause_provenance_refs({**hypothesis, "evidence_paths": hypothesis_evidence_paths}),
-            "evidence_paths": hypothesis_evidence_paths,
-            "updated_at": now_iso(),
-        }
-        actionability = harden_repo_owned_actionability(
-            entry,
-            root=root,
-            repo_owned_source_roots=repo_owned_source_roots,
-        )
-        entry["actionability_status"] = actionability["status"]
-        entry["actionability_basis"] = actionability["basis"]
-        ledger_entries.append(entry)
+    entry_context = _RootCauseEntryContext(
+        args=args,
+        attempt_identity=attempt_identity,
+        input_state_fingerprint=input_state_fingerprint,
+        family_key=family_key,
+        current_root_key=current_root_key,
+        current_root_family_key=current_root_family_key,
+        current_blocker_signature=current_blocker_signature,
+        outcome_changed=outcome_changed,
+        delta_class=delta_class,
+        evidence_paths=evidence_paths,
+        root=root,
+        repo_owned_source_roots=repo_owned_source_roots,
+    )
+    ledger_entries = [
+        _build_root_cause_entry(hypothesis, entry_context)
+        for hypothesis in hypotheses
+    ]
     if finalized_state_status == "invalid":
         existing_root_cause_rows = []
         root_cause_state_source = "invalid_finalized_state"
@@ -144,30 +279,11 @@ def apply_root_cause_ledger(ns: dict[str, Any]) -> tuple[bool, list[dict[str, An
     row["terminal_blocked_invalid_due_to_untried_root_cause"] = bool(untried) and not chain_untried_override
     if root_cause_adapter_error:
         row["root_cause_ledger_adapter_error"] = root_cause_adapter_error
-    seal_path = root / ".task" / "sealed_blocker_families.json"
-    if finalized_state_status == "invalid":
-        existing_seal_state = {}
-        seal_state_source = "invalid_finalized_state"
-    elif finalized_seal_present:
-        existing_seal_state = finalized_seal_state
-        seal_state_source = "verified_finalization"
-    else:
-        existing_seal_state = read_json(seal_path)
-        seal_state_source = "legacy_seal_fallback"
-    if row["hypothesis_exhausted"]:
-        row["hypothesis_exhaustion_seal_path"] = rel_path(root, seal_path)
-        row["hypothesis_exhaustion_seal_status"] = "prepared_not_finalized"
-        row["hypothesis_exhaustion_seal_candidate"] = exhausted_family_seal_record(row)
-        row["sealed_blocker_families_projection"] = project_exhausted_family_seal(
-            existing_seal_state,
-            row,
-        )
-    elif isinstance(existing_seal_state, dict):
-        row["sealed_blocker_families_projection"] = existing_seal_state
-    else:
-        row["sealed_blocker_families_projection"] = {
-            "schema_version": "sealed-blocker-families-v1",
-            "families": [],
-        }
-    row["sealed_blocker_families_state_source"] = seal_state_source
+    _apply_exhaustion_seal(
+        row,
+        root=root,
+        finalized_state_status=finalized_state_status,
+        finalized_seal_present=finalized_seal_present,
+        finalized_seal_state=finalized_seal_state,
+    )
     return chain_untried_override, untried, ledger_entries
