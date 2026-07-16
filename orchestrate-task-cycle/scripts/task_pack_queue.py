@@ -74,7 +74,7 @@ PROMOTION_ORIGINS = {
     "bootstrap_initial_selection",
     "authorized_initial_selection",
 }
-VERDICT_AXIS_STATUSES = {"pass", "fail", "partial", "blocked", "not_evaluated", "not_applicable"}
+VERDICT_AXIS_STATUSES = {"pass", "fail", "partial", "blocked", "not_evaluated", "not_applicable", "conflicted"}
 VERDICT_AXES = (
     "task_acceptance_verdict",
     "artifact_truth_verdict",
@@ -1435,12 +1435,12 @@ def validate_pack(
             implementation_blocking = {
                 axis
                 for axis in ("task_acceptance_verdict", "artifact_truth_verdict", "artifact_semantic_verdict")
-                if verdict_axis_status(supplied_verdict_axes.get(axis)) in {"fail", "blocked", "partial", "not_evaluated"}
+                if verdict_axis_status(supplied_verdict_axes.get(axis)) in {"fail", "blocked", "partial", "not_evaluated", "conflicted"}
             }
             readiness_blocking = {
                 axis
                 for axis in VERDICT_AXES[:-1]
-                if verdict_axis_status(supplied_verdict_axes.get(axis)) in {"fail", "blocked", "partial", "not_evaluated"}
+                if verdict_axis_status(supplied_verdict_axes.get(axis)) in {"fail", "blocked", "partial", "not_evaluated", "conflicted"}
             }
             if implementation_blocking and str(result.get("progress_verdict") or "").lower() == "advanced":
                 add(
@@ -1453,7 +1453,7 @@ def validate_pack(
                 add(
                     "block",
                     "pack_failed_axis_counted_as_goal_ready",
-                    "Goal readiness cannot pass while a required lifecycle axis is failed, blocked, partial, or not evaluated.",
+                    "Goal readiness cannot pass while a required lifecycle axis is failed, blocked, partial, not evaluated, or conflicted.",
                     {"item_id": item_id, "blocking_axes": sorted(readiness_blocking)},
                 )
         if item.get("positive_input_delta_required") is True and item.get("status") in {"consumed", "terminal_blocked"}:

@@ -7,9 +7,16 @@ def apply_root_cause_ledger(ns: dict[str, Any]) -> tuple[bool, list[dict[str, An
     root_cause_ledger_path = Path(getattr(args, "root_cause_ledger_path", ROOT_CAUSE_LEDGER_REL_PATH))
     if not root_cause_ledger_path.is_absolute():
         root_cause_ledger_path = root / root_cause_ledger_path
-    hypotheses_value = load_json_value(root, getattr(args, "root_cause_hypotheses_json", None))
-    root_cause_adapter_error: str | None = None
-    if hypotheses_value is None:
+    hypotheses_prefetched = "root_cause_hypotheses_value" in ns
+    hypotheses_value = (
+        ns.get("root_cause_hypotheses_value")
+        if hypotheses_prefetched
+        else load_json_value(root, getattr(args, "root_cause_hypotheses_json", None))
+    )
+    root_cause_adapter_error: str | None = (
+        ns.get("root_cause_hypotheses_error") if hypotheses_prefetched else None
+    )
+    if hypotheses_value is None and not hypotheses_prefetched:
         hypotheses_value, root_cause_adapter_error = call_adapter(
             domain_adapter,
             "root_cause_hypotheses",

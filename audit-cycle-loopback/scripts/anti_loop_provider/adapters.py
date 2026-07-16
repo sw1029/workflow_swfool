@@ -222,6 +222,13 @@ def load_artifact_selection(
         "artifact_path_or_store_ref": rel_path(root, selected_path) if selected_path is not None else (store_ref or None),
         "artifact_sha256": computed_sha or declared_sha or store_sha or None,
         "production_lane_identity": lane_identity,
+        "body_projection_fingerprint": supplied_ref.get("body_projection_fingerprint"),
+        "verification_input_ids": supplied_ref.get("verification_input_ids")
+        if "verification_input_ids" in supplied_ref
+        else None,
+        "input_fingerprints": supplied_ref.get("input_fingerprints")
+        if "input_fingerprints" in supplied_ref
+        else None,
         "created_or_observed_at": supplied_ref.get("created_or_observed_at"),
         "discovery_basis": discovery_basis,
         "scope_verified": exact_identity,

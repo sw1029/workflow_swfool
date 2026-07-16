@@ -35,6 +35,8 @@ Give the single reviewer only task-local evidence needed to inspect the output:
 
 Ask the reviewer to directly open and inspect the named artifacts. The reviewer should compare actual artifact content against task intent and no-overclaim boundaries, then return a compact structured result. Do not pass the desired answer or prior diagnosis unless the task explicitly asks to verify a known finding.
 
+Declare `direct_read_scope` only with `task_change`, `artifact_body`, or both. Use `task_change` for diff, compatibility, and bounded acceptance inspection. Use `artifact_body` only after opening the current exact body revision and observing the adapter-owned semantic surface. A `task_change` pass never implies an `artifact_body` pass; when the body or a required goal axis was not observed, keep the artifact-semantic axis `not_evaluated`.
+
 ## Domain Adapter Contract
 
 Prefer caller-supplied adapter packets over reviewer-local domain assumptions. The reviewer may consume these optional hooks only through opaque ids, scalars, and enums:
@@ -85,6 +87,17 @@ Return a JSON-compatible summary and, when durable evidence is required, write a
 {
   "task_id": "task-* or unknown",
   "cycle_id": "cycle-* or unknown",
+  "decision_contract_version": 1,
+  "decision_artifact_ref": {
+    "artifact_id": "artifact_A",
+    "artifact_class": "artifact_class_A",
+    "artifact_sha256": "full-sha256",
+    "production_lane_identity": "lane_L",
+    "discovery_basis": "caller_exact",
+    "scope_verified": true,
+    "body_projection_fingerprint": "full-sha256",
+    "verification_input_ids": ["source_cohort_C"]
+  },
   "review_agent_count": 1,
   "agent_routing_applicability": "delegated|delegation_unavailable",
   "policy_id": "configured-tiered-routing-v3",
@@ -105,7 +118,7 @@ Return a JSON-compatible summary and, when durable evidence is required, write a
   "review_status": "complete|partial|blocked|not_applicable",
   "quality_verdict": "acceptable|candidate_only|quality_blocked|unreviewable|not_applicable",
   "reviewed_artifacts": ["path-or-id"],
-  "direct_read_scope": ["path-or-class"],
+  "direct_read_scope": ["task_change", "artifact_body"],
   "path_binding": "producer_declared|fixed_only|not_applicable",
   "layout_drift": false,
   "output_body_locator_unverified": false,
@@ -244,6 +257,9 @@ Preserve `degenerate_surface_language`, `placeholder_event_found`, `surface_enti
 - When `produced_domain_delta` is false, `changed_vs_previous` is false, `semantic_progress` is false, or `metadata_only` is true, require downstream derivation to treat the cycle as `governance_only` unless independent validated positive evidence proves otherwise. Do not let metadata-only measurement, non-empty counts, lineage, or gap reports masquerade as goal-productive output.
 - When strict runner validation and output-delta disagree, carry source-separated evidence ids/fingerprints and set `observed_semantic_progress` to the conservative observation. `$audit-cycle-loopback` owns the pre-derive `authoritative_semantic_progress`; `$validate-task-completion` alone owns the close-time `authoritative_progress_verdict`.
 - Prefer independently recomputed values from the actual artifact body over source-separated verifier results, current transform reports, producer reports, carried-forward reports, and workflow claims, in that order. Keep carried-forward values under `source_*` and current-transform values under `current_*`. If a required body projection cannot be recomputed, return `truth_basis: not_evaluated`; if its canonical fingerprint disagrees with the report, set `report_body_divergence: true`. This review reports the observation and must not close the task.
+- Bind body-backed findings to the exact current artifact revision, lane, full body fingerprint, and declared source cohort. A path, manifest, callable hook, import, or producer echo is not proof that the reviewer consumed that body in the decision path.
+- Keep `task_change` and `artifact_body` outcomes separate. Compatibility-only review may return a bounded task-change pass while artifact semantics remain `not_evaluated`. If the authoritative body projection and its report disagree, preserve both observations, mark the artifact-semantic outcome `conflicted`, and block promotion from the favorable projection.
+- Treat an adapter-sized sample as sample evidence only. Do not project it to a closed-world artifact-body verdict unless the caller or adapter supplies and the reviewer consumes an explicit universe contract.
 - Persist privacy-safe axis-scoped input/artifact IDs, fingerprints, coupling, and provenance. Re-reading a producer scalar is `producer_attested`; a coupled verifier is `self_grounded` and cannot move semantic high-water.
 - When `coverage_quality_delta_reconciliation_gate.status=block`, report the disagreement and cap measurement/oracle/rung progress unless strict changed-and-semantic primary-output evidence independently proves progress.
 - When `substance_delta_gate` is supplied and `substance_delta_pass=false` or `status=missing`, cap measurement/oracle/rung progress at `governance_only` unless strict changed-and-semantic output-delta evidence independently proves primary-output progress.
@@ -268,6 +284,12 @@ Preserve `degenerate_surface_language`, `placeholder_event_found`, `surface_enti
 - Report this review in user-facing cycle summaries as agent qualitative output-review evidence when it affects the next-task direction.
 
 ## Failure Handling
+
+Static decision-boundary fixtures:
+
+- Negative: `task_T` has a compatible bounded diff, but the reviewer opens no `artifact_revision_R`. Expected verdict: task-change review may pass while artifact semantics remain `not_evaluated`. Forbidden overclaim: treating compatibility as body truth.
+- Negative: `body_fp_A` and `report_projection_A` disagree for the same exact revision and cohort. Expected verdict: artifact semantics are `conflicted` and promotion is blocked. Forbidden overclaim: choosing the report or body solely because it is favorable.
+- Happy path: the reviewer opens `artifact_revision_R`, binds `body_fp_A`, `lane_L`, and `source_cohort_C`, observes every adapter-required axis, and the body/report projections agree. Expected verdict: artifact-body review may pass for the observed axes. Forbidden overclaim: inferring task completion, global readiness, or unobserved-universe coverage.
 
 - If the reviewer cannot open required artifacts, return `review_status: blocked` or `partial` with missing paths and a direction recommendation to repair artifact persistence or run logging.
 - If the run is `running`, review only startup/heartbeat/output artifacts that exist and mark final-output-dependent findings as pending.

@@ -266,6 +266,7 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
                 gate, portfolio_budget_evaluation = normalize_portfolio_budget_gate(gate)
                 budget_evaluations["portfolio_nonsemantic_work"] = portfolio_budget_evaluation
             gate_inputs.append(bind_artifact_gate(gate_id, gate))
+    identity_gate_inputs = [dict(gate) for gate in gate_inputs]
     terminal_self_resolution = terminal_self_resolution_gate(runner_validation, output_delta, *gate_inputs)
     if bool_value(terminal_self_resolution.get("goal_terminal_prohibited")):
         gate_inputs.append(
@@ -276,9 +277,36 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
                 "allowed_dispositions": ["goal_productive"],
             }
         )
-    consumer_conformance_gate = consumer_context_conformance_gate(runner_validation, output_delta, *gate_inputs)
+    input_state_fingerprint = decision_input_state_fingerprint(
+        [runner_validation, output_delta, quality, *gate_inputs],
+        decision_artifact_ref,
+    )
+    attempt_identity = content_bound_attempt_identity(
+        args.cycle_id,
+        normalize_root_family_key(args.artifact_family),
+        "pending",
+        input_state_fingerprint,
+    )
+    declared_consumer_context = consumer_context_conformance_gate(
+        runner_validation,
+        output_delta,
+        *gate_inputs,
+        expected_artifact_ref=decision_artifact_ref,
+        expected_cycle_id=args.cycle_id,
+        expected_input_state_fingerprint=input_state_fingerprint,
+        expected_attempt_identity=attempt_identity,
+    )
+    consumer_conformance_gate = consumer_context_conformance_gate(
+        {"required_consumer_ids": declared_consumer_context.get("required_consumer_ids") or []},
+        runner_validation,
+        expected_artifact_ref=decision_artifact_ref,
+        expected_cycle_id=args.cycle_id,
+        expected_input_state_fingerprint=input_state_fingerprint,
+        expected_attempt_identity=attempt_identity,
+    )
     self_consumer_probe_pending = False
     self_consumer_required = False
+    self_consumer_probe_row: dict[str, Any] | None = None
     consumer_id = "audit-cycle-loopback"
     if adapter_registered:
         quality_hook = getattr(domain_adapter, "quality_vector", None) if domain_adapter is not None else None
@@ -287,23 +315,35 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
         self_consumer_probe_pending = self_consumer_required or bool(
             decision_artifact_ref.get("scope_verified") and callable(quality_hook)
         )
+        expected_verification_ids = sorted(
+            str(item) for item in string_list(decision_artifact_ref.get("verification_input_ids"))
+        )
+        observed_verification_ids = sorted(
+            str(item) for item in string_list(quality.get("verification_input_ids"))
+        )
         artifact_echo_valid = bool(
             decision_artifact_ref.get("scope_verified")
             and str(quality.get("artifact_id") or "") == str(decision_artifact_ref.get("artifact_id") or "")
             and str(quality.get("artifact_sha256") or quality.get("output_sha256") or "").lower()
             == str(decision_artifact_ref.get("artifact_sha256") or "").lower()
+            and str(quality.get("production_lane_identity") or "")
+            == str(decision_artifact_ref.get("production_lane_identity") or "")
+            and (
+                not decision_artifact_ref.get("body_projection_fingerprint")
+                or quality.get("body_projection_fingerprint")
+                == decision_artifact_ref.get("body_projection_fingerprint")
+            )
+            and (
+                decision_artifact_ref.get("verification_input_ids") is None
+                or observed_verification_ids == expected_verification_ids
+            )
+            and (
+                decision_artifact_ref.get("input_fingerprints") is None
+                or quality.get("input_fingerprints") == decision_artifact_ref.get("input_fingerprints")
+            )
         )
         invocation_completed = bool(quality_hook_receipt.get("invocation_completed"))
         if self_consumer_probe_pending:
-            probe_basis = "|".join(
-                (
-                    consumer_id,
-                    str(domain_adapter_path or adapter_expected_path or "missing"),
-                    str(decision_artifact_ref.get("artifact_id") or "missing"),
-                    str(decision_artifact_ref.get("artifact_sha256") or "missing"),
-                )
-            )
-            probe_sha256 = hashlib.sha256(probe_basis.encode("utf-8")).hexdigest()
             probe_row = {
                 "consumer_context_id": consumer_id,
                 "hook_id": "quality_vector",
@@ -317,13 +357,25 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
                 "return_contract_status": "pass" if quality_hook_receipt.get("return_contract_valid") else "not_evaluated",
                 "artifact_identity_echo_valid": artifact_echo_valid,
                 "artifact_identity_echo_status": "pass" if artifact_echo_valid else "not_evaluated",
+                "cycle_id": args.cycle_id,
+                "input_state_fingerprint": input_state_fingerprint,
+                "attempt_identity": attempt_identity,
+                "artifact_id": quality.get("artifact_id"),
+                "artifact_sha256": quality.get("artifact_sha256") or quality.get("output_sha256"),
+                "production_lane_identity": quality.get("production_lane_identity"),
+                "body_projection_fingerprint": quality.get("body_projection_fingerprint"),
+                "verification_input_ids": observed_verification_ids,
+                "input_fingerprints": quality.get("input_fingerprints"),
+                "evidence_provenance": "self_grounded",
                 "value_consumed_by_decision": False,
                 "decision_consumption_status": "not_evaluated",
-                "probe_evidence_id": "probe-" + probe_sha256[:16],
                 "probe_evidence_ref": f"packet:consumer_context_conformance/{consumer_id}",
-                "probe_evidence_sha256": probe_sha256,
                 "status": "pending_decision_consumption",
             }
+            probe_sha256 = consumer_receipt_binding_sha256(probe_row)
+            probe_row["probe_evidence_id"] = "probe-" + probe_sha256[:16]
+            probe_row["probe_evidence_sha256"] = probe_sha256
+            self_consumer_probe_row = dict(probe_row)
             if consumer_id not in required_ids:
                 if self_consumer_required:
                     required_ids.append(consumer_id)
@@ -333,17 +385,16 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
                 {
                     "required_consumer_ids": required_ids,
                     "consumer_context_conformance": {"rows": rows},
-                }
+                },
+                expected_artifact_ref=decision_artifact_ref,
+                expected_cycle_id=args.cycle_id,
+                expected_input_state_fingerprint=input_state_fingerprint,
+                expected_attempt_identity=attempt_identity,
             )
     adapter_load_gate["consumer_context_conformance"] = consumer_conformance_gate
-    if bool_value(consumer_conformance_gate.get("missing_consumer_context_ids")):
-        adapter_load_gate["status"] = "block"
-        adapter_load_gate["constrains_disposition"] = True
-        adapter_load_gate["adapter_wiring_defect"] = True
-        if gate_inputs and gate_inputs[0].get("name") == "adapter_wiring_gate":
-            gate_inputs[0].update(adapter_load_gate)
-        else:
-            gate_inputs.append({"name": "adapter_wiring_gate", **adapter_load_gate})
+    # Receipt identity is finalized only after provenance and primary-metric
+    # inputs have been evaluated.  Defer conformance enforcement to that
+    # decision boundary so a preliminary fingerprint cannot govern replay.
     failure_autopsies = load_json_values(root, getattr(args, "failure_autopsy_json", []) or [])
     validator_gate = validator_integrity_gate(runner_validation, output_delta, gate_inputs)
     if bool_value(validator_gate.get("constrains_disposition")):
@@ -704,27 +755,29 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
             receipt["value_consumed_by_decision"] = decision_consumed
             receipt["decision_consumption_status"] = "pass" if decision_consumed else "not_evaluated"
             receipt["status"] = "pass" if decision_consumed else "not_evaluated"
+            receipt_sha256 = consumer_receipt_binding_sha256(receipt)
+            receipt["probe_evidence_id"] = "probe-" + receipt_sha256[:16]
+            receipt["probe_evidence_sha256"] = receipt_sha256
             rows.append(receipt)
+        if self_consumer_probe_row is not None:
+            self_consumer_probe_row = dict(self_consumer_probe_row)
+            self_consumer_probe_row["value_consumed_by_decision"] = decision_consumed
+            self_consumer_probe_row["decision_consumption_status"] = "pass" if decision_consumed else "not_evaluated"
+            self_consumer_probe_row["status"] = "pass" if decision_consumed else "not_evaluated"
+            receipt_sha256 = consumer_receipt_binding_sha256(self_consumer_probe_row)
+            self_consumer_probe_row["probe_evidence_id"] = "probe-" + receipt_sha256[:16]
+            self_consumer_probe_row["probe_evidence_sha256"] = receipt_sha256
         consumer_conformance_gate = consumer_context_conformance_gate(
             {
                 "required_consumer_ids": consumer_conformance_gate.get("required_consumer_ids") or [],
                 "consumer_context_conformance": {"rows": rows},
-            }
+            },
+            expected_artifact_ref=decision_artifact_ref,
+            expected_cycle_id=args.cycle_id,
+            expected_input_state_fingerprint=input_state_fingerprint,
+            expected_attempt_identity=attempt_identity,
         )
-        missing_ids = list(consumer_conformance_gate.get("missing_consumer_context_ids") or [])
         adapter_load_gate["consumer_context_conformance"] = consumer_conformance_gate
-        if missing_ids:
-            adapter_load_gate["status"] = "block"
-            adapter_load_gate["constrains_disposition"] = True
-            adapter_load_gate["adapter_wiring_defect"] = True
-        matching_gate = next(
-            (item for item in gate_inputs if item.get("name") == "adapter_wiring_gate"),
-            None,
-        )
-        if matching_gate is not None:
-            matching_gate.update(adapter_load_gate)
-        elif missing_ids:
-            gate_inputs.append({"name": "adapter_wiring_gate", **adapter_load_gate})
     evidence_gate = evidence_provenance_gate(
         hook_provided=evidence_provenance_provided,
         provenance=evidence_provenance,
@@ -905,60 +958,6 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
         or args.semantic_signature
         or "unknown"
     )
-    input_state_fingerprint = decision_input_state_fingerprint(
-        [runner_validation, output_delta, quality, source_separation_gate, *gate_inputs],
-        decision_artifact_ref,
-    )
-    attempt_identity = content_bound_attempt_identity(
-        args.cycle_id,
-        normalize_root_family_key(args.artifact_family),
-        str(current_blocker_signature).strip().lower(),
-        input_state_fingerprint,
-    )
-    legacy_attempt_identity = legacy_content_bound_attempt_identity(
-        args.cycle_id,
-        normalize_root_family_key(args.artifact_family),
-        str(current_blocker_signature).strip().lower(),
-        input_state_fingerprint,
-    )
-    existing_attempt = next(
-        (
-            registry_row
-            for registry_row in reversed(registry_rows)
-            if str(registry_row.get("attempt_identity") or "") == attempt_identity
-            or (
-                str(registry_row.get("cycle_id") or "") == str(args.cycle_id)
-                and str(registry_row.get("input_state_fingerprint") or "") == input_state_fingerprint
-            )
-        ),
-        None,
-    )
-    registry_label_correction = False
-    attempt_revision_candidate = 1
-    supersedes_attempt_revision_candidate: int | None = None
-    supersedes_attempt_identity_candidate: str | None = None
-    if existing_attempt is not None:
-        previous_attempt_revision = max(1, attempt_revision_value(existing_attempt))
-        attempt_revision_candidate = previous_attempt_revision
-        registry_label_correction = any(
-            str(existing_attempt.get(field) or "") != str(value or "")
-            for field, value in {
-                "family_key": family_key,
-                "root_key": current_root_key,
-                "root_family_key": current_root_family_key,
-                "artifact_family": args.artifact_family,
-                "blocker_signature": current_blocker_signature,
-            }.items()
-        )
-        if registry_label_correction:
-            attempt_revision_candidate = previous_attempt_revision + 1
-            supersedes_attempt_revision_candidate = previous_attempt_revision
-            supersedes_attempt_identity_candidate = str(
-                existing_attempt.get("attempt_identity") or attempt_identity
-            )
-        existing_cycle = existing_attempt
-    elif existing_cycle is not None and existing_cycle.get("attempt_identity"):
-        existing_cycle = None
     blocker_root_family = current_root_family_key if facet_root_map_missing else collapse_root_family(facet_root_map, current_root_key, current_blocker_signature)
     latest_blocker = next((row for row in reversed(registry_rows) if row_root_family(row) == blocker_root_family), latest_terminal_family or latest)
     current_rung = normalize_ladder_rung(args.blocker_rung) or infer_ladder_rung(*blocker_sources)
@@ -1206,16 +1205,48 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
         root_family_key=current_root_family_key,
         previous_primary_metric=previous_primary_metric_value(latest),
         evidence_provenance=evidence_provenance,
+        decision_artifact_ref=decision_artifact_ref,
+    )
+    primary_metric_source = (
+        primary_metric_value.get("primary_metric")
+        if isinstance(primary_metric_value, dict)
+        and isinstance(primary_metric_value.get("primary_metric"), dict)
+        else primary_metric_value
+    )
+    primary_metric_id = str(
+        (
+            primary_metric_source.get("goal_axis_id")
+            or primary_metric_source.get("axis_id")
+            or primary_metric_source.get("metric_id")
+            or ""
+        )
+        if isinstance(primary_metric_source, dict)
+        else ""
+    ).strip()
+    primary_metric_declared_provenance = normalize_provenance_label(
+        evidence_provenance.get(normalize_gate_key(primary_metric_id))
+        or evidence_provenance.get(normalize_gate_key("primary_metric"))
+    )
+    primary_metric_source_separation_gate = verification_source_separation_gate(
+        provenance_value=evidence_provenance_value,
+        verified_artifact_paths=[rel_path(root, path) for path in paths],
+        independently_verified_fields=(
+            [primary_metric_id]
+            if primary_metric_id
+            and evidence_provenance_provided
+            and primary_metric_declared_provenance == "independently_verified"
+            else []
+        ),
     )
     primary_metric_gate = normalize_primary_metric_gate(
         primary_metric_value,
-        previous_value=previous_primary_metric_value(latest),
         rows=registry_rows,
-        scope_key=str(chain_gate.get("cumulative_goal_distance_scope_key") or family_key),
         cap=getattr(args, "cumulative_chain_streak_cap", None),
         epsilon=args.epsilon,
         provenance=evidence_provenance,
         provenance_hook_provided=evidence_provenance_provided,
+        source_separation_gate=primary_metric_source_separation_gate,
+        expected_artifact_ref=decision_artifact_ref,
     )
     primary_metric_gate = bind_artifact_gate(
         "primary_metric_gate",
@@ -1376,6 +1407,183 @@ def _evaluate_impl(args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[
                 }
             )
     forced_selected_task = forced_retarget_gate.get("forced_selected_task") or (forced_task_options[0] if forced_task_options else None)
+
+    root_cause_hypotheses_value = load_json_value(
+        root,
+        getattr(args, "root_cause_hypotheses_json", None),
+    )
+    root_cause_hypotheses_error: str | None = None
+    if root_cause_hypotheses_value is None:
+        root_cause_hypotheses_value, root_cause_hypotheses_error = call_adapter(
+            domain_adapter,
+            "root_cause_hypotheses",
+            root=root,
+            artifact_paths=[rel_path(root, path) for path in paths],
+            quality_vector=quality,
+            output_delta=output_delta,
+            runner_validation=runner_validation,
+            family_key=family_key,
+            root_key=current_root_key,
+            root_family_key=current_root_family_key,
+            blocker_signature=current_blocker_signature,
+            blocker_ladder_rung=current_rung,
+        )
+    input_state_fingerprint = decision_input_state_fingerprint(
+        [
+            runner_validation,
+            output_delta,
+            quality,
+            *identity_gate_inputs,
+            {
+                "evidence_provenance_input": {
+                    "value": evidence_provenance_value,
+                    "error": evidence_provenance_error,
+                    "source_separation": source_separation_gate,
+                }
+            },
+            {
+                "primary_metric_input": {
+                    "value": primary_metric_value,
+                    "error": primary_metric_error,
+                    "source_separation": primary_metric_source_separation_gate,
+                }
+            },
+            {
+                "decision_budget_inputs": budget_evaluations,
+                "numeric_epsilon": args.epsilon,
+            },
+            {
+                "root_cause_hypotheses_input": {
+                    "value": root_cause_hypotheses_value,
+                    "error": root_cause_hypotheses_error,
+                    "declared_hypothesis": getattr(args, "hypothesized_root_cause", None),
+                    "repair_attempted": bool_value(
+                        getattr(args, "root_cause_repair_attempted", False)
+                    ),
+                    "repair_task_id": getattr(args, "root_cause_repair_task_id", None),
+                    "actionable": bool_value(
+                        getattr(args, "root_cause_actionable", False)
+                    ),
+                }
+            },
+        ],
+        decision_artifact_ref,
+    )
+    attempt_identity = content_bound_attempt_identity(
+        args.cycle_id,
+        normalize_root_family_key(args.artifact_family),
+        "pending",
+        input_state_fingerprint,
+    )
+    legacy_attempt_identity = legacy_content_bound_attempt_identity(
+        args.cycle_id,
+        normalize_root_family_key(args.artifact_family),
+        str(current_blocker_signature).strip().lower(),
+        input_state_fingerprint,
+    )
+
+    if self_consumer_probe_row is not None:
+        self_consumer_probe_row = dict(self_consumer_probe_row)
+        self_consumer_probe_row["input_state_fingerprint"] = input_state_fingerprint
+        self_consumer_probe_row["attempt_identity"] = attempt_identity
+        receipt_sha256 = consumer_receipt_binding_sha256(self_consumer_probe_row)
+        self_consumer_probe_row["probe_evidence_id"] = "probe-" + receipt_sha256[:16]
+        self_consumer_probe_row["probe_evidence_sha256"] = receipt_sha256
+    final_conformance_inputs: list[Any] = [
+        {
+            "required_consumer_ids": declared_consumer_context.get("required_consumer_ids") or [],
+        },
+        runner_validation,
+        output_delta,
+        *identity_gate_inputs,
+    ]
+    if self_consumer_probe_row is not None:
+        final_conformance_inputs.append(
+            {
+                "consumer_context_conformance": {
+                    "rows": [self_consumer_probe_row],
+                }
+            }
+        )
+    consumer_conformance_gate = consumer_context_conformance_gate(
+        *final_conformance_inputs,
+        expected_artifact_ref=decision_artifact_ref,
+        expected_cycle_id=args.cycle_id,
+        expected_input_state_fingerprint=input_state_fingerprint,
+        expected_attempt_identity=attempt_identity,
+    )
+    adapter_load_gate["consumer_context_conformance"] = consumer_conformance_gate
+    if bool_value(consumer_conformance_gate.get("missing_consumer_context_ids")):
+        adapter_load_gate["status"] = "block"
+        adapter_load_gate["constrains_disposition"] = True
+        adapter_load_gate["adapter_wiring_defect"] = True
+    matching_adapter_gate = next(
+        (item for item in gate_inputs if item.get("name") == "adapter_wiring_gate"),
+        None,
+    )
+    if matching_adapter_gate is not None:
+        matching_adapter_gate.update(adapter_load_gate)
+    elif bool_value(adapter_load_gate.get("adapter_wiring_defect")):
+        gate_inputs.append({"name": "adapter_wiring_gate", **adapter_load_gate})
+    if bool_value(adapter_load_gate.get("adapter_wiring_defect")):
+        hard_stop = True
+        disposition = "self_inflicted_gate_defect"
+
+    existing_attempt = next(
+        (
+            registry_row
+            for registry_row in reversed(registry_rows)
+            if str(registry_row.get("attempt_identity") or "") == attempt_identity
+        ),
+        None,
+    )
+    registry_label_correction = False
+    attempt_revision_candidate = 1
+    supersedes_attempt_revision_candidate: int | None = None
+    supersedes_attempt_identity_candidate: str | None = None
+    if existing_attempt is not None:
+        previous_attempt_revision = max(1, attempt_revision_value(existing_attempt))
+        attempt_revision_candidate = previous_attempt_revision
+        registry_label_correction = any(
+            str(existing_attempt.get(field) or "") != str(value or "")
+            for field, value in {
+                "family_key": family_key,
+                "root_key": current_root_key,
+                "root_family_key": current_root_family_key,
+                "artifact_family": args.artifact_family,
+                "blocker_signature": current_blocker_signature,
+            }.items()
+        )
+        if registry_label_correction:
+            attempt_revision_candidate = previous_attempt_revision + 1
+            supersedes_attempt_revision_candidate = previous_attempt_revision
+            supersedes_attempt_identity_candidate = str(
+                existing_attempt.get("attempt_identity") or attempt_identity
+            )
+        existing_cycle = existing_attempt
+    elif existing_cycle is not None:
+        # A same-cycle legacy row without the finalized content-bound identity
+        # is history only.  It cannot restore stale decisions by label match.
+        existing_cycle = None
+
+    gate_inputs = [
+        gate for gate in gate_inputs
+        if gate.get("name") != "terminal_self_resolution"
+    ]
+    terminal_self_resolution = terminal_self_resolution_gate(
+        runner_validation,
+        output_delta,
+        *gate_inputs,
+    )
+    if bool_value(terminal_self_resolution.get("goal_terminal_prohibited")):
+        gate_inputs.append(
+            {
+                "name": "terminal_self_resolution",
+                **terminal_self_resolution,
+                "constrains_disposition": True,
+                "allowed_dispositions": ["goal_productive"],
+            }
+        )
 
     row = build_base_packet(locals())
     chain_untried_override, untried, ledger_entries = apply_root_cause_ledger(locals())

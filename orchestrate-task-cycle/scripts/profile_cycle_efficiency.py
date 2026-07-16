@@ -251,18 +251,22 @@ def current_cycle_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return selected or list(events)
 
 
-def artifact_ref_identity(ref: dict[str, Any]) -> str:
-    """Keep location and content together so equal bytes at a new path remain new work."""
+def artifact_payload_identity(ref: dict[str, Any]) -> tuple[str, str] | None:
+    """Return the exact path/store-ref plus content hash used by unchanged_ref."""
 
-    return json.dumps(
-        {
-            "path_or_store_ref": ref.get("path") or ref.get("store_ref"),
-            "sha256": ref.get("sha256"),
-            "artifact_id": ref.get("artifact_id"),
-            "production_lane_identity": ref.get("production_lane_identity"),
-        },
-        sort_keys=True,
-        separators=(",", ":"),
+    path_or_store_ref = str(ref.get("path") or ref.get("store_ref") or "").strip()
+    sha256 = str(ref.get("sha256") or ref.get("artifact_sha256") or "").strip().lower()
+    if not path_or_store_ref or not re.fullmatch(r"[0-9a-f]{64}", sha256):
+        return None
+    return path_or_store_ref, sha256
+
+
+def artifact_ref_identity(ref: dict[str, Any]) -> str:
+    payload_identity = artifact_payload_identity(ref)
+    return (
+        json.dumps(payload_identity, ensure_ascii=False, separators=(",", ":"))
+        if payload_identity is not None
+        else ""
     )
 
 
@@ -481,6 +485,29 @@ def analyze(
         for ref in (event.get("unchanged_refs") or [])
         if isinstance(ref, dict)
     ]
+    artifact_payload_counts = Counter(
+        identity
+        for event in events
+        for ref in (event.get("artifact_refs") or [])
+        if isinstance(ref, dict)
+        if (identity := artifact_payload_identity(ref)) is not None
+    )
+    unchanged_payload_counts = Counter(
+        identity
+        for ref in unchanged_refs
+        if (identity := artifact_payload_identity(ref)) is not None
+    )
+    missing_unchanged_payload_refs = [
+        {
+            "path_or_store_ref": identity[0],
+            "sha256": identity[1],
+            "repeated_count": count,
+            "unchanged_ref_count": unchanged_payload_counts.get(identity, 0),
+            "missing_count": count - 1 - unchanged_payload_counts.get(identity, 0),
+        }
+        for identity, count in sorted(artifact_payload_counts.items())
+        if count > 1 and unchanged_payload_counts.get(identity, 0) < count - 1
+    ]
     validation_profiles = [str(event.get("validation_profile")).lower() for event in events if event.get("validation_profile")]
     global_blocker_signatures = [str(event.get("blocker_signature")).lower() for event in events if event.get("blocker_signature")]
     blocker_signatures = [str(event.get("blocker_signature")).lower() for event in scoped_events if event.get("blocker_signature")]
@@ -542,30 +569,19 @@ def analyze(
                 "recommendation": "resume_primary_output",
             }
         )
-    if len(progress_values) >= 2 and progress_values[-2:] == ["safety_only", "safety_only"]:
-        findings.append({"severity": "warn", "code": "consecutive_safety_only", "message": "The last two progress verdicts are safety_only."})
-    if len(progress_events) >= 2 and all(is_metadata_only(event) for event in progress_events[-2:]):
-        findings.append(
-            {
-                "severity": "warn",
-                "code": "consecutive_metadata_only",
-                "message": "The last two progress-bearing events are metadata-only after output-delta review.",
-                "recommendation": "resume_primary_output",
-            }
-        )
     if repeated_blockers:
         findings.append({"severity": "warn", "code": "repeated_blocker", "message": "A blocker appears multiple times.", "evidence": repeated_blockers[:5]})
     if repeated_signatures:
         findings.append({"severity": "warn", "code": "repeated_blocker_signature", "message": "A normalized blocker signature appears multiple times.", "evidence": repeated_signatures[:5]})
     if duplicate_artifacts:
         findings.append({"severity": "warn", "code": "duplicate_artifact_paths", "message": "Artifact paths repeat across events.", "evidence": duplicate_artifacts[:5]})
-    if duplicate_artifacts and not unchanged_refs:
+    if missing_unchanged_payload_refs:
         findings.append(
             {
                 "severity": "warn",
                 "code": "unchanged_ref_missing_for_duplicate_artifacts",
                 "message": "Repeated artifact payloads should use unchanged_ref(path+hash) instead of reserializing identical packet content.",
-                "evidence": duplicate_artifacts[:5],
+                "evidence": missing_unchanged_payload_refs[:5],
             }
         )
     if full_chain_without_reason:
@@ -625,14 +641,14 @@ def analyze(
         {
             artifact_ref_identity(ref)
             for ref in scoped_unchanged_refs
-            if ref.get("sha256") or ref.get("artifact_id") or ref.get("path") or ref.get("store_ref")
+            if artifact_payload_identity(ref) is not None
         }
     )
     artifact_identities = {
         artifact_ref_identity(ref)
         for event in cost_events
         for ref in (event.get("artifact_refs") or [])
-        if isinstance(ref, dict) and (ref.get("sha256") or ref.get("artifact_id") or ref.get("path") or ref.get("store_ref"))
+        if isinstance(ref, dict) and artifact_payload_identity(ref) is not None
     }
     unique_new_artifact_ids = sorted(artifact_identities - set(unique_unchanged_artifact_ids))
     fresh_stage_event_ids = sorted(
@@ -667,15 +683,9 @@ def analyze(
         recommendations.append("supply_evidence_path")
     if "execution_starvation" in codes:
         recommendations.append("resume_primary_output")
-    if "consecutive_safety_only" in codes and repeated_blockers:
-        recommendations.append("supply_evidence_path_or_bounded_preflight")
-    if "consecutive_metadata_only" in codes:
-        recommendations.append("resume_primary_output")
     if "repeated_blocker_signature" in codes:
         recommendations.append("consume_or_reorder_task_pack_or_terminal_block")
     # Global debt remains visible, but it cannot force a current-family task.
-    if "consecutive_safety_only" in codes:
-        recommendations.append("batch_micro_contracts")
     if "validation_set_gap_without_build_phase" in codes:
         recommendations.append("route_validation_set_plan_or_build")
     if "vacuous_untried_streak" in codes or "forward_mutation_vacuous_streak" in codes:

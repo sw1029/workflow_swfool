@@ -74,6 +74,8 @@ def write_adapter(
     *,
     metric_value: int = 1,
     previous_metric_value: int | None = None,
+    provenance_label: str = "independently_verified",
+    primary_metric_value: int | None = None,
 ) -> None:
     previous_lines = (
         [
@@ -84,18 +86,31 @@ def write_adapter(
         if previous_metric_value is not None
         else []
     )
+    primary_metric_expression = (
+        str(primary_metric_value)
+        if primary_metric_value is not None
+        else "quality.get('metric_A')"
+    )
     path.write_text(
         "\n".join(
             [
                 "def quality_vector(decision_artifact_ref=None, **kwargs):",
                 "    ref = decision_artifact_ref or {}",
-                f"    return {{'quality_vector': {{'metric_A': {metric_value}, 'quality_signal_confidence': 'high', 'current_output_fingerprint': 'fingerprint_A', 'artifact_id': ref.get('artifact_id'), 'artifact_sha256': ref.get('artifact_sha256')}}}}",
+                f"    return {{'quality_vector': {{'metric_A': {metric_value}, 'quality_signal_confidence': 'high', 'current_output_fingerprint': 'fingerprint_A', 'artifact_id': ref.get('artifact_id'), 'artifact_sha256': ref.get('artifact_sha256'), 'production_lane_identity': ref.get('production_lane_identity'), 'body_projection_fingerprint': ref.get('body_projection_fingerprint'), 'verification_input_ids': ref.get('verification_input_ids')}}}}",
                 "",
                 "def quality_delta_policy(**kwargs):",
                 "    return {'keys': ['metric_A']}",
                 "",
                 "def substance_metrics(**kwargs):",
                 "    return {'substance_metrics': {'axis_A': 1}}",
+                "",
+                "def evidence_provenance(**kwargs):",
+                f"    return {{'evidence_provenance': {{'metric_A': '{provenance_label}', 'axis_A': '{provenance_label}', 'axis_G': '{provenance_label}'}}, 'verification_input_paths': ['source_cohort_D.json'], 'verification_input_ids': ['source_cohort_D'], 'producer_input_ids': ['artifact_A'], 'verified_artifact_ids': ['artifact_A'], 'input_fingerprints': {{'producer_inputs': ['body_fp_A'], 'verification_inputs': ['input_delta_D']}}, 'producer_function_id': 'consumer_C', 'verifier_function_id': 'consumer_D'}}",
+                "",
+                "def primary_metric(decision_artifact_ref=None, quality_vector=None, **kwargs):",
+                "    ref = decision_artifact_ref or {}",
+                "    quality = quality_vector or {}",
+                f"    return {{'goal_axis_id': 'axis_G', 'value': {primary_metric_expression}, 'artifact_id': ref.get('artifact_id'), 'artifact_sha256': ref.get('artifact_sha256'), 'production_lane_identity': ref.get('production_lane_identity'), 'body_projection_fingerprint': ref.get('body_projection_fingerprint'), 'verification_input_ids': ref.get('verification_input_ids')}}",
                 "",
                 "def facet_root_map(**kwargs):",
                 "    return {'axis_A': 'axis_A', 'family_A': 'axis_A', 'class_A': 'axis_A'}",
@@ -116,15 +131,22 @@ def run_provider(
     *extra: str,
     metric_value: int = 1,
     previous_metric_value: int | None = None,
+    provenance_label: str = "independently_verified",
+    primary_metric_value: int | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     artifact = root / "artifact_A.json"
     artifact.write_text('{"artifact_id":"artifact_A"}\n', encoding="utf-8")
+    (root / "source_cohort_D.json").write_text(
+        '{"source_cohort":"source_cohort_D"}\n', encoding="utf-8"
+    )
     artifact_sha256 = hashlib.sha256(artifact.read_bytes()).hexdigest()
     adapter = root / "adapter_A.py"
     write_adapter(
         adapter,
         metric_value=metric_value,
         previous_metric_value=previous_metric_value,
+        provenance_label=provenance_label,
+        primary_metric_value=primary_metric_value,
     )
     output = root / "candidate_A.json"
     artifact_ref = {
@@ -133,6 +155,8 @@ def run_provider(
         "artifact_path_or_store_ref": artifact.name,
         "artifact_sha256": artifact_sha256,
         "production_lane_identity": "lane_A",
+        "body_projection_fingerprint": artifact_sha256,
+        "verification_input_ids": ["source_cohort_C"],
     }
     command = [
         sys.executable,
@@ -169,7 +193,25 @@ def test_write_registry_prepares_positive_candidate_without_mutating_state(tmp_p
     ledger = tmp_path / ".task" / "anti_loop" / "root_cause_ledger.jsonl"
     seal = tmp_path / ".task" / "sealed_blocker_families.json"
     registry.parent.mkdir(parents=True)
-    registry.write_text('{"cycle_id":"cycle_prior","family_key":"family_prior"}\n', encoding="utf-8")
+    registry.write_text(
+        json.dumps(
+            {
+                "cycle_id": "cycle_prior",
+                "family_key": "family_prior",
+                    "primary_metric_gate": {
+                        "primary_metric_scope_key": "primary_goal_axis:axis_g",
+                        "artifact_binding_status": "exact",
+                        "evidence_provenance": "independently_verified",
+                        "independent_source_separation_status": "pass",
+                        "decision_contribution_allowed": True,
+                    "primary_metric_high_water": 0,
+                },
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     ledger.write_text('{"cycle_id":"cycle_prior","root_key":"axis_prior"}\n', encoding="utf-8")
     seal.write_text('{"schema_version":"sealed-blocker-families-v1","families":[]}\n', encoding="utf-8")
     advice = tmp_path / "skill_advice.md"
@@ -361,6 +403,109 @@ def test_label_correction_preserves_logical_attempt_and_revision_lineage() -> No
     assert rows[0]["attempt_revision_candidate"] == 3
     assert rows[0]["supersedes_attempt_revision_candidate"] == 2
     assert rows[0]["supersedes_attempt_identity_candidate"] == attempt_old
+
+
+def test_primary_metric_requires_exact_source_separation_for_high_water() -> None:
+    provider = load_provider()
+    artifact_ref = {
+        "artifact_id": "artifact_A",
+        "artifact_sha256": "a" * 64,
+        "production_lane_identity": "lane_L",
+        "body_projection_fingerprint": "b" * 64,
+        "verification_input_ids": ["source_cohort_C"],
+    }
+    metric = {
+        "goal_axis_id": "axis_G",
+        "value": 2,
+        **artifact_ref,
+    }
+    prior = {
+        "primary_metric_gate": {
+            "primary_metric_scope_key": "primary_goal_axis:axis_g",
+            "artifact_binding_status": "exact",
+            "evidence_provenance": "independently_verified",
+            "independent_source_separation_status": "pass",
+            "decision_contribution_allowed": True,
+            "primary_metric_high_water": 1,
+        }
+    }
+    overlapping = provider.normalize_primary_metric_gate(
+        metric,
+        rows=[prior],
+        cap=None,
+        epsilon=0.0,
+        provenance={"axis_g": "independently_verified"},
+        provenance_hook_provided=True,
+        source_separation_gate={
+            "independent_source_separation_status": "overlap",
+            "verification_axes": [
+                {
+                    "axis_id": "axis_G",
+                    "evidence_provenance": "producer_attested",
+                }
+            ],
+        },
+        expected_artifact_ref=artifact_ref,
+    )
+    separated = provider.normalize_primary_metric_gate(
+        metric,
+        rows=[prior],
+        cap=None,
+        epsilon=0.0,
+        provenance={"axis_g": "independently_verified"},
+        provenance_hook_provided=True,
+        source_separation_gate={
+            "independent_source_separation_status": "pass",
+            "verification_axes": [
+                {
+                    "axis_id": "axis_G",
+                    "evidence_provenance": "independently_verified",
+                }
+            ],
+        },
+        expected_artifact_ref=artifact_ref,
+    )
+
+    assert overlapping["raw_primary_metric_high_water_moved"] is True
+    assert overlapping["primary_metric_high_water_moved"] is False
+    assert overlapping["evidence_provenance"] == "producer_attested"
+    assert separated["primary_metric_high_water_moved"] is True
+    assert separated["evidence_provenance"] == "independently_verified"
+
+
+def test_terminal_self_resolution_rechecks_final_disposition() -> None:
+    provider = load_provider()
+    missing = provider.terminal_self_resolution_gate(
+        {"recommended_disposition": "terminal_blocked"}
+    )
+    local = provider.terminal_self_resolution_gate(
+        {
+            "recommended_disposition": "terminal_blocked",
+            "residuals": [
+                {
+                    "residual_id": "residual_A",
+                    "classification": "local_deterministic_repair_possible",
+                }
+            ],
+        }
+    )
+    external = provider.terminal_self_resolution_gate(
+        {
+            "recommended_disposition": "terminal_blocked",
+            "residuals": [
+                {
+                    "residual_id": "residual_A",
+                    "classification": "new_external_input_required",
+                }
+            ],
+        }
+    )
+
+    assert missing["goal_terminal_prohibited"] is True
+    assert missing["offline_scope_unverified"] is True
+    assert local["goal_terminal_prohibited"] is True
+    assert external["goal_terminal_prohibited"] is False
+    assert external["status"] == "pass"
 
 
 def test_next_cycle_consumes_only_helper_verified_finalized_projection(tmp_path: Path) -> None:
@@ -600,6 +745,38 @@ def test_durable_projection_drops_free_text_locators_and_volatile_trace() -> Non
         "evidence_id": "evidence_A",
         "reason_code": "reason_A",
     }
+
+
+def test_late_provenance_and_primary_inputs_change_attempt_identity(
+    tmp_path: Path,
+) -> None:
+    first_process, first_output = run_provider(
+        tmp_path,
+        provenance_label="independently_verified",
+        primary_metric_value=1,
+    )
+    assert first_process.returncode == 0, first_process.stderr
+    first = json.loads(first_output.read_text(encoding="utf-8"))
+
+    provenance_process, provenance_output = run_provider(
+        tmp_path,
+        provenance_label="producer_attested",
+        primary_metric_value=1,
+    )
+    assert provenance_process.returncode == 0, provenance_process.stderr
+    provenance_changed = json.loads(provenance_output.read_text(encoding="utf-8"))
+    assert provenance_changed["input_state_fingerprint"] != first["input_state_fingerprint"]
+    assert provenance_changed["attempt_identity"] != first["attempt_identity"]
+
+    primary_process, primary_output = run_provider(
+        tmp_path,
+        provenance_label="independently_verified",
+        primary_metric_value=2,
+    )
+    assert primary_process.returncode == 0, primary_process.stderr
+    primary_changed = json.loads(primary_output.read_text(encoding="utf-8"))
+    assert primary_changed["input_state_fingerprint"] != first["input_state_fingerprint"]
+    assert primary_changed["attempt_identity"] != first["attempt_identity"]
 
 
 def test_identical_prepare_only_evaluation_has_stable_mutation_hash(

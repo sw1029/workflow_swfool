@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from .common import *
 from .registry import normalize_hook_id
 
@@ -146,7 +148,79 @@ def adapter_wiring_gate(
     }
 
 
-def consumer_context_conformance_gate(*values: Any) -> dict[str, Any]:
+def consumer_receipt_pass(
+    row: dict[str, Any],
+    bool_field: str,
+    status_field: str,
+) -> bool:
+    if bool_field in row:
+        return bool_value(row.get(bool_field))
+    return str(row.get(status_field) or "").strip().lower() in {
+        "pass",
+        "passed",
+        "complete",
+        "completed",
+        "consumed",
+        "success",
+    }
+
+
+def consumer_receipt_binding_sha256(row: dict[str, Any]) -> str:
+    basis = {
+        "consumer_context_id": str(row.get("consumer_context_id") or ""),
+        "cycle_id": str(row.get("cycle_id") or ""),
+        "input_state_fingerprint": str(row.get("input_state_fingerprint") or ""),
+        "attempt_identity": str(row.get("attempt_identity") or ""),
+        "artifact_id": row.get("artifact_id"),
+        "artifact_sha256": row.get("artifact_sha256"),
+        "production_lane_identity": row.get("production_lane_identity"),
+        "body_projection_fingerprint": row.get("body_projection_fingerprint"),
+        "verification_input_ids": sorted(
+            str(item) for item in string_list(row.get("verification_input_ids"))
+        ),
+        "input_fingerprints": (
+            row.get("input_fingerprints")
+            if isinstance(row.get("input_fingerprints"), dict)
+            else None
+        ),
+        "evidence_provenance": str(row.get("evidence_provenance") or "").strip().lower(),
+        "adapter_loaded": bool_value(row.get("adapter_loaded")),
+        "hook_resolved": bool_value(
+            row.get("hook_resolved")
+            if "hook_resolved" in row
+            else row.get("required_hook_callable")
+        ),
+        "required_hook_callable": bool_value(row.get("required_hook_callable")),
+        "hook_signature_compatible": bool_value(row.get("hook_signature_compatible")),
+        "invocation_completed": consumer_receipt_pass(
+            row,
+            "invocation_completed",
+            "invocation_status",
+        ),
+        "return_contract_valid": bool_value(row.get("return_contract_valid")),
+        "artifact_identity_echo_valid": consumer_receipt_pass(
+            row,
+            "artifact_identity_echo_valid",
+            "artifact_identity_echo_status",
+        ),
+        "value_consumed_by_decision": consumer_receipt_pass(
+            row,
+            "value_consumed_by_decision",
+            "decision_consumption_status",
+        ),
+        "probe_evidence_ref": str(row.get("probe_evidence_ref") or ""),
+    }
+    raw = json.dumps(basis, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def consumer_context_conformance_gate(
+    *values: Any,
+    expected_artifact_ref: dict[str, Any] | None = None,
+    expected_cycle_id: str | None = None,
+    expected_input_state_fingerprint: str | None = None,
+    expected_attempt_identity: str | None = None,
+) -> dict[str, Any]:
     required_ids: list[str] = []
     rows: list[dict[str, Any]] = []
 
@@ -184,25 +258,82 @@ def consumer_context_conformance_gate(*values: Any) -> dict[str, Any]:
             by_id.setdefault(consumer_id, []).append(row)
     missing: list[str] = []
     normalized: list[dict[str, Any]] = []
-    def receipt_pass(row: dict[str, Any], bool_field: str, status_field: str) -> bool:
-        if bool_field in row:
-            return bool_value(row.get(bool_field))
-        return str(row.get(status_field) or "").strip().lower() in {"pass", "passed", "complete", "completed", "consumed", "success"}
     consumer_ids = list(dict.fromkeys([*required_ids, *by_id.keys()]))
     for consumer_id in consumer_ids:
         candidate_rows = by_id.get(str(consumer_id)) or [{}]
         row = candidate_rows[-1]
+        expected = expected_artifact_ref or {}
+        expected_verification_ids = sorted(
+            str(item) for item in string_list(expected.get("verification_input_ids"))
+        )
+        expected_body_fingerprint = str(
+            expected.get("body_projection_fingerprint") or ""
+        ).strip().lower()
+        expected_cohort_present = bool(expected_verification_ids) or bool(
+            expected.get("input_fingerprints")
+            if isinstance(expected.get("input_fingerprints"), dict)
+            else None
+        )
+
+        def exact_echo(candidate: dict[str, Any]) -> bool:
+            if not expected:
+                return False
+            if not re.fullmatch(r"[0-9a-f]{64}", expected_body_fingerprint):
+                return False
+            if not expected_cohort_present:
+                return False
+            if (
+                not expected_cycle_id
+                or candidate.get("cycle_id") != expected_cycle_id
+                or not expected_input_state_fingerprint
+                or candidate.get("input_state_fingerprint") != expected_input_state_fingerprint
+                or not expected_attempt_identity
+                or candidate.get("attempt_identity") != expected_attempt_identity
+            ):
+                return False
+            for field in ("artifact_id", "artifact_sha256", "production_lane_identity"):
+                if not expected.get(field) or candidate.get(field) != expected.get(field):
+                    return False
+            if (
+                expected.get("body_projection_fingerprint")
+                and candidate.get("body_projection_fingerprint")
+                != expected.get("body_projection_fingerprint")
+            ):
+                return False
+            if expected.get("verification_input_ids") is not None and sorted(
+                str(item) for item in string_list(candidate.get("verification_input_ids"))
+            ) != expected_verification_ids:
+                return False
+            if (
+                expected.get("input_fingerprints") is not None
+                and candidate.get("input_fingerprints") != expected.get("input_fingerprints")
+            ):
+                return False
+            return True
+
         valid = all(
             bool(candidate) and all(
                 bool_value(candidate.get(field))
-                for field in ("adapter_loaded", "required_hook_callable", "hook_signature_compatible", "return_contract_valid")
+                for field in ("adapter_loaded", "hook_resolved", "required_hook_callable", "hook_signature_compatible", "return_contract_valid")
             ) and all(
                 (
-                    receipt_pass(candidate, "invocation_completed", "invocation_status"),
-                    receipt_pass(candidate, "artifact_identity_echo_valid", "artifact_identity_echo_status"),
-                    receipt_pass(candidate, "value_consumed_by_decision", "decision_consumption_status"),
+                    consumer_receipt_pass(candidate, "invocation_completed", "invocation_status"),
+                    consumer_receipt_pass(candidate, "artifact_identity_echo_valid", "artifact_identity_echo_status"),
+                    consumer_receipt_pass(candidate, "value_consumed_by_decision", "decision_consumption_status"),
                 )
-            ) and bool(str(candidate.get("probe_evidence_ref") or candidate.get("probe_evidence_id") or "").strip())
+            )
+            and str(candidate.get("evidence_provenance") or "").strip().lower()
+            in {"independently_verified", "self_grounded"}
+            and exact_echo(candidate)
+            and bool(str(candidate.get("probe_evidence_ref") or "").strip())
+            and bool(
+                re.fullmatch(
+                    r"[0-9a-f]{64}",
+                    str(candidate.get("probe_evidence_sha256") or "").lower(),
+                )
+            )
+            and str(candidate.get("probe_evidence_sha256") or "").lower()
+            == consumer_receipt_binding_sha256(candidate)
             for candidate in candidate_rows
         )
         normalized.append({
@@ -211,10 +342,20 @@ def consumer_context_conformance_gate(*values: Any) -> dict[str, Any]:
             "hook_resolved": bool_value(row.get("hook_resolved") if "hook_resolved" in row else row.get("required_hook_callable")),
             "required_hook_callable": bool_value(row.get("required_hook_callable")),
             "hook_signature_compatible": bool_value(row.get("hook_signature_compatible")),
-            "invocation_completed": receipt_pass(row, "invocation_completed", "invocation_status"),
+            "invocation_completed": consumer_receipt_pass(row, "invocation_completed", "invocation_status"),
             "return_contract_valid": bool_value(row.get("return_contract_valid")),
-            "artifact_identity_echo_valid": receipt_pass(row, "artifact_identity_echo_valid", "artifact_identity_echo_status"),
-            "value_consumed_by_decision": receipt_pass(row, "value_consumed_by_decision", "decision_consumption_status"),
+            "artifact_identity_echo_valid": consumer_receipt_pass(row, "artifact_identity_echo_valid", "artifact_identity_echo_status"),
+            "cycle_id": row.get("cycle_id"),
+            "input_state_fingerprint": row.get("input_state_fingerprint"),
+            "attempt_identity": row.get("attempt_identity"),
+            "artifact_id": row.get("artifact_id"),
+            "artifact_sha256": row.get("artifact_sha256"),
+            "production_lane_identity": row.get("production_lane_identity"),
+            "body_projection_fingerprint": row.get("body_projection_fingerprint"),
+            "verification_input_ids": string_list(row.get("verification_input_ids")),
+            "input_fingerprints": row.get("input_fingerprints") if isinstance(row.get("input_fingerprints"), dict) else None,
+            "evidence_provenance": row.get("evidence_provenance"),
+            "value_consumed_by_decision": consumer_receipt_pass(row, "value_consumed_by_decision", "decision_consumption_status"),
             "probe_evidence_id": row.get("probe_evidence_id"),
             "probe_evidence_ref": row.get("probe_evidence_ref"),
             "probe_evidence_sha256": row.get("probe_evidence_sha256"),
@@ -442,8 +583,11 @@ def primary_metric_zero_movement_streak(
     rows: list[dict[str, Any]],
     scope_key: str,
     moved: bool,
+    comparable: bool,
 ) -> int:
     if moved:
+        return 0
+    if not comparable:
         return 0
     streak = 1
     for row in reversed(rows):
@@ -455,19 +599,75 @@ def primary_metric_zero_movement_streak(
             continue
         if bool_value(gate.get("primary_metric_high_water_moved")):
             break
+        if gate.get("previous_primary_metric_value") is None:
+            break
         streak += 1
     return streak
+
+def primary_metric_registry_high_water(
+    rows: list[dict[str, Any]],
+    scope_key: str,
+) -> float | None:
+    values: list[float] = []
+    for row in rows:
+        gate = row.get("primary_metric_gate")
+        if not isinstance(gate, dict):
+            continue
+        if str(gate.get("primary_metric_scope_key") or "") != scope_key:
+            continue
+        if gate.get("artifact_binding_status") != "exact":
+            continue
+        if gate.get("evidence_provenance") != "independently_verified":
+            continue
+        if gate.get("independent_source_separation_status") != "pass":
+            continue
+        if not bool_value(gate.get("decision_contribution_allowed")):
+            continue
+        if gate.get("primary_metric_high_water") is not None:
+            values.append(float_value(gate.get("primary_metric_high_water")))
+    return max(values) if values else None
+
+def primary_metric_artifact_binding(
+    source: dict[str, Any],
+    expected: dict[str, Any],
+) -> tuple[bool, list[str]]:
+    echoed = source.get("decision_artifact_ref")
+    if not isinstance(echoed, dict):
+        echoed = source
+    mismatches: list[str] = []
+    expected_body = str(expected.get("body_projection_fingerprint") or "").strip().lower()
+    expected_cohort_present = bool(string_list(expected.get("verification_input_ids"))) or bool(
+        expected.get("input_fingerprints")
+        if isinstance(expected.get("input_fingerprints"), dict)
+        else None
+    )
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_body):
+        mismatches.append("body_projection_fingerprint")
+    if not expected_cohort_present:
+        mismatches.append("source_cohort")
+    for field in ("artifact_id", "artifact_sha256", "production_lane_identity"):
+        if not expected.get(field) or echoed.get(field) != expected.get(field):
+            mismatches.append(field)
+    for field in ("body_projection_fingerprint", "verification_input_ids", "input_fingerprints"):
+        observed = echoed.get(field)
+        expected_value = expected.get(field)
+        if field == "verification_input_ids":
+            observed = sorted(str(item) for item in string_list(observed))
+            expected_value = sorted(str(item) for item in string_list(expected_value))
+        if expected_value is not None and observed != expected_value:
+            mismatches.append(field)
+    return not mismatches, sorted(set(mismatches))
 
 def normalize_primary_metric_gate(
     value: Any,
     *,
-    previous_value: float,
     rows: list[dict[str, Any]],
-    scope_key: str,
     cap: int | None,
     epsilon: float,
     provenance: dict[str, str],
     provenance_hook_provided: bool,
+    source_separation_gate: dict[str, Any],
+    expected_artifact_ref: dict[str, Any],
 ) -> dict[str, Any]:
     if value is None:
         return {
@@ -480,31 +680,107 @@ def normalize_primary_metric_gate(
     if isinstance(value, dict) and isinstance(value.get("primary_metric"), dict):
         source = value["primary_metric"]
     if not isinstance(source, dict):
-        source = {"value": value}
-    metric_id = str(source.get("metric_id") or source.get("name") or "primary_metric")
-    current_value = float_value(
+        return {
+            "gate": "G-CHAIN-PRIMARY-METRIC",
+            "evaluation_status": "not_evaluated",
+            "status": "not_evaluated",
+            "not_evaluated_reason": "adapter_primary_metric_contract_missing",
+            "constrains_disposition": False,
+        }
+    metric_id = str(source.get("goal_axis_id") or source.get("axis_id") or source.get("metric_id") or "").strip()
+    if not metric_id:
+        return {
+            "gate": "G-CHAIN-PRIMARY-METRIC",
+            "evaluation_status": "not_evaluated",
+            "status": "not_evaluated",
+            "not_evaluated_reason": "adapter_stable_goal_axis_missing",
+            "constrains_disposition": False,
+        }
+    stable_scope_key = f"primary_goal_axis:{normalize_root_family_key(metric_id)}"
+    binding_exact, binding_mismatches = primary_metric_artifact_binding(
+        source,
+        expected_artifact_ref,
+    )
+    if not binding_exact:
+        return {
+            "gate": "G-CHAIN-PRIMARY-METRIC",
+            "metric_id": metric_id,
+            "primary_metric_scope_key": stable_scope_key,
+            "artifact_binding_status": "not_evaluated",
+            "artifact_binding_mismatches": binding_mismatches,
+            "evaluation_status": "not_evaluated",
+            "status": "not_evaluated",
+            "not_evaluated_reason": "exact_decision_artifact_binding_missing",
+            "constrains_disposition": False,
+        }
+    raw_current_value = (
         source.get("value")
         if "value" in source
         else source.get("primary_metric_value")
         if "primary_metric_value" in source
         else source.get("current")
     )
-    previous = float_value(source.get("previous_value") or source.get("previous_primary_metric") or previous_value)
-    raw_moved = (
-        bool_value(source.get("primary_metric_high_water_moved"))
-        if "primary_metric_high_water_moved" in source
-        else current_value > previous + epsilon
+    try:
+        current_value = float(raw_current_value)
+    except (TypeError, ValueError):
+        current_value = float("nan")
+    if isinstance(raw_current_value, bool) or not math.isfinite(current_value):
+        return {
+            "gate": "G-CHAIN-PRIMARY-METRIC",
+            "metric_id": metric_id,
+            "primary_metric_scope_key": stable_scope_key,
+            "artifact_binding_status": "exact",
+            "evaluation_status": "not_evaluated",
+            "status": "not_evaluated",
+            "not_evaluated_reason": "primary_metric_value_missing_or_non_numeric",
+            "constrains_disposition": False,
+        }
+    registry_previous = primary_metric_registry_high_water(rows, stable_scope_key)
+    comparable = registry_previous is not None
+    previous = registry_previous
+    raw_moved = comparable and current_value > float(previous) + epsilon
+    declared_metric_provenance = normalize_provenance_label(
+        (
+            provenance.get(normalize_gate_key(metric_id))
+            or provenance.get(normalize_gate_key("primary_metric"))
+        )
+        if provenance_hook_provided
+        else "legacy_unclassified"
     )
-    metric_provenance = normalize_provenance_label(
-        source.get("evidence_provenance")
-        or source.get("provenance")
-        or provenance_for_metric(metric_id, provenance, provenance_hook_provided)
-        or provenance_for_metric("primary_metric", provenance, provenance_hook_provided)
+    source_axis = next(
+        (
+            row
+            for row in source_separation_gate.get("verification_axes") or []
+            if isinstance(row, dict)
+            and normalize_gate_key(row.get("axis_id")) == normalize_gate_key(metric_id)
+        ),
+        {},
     )
-    independent = not provenance_hook_provided or metric_provenance == "independently_verified"
+    source_separation_status = str(
+        source_separation_gate.get("independent_source_separation_status") or "not_evaluated"
+    ).strip().lower()
+    source_axis_provenance = normalize_provenance_label(
+        source_axis.get("evidence_provenance")
+    )
+    independent = bool(
+        provenance_hook_provided
+        and declared_metric_provenance == "independently_verified"
+        and source_separation_status == "pass"
+        and source_axis_provenance == "independently_verified"
+    )
+    metric_provenance = (
+        "independently_verified"
+        if independent
+        else source_axis_provenance
+        if declared_metric_provenance == "independently_verified"
+        and source_axis_provenance in {"producer_attested", "self_grounded"}
+        else "not_evaluated"
+        if declared_metric_provenance == "independently_verified"
+        else declared_metric_provenance
+    )
     moved = raw_moved and independent
     attested_only = raw_moved and not independent
-    zero_streak = primary_metric_zero_movement_streak(rows, scope_key, moved)
+    zero_streak = primary_metric_zero_movement_streak(rows, stable_scope_key, moved, comparable)
     adapter_stalled = bool_value(
         source.get("primary_metric_stalled")
         or (value.get("primary_metric_stalled") if isinstance(value, dict) else False)
@@ -515,24 +791,32 @@ def normalize_primary_metric_gate(
         source="caller_or_repository_config",
     )
     cap_value = budget_value(budget_contract)
-    stalled = adapter_stalled or (not moved and cap_value is not None and zero_streak >= cap_value)
+    stalled = independent and comparable and (
+        adapter_stalled or (not moved and cap_value is not None and zero_streak >= cap_value)
+    )
+    high_water = max(float(previous), current_value) if comparable else current_value
+    evaluation_status = "pass" if moved else ("fail" if comparable and independent else "not_evaluated")
     return {
         "gate": "G-CHAIN-PRIMARY-METRIC",
         "metric_id": metric_id,
         "primary_metric_value": current_value,
         "previous_primary_metric_value": previous,
-        "primary_metric_high_water": max(previous, current_value) if moved else previous,
+        "primary_metric_high_water": high_water,
         "primary_metric_high_water_moved": moved,
         "raw_primary_metric_high_water_moved": raw_moved,
         "evidence_provenance": metric_provenance,
+        "declared_evidence_provenance": declared_metric_provenance,
+        "independent_source_separation_status": source_separation_status,
+        "verification_source_separation_gate": source_separation_gate,
         "attested_only_movement": attested_only,
-        "primary_metric_scope_key": scope_key,
+        "primary_metric_scope_key": stable_scope_key,
+        "artifact_binding_status": "exact",
         "primary_metric_zero_movement_streak": zero_streak,
         "primary_metric_stall_cap": cap_value,
         "budget_evaluation": budget_contract,
         "budget_evaluation_status": budget_contract["budget_evaluation_status"],
         "primary_metric_stalled": stalled,
-        "evaluation_status": "pass" if moved else "fail",
+        "evaluation_status": evaluation_status,
         "status": "block" if stalled else ("warn" if attested_only else ("pass" if moved else "ok")),
         "constrains_disposition": stalled,
         "allowed_dispositions": ["goal_productive", "terminal_blocked", "user_escalation"],

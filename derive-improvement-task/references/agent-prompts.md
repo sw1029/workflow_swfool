@@ -276,7 +276,8 @@ Selection constraints:
 - Do not downgrade authority violations into generic risk notes.
 - Treat `insufficient_evidence` as an open validation or discovery requirement in the generated task.
 - Prefer a task that moves a blocker or goal state forward over another isolated no-live safety proof.
-- If the last two completed tasks were `safety_only` for the same blocker, select evidence supply, bounded preflight/run, or a batched boundary task unless that is explicitly blocked.
+- If an evaluated same-blocker recurrence gate reaches its supplied `safety_only` budget, select evidence supply, bounded preflight/run, or a batched boundary task unless that is explicitly blocked. Without an evaluated budget, use the sequence only for ranking.
+- If the bounded current task is complete, no successor is justified, and global readiness is blocked or waiting, emit the completed identity with no successor and do not select that same identity again. Preserve the mutable alias as non-executable current history.
 - Do not select a sequential micro-contract only because it is next in order; batch it with adjacent checks when target, issue, prerequisite chain, and validation surface are the same.
 - If recent cycles repeat the same normalized blocker signature, do not select another narrowing/handoff task unless a new input kind, authority change, external-state change, or safe pack item changes the state.
 - If the only novelty is task/advice/pack/cycle/run/date/hash/version label churn, preserve it as trace-only and select using the effective count key or terminal-outcome family fallback.

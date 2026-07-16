@@ -104,6 +104,10 @@ NON_ACTIVE_STATUSES = {
     "resolved",
     "superseded",
 }
+TASK_SCAN_PRESERVED_NONEXECUTABLE_STATUSES = {
+    "complete",
+    "completed",
+}
 
 _THREAD_LOCKS: dict[str, threading.RLock] = {}
 _THREAD_LOCKS_GUARD = threading.Lock()
@@ -675,13 +679,81 @@ def versioned_event(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def validate_completed_task_alias_batch(
+    existing_state: dict[str, dict[str, Any]],
+    events: list[dict[str, Any]],
+) -> None:
+    event_ids = {
+        str(event.get("id"))
+        for event in events
+        if isinstance(event.get("id"), str)
+    }
+    prospective_state = merge_state([*existing_state.values(), *events])
+    for item_id, existing in existing_state.items():
+        existing_fields = existing.get("fields") if isinstance(existing.get("fields"), dict) else {}
+        completed_alias = bool(
+            existing.get("type") == "task"
+            and existing.get("path") == "task.md"
+            and existing.get("status") in TASK_SCAN_PRESERVED_NONEXECUTABLE_STATUSES
+            and existing_fields.get("record_class") == "mutable_alias"
+            and existing_fields.get("canonical_id") == item_id
+        )
+        if not completed_alias or item_id not in event_ids:
+            continue
+        current = prospective_state[item_id]
+        if current.get("content_sha256") != existing.get("content_sha256"):
+            raise ValueError(
+                "A completed current task alias cannot change body under the same identity"
+            )
+        current_fields = current.get("fields") if isinstance(current.get("fields"), dict) else {}
+        if (
+            current.get("status") in TASK_SCAN_PRESERVED_NONEXECUTABLE_STATUSES
+            and current_fields.get("record_class") == "mutable_alias"
+            and current_fields.get("canonical_id") == item_id
+        ):
+            continue
+        successor_ids = {
+            str(link.get("id"))
+            for link in current.get("links") or []
+            if isinstance(link, dict) and link.get("rel") == "superseded_by" and link.get("id")
+        }
+        valid_successor = False
+        for successor_id in successor_ids.intersection(event_ids):
+            if successor_id == item_id:
+                continue
+            successor = prospective_state.get(successor_id) or {}
+            successor_fields = successor.get("fields") if isinstance(successor.get("fields"), dict) else {}
+            supersedes = {
+                str(link.get("id"))
+                for link in successor.get("links") or []
+                if isinstance(link, dict) and link.get("rel") == "supersedes" and link.get("id")
+            }
+            if (
+                current.get("status") == "superseded"
+                and current_fields.get("record_class") == "immutable_snapshot"
+                and successor.get("type") == "task"
+                and successor.get("path") == "task.md"
+                and successor_fields.get("record_class") == "mutable_alias"
+                and successor_fields.get("canonical_id") == successor_id
+                and item_id in supersedes
+            ):
+                valid_successor = True
+                break
+        if not valid_successor:
+            raise ValueError(
+                "A completed task identity can change lifecycle only in one batch with a distinct linked successor"
+            )
+
+
 def _append_events_unlocked(root: Path, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     existing = _load_events_unlocked(root)
-    known_ids = set(merge_state(existing))
+    existing_state = merge_state(existing)
+    known_ids = set(existing_state)
     versioned = [versioned_event(event) for event in events]
     for offset, event in enumerate(versioned, start=1):
         validate_event(event, offset, jsonl_path(root))
         validate_current_suffix_event(event, known_ids)
+    validate_completed_task_alias_batch(existing_state, versioned)
     payload = jsonl_path(root).read_bytes()
     if payload and not payload.endswith(b"\n"):
         payload += b"\n"
@@ -833,6 +905,29 @@ def upsert_item(
             and all(existing_id != item_id for existing_id, _ in active_records)
         )
         existing_exact = state.get(item_id) if provided_item_id and item_id is not None else None
+        existing_exact_fields = (
+            existing_exact.get("fields")
+            if isinstance(existing_exact, dict)
+            and isinstance(existing_exact.get("fields"), dict)
+            else {}
+        )
+        completed_exact_alias = bool(
+            item_type == "task"
+            and path_value == "task.md"
+            and isinstance(existing_exact, dict)
+            and existing_exact.get("status") in TASK_SCAN_PRESERVED_NONEXECUTABLE_STATUSES
+            and existing_exact_fields.get("record_class") == "mutable_alias"
+            and existing_exact_fields.get("canonical_id") == item_id
+        )
+        if completed_exact_alias:
+            if existing_exact.get("content_sha256") != digest:
+                raise ValueError(
+                    "A completed current task alias changed body without a distinct successor identity"
+                )
+            if status not in TASK_SCAN_PRESERVED_NONEXECUTABLE_STATUSES:
+                raise ValueError(
+                    "A completed task identity cannot be reactivated; create a distinct successor identity"
+                )
         canonical_advice_reactivation = bool(
             explicit_replacement
             and item_type == "external_advice"
@@ -1544,6 +1639,21 @@ def scan_artifacts(root: Path, *, dry_run: bool = False) -> dict[str, Any]:
                 )
         existing = identity_state.get(item_id) if item_id else None
         existing_fields = existing.get("fields") if isinstance(existing, dict) and isinstance(existing.get("fields"), dict) else {}
+        completed_mutable_alias = bool(
+            item_type == "task"
+            and path_value == "task.md"
+            and existing
+            and existing.get("status") in TASK_SCAN_PRESERVED_NONEXECUTABLE_STATUSES
+            and existing_fields.get("record_class") == "mutable_alias"
+            and existing_fields.get("canonical_id") == item_id
+        )
+        if completed_mutable_alias:
+            if existing.get("content_sha256") == digest:
+                status = str(existing.get("status"))
+            else:
+                raise ValueError(
+                    "A non-executable current task alias changed body without an explicit lifecycle switch"
+                )
         if (
             existing
             and existing.get("path") == path_value
@@ -1693,7 +1803,24 @@ def audit_index(root: Path) -> dict[str, Any]:
         for item_id, item in state.items()
         if item.get("type") == "task" and item.get("status") == "active"
     ]
-    current_surface_ids = set(active_tasks)
+    current_task_digest = sha256_file(root / "task.md") if (root / "task.md").is_file() else None
+    current_task_alias_ids = [
+        item_id
+        for item_id, item in state.items()
+        if item.get("type") == "task"
+        and item.get("path") == "task.md"
+        and item.get("content_sha256") == current_task_digest
+        and (
+            item.get("status") == "active"
+            or (
+                item.get("status") in TASK_SCAN_PRESERVED_NONEXECUTABLE_STATUSES
+                and isinstance(item.get("fields"), dict)
+                and item["fields"].get("record_class") == "mutable_alias"
+                and item["fields"].get("canonical_id") == item_id
+            )
+        )
+    ]
+    current_surface_ids = set(current_task_alias_ids)
     while True:
         prior_size = len(current_surface_ids)
         for item_id, item in state.items():
@@ -1816,8 +1943,8 @@ def audit_index(root: Path) -> dict[str, Any]:
 
     if len(active_tasks) > 1:
         add_issue(issues, "high", "multiple_active_tasks", "More than one task is marked active.", active_tasks)
-    if (root / "task.md").is_file() and not active_tasks:
-        add_issue(issues, "high", "current_canonical_id_missing", "Current task.md has no active canonical task ID.", paths=["task.md"])
+    if (root / "task.md").is_file() and not current_task_alias_ids:
+        add_issue(issues, "high", "current_canonical_id_missing", "Current task.md has no current canonical task ID.", paths=["task.md"])
 
     active_packs = [
         item_id
@@ -1849,12 +1976,12 @@ def audit_index(root: Path) -> dict[str, Any]:
         if item.get("type") not in task_like_types or item.get("status") in NON_ACTIVE_STATUSES:
             continue
         links = item.get("links", [])
-        has_task_ref = item.get("parent_id") in active_tasks or any(
-            link.get("id") in active_tasks or link.get("rel") in {"run_for", "audit_for", "miss_for", "validates", "issue_for", "tracks_task"}
+        has_task_ref = item.get("parent_id") in current_task_alias_ids or any(
+            link.get("id") in current_task_alias_ids or link.get("rel") in {"run_for", "audit_for", "miss_for", "validates", "issue_for", "tracks_task"}
             for link in links
             if isinstance(link, dict)
         )
-        if active_tasks and not has_task_ref:
+        if current_task_alias_ids and not has_task_ref:
             add_issue(issues, "low", "unlinked_task_artifact", "Artifact is not linked to an active task.", [item_id])
 
     state_paths = {
@@ -1883,7 +2010,7 @@ def audit_index(root: Path) -> dict[str, Any]:
         "multiple_active_tasks",
         "current_projection_not_evaluated",
     }
-    active_ids = set(active_tasks)
+    active_ids = set(current_task_alias_ids)
     designated_surface_ids = active_ids | set(active_packs)
     designated_surface_paths = {
         (str(state[item_id].get("type", "")), str(state[item_id].get("path", "")))

@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 
 from ..base import RuleContext, TargetContractRule
-from ..common import add, boolish, first_present, has_value, non_empty, value_for
+from ..common import add, boolish, first_present, has_value, list_values, non_empty, value_for
 
 
 def _nonzero_scalar(value: object) -> bool:
@@ -112,6 +112,99 @@ class QualitativeReviewRule(TargetContractRule):
                 "qualitative_review_quality_verdict_invalid",
                 "`qualitative_review` quality_verdict should use the owner skill vocabulary.",
                 {"quality_verdict": quality_verdict},
+            )
+        direct_read_scope = {
+            str(item).strip().lower()
+            for item in list_values(
+                first_present(
+                    result,
+                    [
+                        "direct_read_scope",
+                        "quality_review.direct_read_scope",
+                        "qualitative_review.direct_read_scope",
+                        "result.direct_read_scope",
+                    ],
+                )
+            )
+            if str(item).strip()
+        }
+        task_change_observed = "task_change" in direct_read_scope
+        artifact_body_observed = "artifact_body" in direct_read_scope
+        semantic_ready = str(first_present(result, ["semantic_ready", "quality_review.semantic_ready"]) or "").strip().lower()
+        effective_progress_kind = str(
+            first_present(result, ["effective_progress_kind", "progress_kind", "quality_review.effective_progress_kind"])
+            or ""
+        ).strip().lower()
+        progress_cap = str(first_present(result, ["progress_cap", "quality_review.progress_cap"]) or "").strip().lower()
+        semantic_axis_values = [
+            first_present(
+                result,
+                [
+                    "artifact_semantic_verdict",
+                    "verdict_axes.artifact_semantic_verdict",
+                    "result.artifact_semantic_verdict",
+                    "result.verdict_axes.artifact_semantic_verdict",
+                ],
+            ),
+            first_present(
+                result,
+                [
+                    "goal_readiness_verdict",
+                    "verdict_axes.goal_readiness_verdict",
+                    "result.goal_readiness_verdict",
+                    "result.verdict_axes.goal_readiness_verdict",
+                ],
+            ),
+        ]
+
+        def axis_pass(value: object) -> bool:
+            raw = value.get("status") or value.get("verdict") if isinstance(value, dict) else value
+            return str(raw or "").strip().lower() == "pass"
+
+        semantic_positive = bool(
+            boolish(first_present(result, ["semantic_progress", "observed_semantic_progress"]))
+            or semantic_ready == "true"
+            or effective_progress_kind == "goal_productive"
+            or progress_cap == "goal_productive"
+            or any(axis_pass(value) for value in semantic_axis_values)
+        )
+        truth_basis = str(
+            first_present(
+                result,
+                [
+                    "truth_basis",
+                    "actual_body_truth_basis",
+                    "actual_artifact_truth.truth_basis",
+                    "quality_review.truth_basis",
+                ],
+            )
+            or ""
+        ).strip().lower()
+        if review_status == "complete" and not (task_change_observed or artifact_body_observed):
+            add(
+                findings,
+                (
+                    "block"
+                    if mode == "block" or quality_verdict == "acceptable"
+                    else "warn"
+                ),
+                "qualitative_review_scope_not_evaluated",
+                "A complete qualitative review must declare task_change, artifact_body, or both in direct_read_scope.",
+            )
+        if semantic_positive and (
+            not artifact_body_observed
+            or truth_basis in {"", "not_evaluated", "missing", "unknown"}
+        ):
+            add(
+                findings,
+                "block",
+                "qualitative_review_artifact_body_not_evaluated",
+                "Task-change or compatibility inspection cannot produce an artifact-body semantic pass; read the current body and preserve an evaluated truth basis.",
+                {
+                    "task_change_observed": task_change_observed,
+                    "artifact_body_observed": artifact_body_observed,
+                    "truth_basis": truth_basis or "not_evaluated",
+                },
             )
         pass_with_unobserved_axes = boolish(
             first_present(

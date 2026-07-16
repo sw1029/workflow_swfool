@@ -1031,7 +1031,17 @@ def validate(
                 "goal_distance_gate.threshold",
                 "packet.goal_distance_gate.threshold",
             )
-        ) or 5
+        )
+        goal_threshold_status = str(
+            first_value(
+                stage,
+                "goal_distance_gate.evaluation_status",
+                "packet.goal_distance_gate.evaluation_status",
+                "goal_distance_gate.budget_evaluation_status",
+                "packet.goal_distance_gate.budget_evaluation_status",
+            )
+            or ""
+        ).strip().lower()
         goal_productive_this_cycle = truthy(
             first_value(
                 stage,
@@ -1101,7 +1111,9 @@ def validate(
                 {"semantic_signature": sealed_matches, "sealed_families": sealed_families[:5]},
             )
         if (
-            cycles_since_goal_productive is not None
+            goal_threshold is not None
+            and goal_threshold_status == "evaluated"
+            and cycles_since_goal_productive is not None
             and cycles_since_goal_productive > goal_threshold
             and not goal_productive_this_cycle
             and not terminal_blocker
@@ -1116,7 +1128,9 @@ def validate(
                 {"cycles_since_goal_productive_output": cycles_since_goal_productive, "threshold": goal_threshold, "progress_kind": next_progress_kind},
             )
         elif (
-            cycles_since_goal_productive is not None
+            goal_threshold is not None
+            and goal_threshold_status == "evaluated"
+            and cycles_since_goal_productive is not None
             and cycles_since_goal_productive > goal_threshold
             and not goal_productive_this_cycle
             and not terminal_blocker

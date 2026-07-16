@@ -244,14 +244,14 @@ Always preserve `terminal_blocked` and `user_escalation` as safety valves. `$der
 
 ## G0 Pre-Cycle Regression Guard
 
-Before deriving the next task, compare at least the most recent 3 to 5 cycle records when available:
+Before deriving the next task, compare the caller/adapter-supplied evaluated observation window when available:
 
 - current artifact family, target command surface, root key, semantic signature, and observed output class
 - `provider_request_count`, `env_file_read`, local-model/provider attempt booleans, and terminal/provider status
 - primary output fingerprints, semantic counts, and qualitative review caps
 - command-surface budget state and same-family micro-hardening streak
 
-If the same artifact family repeats with `provider_request_count=0` and stagnant semantic output for at least 3 recent cycles, block another no-provider micro-hardening task as `goal_productive`. The next selection must be one of:
+If that evaluated window reaches its supplied same-family nonsemantic budget with no producer execution and stagnant semantic output, block another no-producer micro-hardening task as `goal_productive`. Without an evaluated budget, keep the records as ranking evidence and do not force a threshold. At the evaluated boundary, the next selection must be one of:
 
 - a bounded provider or semantic-output transition authorized by authority and GT
 - a valid consolidation/refactor task for the over-budget surface
@@ -504,7 +504,9 @@ Consolidation is governance-only unless it independently produces accepted prima
 
 ## G6 Same-Family Micro-Hardening Limit
 
-If the last 3 selected tasks in the same artifact family are micro-hardening changes such as `add_field`, `lineage`, `gap_report`, `relation_label_tweak`, `contract_scalar`, `preflight_scalar`, or renamed command variants, block the next same-family micro-hardening task as `goal_productive`.
+When the adapter/caller supplies an evaluated same-family nonsemantic budget and verifier/guard/report/structure-only work reaches it without body or primary-axis movement, block the next same-family micro-hardening task as `goal_productive`. Without the evaluated budget, preserve recurrence as diagnostic/ranking evidence only.
+
+At that existing selection boundary, rank: producer/body logic repair; an evaluator that the immediately selected task will consume; approved bounded producer execution; concrete terminal proof; then the minimum authority request that removes the blocker. Binding repair is workflow correctness, not semantic movement. Keep safety and authority constraints intact.
 
 The next task must be one of:
 
@@ -512,6 +514,11 @@ The next task must be one of:
 - valid consolidation/refactor of the repeated surface
 - supplied-input or source-backed domain-delta task
 - terminal/user escalation with evidence that no authorized productive alternative remains
+
+Static boundary fixtures:
+
+- Negative: an evaluated portfolio over `artifact_A` reaches its supplied budget with unchanged `body_fp_A` and only verifier/report/structure rows. Expected verdict: another verifier-like item is excluded from `goal_productive`, and producer/body work ranks first. Forbidden overclaim: treating a renamed check or binding repair as semantic movement.
+- Happy path: approved `attempt_A` executes the bounded producer path and produces a fresh exact-bound body revision with independently verified movement on `axis_G`. Expected verdict: producer starvation clears for that path and ordinary selection resumes. Forbidden overclaim: inferring every goal axis, completion, or final publication.
 
 ## G7 Loopback Progress Packet
 

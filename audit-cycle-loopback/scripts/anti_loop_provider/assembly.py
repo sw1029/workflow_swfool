@@ -10,6 +10,13 @@ def build_base_packet(ns: dict[str, Any]) -> dict[str, Any]:
     body_divergence = bool_value(first_field_value(integrity_values, {"report_body_divergence"}))
     key_divergence = bool_value(first_field_value(integrity_values, {"report_key_divergence"}))
     consumer_missing = bool_value((adapter_load_gate.get("consumer_context_conformance") or {}).get("missing_consumer_context_ids"))
+    body_fingerprint = str(decision_artifact_ref.get("body_projection_fingerprint") or "").strip().lower()
+    exact_body_bound = bool(re.fullmatch(r"[0-9a-f]{64}", body_fingerprint))
+    exact_cohort_bound = bool(string_list(decision_artifact_ref.get("verification_input_ids"))) or bool(
+        decision_artifact_ref.get("input_fingerprints")
+        if isinstance(decision_artifact_ref.get("input_fingerprints"), dict)
+        else None
+    )
     authoritative_progress = bool(semantic_progress) and not any(
         (
             hard_stop,
@@ -17,7 +24,10 @@ def build_base_packet(ns: dict[str, Any]) -> dict[str, Any]:
             key_divergence,
             consumer_missing,
             not bool_value(decision_artifact_ref.get("scope_verified")),
+            not exact_body_bound,
+            not exact_cohort_bound,
             not bool_value(coverage_gate.get("decision_contribution_allowed")),
+            not bool_value(primary_metric_gate.get("primary_metric_high_water_moved")),
             truth_required and truth_basis in {"", "not_evaluated", "missing", "unknown"},
             bool_value(validator_gate.get("constrains_disposition")),
             bool_value(source_separation_gate.get("independently_verified_downgraded_fields")),

@@ -47,12 +47,16 @@ def projection_conclusions(projection: dict[str, Any]) -> tuple[str, str]:
         "fail": "failed",
         "partial": "partial",
         "blocked": "blocked",
+        "conflicted": "blocked",
         "not_evaluated": "not_run",
         "not_applicable": "not_applicable",
     }.get(acceptance, "not_run")
     semantic = status("artifact_semantic_verdict")
     goal = status("goal_readiness_verdict")
-    if semantic == "pass" and goal == "pass":
+    all_statuses = {status(axis) for axis in VERDICT_AXES}
+    if "conflicted" in all_statuses:
+        progress = "blocked"
+    elif semantic == "pass" and goal == "pass":
         progress = "advanced"
     elif "blocked" in {semantic, goal}:
         progress = "blocked"
@@ -81,7 +85,8 @@ def opaque_id(value: Any, *, max_length: int = 256) -> bool:
     )
 
 
-def extract_finalization_receipt(result: dict[str, Any]) -> dict[str, Any] | None:
+def finalization_receipt_aliases(result: dict[str, Any]) -> list[dict[str, Any]]:
+    aliases: list[dict[str, Any]] = []
     declared_paths = (
         ("finalization_receipt",),
         ("validation_finalization_receipt",),
@@ -99,11 +104,25 @@ def extract_finalization_receipt(result: dict[str, Any]) -> dict[str, Any] | Non
         if declared:
             if current is None:
                 continue
-            return current if isinstance(current, dict) else {"malformed_receipt_value": True}
+            aliases.append(current if isinstance(current, dict) else {"malformed_receipt_value": True})
     compatibility = result.get("receipt")
     if isinstance(compatibility, dict) and compatibility.get("kind") == RECEIPT_KIND:
-        return compatibility
-    return None
+        aliases.append(compatibility)
+    return aliases
+
+
+def conflicting_finalization_receipt_aliases(result: dict[str, Any]) -> bool:
+    aliases = finalization_receipt_aliases(result)
+    return len({canonical_digest(value) for value in aliases}) > 1
+
+
+def extract_finalization_receipt(result: dict[str, Any]) -> dict[str, Any] | None:
+    aliases = finalization_receipt_aliases(result)
+    if not aliases:
+        return None
+    if len({canonical_digest(value) for value in aliases}) > 1:
+        return {"malformed_receipt_value": True, "conflicting_receipt_aliases": True}
+    return aliases[0]
 
 
 def extract_finalization_consumption(result: dict[str, Any]) -> dict[str, Any] | None:
@@ -118,26 +137,43 @@ def extract_finalization_consumption(result: dict[str, Any]) -> dict[str, Any] |
     return value if isinstance(value, dict) else None
 
 
-def projection_from_result(result: dict[str, Any]) -> dict[str, Any] | None:
-    value = first_present(
-        result,
-        [
-            "authoritative_projection",
-            "finalization.authoritative_projection",
-            "result.authoritative_projection",
-        ],
-    )
-    if isinstance(value, dict):
-        return value
+def _value_at_path(data: dict[str, Any], path: tuple[str, ...]) -> Any:
+    current: Any = data
+    for part in path:
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def projection_aliases(result: dict[str, Any]) -> list[dict[str, Any]]:
+    aliases: list[dict[str, Any]] = []
+    for path in (
+        ("authoritative_projection",),
+        ("finalization", "authoritative_projection"),
+        ("result", "authoritative_projection"),
+    ):
+        value = _value_at_path(result, path)
+        if isinstance(value, dict):
+            aliases.append(value)
     if all(result.get(field) is not None for field in ("verdict_contract_version", *VERDICT_AXES)):
         authoritative_final = result.get("authoritative_final")
         if authoritative_final is not None:
-            return {
-                "verdict_contract_version": result["verdict_contract_version"],
-                **{field: result[field] for field in VERDICT_AXES},
-                "authoritative_final": authoritative_final,
-            }
-    return None
+            aliases.append(
+                {
+                    "verdict_contract_version": result["verdict_contract_version"],
+                    **{field: result[field] for field in VERDICT_AXES},
+                    "authoritative_final": authoritative_final,
+                }
+            )
+    return aliases
+
+
+def projection_from_result(result: dict[str, Any]) -> dict[str, Any] | None:
+    aliases = projection_aliases(result)
+    if not aliases or len({canonical_digest(value) for value in aliases}) != 1:
+        return None
+    return aliases[0]
 
 
 def finalization_required(target: str, result: dict[str, Any]) -> bool:
@@ -224,9 +260,59 @@ def candidate_errors(candidate: dict[str, Any]) -> list[dict[str, Any]]:
         error("final_candidate_previous_binding_partial", "Previous revision, attempt, and token must be all null for the first revision or all populated.")
     if candidate.get("verdict_contract_version") != 1:
         error("final_candidate_verdict_version_invalid", "Final candidate must preserve verdict_contract_version=1.")
+    producer_projection_fields = sorted(
+        {
+            "authoritative_projection",
+            "authoritative_projection_digest",
+            "authoritative_projection_id",
+            "validation_axes_digest",
+        }.intersection(candidate)
+    )
+    nested_projection = (
+        isinstance(candidate.get("finalization"), dict)
+        and isinstance(candidate["finalization"].get("authoritative_projection"), dict)
+    ) or (
+        isinstance(candidate.get("result"), dict)
+        and isinstance(candidate["result"].get("authoritative_projection"), dict)
+    )
+    if producer_projection_fields or nested_projection:
+        error(
+            "final_candidate_projection_preassigned",
+            "Only the existing finalization owner may construct the authoritative projection and its digests.",
+            {"fields": producer_projection_fields, "nested_projection": bool(nested_projection)},
+        )
     missing_axes = [axis for axis in VERDICT_AXES if not isinstance(candidate.get(axis), dict)]
     if missing_axes:
         error("final_candidate_verdict_axis_missing", "Final candidate must preserve all six typed verdict axes.", {"axes": missing_axes})
+    alias_containers = [
+        candidate.get("verdict_axes"),
+        candidate.get("result"),
+        candidate.get("result", {}).get("verdict_axes")
+        if isinstance(candidate.get("result"), dict)
+        else None,
+    ]
+    alias_conflicts: list[str] = []
+    for axis in VERDICT_AXES:
+        canonical = candidate.get(axis)
+        canonical_status = str(
+            canonical.get("status") or canonical.get("verdict") or ""
+        ).strip().lower() if isinstance(canonical, dict) else ""
+        for container in alias_containers:
+            if not isinstance(container, dict) or axis not in container:
+                continue
+            alias = container[axis]
+            alias_status = str(
+                alias.get("status") or alias.get("verdict") or ""
+            ).strip().lower() if isinstance(alias, dict) else str(alias or "").strip().lower()
+            if alias_status != canonical_status:
+                alias_conflicts.append(axis)
+                break
+    if alias_conflicts:
+        error(
+            "final_candidate_verdict_alias_conflict",
+            "Final candidate verdict aliases disagree with the canonical top-level axes.",
+            {"axes": sorted(set(alias_conflicts))},
+        )
     if "attempt_revision" in candidate or "supersedes_revision" in candidate or "supersedes_finalization_token" in candidate:
         error("final_candidate_revision_preassigned", "Only the finalization owner may assign attempt revision and supersession lineage.")
     durable_state = candidate.get("durable_state_candidate")
@@ -468,7 +554,22 @@ def validate_finalization_contract(
         return errors
     if not receipt_present:
         return errors
+    if conflicting_finalization_receipt_aliases(result):
+        errors.append(
+            {
+                "code": "finalization_receipt_alias_conflict",
+                "message": "Finalization receipt aliases disagree; do not select a favorable or current-looking receipt.",
+            }
+        )
     errors.extend(receipt_shape_errors(receipt))
+    aliases = projection_aliases(result)
+    if len({canonical_digest(value) for value in aliases}) > 1:
+        errors.append(
+            {
+                "code": "authoritative_projection_alias_conflict",
+                "message": "Current authoritative projection aliases disagree; do not select the favorable projection.",
+            }
+        )
     projection = projection_from_result(result)
     consumption = extract_finalization_consumption(result)
     errors.extend(consumption_errors(receipt, consumption, projection))
@@ -498,7 +599,15 @@ def verified_projection(
     receipt = extract_finalization_receipt(result)
     if receipt is None:
         return None, None, []
-    errors = receipt_shape_errors(receipt)
+    errors: list[dict[str, Any]] = []
+    if conflicting_finalization_receipt_aliases(result):
+        errors.append(
+            {
+                "code": "finalization_receipt_alias_conflict",
+                "message": "Finalization receipt aliases disagree; current projection consumption is not evaluated.",
+            }
+        )
+    errors.extend(receipt_shape_errors(receipt))
     if errors:
         return None, receipt, errors
     verified, verification_errors = verify_current_receipt(workspace_root(result, contract_context), receipt)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import sys
@@ -55,7 +56,15 @@ VERDICT_AXES = (
     "historical_index_verdict",
     "goal_readiness_verdict",
 )
-VERDICT_AXIS_STATUSES = {"pass", "fail", "partial", "blocked", "not_evaluated", "not_applicable"}
+VERDICT_AXIS_STATUSES = {
+    "pass",
+    "fail",
+    "partial",
+    "blocked",
+    "not_evaluated",
+    "not_applicable",
+    "conflicted",
+}
 COUPLING_STATUSES = {"disjoint", "overlapping", "same_artifact", "unknown"}
 EVIDENCE_PROVENANCE_STATUSES = {
     "independently_verified",
@@ -67,6 +76,8 @@ EVIDENCE_PROVENANCE_STATUSES = {
 
 def _positive_decision_claim(target: str, result: dict[str, Any]) -> bool:
     validation_verdict = str(value_for(result, "validation_verdict") or "").strip().lower()
+    review_status = str(value_for(result, "review_status") or "").strip().lower()
+    quality_verdict = str(value_for(result, "quality_verdict") or "").strip().lower()
     progress_verdict = str(value_for(result, "progress_verdict") or "").strip().lower()
     progress_kind = str(value_for(result, "progress_kind") or "").strip().lower()
     completion_status = str(first_present(result, ["completion_status", "report.completion_status", "result.completion_status"]) or "").strip().lower()
@@ -76,6 +87,7 @@ def _positive_decision_claim(target: str, result: dict[str, Any]) -> bool:
     ).strip().lower()
     return bool(
         (target == "validate" and validation_verdict in {"complete", "pass", "passed", "success"})
+        or (target == "qualitative_review" and review_status == "complete" and quality_verdict == "acceptable")
         or completion_status in {"complete", "complete_verified", "closed", "promoted"}
         or pack_transition_status in {"pass", "passed", "promoted", "complete"}
         or boolish(first_present(result, ["pack_transition_applied", "successor_auto_promoted", "promotion_applied"]))
@@ -132,6 +144,83 @@ def _declared_values(data: dict[str, Any], paths: tuple[str, ...]) -> list[Any]:
         if declared:
             values.append(current)
     return values
+
+
+def _normalized_verdict_status(value: Any) -> str:
+    if isinstance(value, dict):
+        raw = value.get("status") if value.get("status") is not None else value.get("verdict")
+    else:
+        raw = value
+    status = str(raw or "").strip().lower()
+    if status in {"", "missing", "unknown", "unobserved"}:
+        return "not_evaluated"
+    return status
+
+
+def _consumer_receipt_pass(
+    row: dict[str, Any],
+    bool_field: str,
+    status_field: str,
+) -> bool:
+    if bool_field in row:
+        return boolish(row.get(bool_field))
+    return str(row.get(status_field) or "").strip().lower() in {
+        "pass",
+        "passed",
+        "complete",
+        "completed",
+        "consumed",
+        "success",
+    }
+
+
+def _consumer_receipt_binding_sha256(row: dict[str, Any]) -> str:
+    basis = {
+        "consumer_context_id": str(row.get("consumer_context_id") or ""),
+        "cycle_id": str(row.get("cycle_id") or ""),
+        "input_state_fingerprint": str(row.get("input_state_fingerprint") or ""),
+        "attempt_identity": str(row.get("attempt_identity") or ""),
+        "artifact_id": row.get("artifact_id"),
+        "artifact_sha256": row.get("artifact_sha256"),
+        "production_lane_identity": row.get("production_lane_identity"),
+        "body_projection_fingerprint": row.get("body_projection_fingerprint"),
+        "verification_input_ids": sorted(
+            str(item) for item in list_values(row.get("verification_input_ids"))
+        ),
+        "input_fingerprints": (
+            row.get("input_fingerprints")
+            if isinstance(row.get("input_fingerprints"), dict)
+            else None
+        ),
+        "evidence_provenance": str(row.get("evidence_provenance") or "").strip().lower(),
+        "adapter_loaded": boolish(row.get("adapter_loaded")),
+        "hook_resolved": boolish(
+            row.get("hook_resolved")
+            if "hook_resolved" in row
+            else row.get("required_hook_callable")
+        ),
+        "required_hook_callable": boolish(row.get("required_hook_callable")),
+        "hook_signature_compatible": boolish(row.get("hook_signature_compatible")),
+        "invocation_completed": _consumer_receipt_pass(
+            row,
+            "invocation_completed",
+            "invocation_status",
+        ),
+        "return_contract_valid": boolish(row.get("return_contract_valid")),
+        "artifact_identity_echo_valid": _consumer_receipt_pass(
+            row,
+            "artifact_identity_echo_valid",
+            "artifact_identity_echo_status",
+        ),
+        "value_consumed_by_decision": _consumer_receipt_pass(
+            row,
+            "value_consumed_by_decision",
+            "decision_consumption_status",
+        ),
+        "probe_evidence_ref": str(row.get("probe_evidence_ref") or ""),
+    }
+    raw = json.dumps(basis, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def _metric_gate_signature(gate: Any) -> tuple[Any, ...]:
@@ -205,7 +294,6 @@ def validate_decision_identity_and_compatibility(
 ) -> None:
     if target not in DECISION_TARGETS:
         return
-    severity = "block" if mode == "block" or target in {"validate", "report"} else "warn"
     raw_contract_version = first_present(
         result,
         [
@@ -220,6 +308,13 @@ def validate_decision_identity_and_compatibility(
     except (TypeError, ValueError):
         contract_version = None
     positive_claim = _positive_decision_claim(target, result)
+    severity = (
+        "block"
+        if mode == "block"
+        or target in {"validate", "report"}
+        or positive_claim
+        else "warn"
+    )
     contract_required = positive_claim
     if contract_required and raw_contract_version is None:
         add(
@@ -280,6 +375,95 @@ def validate_decision_identity_and_compatibility(
                 severity,
                 "advisory_artifact_controls_decision",
                 "An advisory or scope-unverified artifact cannot control completion, progress, hard stop, terminal state, or pack consumption.",
+            )
+
+        direct_read_scope = {
+            str(item).strip().lower()
+            for item in list_values(
+                first_present(
+                    result,
+                    [
+                        "direct_read_scope",
+                        "quality_review.direct_read_scope",
+                        "qualitative_review.direct_read_scope",
+                        "result.direct_read_scope",
+                    ],
+                )
+            )
+            if str(item).strip()
+        }
+        semantic_axis_values = [
+            *_declared_values(
+                result,
+                (
+                    "artifact_semantic_verdict",
+                    "verdict_axes.artifact_semantic_verdict",
+                    "result.artifact_semantic_verdict",
+                    "result.verdict_axes.artifact_semantic_verdict",
+                ),
+            ),
+            *_declared_values(
+                result,
+                (
+                    "goal_readiness_verdict",
+                    "verdict_axes.goal_readiness_verdict",
+                    "result.goal_readiness_verdict",
+                    "result.verdict_axes.goal_readiness_verdict",
+                ),
+            ),
+        ]
+        semantic_claim = bool(
+            "artifact_body" in direct_read_scope
+            or any(_normalized_verdict_status(value) == "pass" for value in semantic_axis_values)
+            or boolish(first_present(result, ["semantic_progress", "authoritative_semantic_progress"]))
+            or str(first_present(result, ["progress_kind", "effective_progress_kind"]) or "").strip().lower()
+            == "goal_productive"
+        )
+        body_values = []
+        if "body_projection_fingerprint" in identity:
+            body_values.append(identity.get("body_projection_fingerprint"))
+        body_values.extend(
+            _declared_values(
+                result,
+                (
+                    "body_projection_fingerprint",
+                    "actual_artifact_truth.body_projection_fingerprint",
+                    "quality_review.body_projection_fingerprint",
+                    "result.body_projection_fingerprint",
+                ),
+            )
+        )
+        body_fingerprint = next((value for value in body_values if non_empty(value)), None)
+        cohort_values = []
+        for field in ("verification_input_ids", "input_fingerprints"):
+            if field in identity:
+                cohort_values.append(identity.get(field))
+        cohort_values.extend(
+            _declared_values(
+                result,
+                (
+                    "verification_input_ids",
+                    "verification_source_separation_gate.verification_input_ids",
+                    "input_fingerprints",
+                    "verification_source_separation_gate.input_fingerprints",
+                    "result.verification_input_ids",
+                    "result.input_fingerprints",
+                ),
+            )
+        )
+        cohort_declared = any(non_empty(value) for value in cohort_values)
+        semantic_binding_missing: list[str] = []
+        if semantic_claim and not _full_sha256(body_fingerprint):
+            semantic_binding_missing.append("body_projection_fingerprint")
+        if semantic_claim and not cohort_declared:
+            semantic_binding_missing.append("source_cohort")
+        if semantic_binding_missing:
+            add(
+                findings,
+                severity,
+                "decision_semantic_binding_incomplete",
+                "Artifact-body, semantic, or goal claims require a current body fingerprint and an explicitly declared source cohort; missing bindings remain not evaluated.",
+                {"missing_fields": semantic_binding_missing},
             )
 
     explicit_identity = first_present(result, ["explicit_artifact_ref", "caller_artifact_ref"])
@@ -1346,7 +1530,21 @@ def validate_verdict_axes(
     mode: str,
     findings: list[dict[str, Any]],
 ) -> None:
-    supplied = {axis: first_present(result, [axis, f"verdict_axes.{axis}", f"result.{axis}"]) for axis in VERDICT_AXES}
+    declared = {
+        axis: _declared_values(
+            result,
+            (
+                axis,
+                f"verdict_axes.{axis}",
+                f"result.{axis}",
+                f"result.verdict_axes.{axis}",
+                f"authoritative_projection.{axis}",
+                f"finalization.authoritative_projection.{axis}",
+                f"result.authoritative_projection.{axis}",
+            ),
+        )
+        for axis in VERDICT_AXES
+    }
     raw_version = first_present(
         result,
         ["verdict_contract_version", "verdict_axes.schema_version", "result.verdict_contract_version"],
@@ -1355,9 +1553,15 @@ def validate_verdict_axes(
         contract_version = int(raw_version) if raw_version is not None else None
     except (TypeError, ValueError):
         contract_version = None
-    any_axes = any(value is not None for value in supplied.values())
+    any_axes = any(values for values in declared.values())
     current_required = target in {"validate", "derive", "report"} and _positive_decision_claim(target, result)
-    severity = "block" if mode == "block" or target in {"validate", "report"} else "warn"
+    severity = (
+        "block"
+        if mode == "block"
+        or target in {"validate", "report"}
+        or _positive_decision_claim(target, result)
+        else "warn"
+    )
     if raw_version is None and (any_axes or current_required):
         add(
             findings,
@@ -1374,31 +1578,41 @@ def validate_verdict_axes(
     if contract_version != 1 and not any_axes:
         return
     statuses: dict[str, str] = {}
-    for axis, value in supplied.items():
-        if value is None:
+    for axis, values in declared.items():
+        if not values:
             add(findings, severity, "verdict_axis_missing", "Current verdict-axis packets must preserve every lifecycle verdict axis.", {"axis": axis})
             continue
-        if isinstance(value, dict):
-            status = str(value.get("status") or value.get("verdict") or "").strip().lower()
-            evidence = value.get("evidence_ref") or value.get("evidence_refs")
+        observed_statuses = {_normalized_verdict_status(value) for value in values}
+        if len(observed_statuses) > 1:
+            status = "conflicted"
+            add(
+                findings,
+                severity,
+                "verdict_axis_conflicted",
+                "Duplicate current surfaces disagree on one verdict axis; preserve the axis as conflicted instead of selecting a favorable value.",
+                {"axis": axis, "observed_statuses": sorted(observed_statuses)},
+            )
         else:
-            status = str(value).strip().lower()
-            evidence = None
+            status = next(iter(observed_statuses))
         statuses[axis] = status
         if status not in VERDICT_AXIS_STATUSES:
             add(findings, severity, "verdict_axis_status_invalid", "Verdict axis status is invalid.", {"axis": axis, "status": status})
-        if status != "not_applicable" and not non_empty(evidence):
-            add(findings, severity, "verdict_axis_evidence_missing", "Verdict axes require a bounded evidence reference.", {"axis": axis})
+        for value in values:
+            value_status = _normalized_verdict_status(value)
+            evidence = value.get("evidence_ref") or value.get("evidence_refs") if isinstance(value, dict) else None
+            if value_status != "not_applicable" and not non_empty(evidence):
+                add(findings, severity, "verdict_axis_evidence_missing", "Verdict axes require a bounded evidence reference.", {"axis": axis})
+                break
     goal_status = statuses.get("goal_readiness_verdict")
     implementation_blocking = {
         axis
         for axis in ("task_acceptance_verdict", "artifact_truth_verdict", "artifact_semantic_verdict")
-        if statuses.get(axis) in {"fail", "blocked", "partial", "not_evaluated"}
+        if statuses.get(axis) in {"fail", "blocked", "partial", "not_evaluated", "conflicted"}
     }
     readiness_blocking = {
         axis
         for axis in VERDICT_AXES[:-1]
-        if statuses.get(axis) in {"fail", "blocked", "partial", "not_evaluated"}
+        if statuses.get(axis) in {"fail", "blocked", "partial", "not_evaluated", "conflicted"}
     }
     if implementation_blocking and str(value_for(result, "progress_verdict") or "").lower() == "advanced":
         add(
@@ -1413,10 +1627,14 @@ def validate_verdict_axes(
             findings,
             severity,
             "failed_axis_counted_as_goal_ready",
-            "Goal readiness cannot pass while a required lifecycle axis is failed, blocked, partial, or not evaluated.",
+            "Goal readiness cannot pass while a required lifecycle axis is failed, blocked, partial, not evaluated, or conflicted.",
             {"blocking_axes": sorted(readiness_blocking)},
         )
-    failed_axes = {axis for axis, status in statuses.items() if status in {"fail", "blocked", "partial", "not_evaluated"}}
+    failed_axes = {
+        axis
+        for axis, status in statuses.items()
+        if status in {"fail", "blocked", "partial", "not_evaluated", "conflicted"}
+    }
     retry_axis = str(first_present(result, ["retry_axis", "selected_remediation_axis", "derive.retry_axis"]) or "").strip()
     if target == "derive" and failed_axes and retry_axis and retry_axis not in failed_axes:
         add(
@@ -1800,7 +2018,13 @@ def _validate(
     if report_body_divergence:
         add(
             findings,
-            "block" if mode == "block" or target in {"validate", "report"} else "warn",
+            (
+                "block"
+                if mode == "block"
+                or target in {"validate", "report"}
+                or _positive_decision_claim(target, result)
+                else "warn"
+            ),
             "report_body_divergence",
             "The canonical actual-artifact body projection disagrees with the consumed report; this is distinct from duplicate report-key divergence.",
             {"auto_detected": auto_report_body_divergences[:20]},
@@ -1813,63 +2037,205 @@ def _validate(
             "Acceptance-required actual-artifact body truth was not independently evaluated.",
         )
 
-    required_consumer_ids = list_values(
-        first_present(
-            result,
-            [
-                "required_consumer_ids",
-                "adapter_contract.required_consumer_ids",
-                "consumer_context_conformance.required_consumer_ids",
-            ],
+    required_consumer_ids: list[Any] = []
+    for declared_ids in _declared_values(
+        result,
+        (
+            "required_consumer_ids",
+            "adapter_contract.required_consumer_ids",
+            "consumer_context_conformance.required_consumer_ids",
+            "adapter_consumer_conformance.required_consumer_ids",
+            "result.required_consumer_ids",
+            "result.consumer_context_conformance.required_consumer_ids",
+            "result.adapter_consumer_conformance.required_consumer_ids",
+        ),
+    ):
+        for consumer_id in list_values(declared_ids):
+            if consumer_id not in required_consumer_ids:
+                required_consumer_ids.append(consumer_id)
+    conformance_rows: list[Any] = []
+    malformed_conformance_aliases: list[str] = []
+    for conformance_path in (
+        "consumer_context_conformance",
+        "adapter_consumer_conformance",
+        "result.consumer_context_conformance",
+        "result.adapter_consumer_conformance",
+    ):
+        declared_surfaces = _declared_values(result, (conformance_path,))
+        if not declared_surfaces:
+            continue
+        conformance_surface = declared_surfaces[0]
+        rows_value = (
+            conformance_surface.get("rows")
+            if isinstance(conformance_surface, dict)
+            else conformance_surface
         )
-    )
-    conformance_rows_value = first_present(
+        if isinstance(rows_value, list):
+            conformance_rows.extend(rows_value)
+        elif not (isinstance(conformance_surface, dict) and "rows" not in conformance_surface):
+            malformed_conformance_aliases.append(conformance_path)
+    if malformed_conformance_aliases:
+        add(
+            findings,
+            (
+                "block"
+                if mode == "block"
+                or target == "validate"
+                or _positive_decision_claim(target, result)
+                else "warn"
+            ),
+            "consumer_context_conformance_alias_malformed",
+            "Every declared consumer-conformance alias must contain a row list; malformed duplicates cannot be ignored in favor of a valid surface.",
+            {"aliases": malformed_conformance_aliases},
+        )
+    conformance_by_id: dict[str, list[dict[str, Any]]] = {}
+    for row in conformance_rows:
+        if isinstance(row, dict) and row.get("consumer_context_id"):
+            conformance_by_id.setdefault(str(row["consumer_context_id"]), []).append(row)
+    decision_identity = first_present(
         result,
         [
-            "consumer_context_conformance.rows",
-            "consumer_context_conformance",
-            "adapter_consumer_conformance",
+            "decision_input_identity",
+            "decision_artifact_ref",
+            "selected_artifact_ref",
+            "artifact_ref",
+            "actual_artifact_ref",
+            "result.decision_input_identity",
         ],
     )
-    if isinstance(conformance_rows_value, dict):
-        conformance_rows = conformance_rows_value.get("rows") or []
-    else:
-        conformance_rows = conformance_rows_value or []
-    conformance_by_id = {
-        str(row.get("consumer_context_id")): row
-        for row in conformance_rows
-        if isinstance(row, dict) and row.get("consumer_context_id")
-    }
-    invalid_consumers: list[str] = []
-    for consumer_id in required_consumer_ids:
-        row = conformance_by_id.get(str(consumer_id))
-        invocation_status = str((row or {}).get("invocation_status") or "").strip().lower()
-        return_status = str((row or {}).get("return_contract_status") or "").strip().lower()
-        echo_status = str((row or {}).get("artifact_identity_echo_status") or "").strip().lower()
-        consumption_status = str((row or {}).get("decision_consumption_status") or "").strip().lower()
-        valid = bool(row) and all(
+    decision_identity = decision_identity if isinstance(decision_identity, dict) else {}
+    body_fingerprint_values = []
+    if "body_projection_fingerprint" in decision_identity:
+        body_fingerprint_values.append(decision_identity.get("body_projection_fingerprint"))
+    body_fingerprint_values.extend(
+        _declared_values(
+            result,
             (
-                boolish(row.get("adapter_loaded")),
-                boolish(row.get("hook_resolved")),
-                boolish(row.get("hook_callable") or row.get("required_hook_callable")),
-                boolish(row.get("signature_bind_passed") or row.get("hook_signature_compatible")),
-                boolish(row.get("invocation_completed")) or invocation_status in {"complete", "completed", "pass", "passed", "success"},
-                boolish(row.get("return_contract_valid")) or return_status in {"valid", "pass", "passed"},
-                boolish(row.get("artifact_identity_echo_valid")) or echo_status in {"valid", "pass", "passed", "matched"},
-                boolish(row.get("value_consumed_by_decision")) or consumption_status in {"consumed", "pass", "passed"},
+                "body_projection_fingerprint",
+                "actual_artifact_truth.body_projection_fingerprint",
+                "quality_review.body_projection_fingerprint",
+                "result.body_projection_fingerprint",
+            ),
+        )
+    )
+    expected_body_fingerprint = next(
+        (value for value in body_fingerprint_values if non_empty(value)),
+        None,
+    )
+    verification_input_values = []
+    if "verification_input_ids" in decision_identity:
+        verification_input_values.append(decision_identity.get("verification_input_ids"))
+    verification_input_values.extend(
+        _declared_values(
+            result,
+            (
+                "verification_input_ids",
+                "verification_source_separation_gate.verification_input_ids",
+                "result.verification_input_ids",
+            ),
+        )
+    )
+    expected_verification_input_ids = verification_input_values[0] if verification_input_values else None
+    input_fingerprint_values = []
+    if "input_fingerprints" in decision_identity:
+        input_fingerprint_values.append(decision_identity.get("input_fingerprints"))
+    input_fingerprint_values.extend(
+        _declared_values(
+            result,
+            (
+                "input_fingerprints",
+                "verification_source_separation_gate.input_fingerprints",
+                "result.input_fingerprints",
+            ),
+        )
+    )
+    expected_input_fingerprints = input_fingerprint_values[0] if input_fingerprint_values else None
+    expected_cycle_id = str(first_present(result, ["cycle_id", "result.cycle_id"]) or "").strip()
+    expected_input_state_fingerprint = str(
+        first_present(result, ["input_state_fingerprint", "result.input_state_fingerprint"])
+        or ""
+    ).strip()
+    expected_attempt_identity = str(
+        first_present(result, ["attempt_identity", "result.attempt_identity"]) or ""
+    ).strip()
+    expected_cohort_present = bool(list_values(expected_verification_input_ids)) or bool(
+        expected_input_fingerprints
+        if isinstance(expected_input_fingerprints, dict)
+        else None
+    )
+    invalid_consumers: list[str] = []
+    consumer_mismatches: dict[str, list[str]] = {}
+    for consumer_id in required_consumer_ids:
+        candidate_rows = conformance_by_id.get(str(consumer_id)) or []
+        mismatched_fields: set[str] = set()
+
+        def row_valid(row: dict[str, Any]) -> bool:
+            row_mismatches: list[str] = []
+            if not expected_cycle_id or row.get("cycle_id") != expected_cycle_id:
+                row_mismatches.append("cycle_id")
+            if (
+                not _full_sha256(expected_input_state_fingerprint)
+                or row.get("input_state_fingerprint") != expected_input_state_fingerprint
+            ):
+                row_mismatches.append("input_state_fingerprint")
+            if not expected_attempt_identity or row.get("attempt_identity") != expected_attempt_identity:
+                row_mismatches.append("attempt_identity")
+            for field in ("artifact_id", "artifact_sha256", "production_lane_identity"):
+                expected = decision_identity.get(field)
+                if not non_empty(expected) or row.get(field) != expected:
+                    row_mismatches.append(field)
+            if not _full_sha256(expected_body_fingerprint):
+                row_mismatches.append("body_projection_fingerprint")
+            elif row.get("body_projection_fingerprint") != expected_body_fingerprint:
+                row_mismatches.append("body_projection_fingerprint")
+            if not expected_cohort_present:
+                row_mismatches.append("source_cohort")
+            if expected_verification_input_ids is not None:
+                expected_ids = sorted(str(item) for item in list_values(expected_verification_input_ids))
+                observed_ids = sorted(str(item) for item in list_values(row.get("verification_input_ids")))
+                if observed_ids != expected_ids:
+                    row_mismatches.append("verification_input_ids")
+            if expected_input_fingerprints is not None and row.get("input_fingerprints") != expected_input_fingerprints:
+                row_mismatches.append("input_fingerprints")
+            mismatched_fields.update(row_mismatches)
+            invocation_status = str(row.get("invocation_status") or "").strip().lower()
+            return_status = str(row.get("return_contract_status") or "").strip().lower()
+            echo_status = str(row.get("artifact_identity_echo_status") or "").strip().lower()
+            consumption_status = str(row.get("decision_consumption_status") or "").strip().lower()
+            return not row_mismatches and all(
+                (
+                    boolish(row.get("adapter_loaded")),
+                    boolish(row.get("hook_resolved")),
+                    boolish(row.get("hook_callable") or row.get("required_hook_callable")),
+                    boolish(row.get("signature_bind_passed") or row.get("hook_signature_compatible")),
+                    boolish(row.get("invocation_completed")) or invocation_status in {"complete", "completed", "pass", "passed", "success"},
+                    boolish(row.get("return_contract_valid")) or return_status in {"valid", "pass", "passed"},
+                    boolish(row.get("artifact_identity_echo_valid")) or echo_status in {"valid", "pass", "passed", "matched"},
+                    boolish(row.get("value_consumed_by_decision")) or consumption_status in {"consumed", "pass", "passed"},
+                    str(row.get("evidence_provenance") or "").strip().lower()
+                    in {"independently_verified", "self_grounded"},
+                    non_empty(row.get("probe_evidence_ref")),
+                    _full_sha256(row.get("probe_evidence_sha256")),
+                    str(row.get("probe_evidence_sha256") or "").lower()
+                    == _consumer_receipt_binding_sha256(row),
+                )
             )
-        ) and non_empty(row.get("probe_evidence_ref") or row.get("probe_evidence_id"))
-        if row and row.get("probe_evidence_sha256") and not _full_sha256(row.get("probe_evidence_sha256")):
-            valid = False
+
+        valid = bool(candidate_rows) and all(row_valid(row) for row in candidate_rows)
         if not valid:
             invalid_consumers.append(str(consumer_id))
+            if mismatched_fields:
+                consumer_mismatches[str(consumer_id)] = sorted(mismatched_fields)
     if invalid_consumers:
         add(
             findings,
             "block" if mode == "block" or target == "validate" else "warn",
             "required_consumer_context_not_evaluated",
             "Required adapter consumer contexts lack a full external invocation receipt; import, hook-name presence, or adapter self-attestation is insufficient.",
-            {"consumer_context_ids": invalid_consumers},
+            {
+                "consumer_context_ids": invalid_consumers,
+                "mismatched_fields": consumer_mismatches or None,
+            },
         )
 
     if target == "validate":

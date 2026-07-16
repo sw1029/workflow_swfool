@@ -628,8 +628,57 @@ class DeriveRule(TargetContractRule):
             add(findings, "block", "terminal_blocker_missing", "`selected_task_source: terminal_blocked` requires `terminal_blocker`.")
         if selected_source == "terminal_blocked" and not has_value(result, "semantic_signature"):
             add(findings, "block" if mode == "block" else "warn", "terminal_semantic_signature_missing", "`selected_task_source: terminal_blocked` should include `semantic_signature` so the family can be sealed.")
-        if selected_source != "terminal_blocked" and not has_value(result, "next_task_id"):
+        completed_task_id = str(value_for(result, "completed_task_id") or "").strip()
+        next_task_id = str(value_for(result, "next_task_id") or "").strip()
+        def lifecycle_axis_status(axis: str) -> str:
+            nested_result = result.get("result") if isinstance(result.get("result"), dict) else {}
+            sources = [
+                result,
+                result.get("verdict_axes") if isinstance(result.get("verdict_axes"), dict) else {},
+                nested_result,
+                nested_result.get("verdict_axes") if isinstance(nested_result.get("verdict_axes"), dict) else {},
+            ]
+            observed: set[str] = set()
+            for source in sources:
+                if axis not in source:
+                    continue
+                value = source.get(axis)
+                raw = value.get("status") or value.get("verdict") if isinstance(value, dict) else value
+                normalized = str(raw or "").strip().lower()
+                observed.add(
+                    "not_evaluated"
+                    if normalized in {"", "missing", "unknown", "unobserved"}
+                    else normalized
+                )
+            if len(observed) > 1:
+                return "conflicted"
+            return next(iter(observed), "")
+
+        task_acceptance_status = lifecycle_axis_status("task_acceptance_verdict")
+        goal_readiness_status = lifecycle_axis_status("goal_readiness_verdict")
+        bounded_complete_global_wait = bool(
+            completed_task_id
+            and task_acceptance_status == "pass"
+            and goal_readiness_status in {"blocked", "not_evaluated"}
+            and status in {"deferred", "pending", "blocked"}
+            and not selected_source
+            and not next_task_id
+        )
+        if selected_source != "terminal_blocked" and not next_task_id and not bounded_complete_global_wait:
             add(findings, "block" if mode == "block" else "warn", "next_task_id_missing", "Non-terminal derive result requires `next_task_id`.")
+        if (
+            completed_task_id
+            and next_task_id
+            and completed_task_id == next_task_id
+            and task_acceptance_status == "pass"
+        ):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_completed_task_reselected",
+                "A bounded-complete task cannot be selected again as its own successor; preserve it as current history and use a distinct successor identity when one exists.",
+                {"completed_task_id": completed_task_id},
+            )
         progress_kind = str(
             first_present(
                 result,
@@ -2405,7 +2454,20 @@ class DeriveRule(TargetContractRule):
         )
         goal_threshold = number_value(
             first_present(result, ["goal_productive_threshold", "goal_distance_gate.threshold", "result.goal_distance_gate.threshold"])
-        ) or 5
+        )
+        goal_threshold_status = str(
+            first_present(
+                result,
+                [
+                    "goal_distance_gate.evaluation_status",
+                    "goal_distance_gate.budget_evaluation_status",
+                    "loop_breaker_packet.goal_distance_gate.evaluation_status",
+                    "result.goal_distance_gate.evaluation_status",
+                ],
+            )
+            or ""
+        ).strip().lower()
+        goal_threshold_evaluated = goal_threshold is not None and goal_threshold_status == "evaluated"
         goal_distance_required = boolish(
             first_present(
                 result,
@@ -2416,7 +2478,11 @@ class DeriveRule(TargetContractRule):
                     "result.goal_distance_gate.requires_goal_productive_next",
                 ],
             )
-        ) or (cycles_since_goal_productive is not None and cycles_since_goal_productive > goal_threshold)
+        ) or (
+            goal_threshold_evaluated
+            and cycles_since_goal_productive is not None
+            and cycles_since_goal_productive > goal_threshold
+        )
         governance_only_streak = number_value(
             first_present(
                 result,
@@ -2835,14 +2901,6 @@ class DeriveRule(TargetContractRule):
                     "terminal_blocker_missing_dual_track_attempt_evidence",
                     "Terminal blocker after a hard progress-loop gate must cite provider-track and provider-neutral/quality-track attempt evidence.",
                 )
-        if governance_only_streak is not None and governance_only_streak >= 2 and not terminal_selected and progress_kind != "goal_productive":
-            add(
-                findings,
-                "block" if mode == "block" else "warn",
-                "governance_only_streak_unmet",
-                "After two governance-only cycles, derive must select goal-productive work or terminal blocker state.",
-                {"governance_only_streak": governance_only_streak, "progress_kind": progress_kind or None},
-            )
         autonomous_retarget_disabled = boolish(
             first_present(
                 result,

@@ -815,7 +815,9 @@ def test_cumulative_chain_overrides_untried_veto_after_quality_stall() -> None:
     assert packet["cumulative_untried_chain_without_quality_delta"] is True
     assert packet["untried_veto_overridden_by_chain_stall"] is True
     assert packet["terminal_blocked_invalid_due_to_untried_root_cause"] is False
-    assert packet["effective_allowed_dispositions"] == ["terminal_blocked", "user_escalation"]
+    assert packet["effective_allowed_dispositions"] == ["goal_productive"]
+    assert packet["goal_terminal_prohibited"] is True
+    assert packet["offline_scope_unverified"] is True
 
 
 def test_chain_stall_forces_actionable_ladder_task_kind() -> None:
@@ -2048,6 +2050,8 @@ def test_consumer_receipts_require_strict_signature_union_and_decision_consumpti
         "artifact_class": "family_F",
         "artifact_sha256": "a" * 64,
         "production_lane_identity": "lane_L",
+        "body_projection_fingerprint": "c" * 64,
+        "verification_input_ids": ["source_cohort_C"],
         "scope_verified": True,
     }
 
@@ -2062,18 +2066,39 @@ def test_consumer_receipts_require_strict_signature_union_and_decision_consumpti
     )
     valid = {
         "consumer_context_id": "hook_H",
+        "cycle_id": "cycle_C",
+        "input_state_fingerprint": "b" * 64,
+        "attempt_identity": "attempt_A",
         "adapter_loaded": True,
+        "hook_resolved": True,
         "required_hook_callable": True,
         "hook_signature_compatible": True,
         "invocation_completed": True,
         "return_contract_valid": True,
         "artifact_identity_echo_valid": True,
+        "artifact_id": "artifact_A",
+        "artifact_sha256": "a" * 64,
+        "production_lane_identity": "lane_L",
+        "body_projection_fingerprint": "c" * 64,
+        "verification_input_ids": ["source_cohort_C"],
+        "evidence_provenance": "independently_verified",
         "value_consumed_by_decision": True,
         "probe_evidence_ref": "packet:receipt/hook_H",
     }
+
+    def bound(row: dict[str, Any]) -> dict[str, Any]:
+        result = dict(row)
+        digest = anti_loop_gate_provider.consumer_receipt_binding_sha256(result)
+        result["probe_evidence_sha256"] = digest
+        return result
+
+    valid = bound(valid)
     invalid_consumption = {**valid, "consumer_context_id": "hook_I", "value_consumed_by_decision": False}
     invalid_return = {**valid, "consumer_context_id": "hook_J", "return_contract_valid": False}
     invalid_identity = {**valid, "consumer_context_id": "hook_K", "artifact_identity_echo_valid": False}
+    invalid_consumption = bound(invalid_consumption)
+    invalid_return = bound(invalid_return)
+    invalid_identity = bound(invalid_identity)
     conformance = anti_loop_gate_provider.consumer_context_conformance_gate(
         {"required_consumer_ids": ["hook_H"], "consumer_context_conformance": {"rows": [valid]}},
         {
@@ -2082,6 +2107,10 @@ def test_consumer_receipts_require_strict_signature_union_and_decision_consumpti
                 "rows": [invalid_consumption, invalid_return, invalid_identity]
             },
         },
+        expected_artifact_ref=artifact_ref,
+        expected_cycle_id="cycle_C",
+        expected_input_state_fingerprint="b" * 64,
+        expected_attempt_identity="attempt_A",
     )
 
     assert compatibility["gate_compatibility_status"] == "not_evaluated"

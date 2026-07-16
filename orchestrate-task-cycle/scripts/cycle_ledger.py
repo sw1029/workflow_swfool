@@ -14,6 +14,12 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from result_contract_lib.integrity import actual_report_body_divergences  # noqa: E402
+
 
 DEFAULT_STEPS = [
     "context",
@@ -70,7 +76,7 @@ VERDICT_AXES = (
     "historical_index_verdict",
     "goal_readiness_verdict",
 )
-VERDICT_AXIS_STATUSES = {"pass", "fail", "partial", "blocked", "not_evaluated", "not_applicable"}
+VERDICT_AXIS_STATUSES = {"pass", "fail", "partial", "blocked", "not_evaluated", "not_applicable", "conflicted"}
 DURABLE_STATE_MODES = {"complete_projection", "typed_operations"}
 DURABLE_OPERATION_TYPES = {"append_projection", "replace_projection"}
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -1357,6 +1363,25 @@ def normalize_final_candidate(cycle_id: str, candidate: dict[str, Any]) -> dict[
             "revision, supersession, receipt, and authoritative verdict fields are assigned only by the finalization owner: "
             + ", ".join(supplied_owner_fields)
         )
+    producer_projection_fields = sorted(
+        {
+            "authoritative_projection",
+            "authoritative_projection_digest",
+            "authoritative_projection_id",
+            "validation_axes_digest",
+        }.intersection(normalized)
+    )
+    nested_projection = (
+        isinstance(normalized.get("finalization"), dict)
+        and isinstance(normalized["finalization"].get("authoritative_projection"), dict)
+    ) or (
+        isinstance(normalized.get("result"), dict)
+        and isinstance(normalized["result"].get("authoritative_projection"), dict)
+    )
+    if producer_projection_fields or nested_projection:
+        raise ValueError(
+            "authoritative projection fields are assigned only by the finalization owner"
+        )
     normalized["expected_previous_revision"] = _candidate_expected_revision(normalized)
     normalized["expected_previous_attempt_id"] = _candidate_expected_identifier(
         normalized, "expected_previous_attempt_id"
@@ -1380,6 +1405,59 @@ def normalize_final_candidate(cycle_id: str, candidate: dict[str, Any]) -> dict[
         if evidence not in (None, "", []):
             validate_durable_payload_privacy(evidence, f"final_candidate.{axis}.evidence")
         normalized[axis] = {**value, "status": status}
+    alias_containers = [
+        normalized.get("verdict_axes"),
+        normalized.get("result"),
+        normalized.get("result", {}).get("verdict_axes")
+        if isinstance(normalized.get("result"), dict)
+        else None,
+    ]
+    for axis in VERDICT_AXES:
+        canonical_status = normalized[axis]["status"]
+        for container in alias_containers:
+            if not isinstance(container, dict) or axis not in container:
+                continue
+            alias = container[axis]
+            alias_status = str(
+                alias.get("status") or alias.get("verdict") or ""
+            ).strip().lower() if isinstance(alias, dict) else str(alias or "").strip().lower()
+            if alias_status != canonical_status:
+                raise ValueError(
+                    f"final candidate verdict alias conflicts with canonical axis {axis}"
+                )
+    explicit_body_divergence = False
+    for divergence_path in (
+        ("report_body_divergence",),
+        ("actual_artifact_truth", "report_body_divergence"),
+        ("quality_review", "report_body_divergence"),
+        ("validation", "actual_artifact_truth", "report_body_divergence"),
+        ("result", "report_body_divergence"),
+        ("result", "actual_artifact_truth", "report_body_divergence"),
+        ("result", "quality_review", "report_body_divergence"),
+        ("result", "validation", "actual_artifact_truth", "report_body_divergence"),
+    ):
+        current: Any = normalized
+        for path_part in divergence_path:
+            if not isinstance(current, dict) or path_part not in current:
+                current = None
+                break
+            current = current[path_part]
+        explicit_body_divergence = explicit_body_divergence or truthy_delta(current)
+    body_divergence = explicit_body_divergence or bool(
+        actual_report_body_divergences(normalized)
+    )
+    if body_divergence:
+        truth_status = normalized["artifact_truth_verdict"]["status"]
+        semantic_status = normalized["artifact_semantic_verdict"]["status"]
+        goal_status = normalized["goal_readiness_verdict"]["status"]
+        if (
+            "conflicted" not in {truth_status, semantic_status}
+            or semantic_status == "pass"
+            or goal_status == "pass"
+        ):
+            raise ValueError(
+                "body/report divergence requires a conflicted artifact axis and blocks favorable semantic or goal publication"
+            )
     semantic_status = normalized["artifact_semantic_verdict"]["status"]
     goal_status = normalized["goal_readiness_verdict"]["status"]
     normalized["durable_state_candidate"] = validate_durable_state_candidate(
@@ -1398,6 +1476,8 @@ def authoritative_final_from_axes(axes: dict[str, dict[str, Any]]) -> str:
     statuses = {str(value.get("status") or "") for value in axes.values()}
     if "fail" in statuses:
         return "failure"
+    if "conflicted" in statuses:
+        return "blocked"
     if "blocked" in statuses:
         return "blocked"
     if "partial" in statuses:

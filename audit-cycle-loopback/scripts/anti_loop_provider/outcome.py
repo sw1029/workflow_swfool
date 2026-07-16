@@ -49,19 +49,43 @@ def terminal_outcome_changed(output_delta: Any, changed_vs_previous: bool, seman
 
 def terminal_self_resolution_gate(*values: Any) -> dict[str, Any]:
     allowed = {
-        "self_resolvable_local",
-        "offline_recompute",
-        "existing_authority",
-        "genuine_new_authority",
-        "external_state_change",
+        "current_envelope_mutation_allowed",
+        "local_diagnostic_possible",
+        "local_deterministic_repair_possible",
+        "bounded_producer_execution_possible",
+        "new_authority_required",
+        "new_external_input_required",
+        "external_state_change_required",
         "unverified",
+    }
+    legacy_classes = {
+        "self_resolvable_local": "local_deterministic_repair_possible",
+        "offline_recompute": "local_diagnostic_possible",
+        "existing_authority": "current_envelope_mutation_allowed",
+        "genuine_new_authority": "new_authority_required",
+        "external_state_change": "external_state_change_required",
     }
     residual_rows: list[dict[str, Any]] = []
     terminal_requested = False
+    terminal_dispositions = {
+        "terminal_blocked",
+        "user_escalation",
+        "goal_terminal",
+        "no_local_actionable_root_cause",
+    }
     for value in values:
         for row in iter_dicts(value):
             terminal_requested = terminal_requested or any(
                 bool_value(row.get(key)) for key in ("terminal_justified", "terminal_requested", "user_escalation_required")
+            )
+            terminal_requested = terminal_requested or any(
+                str(row.get(key) or "").strip().lower() in terminal_dispositions
+                for key in (
+                    "recommended_disposition",
+                    "forced_disposition",
+                    "selected_task_source",
+                    "disposition",
+                )
             )
             raw_rows = row.get("residual_classification") or row.get("residuals")
             if isinstance(raw_rows, list):
@@ -73,13 +97,19 @@ def terminal_self_resolution_gate(*values: Any) -> dict[str, Any]:
     normalized: list[dict[str, Any]] = []
     for index, row in enumerate(residual_rows):
         classification = str(row.get("classification") or row.get("residual_class") or "unverified").strip().lower()
+        classification = legacy_classes.get(classification, classification)
         if classification not in allowed:
             classification = "unverified"
         normalized.append({
             "residual_id": row.get("residual_id") or row.get("id") or f"residual-{index + 1}",
             "classification": classification,
         })
-    local_classes = {"self_resolvable_local", "offline_recompute", "existing_authority"}
+    local_classes = {
+        "current_envelope_mutation_allowed",
+        "local_diagnostic_possible",
+        "local_deterministic_repair_possible",
+        "bounded_producer_execution_possible",
+    }
     self_resolvable = [row for row in normalized if row["classification"] in local_classes]
     unverified = [row for row in normalized if row["classification"] == "unverified"]
     classification_missing = terminal_requested and not normalized
@@ -88,6 +118,7 @@ def terminal_self_resolution_gate(*values: Any) -> dict[str, Any]:
         "self_resolvable_residual_count": len(self_resolvable),
         "unverified_residual_count": len(unverified),
         "offline_scope_unverified": classification_missing or bool(unverified),
+        "terminal_requested": terminal_requested,
         "goal_terminal_prohibited": bool(self_resolvable) or classification_missing or bool(unverified),
         "status": "block" if bool(self_resolvable) else ("not_evaluated" if classification_missing or unverified else "pass"),
     }

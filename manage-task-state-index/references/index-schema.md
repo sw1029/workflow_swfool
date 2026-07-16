@@ -63,8 +63,15 @@ Treat `partially_resolved` as an active residual-bearing lifecycle state. It pre
 ## Stable Path and Replacement Contract
 
 - `scan` keeps the current ID when artifact type and workspace-relative path are unchanged. A digest, title, status, or bounded-field change appends an update event to that ID.
+- For `task.md`, an exact same-digest mutable alias in `complete` or `completed` remains current but non-executable. Do not infer bounded completion from `blocked`, `terminal_blocked`, or `deferred`; preserve those only through their existing explicit owner transition. A changed body or executable status under that completed ID is not an ordinary update: reject every scan and direct upsert entrypoint until the caller performs an explicit active switch with a distinct successor ID.
 - A new explicit `--id` or `add --replace` declares semantic replacement. Append the new canonical record, mark prior active same-path records `superseded`, and add reciprocal `supersedes` / `superseded_by` links.
 - Never create multiple non-closed IDs for an ordinary same-path edit. When legacy duplicate active records are encountered during a stable update, retain one canonical ID and supersede the others.
+
+Static decision-boundary fixtures:
+
+- Negative: `task_T` is bounded-complete, its mutable alias has the same digest, no successor exists, and global readiness waits. Expected verdict: `task_T` stays current but non-executable and scan does not emit `active`. Forbidden overclaim: selecting it again because the alias exists.
+- Negative: the alias body changes while `task_T` remains completed and no lifecycle-switch receipt exists. Expected verdict: ordinary scan fails closed without mutation. Forbidden overclaim: reactivating `task_T` in place.
+- Happy path: the caller preserves `task_T` as immutable history and performs the existing active-switch transaction to distinct `task_U`. Expected verdict: only `task_U` is active/executable. Forbidden overclaim: rewriting `task_T` history.
 
 ## Durability Contract
 

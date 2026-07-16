@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 
 sys.dont_write_bytecode = True
 SCRIPTS_ROOT = Path(__file__).resolve().parent
@@ -108,6 +110,76 @@ def finalize_registry_projection(root: Path, cycle_id: str = "cycle_A") -> dict[
     )
 
 
+def test_finalizer_rejects_unsigned_axis_alias_and_favorable_body_divergence(
+    tmp_path: Path,
+) -> None:
+    cycle_id = "cycle_alias_A"
+    cycle_ledger.init_cycle(tmp_path, cycle_id, "task_T", "fixture initialization")
+    prepared = prepare_feature_symbol_registry_update(tmp_path, observed_item())
+    durable_state = prepared["durable_mutation_candidate"]
+
+    alias_candidate = final_candidate(cycle_id, durable_state)
+    alias_candidate["verdict_axes"] = {
+        "artifact_semantic_verdict": {
+            "status": "fail",
+            "evidence_ref": "evidence_semantic_fail",
+        }
+    }
+    with pytest.raises(ValueError, match="verdict alias conflicts"):
+        cycle_ledger.finalize_candidate(tmp_path, cycle_id, alias_candidate)
+
+    divergence_candidate = final_candidate(cycle_id, durable_state)
+    divergence_candidate["report_body_divergence"] = True
+    with pytest.raises(ValueError, match="body/report divergence"):
+        cycle_ledger.finalize_candidate(tmp_path, cycle_id, divergence_candidate)
+
+    nested_divergence_candidate = final_candidate(cycle_id, durable_state)
+    nested_divergence_candidate["result"] = {"report_body_divergence": True}
+    with pytest.raises(ValueError, match="body/report divergence"):
+        cycle_ledger.finalize_candidate(tmp_path, cycle_id, nested_divergence_candidate)
+
+    nested_review_divergence_candidate = final_candidate(cycle_id, durable_state)
+    nested_review_divergence_candidate["result"] = {
+        "quality_review": {"report_body_divergence": True}
+    }
+    with pytest.raises(ValueError, match="body/report divergence"):
+        cycle_ledger.finalize_candidate(
+            tmp_path,
+            cycle_id,
+            nested_review_divergence_candidate,
+        )
+
+    assert not cycle_ledger.current_finalization_path(tmp_path, cycle_id).exists()
+
+    conflicted_candidate = final_candidate(cycle_id, durable_state)
+    conflicted_candidate["report_body_divergence"] = True
+    conflicted_candidate["artifact_truth_verdict"] = {
+        "status": "conflicted",
+        "evidence_ref": "evidence_truth_conflict",
+    }
+    conflicted_candidate["artifact_semantic_verdict"] = {
+        "status": "blocked",
+        "evidence_ref": "evidence_semantic_blocked",
+    }
+    conflicted_candidate["goal_readiness_verdict"] = {
+        "status": "blocked",
+        "evidence_ref": "evidence_goal_blocked",
+    }
+    finalized = cycle_ledger.finalize_candidate(
+        tmp_path,
+        cycle_id,
+        conflicted_candidate,
+    )
+
+    assert finalized["authoritative_projection"]["task_acceptance_verdict"][
+        "status"
+    ] == "pass"
+    assert finalized["authoritative_projection"]["artifact_truth_verdict"][
+        "status"
+    ] == "conflicted"
+    assert finalized["authoritative_projection"]["authoritative_final"] == "blocked"
+
+
 def test_legacy_write_request_is_prepare_only_and_privacy_bounded(tmp_path: Path) -> None:
     prepared = prepare_feature_symbol_registry_update(tmp_path, observed_item())
     alias_result = append_feature_symbol_registry(tmp_path, observed_item())
@@ -124,6 +196,36 @@ def test_legacy_write_request_is_prepare_only_and_privacy_bounded(tmp_path: Path
     assert "axis_A" not in serialized
     assert "last_evidence_path" not in serialized
     assert "first_seen_cycle" not in serialized
+
+
+def test_same_path_with_changed_hash_is_fresh_evidence_not_unchanged_ref(
+    tmp_path: Path,
+) -> None:
+    cycle_id = "cycle_evidence_A"
+    artifact = tmp_path / "artifact_A.json"
+    artifact.write_text('{"revision":1}\n', encoding="utf-8")
+    cycle_ledger.init_cycle(tmp_path, cycle_id, "task_T", "fixture initialization")
+    cycle_ledger.append_event(
+        tmp_path,
+        cycle_id,
+        {"step": "context", "status": "complete", "task_id": "task_T"},
+    )
+    first = cycle_ledger.append_event(
+        tmp_path,
+        cycle_id,
+        {"step": "run", "status": "complete", "artifacts": [artifact.name]},
+    )
+    artifact.write_text('{"revision":2}\n', encoding="utf-8")
+    second = cycle_ledger.append_event(
+        tmp_path,
+        cycle_id,
+        {"step": "validate", "status": "complete", "artifacts": [artifact.name]},
+    )
+
+    assert first["event"]["artifact_refs"][0]["sha256"] != second["event"][
+        "artifact_refs"
+    ][0]["sha256"]
+    assert second["event"].get("unchanged_refs") in (None, [])
 
 
 def test_finalization_consumer_reloads_prepared_registry_projection(tmp_path: Path) -> None:
@@ -161,6 +263,50 @@ def test_finalization_consumer_reloads_prepared_registry_projection(tmp_path: Pa
     assert operations[0]["target_id"] == "dedup_symbol_registry"
     assert operations[0]["payload"]["rows"][0]["symbol"] == "feature_A"
     assert not (tmp_path / REGISTRY_REL_PATH).exists()
+
+
+def test_same_attempt_negative_correction_replaces_current_and_preserves_history(
+    tmp_path: Path,
+) -> None:
+    cycle_id = "cycle_correction_A"
+    cycle_ledger.init_cycle(tmp_path, cycle_id, "task_T", "fixture initialization")
+    prepared = prepare_feature_symbol_registry_update(tmp_path, observed_item())
+    candidate = final_candidate(cycle_id, prepared["durable_mutation_candidate"])
+    first = cycle_ledger.finalize_candidate(tmp_path, cycle_id, candidate)
+    first_receipt = first["receipt"]
+    first_snapshot = cycle_ledger.finalization_snapshot_path(
+        tmp_path,
+        cycle_id,
+        first_receipt["finalization_token"],
+    )
+
+    corrected = final_candidate(cycle_id, prepared["durable_mutation_candidate"])
+    corrected["expected_previous_revision"] = first_receipt["attempt_revision"]
+    corrected["expected_previous_attempt_id"] = first_receipt["attempt_id"]
+    corrected["expected_previous_finalization_token"] = first_receipt[
+        "finalization_token"
+    ]
+    corrected["artifact_semantic_verdict"] = {
+        "status": "fail",
+        "evidence_ref": "evidence_semantic_negative",
+    }
+    corrected["goal_readiness_verdict"] = {
+        "status": "blocked",
+        "evidence_ref": "evidence_goal_blocked",
+    }
+    second = cycle_ledger.finalize_candidate(tmp_path, cycle_id, corrected)
+    current = cycle_ledger.load_current_finalized_state(tmp_path, cycle_id)
+
+    assert first_snapshot.is_file()
+    assert second["receipt"]["attempt_revision"] == 2
+    assert second["receipt"]["supersedes_revision"] == 1
+    assert current["receipt"]["finalization_token"] == second["receipt"][
+        "finalization_token"
+    ]
+    assert current["authoritative_projection"]["authoritative_final"] == "failure"
+    assert current["authoritative_projection"]["artifact_semantic_verdict"][
+        "status"
+    ] == "fail"
 
 
 def test_explicit_finalized_cycle_rejects_tampered_or_missing_current_pointer(tmp_path: Path) -> None:
