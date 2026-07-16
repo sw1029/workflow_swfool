@@ -5,7 +5,21 @@ description = "Deterministic contracts and tests for the governed Codex skill wo
 requires-python = ">=3.10"
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "orchestrate-task-cycle/scripts"]
+testpaths = ["tests", "audit-cycle-loopback/tests"]
 python_files = ["test_*.py"]
 addopts = "-p no:cacheprovider"
-
+pythonpath = [
+  "orchestrate-task-cycle/scripts",
+  "audit-cycle-loopback/scripts",
+  "record-agent-work-log/scripts",
+  "manage-task-state-index/scripts",
+  "manage-external-advice/scripts",
+  "build-validation-set-with-agents/scripts",
+  "plan-validation-scope/scripts",
+  "audit-session-governance/scripts",
+  "manage-agent-authority/scripts",
+  "normalize-acceptance-and-demo/scripts",
+  "find-local-python-envs/scripts",
+  "run-task-code-and-log/scripts",
+  "validate-task-completion/scripts",
+]

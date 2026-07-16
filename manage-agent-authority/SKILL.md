@@ -13,7 +13,13 @@ The file is goal truth, but it cannot grant authority beyond the active session'
 
 External advice under `.agent_advice/active/*.md` is not authority evidence. It may suggest questions or narrower project posture, but it cannot grant API/network/destructive capability or override current permissions. Promote advice into `.agent_goal/agent_authority.md` only after explicit user instruction and this skill's safety validation.
 
-Treat an operation receipt as non-GT evidence that binds an already-valid decision to one operation and subject. A current ratification may authorize prospective continuation, but it must not backdate the decision or turn unverified historical authority into a pass. Read [operation-authority-receipt.md](references/operation-authority-receipt.md) before issuing or validating one, and use `scripts/authority_receipt.py` for deterministic structure, digest, subject, temporality, and privacy checks.
+Treat an operation receipt as non-GT evidence that binds an already-valid decision to one operation and subject. A current ratification may authorize prospective continuation, but it must not backdate the decision or turn unverified historical authority into a pass. Read [operation-authority-receipt.md](references/operation-authority-receipt.md) before issuing or validating one, and use the `receipt` module command for deterministic structure, digest, subject, temporality, and privacy checks.
+
+```bash
+SKILLS_ROOT="${CODEX_HOME:-$HOME/.codex}/skills"
+PYTHONPATH="$SKILLS_ROOT/manage-agent-authority/scripts" \
+  python3 -m manage_agent_authority receipt <issue|validate> [arguments]
+```
 
 Use [agent-authority-template.md](references/agent-authority-template.md) for both `.agent_goal/agent_authority.md` and `.interview/drafts/agent_authority.md`.
 
@@ -47,8 +53,8 @@ Do not define policy-consumption sites, authority axes, self-resolution meanings
    - `finalize_from_interview`: after `$deep-interview-goal-context` evidence review, audit, final review, and agent write-confirmation pass, write `.agent_goal/agent_authority.md` from the supported interview draft.
    - `update`: update `.agent_goal/agent_authority.md` from explicit user instruction or current work evidence.
    - `validate`: check that an authority file does not claim capabilities beyond current effective permissions or higher-priority instructions.
-   - `issue_operation_receipt`: after resolving authority, write one subject-bound receipt under `.task/authority_receipts/` with `scripts/authority_receipt.py issue`; use `current_ratification` for a present approval of an older operation.
-   - `validate_operation_receipt`: validate a receipt file, digest, subject, policy/source bindings, temporal mode, allowed effects, and privacy with `scripts/authority_receipt.py validate`; pass `--selected-at` for a complete initial-selection time binding.
+   - `issue_operation_receipt`: after resolving authority, write one subject-bound receipt under `.task/authority_receipts/` with the `receipt issue` module command; use `current_ratification` for a present approval of an older operation.
+   - `validate_operation_receipt`: validate a receipt file, digest, subject, policy/source bindings, temporal mode, allowed effects, and privacy with `receipt validate`; pass `--selected-at` for a complete initial-selection time binding.
 
 4. Apply the template.
    - Include these sections: `Authority Baseline`, `API And External Calls`, `Direction Freedom`, `Implementation And Validation Priority`, `Escalation And Approval`, `Precedence And Overrides`, and `Open Questions`.

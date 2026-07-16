@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import re
@@ -8,27 +7,20 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
+TASK_STATE_SCRIPTS = ROOT / "manage-task-state-index" / "scripts"
+AGENT_LOG_SCRIPTS = ROOT / "record-agent-work-log" / "scripts"
+for package_root in (TASK_STATE_SCRIPTS, AGENT_LOG_SCRIPTS):
+    if str(package_root) not in sys.path:
+        sys.path.insert(0, str(package_root))
 
 
-def load_module(path: Path, name: str) -> Any:
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-task_state_index = load_module(
-    ROOT / "manage-task-state-index" / "scripts" / "task_state_index.py",
-    "task_state_index_registry_tests",
-)
+from manage_task_state_index import index as task_state_index  # noqa: E402
 
 
 def test_scan_keeps_stable_id_for_ordinary_same_path_edit(tmp_path: Path) -> None:
@@ -222,13 +214,16 @@ def test_scan_check_exit_code_reports_pending_changes_without_mutation(tmp_path:
     task = tmp_path / "task.md"
     task.write_text("# Check task\n", encoding="utf-8")
     task_state_index.scan_artifacts(tmp_path)
-    script = ROOT / "manage-task-state-index" / "scripts" / "task_state_index.py"
-    environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+    environment = {
+        **os.environ,
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": os.pathsep.join((str(TASK_STATE_SCRIPTS), str(AGENT_LOG_SCRIPTS))),
+    }
     index = tmp_path / ".task" / "index.jsonl"
     markdown = tmp_path / ".task" / "index.md"
 
     clean = subprocess.run(
-        [sys.executable, str(script), "--root", str(tmp_path), "scan", "--check"],
+        [sys.executable, "-m", "manage_task_state_index", "index", "--root", str(tmp_path), "scan", "--check"],
         check=False,
         capture_output=True,
         text=True,
@@ -240,7 +235,7 @@ def test_scan_check_exit_code_reports_pending_changes_without_mutation(tmp_path:
     task.write_text("# Check changed task\n", encoding="utf-8")
     before = (index.read_bytes(), markdown.read_bytes())
     pending = subprocess.run(
-        [sys.executable, str(script), "--root", str(tmp_path), "scan", "--check"],
+        [sys.executable, "-m", "manage_task_state_index", "index", "--root", str(tmp_path), "scan", "--check"],
         check=False,
         capture_output=True,
         text=True,
@@ -394,14 +389,19 @@ def test_concurrent_same_path_updates_keep_jsonl_durable_and_one_active_id(tmp_p
 
 def test_concurrent_cli_processes_share_the_workspace_lock(tmp_path: Path) -> None:
     (tmp_path / "task.md").write_text("# Process-safe task\n", encoding="utf-8")
-    script = ROOT / "manage-task-state-index" / "scripts" / "task_state_index.py"
-    environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+    environment = {
+        **os.environ,
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": os.pathsep.join((str(TASK_STATE_SCRIPTS), str(AGENT_LOG_SCRIPTS))),
+    }
 
     def invoke(index: int) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [
                 sys.executable,
-                str(script),
+                "-m",
+                "manage_task_state_index",
+                "index",
                 "--root",
                 str(tmp_path),
                 "add",

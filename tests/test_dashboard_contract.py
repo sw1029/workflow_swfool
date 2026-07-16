@@ -1,26 +1,11 @@
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
 from typing import Any
 
 import pytest
-
-
-ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS = ROOT / "orchestrate-task-cycle" / "scripts"
-
-
-def load_module(path: Path, name: str) -> Any:
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-dashboard = load_module(SCRIPTS / "render_cycle_dashboard.py", "dashboard_contract_renderer")
-result_contract = load_module(SCRIPTS / "result_contract.py", "dashboard_contract_validator")
+from orchestrate_task_cycle import render_cycle_dashboard as dashboard
+from orchestrate_task_cycle.result_contract import api as result_contract
 
 
 def events() -> list[dict[str, Any]]:

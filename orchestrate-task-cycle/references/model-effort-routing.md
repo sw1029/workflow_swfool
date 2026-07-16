@@ -1,6 +1,6 @@
 # Tiered Configured Model And Effort Routing
 
-Use [model-effort-profiles.json](model-effort-profiles.json) as the executable policy and `scripts/model_effort_router.py` as the deterministic selector. Keep role/tier policy global and keep runtime model bindings in caller configuration or a repository adapter.
+Use [model-effort-profiles.json](model-effort-profiles.json) as the executable policy and `python3 -m orchestrate_task_cycle model-effort` as the deterministic selector. Keep role/tier policy global and keep runtime model bindings in caller configuration or a repository adapter.
 
 ## Tier Contract
 
@@ -74,7 +74,7 @@ Do not infer signals from prose, file names, task labels, or model self-assessme
 Use the selector directly when needed:
 
 ```bash
-python3 scripts/model_effort_router.py \
+python3 python3 -m orchestrate_task_cycle model-effort \
   --profile schema_planning \
   --request '{"final_direction_ownership":true,"signals":{"architecture_direction_change":true},"signal_evidence":{"architecture_direction_change":{"artifact_id":"evidence-004"}}}'
 ```

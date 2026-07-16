@@ -144,7 +144,7 @@ Never produce from this packet alone:
 
 ## Stop-hook compatibility
 
-Use the bundled `scripts/capture_projection.py` as the optional Stop-hook producer.
+Use `python3 -m audit_session_governance capture` under the skill package `PYTHONPATH` as the optional Stop-hook producer.
 Pass the repository root and tool explicitly on argv; pass the hook's safe
 `session_id` and absolute `transcript_path` in its stdin JSON object. The producer
 strictly bounds and decodes both inputs, rejects duplicate JSON keys, unsupported

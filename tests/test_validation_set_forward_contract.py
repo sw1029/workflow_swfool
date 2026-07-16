@@ -25,11 +25,12 @@ def write_jsonl(path: Path, values: list[dict[str, Any]]) -> None:
     path.write_text("".join(json.dumps(value, sort_keys=True) + "\n" for value in values), encoding="utf-8")
 
 
-def run_script(name: str, *args: object) -> subprocess.CompletedProcess[str]:
+def run_module(command: str, *args: object) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PYTHONPATH"] = str(SCRIPTS)
     return subprocess.run(
-        [sys.executable, "-B", str(SCRIPTS / name), *(str(arg) for arg in args)],
+        [sys.executable, "-B", "-m", "build_validation_set_with_agents", command, *(str(arg) for arg in args)],
         cwd=REPO,
         env=env,
         text=True,
@@ -53,8 +54,8 @@ def canonical_hash(value: Any) -> str:
 def build_candidate(root: Path, *, set_id: str = "forward", items: list[dict[str, Any]]) -> Path:
     candidate_path = root / "input" / f"{set_id}-items.jsonl"
     write_jsonl(candidate_path, items)
-    result = run_script(
-        "build_validation_set.py",
+    result = run_module(
+        "build",
         "--root",
         root,
         "--set-id",
@@ -90,8 +91,8 @@ def local_candidate(root: Path, *, set_id: str = "forward") -> Path:
 
 
 def run_leakage(root: Path, set_root: Path) -> None:
-    result = run_script(
-        "leakage_check.py",
+    result = run_module(
+        "leakage",
         "--items",
         set_root / "validation_set_items.jsonl",
         "--labels",
@@ -103,12 +104,12 @@ def run_leakage(root: Path, set_root: Path) -> None:
 
 
 def run_oracles(root: Path, set_root: Path) -> None:
-    result = run_script("run_validation_oracles.py", "--root", root, "--set-root", set_root)
+    result = run_module("run-oracles", "--root", root, "--set-root", set_root)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
 def finalize(root: Path, set_root: Path) -> subprocess.CompletedProcess[str]:
-    return run_script("finalize_validation_set.py", "--root", root, "--set-root", set_root)
+    return run_module("finalize", "--root", root, "--set-root", set_root)
 
 
 def complete_local_set(root: Path, *, set_id: str = "forward") -> Path:
@@ -121,7 +122,7 @@ def complete_local_set(root: Path, *, set_id: str = "forward") -> Path:
 
 
 def validate(root: Path, set_root: Path) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
-    result = run_script("validate_validation_set.py", "--root", root, "--set-root", set_root)
+    result = run_module("validate", "--root", root, "--set-root", set_root)
     return result, report(result)
 
 
@@ -140,19 +141,19 @@ def test_forward_pipeline_binds_source_results_finalization_and_root(tmp_path: P
     assert oracle_results["execution_status"] == "completed"
     assert oracle_results["items_sha256"] == hashlib.sha256((set_root / "validation_set_items.jsonl").read_bytes()).hexdigest()
 
-    frozen = run_script("freeze_validation_set_root.py", "--root", tmp_path, "--set-root", set_root)
+    frozen = run_module("freeze", "--root", tmp_path, "--set-root", set_root)
     assert frozen.returncode == 0, frozen.stdout + frozen.stderr
     root_doc = report(frozen)
     assert root_doc["root_schema_version"] == 2
     assert set(root_doc["file_hashes"]) == {"manifest", "items", "labels", "oracle_manifest", "oracle_results", "split_manifest", "leakage_report"}
-    verified = run_script("verify_validation_set_root.py", "--root", tmp_path, "--set-root", set_root)
+    verified = run_module("verify-root", "--root", tmp_path, "--set-root", set_root)
     assert verified.returncode == 0
     assert report(verified)["readiness"] == "consumable"
 
 
 def test_local_source_drift_blocks_validation_and_verified_root(tmp_path: Path) -> None:
     set_root = complete_local_set(tmp_path)
-    assert run_script("freeze_validation_set_root.py", "--root", tmp_path, "--set-root", set_root).returncode == 0
+    assert run_module("freeze", "--root", tmp_path, "--set-root", set_root).returncode == 0
     (tmp_path / "source" / "forward.rec").write_text("acct_9|1250|USD\n", encoding="utf-8")
 
     result, validation = validate(tmp_path, set_root)
@@ -160,7 +161,7 @@ def test_local_source_drift_blocks_validation_and_verified_root(tmp_path: Path) 
     assert "local_source_hash_mismatch" in codes(validation)
     assert validation["readiness"] == "blocked"
 
-    verified = run_script("verify_validation_set_root.py", "--root", tmp_path, "--set-root", set_root)
+    verified = run_module("verify-root", "--root", tmp_path, "--set-root", set_root)
     verify_report = report(verified)
     assert verified.returncode == 2
     assert verify_report["status"] == "block"
@@ -290,7 +291,7 @@ def test_manual_complete_and_versionless_legacy_cannot_bypass_finalizer(tmp_path
     result, validation = validate(tmp_path, set_root)
     assert result.returncode == 2
     assert "missing_finalization_record" in codes(validation)
-    assert run_script("freeze_validation_set_root.py", "--root", tmp_path, "--set-root", set_root).returncode == 2
+    assert run_module("freeze", "--root", tmp_path, "--set-root", set_root).returncode == 2
 
     manifest.pop("manifest_schema_version")
     manifest.pop("oracle_results_path")
@@ -301,7 +302,7 @@ def test_manual_complete_and_versionless_legacy_cannot_bypass_finalizer(tmp_path
     assert validation["status"] == "warn"
     assert validation["readiness"] == "migration_required"
     assert "legacy_manifest_migration_required" in codes(validation)
-    frozen = run_script("freeze_validation_set_root.py", "--root", tmp_path, "--set-root", set_root)
+    frozen = run_module("freeze", "--root", tmp_path, "--set-root", set_root)
     assert frozen.returncode == 2
     assert "migration_required" in report(frozen)["error"]
 
@@ -322,7 +323,7 @@ def test_build_custom_oracle_ids_fail_closed_without_plan_inputs(tmp_path: Path)
     ]
     items_path = tmp_path / "items.jsonl"
     write_jsonl(items_path, items)
-    blocked = run_script("build_validation_set.py", "--root", tmp_path, "--set-id", "missing-plan", "--items", items_path)
+    blocked = run_module("build", "--root", tmp_path, "--set-id", "missing-plan", "--items", items_path)
     assert blocked.returncode == 2
     assert "custom item oracle_ids require --oracle-manifest" in report(blocked)["error"]
 
@@ -353,8 +354,8 @@ def test_build_custom_oracle_ids_fail_closed_without_plan_inputs(tmp_path: Path)
             "splits": {"public_test": ["custom-item"]},
         },
     )
-    built = run_script(
-        "build_validation_set.py",
+    built = run_module(
+        "build",
         "--root",
         tmp_path,
         "--set-id",
@@ -374,10 +375,10 @@ def test_build_custom_oracle_ids_fail_closed_without_plan_inputs(tmp_path: Path)
 
 def test_integrity_finding_forces_consistent_blocked_verify_status(tmp_path: Path) -> None:
     set_root = complete_local_set(tmp_path)
-    assert run_script("freeze_validation_set_root.py", "--root", tmp_path, "--set-root", set_root).returncode == 0
+    assert run_module("freeze", "--root", tmp_path, "--set-root", set_root).returncode == 0
     split = set_root / "split_manifest.json"
     split.write_text(split.read_text(encoding="utf-8") + " \n", encoding="utf-8")
-    verified = run_script("verify_validation_set_root.py", "--root", tmp_path, "--set-root", set_root)
+    verified = run_module("verify-root", "--root", tmp_path, "--set-root", set_root)
     value = report(verified)
     assert verified.returncode == 2
     assert value["status"] == "block"
@@ -412,7 +413,7 @@ def test_changed_predicate_cannot_be_forged_pass_by_updating_result_hashes(tmp_p
     assert forged_content_hash.returncode == 2
     assert "oracle_result_semantic_mismatch" in report(forged_content_hash)["error"]
 
-    rerun = run_script("run_validation_oracles.py", "--root", tmp_path, "--set-root", set_root)
+    rerun = run_module("run-oracles", "--root", tmp_path, "--set-root", set_root)
     assert rerun.returncode == 1
     assert report(rerun)["status"] == "failed"
 
@@ -601,7 +602,7 @@ def test_scenario_coverage_requires_observing_oracle_and_hashed_evidence(tmp_pat
 def test_atomic_json_writer_ignores_precreated_predictable_temp_symlink(tmp_path: Path) -> None:
     sys.path.insert(0, str(SCRIPTS))
     try:
-        from validation_set_contract import atomic_write_json
+        from build_validation_set_with_agents.validation_set_contract import atomic_write_json
     finally:
         sys.path.pop(0)
     target = tmp_path / "artifact.json"
@@ -647,7 +648,7 @@ def test_builder_replaces_child_output_symlink_without_overwriting_target(tmp_pa
         ],
     )
 
-    built = run_script("build_validation_set.py", "--root", root, "--set-id", "child-link", "--items", candidate)
+    built = run_module("build", "--root", root, "--set-id", "child-link", "--items", candidate)
 
     assert built.returncode == 0, built.stdout + built.stderr
     assert outside.read_text(encoding="utf-8") == "sentinel\n"
@@ -663,8 +664,7 @@ def test_freeze_ignores_precreated_pid_temp_symlink(tmp_path: Path) -> None:
         [
             "import os, sys",
             "from pathlib import Path",
-            f"sys.path.insert(0, {str(SCRIPTS)!r})",
-            "from freeze_validation_set_root import main",
+            "from build_validation_set_with_agents.freeze_validation_set_root import main",
             f"set_root = Path({str(set_root)!r})",
             f"outside = Path({str(outside)!r})",
             "link = set_root / f'.validation_set_root.json.tmp-{os.getpid()}'",
@@ -674,6 +674,7 @@ def test_freeze_ignores_precreated_pid_temp_symlink(tmp_path: Path) -> None:
     )
     env = dict(os.environ)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PYTHONPATH"] = str(SCRIPTS)
 
     frozen = subprocess.run([sys.executable, "-B", "-c", code], cwd=REPO, env=env, text=True, capture_output=True, check=False)
 

@@ -1,43 +1,15 @@
 from __future__ import annotations
 
-import importlib.util
 import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
-
-ROOT = Path(__file__).resolve().parents[1]
-
-
-def load_module(path: Path, name: str) -> Any:
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-contracts = load_module(
-    ROOT / "orchestrate-task-cycle" / "scripts" / "result_contract.py",
-    "session_audit_result_contract",
-)
-cycle_context = load_module(
-    ROOT / "orchestrate-task-cycle" / "scripts" / "collect_cycle_context.py",
-    "session_audit_cycle_context",
-)
-completion_evidence = load_module(
-    ROOT / "validate-task-completion" / "scripts" / "collect_completion_evidence.py",
-    "session_audit_completion_evidence",
-)
-renderer = load_module(
-    ROOT / "orchestrate-task-cycle" / "scripts" / "render_subskill_packet.py",
-    "session_audit_packet_renderer",
-)
-audit_producer = load_module(
-    ROOT / "audit-session-governance" / "scripts" / "session_audit.py",
-    "session_audit_integration_producer",
-)
+from audit_session_governance import session_audit as audit_producer
+from orchestrate_task_cycle import collect_cycle_context as cycle_context
+from orchestrate_task_cycle import render_subskill_packet as renderer
+from orchestrate_task_cycle.result_contract import api as contracts
+from validate_task_completion import collect_completion_evidence as completion_evidence
 
 
 def packet(

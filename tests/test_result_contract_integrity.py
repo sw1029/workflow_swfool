@@ -1,56 +1,31 @@
 from __future__ import annotations
 
-import importlib.util
-import importlib
 from pathlib import Path
 import sys
 from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+for package_root in (
+    ROOT / "orchestrate-task-cycle" / "scripts",
+    ROOT / "audit-cycle-loopback" / "scripts",
+):
+    if str(package_root) not in sys.path:
+        sys.path.insert(0, str(package_root))
 
-
-def load_module(path: Path, name: str) -> Any:
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-result_contract = load_module(
-    ROOT / "orchestrate-task-cycle" / "scripts" / "result_contract.py",
-    "result_contract_integrity",
-)
-assemble_cycle_report = load_module(
-    ROOT / "orchestrate-task-cycle" / "scripts" / "assemble_cycle_report.py",
-    "assemble_cycle_report_integrity",
-)
-render_cycle_dashboard = load_module(
-    ROOT / "orchestrate-task-cycle" / "scripts" / "render_cycle_dashboard.py",
-    "render_cycle_dashboard_result_contract_integrity",
-)
-cycle_ledger = load_module(
-    ROOT / "orchestrate-task-cycle" / "scripts" / "cycle_ledger.py",
-    "cycle_ledger_for_result_contract_integrity",
-)
-finalization_contract = importlib.import_module("result_contract_lib.finalization")
-lifecycle_contract = importlib.import_module("result_contract_lib.lifecycle")
-output_delta_contract = load_module(
-    ROOT / "orchestrate-task-cycle" / "scripts" / "output_delta_contract.py",
-    "output_delta_contract_decision_boundaries",
-)
-profile_cycle_efficiency = load_module(
-    ROOT / "orchestrate-task-cycle" / "scripts" / "profile_cycle_efficiency.py",
-    "profile_cycle_efficiency_decision_boundaries",
-)
-sys.path.insert(0, str(ROOT / "orchestrate-task-cycle" / "scripts"))
-progress_output_delta_gate = importlib.import_module("progress_loop_detection.output_delta_gate")
-progress_dispatch_gate = importlib.import_module("progress_loop_detection.dispatch_gate")
-progress_analysis_aggregation = importlib.import_module("progress_loop_detection.analysis_aggregation")
-result_integrity = importlib.import_module("result_contract_lib.integrity")
-sys.path.insert(0, str(ROOT / "audit-cycle-loopback" / "scripts"))
-anti_loop_provider = importlib.import_module("anti_loop_provider")
+import audit_cycle_loopback as loopback_provider  # noqa: E402
+from orchestrate_task_cycle import assemble_cycle_report  # noqa: E402
+from orchestrate_task_cycle import cycle_ledger  # noqa: E402
+from orchestrate_task_cycle import output_delta_contract  # noqa: E402
+from orchestrate_task_cycle import profile_cycle_efficiency  # noqa: E402
+from orchestrate_task_cycle import render_cycle_dashboard  # noqa: E402
+from orchestrate_task_cycle.progress import analysis_aggregation as progress_analysis_aggregation  # noqa: E402
+from orchestrate_task_cycle.progress import dispatch_gate as progress_dispatch_gate  # noqa: E402
+from orchestrate_task_cycle.progress import output_delta_gate as progress_output_delta_gate  # noqa: E402
+from orchestrate_task_cycle.result_contract import api as result_contract  # noqa: E402
+from orchestrate_task_cycle.result_contract import finalization as finalization_contract  # noqa: E402
+from orchestrate_task_cycle.result_contract import integrity as result_integrity  # noqa: E402
+from orchestrate_task_cycle.result_contract import lifecycle as lifecycle_contract  # noqa: E402
 
 
 def finding_codes(result: dict[str, Any]) -> set[str]:
@@ -908,7 +883,7 @@ def test_metric_applicability_precedes_values_and_excludes_nonapplicable_metrics
         {"metric_M": 1},
         quality_delta_policy=policy,
     )
-    audit_gate = anti_loop_provider.coverage_quality_delta_gate(
+    audit_gate = loopback_provider.coverage_quality_delta_gate(
         {"metric_M": 999},
         {"metric_M": 1},
         0,
@@ -965,7 +940,7 @@ def test_metric_applicability_insufficient_invalid_and_happy_paths() -> None:
         ROOT
         / "audit-cycle-loopback"
         / "scripts"
-        / "anti_loop_provider"
+        / "audit_cycle_loopback"
         / "evaluation_stages"
         / "setup_quality.py"
     ).read_text(encoding="utf-8")
@@ -986,7 +961,7 @@ def test_metric_applicability_rejects_partial_rows_and_nonopaque_evidence() -> N
         },
     }
     for normalized in (
-        anti_loop_provider.normalize_quality_delta_policy(partial_policy),
+        loopback_provider.normalize_quality_delta_policy(partial_policy),
         output_delta_contract.normalize_quality_delta_policy(partial_policy),
     ):
         assert normalized["invalid_contract_fields"] == ["metric_N"]
@@ -1002,7 +977,7 @@ def test_metric_applicability_rejects_partial_rows_and_nonopaque_evidence() -> N
         },
     }
     for normalized in (
-        anti_loop_provider.normalize_quality_delta_policy(malformed_policy),
+        loopback_provider.normalize_quality_delta_policy(malformed_policy),
         output_delta_contract.normalize_quality_delta_policy(malformed_policy),
     ):
         assert normalized["invalid_contract_fields"] == ["metric_M"]
@@ -1022,7 +997,7 @@ def test_metric_policy_rejects_malformed_declared_ids_and_aliases_without_repr()
     )
     for policy in cases:
         for normalizer in (
-            anti_loop_provider.normalize_quality_delta_policy,
+            loopback_provider.normalize_quality_delta_policy,
             output_delta_contract.normalize_quality_delta_policy,
         ):
             normalized = normalizer(policy)
@@ -1032,7 +1007,7 @@ def test_metric_policy_rejects_malformed_declared_ids_and_aliases_without_repr()
             assert "'raw'" not in repr(normalized)
             assert normalizer(normalized)["policy_contract_invalid"] is True
         for gate in (
-            anti_loop_provider.coverage_quality_delta_gate(
+            loopback_provider.coverage_quality_delta_gate(
                 {"metric_M": 2}, {"metric_M": 1}, 0, 1e-9, policy
             ),
             output_delta_contract.quality_delta_gate(
@@ -1064,14 +1039,14 @@ def test_metric_policy_rejects_malformed_declared_ids_and_aliases_without_repr()
     )
     for malformed_id in bounded_failures:
         for normalizer in (
-            anti_loop_provider.normalize_quality_delta_policy,
+            loopback_provider.normalize_quality_delta_policy,
             output_delta_contract.normalize_quality_delta_policy,
         ):
             normalized = normalizer({"keys": [malformed_id]})
             assert normalized["policy_contract_invalid"] is True
             assert normalized["keys"] == []
     for normalizer in (
-        anti_loop_provider.normalize_quality_delta_policy,
+        loopback_provider.normalize_quality_delta_policy,
         output_delta_contract.normalize_quality_delta_policy,
     ):
         normalized = normalizer(
@@ -1090,7 +1065,7 @@ def test_metric_policy_rejects_malformed_declared_ids_and_aliases_without_repr()
         assert "'raw'" not in repr(normalized)
 
     for normalizer in (
-        anti_loop_provider.normalize_quality_delta_policy,
+        loopback_provider.normalize_quality_delta_policy,
         output_delta_contract.normalize_quality_delta_policy,
     ):
         prose_reason = normalizer(
@@ -1125,7 +1100,7 @@ def test_metric_gates_reject_nonfinite_observations_without_pass_or_stall() -> N
     invalid_values = (float("nan"), float("inf"), float("-inf"), "NaN", "Infinity", 10**10000)
     for invalid in invalid_values:
         gates = (
-            anti_loop_provider.coverage_quality_delta_gate(
+            loopback_provider.coverage_quality_delta_gate(
                 {"metric_M": invalid}, {"metric_M": 1}, 0, 1e-9, policy
             ),
             output_delta_contract.quality_delta_gate(
@@ -1161,7 +1136,7 @@ def test_metric_gates_reject_nonfinite_observations_without_pass_or_stall() -> N
 
     for invalid_epsilon in (float("nan"), float("inf"), float("-inf"), 10**10000):
         epsilon_gates = (
-            anti_loop_provider.coverage_quality_delta_gate(
+            loopback_provider.coverage_quality_delta_gate(
                 {"metric_M": 2}, {"metric_M": 1}, 0, invalid_epsilon, policy
             ),
             output_delta_contract.quality_delta_gate(
@@ -1455,7 +1430,7 @@ def test_metric_baseline_absence_does_not_coerce_malformed_values_and_mixed_stat
         output_delta_contract.quality_delta_gate(
             {"metric_M": 2}, {"metric_M": True}, quality_delta_policy=policy
         ),
-        anti_loop_provider.coverage_quality_delta_gate(
+        loopback_provider.coverage_quality_delta_gate(
             {"metric_M": 2}, {"metric_M": True}, 0, 1e-9, policy
         ),
         progress_output_delta_gate.coverage_quality_delta_gate(
@@ -1485,13 +1460,13 @@ def test_metric_baseline_absence_does_not_coerce_malformed_values_and_mixed_stat
         {"quality_delta_policy": applicability_policy("applicable")},
     )
     assert semantically_equal["invalid_contract_fields"] == []
-    assert anti_loop_provider.metric_stall_observation_allowed(
+    assert loopback_provider.metric_stall_observation_allowed(
         "not_applicable", policy_supplied=True, producer_absence_reason="missing"
     ) is False
-    assert anti_loop_provider.metric_stall_observation_allowed(
+    assert loopback_provider.metric_stall_observation_allowed(
         "insufficient_evidence", policy_supplied=True, producer_absence_reason="missing"
     ) is False
-    assert anti_loop_provider.metric_stall_observation_allowed(
+    assert loopback_provider.metric_stall_observation_allowed(
         "evaluated", policy_supplied=True
     ) is True
 

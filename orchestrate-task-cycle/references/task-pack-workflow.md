@@ -432,10 +432,10 @@ Before consuming a promoted item or promoting its successor, compare the existin
 
 ## Pack Transactions
 
-`$derive-improvement-task` owns the decision. `scripts/task_pack_queue.py` owns deterministic queue mutation when available. Prefer:
+`$derive-improvement-task` owns the decision. `python3 -m orchestrate_task_cycle task-pack` owns deterministic queue mutation when available. Prefer:
 
 ```text
-scripts/task_pack_queue.py --root . apply-mutation --plan <derive-pack-plan.json> --render --language <user-language>
+python3 -m orchestrate_task_cycle task-pack --root . apply-mutation --plan <derive-pack-plan.json> --render --language <user-language>
 ```
 
 Before publication, inspect the helper contract with `capabilities` and require `findings: []` from the create/replace dry-run for the exact in-memory candidate body. Use `validate --pack <workspace-relative-pack.json> --strict-findings` only to audit an already-existing pack artifact; create/replace requires the final successor JSON path to remain absent, so an existing canonical-path candidate is debt/input rather than a publishable successor at that ref. Historical findings in unrelated inactive packs are separate debt: they do not authorize publishing a candidate with findings, and global debt must not be misreported as a defect in a clean exact candidate.

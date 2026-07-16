@@ -9,7 +9,13 @@ description: "Plan validation scope for task-cycle changes. Use when Codex must 
 
 Use this skill to choose the cheapest valid validation profile without skipping necessary prerequisite evidence.
 
-Use `scripts/changed_surface.py` to classify changed files and `scripts/validation_scope.py` to render a validation manifest. Run the manifest in `plan` mode before governance and `finalize` mode after implementation/run evidence identifies the actual changed files. Finalization may retain or raise the planned profile; it must never lower it.
+Use the `changed-surface` module command to classify changed files. Use `plan` before governance and `finalize` after implementation/run evidence identifies the actual changed files. Finalization may retain or raise the planned profile; it must never lower it.
+
+```bash
+SKILLS_ROOT="${CODEX_HOME:-$HOME/.codex}/skills"
+PYTHONPATH="$SKILLS_ROOT/plan-validation-scope/scripts" \
+  python3 -m plan_validation_scope <changed-surface|plan|finalize> [arguments]
+```
 
 ## Domain Adapter Contract
 
@@ -25,7 +31,7 @@ Missing hooks fail quiet to existing validation-scope rules. The manifest may ca
 
 ## Workflow
 
-1. Before governance, collect planned files or surfaces from `task.md`, acceptance, and repository policy. Run `validation_scope.py --mode plan`; an unknown planned surface conservatively selects `affected_chain` and stays visibly unfinalized.
+1. Before governance, collect planned files or surfaces from `task.md`, acceptance, and repository policy. Run the `plan` command; an unknown planned surface conservatively selects `affected_chain` and stays visibly unfinalized.
 2. Classify surfaces: `source`, `tests`, `runtime_config`, `schema`, `contract`, `task_state`, `issue`, `docs`, or `unknown`.
 3. Choose:
    - `current_only` when only the current validator and direct predecessor hash/status checks are needed.
@@ -36,7 +42,7 @@ Missing hooks fail quiet to existing validation-scope rules. The manifest may ca
    - Require fresh or affected-chain validation when Part N evidence reports producer-source changes without refreshed output fingerprints, `deliverable_stale`, storage-policy/resolution-depth changes, `anonymization_theater`, or `mutually_unsatisfiable_persistence_contract`. Flow: adapter hook absent -> fail quiet; changed files intersect `producer_source_paths` and `output_fingerprint` did not update -> plan regeneration/revalidation before reuse; `persistence_policy_map` reports unresolved storage/ability conflict -> plan contract reconciliation validation before close.
    - For producer-path repairs, when `field_authority_map` shows that changed producer row fields and validator aggregate inputs can diverge or a merge rule can override the changed field, set `dual_bookkeeping_risk=true` and require a row-vs-aggregate same-sample comparison in the manifest. If that comparison reports contradictions, close is invalid until `$manage-schema-contracts` records a single authority formula or residual blocker. If the hook is absent, fail quiet and keep existing scope rules.
    - Before planning a gate for an artifact class, apply S9 `gate_artifact_compatibility` when supplied. If the artifact class cannot satisfy the gate's adapter-owned precondition, skip that gate in the manifest as category-incompatible and do not plan repeated failure, residual, or escalation validation for it. If the hook is absent, keep existing planning and record `gate_compat=unverified` only as warning evidence.
-4. After governance and run/review evidence, collect the authoritative actual changed-file list and run `validation_scope.py --mode finalize --task-id <active-task-id> --plan-json <plan>`. Finalization accepts only the same task's `step: validation_scope_plan`, `mode: plan`, `finalized: false` manifest with a non-placeholder task ID. Treat missing actual-surface input, identity mismatch, a finalized/non-plan input, or missing final validation commands as blocking. Preserve the plan profile as a floor and raise it when actual surfaces or explicit risk flags require broader validation.
+4. After governance and run/review evidence, collect the authoritative actual changed-file list and run `python3 -m plan_validation_scope finalize --task-id <active-task-id> --plan-json <plan>` under the package `PYTHONPATH`. Finalization accepts only the same task's `step: validation_scope_plan`, `mode: plan`, `finalized: false` manifest with a non-placeholder task ID. Treat missing actual-surface input, identity mismatch, a finalized/non-plan input, or missing final validation commands as blocking. Preserve the plan profile as a floor and raise it when actual surfaces or explicit risk flags require broader validation.
 5. Record required commands, reusable prerequisites, fingerprints or hashes, escalation reasons, `profile_floor`, and whether finalization raised the profile.
 6. Save both manifests as workspace-bounded workflow artifacts; `--output` must remain under `--root`, including through symlinks. Pass the finalized manifest to `$validate-task-completion`.
 

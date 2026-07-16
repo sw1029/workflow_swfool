@@ -29,7 +29,9 @@ When a task-state index exists, record environment evidence through `$manage-tas
    - Run the bundled scanner when Python dependencies are involved:
 
      ```bash
-     python3 "${CODEX_HOME:-$HOME/.codex}/skills/find-local-python-envs/scripts/env_inventory.py" --root . --dep pandas --dep pyarrow --json
+     SKILLS_ROOT="${CODEX_HOME:-$HOME/.codex}/skills"
+     PYTHONPATH="$SKILLS_ROOT/find-local-python-envs/scripts" \
+       python3 -m find_local_python_envs inventory --root . --dep pandas --dep pyarrow --json
      ```
 
    - Replace dependencies with the user's required packages. Use `--dep distribution=import_name` when the pip/conda distribution name differs from the import name.

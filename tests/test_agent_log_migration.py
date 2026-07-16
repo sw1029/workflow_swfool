@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from argparse import Namespace
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -18,38 +17,21 @@ import pytest
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "record-agent-work-log" / "scripts"
-if str(SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS))
+TASK_STATE_SCRIPTS = ROOT / "manage-task-state-index" / "scripts"
+ORCHESTRATE_SCRIPTS = ROOT / "orchestrate-task-cycle" / "scripts"
+COMPLETION_SCRIPTS = ROOT / "validate-task-completion" / "scripts"
+for package_root in (SCRIPTS, TASK_STATE_SCRIPTS, ORCHESTRATE_SCRIPTS, COMPLETION_SCRIPTS):
+    if str(package_root) not in sys.path:
+        sys.path.insert(0, str(package_root))
 
-import agent_log_integrity as integrity  # noqa: E402
-import agent_log_migration as migration  # noqa: E402
-import write_agent_log as writer  # noqa: E402
-
-
-def load_module(path: Path, name: str) -> Any:
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-cycle_context = load_module(
-    ROOT / "orchestrate-task-cycle" / "scripts" / "collect_cycle_context.py",
-    "agent_log_migration_cycle_context_tests",
-)
-completion_evidence = load_module(
-    ROOT / "validate-task-completion" / "scripts" / "collect_completion_evidence.py",
-    "agent_log_migration_completion_evidence_tests",
-)
-task_state_index = load_module(
-    ROOT / "manage-task-state-index" / "scripts" / "task_state_index.py",
-    "agent_log_migration_task_state_index_tests",
-)
-progress_loop = load_module(
-    ROOT / "orchestrate-task-cycle" / "scripts" / "detect_progress_loop.py",
-    "agent_log_migration_progress_loop_tests",
-)
+from record_agent_work_log import integrity  # noqa: E402
+from record_agent_work_log import migration  # noqa: E402
+from record_agent_work_log import write as writer  # noqa: E402
+from record_agent_work_log.migration import storage as migration_storage  # noqa: E402
+from manage_task_state_index import index as task_state_index  # noqa: E402
+from orchestrate_task_cycle import collect_cycle_context as cycle_context  # noqa: E402
+from orchestrate_task_cycle.progress import api as progress_loop  # noqa: E402
+from validate_task_completion import collect_completion_evidence as completion_evidence  # noqa: E402
 
 
 def body(
@@ -614,7 +596,7 @@ def test_directory_fsync_failure_propagates_before_index_switch(
     def fail_fsync(_path: Path) -> None:
         raise OSError("injected directory fsync failure")
 
-    monkeypatch.setattr(migration, "_strict_fsync_directory", fail_fsync)
+    monkeypatch.setattr(migration_storage, "_strict_fsync_directory", fail_fsync)
     with pytest.raises(OSError, match="directory fsync failure"):
         apply_store(tmp_path, inspection, plan_path, plan_sha)
     assert (tmp_path / ".agent_log" / "index.jsonl").read_bytes() == source
@@ -697,10 +679,11 @@ def test_crash_recovery_is_forward_only_or_source_preserving(
 def test_concurrent_apply_and_writer_share_exclusive_lock(tmp_path: Path) -> None:
     _, status_map = basic_legacy_store(tmp_path)
     inspection, plan_path, plan_sha, plan = plan_store(tmp_path, status_map)
-    script = SCRIPTS / "agent_log_migration.py"
     command = [
         sys.executable,
-        str(script),
+        "-m",
+        "record_agent_work_log",
+        "migrate",
         "apply",
         "--root",
         str(tmp_path),
@@ -716,6 +699,7 @@ def test_concurrent_apply_and_writer_share_exclusive_lock(tmp_path: Path) -> Non
     environment = {
         **os.environ,
         "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": str(SCRIPTS),
         "AGENT_LOG_MIGRATION_LOCK_HOLD_SECONDS": "0.4",
     }
     first = subprocess.Popen(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment)
@@ -731,10 +715,11 @@ def test_concurrent_apply_and_writer_share_exclusive_lock(tmp_path: Path) -> Non
         time.sleep(0.01)
     assert journal.exists()
 
-    writer_script = SCRIPTS / "write_agent_log.py"
     writer_command = [
         sys.executable,
-        str(writer_script),
+        "-m",
+        "record_agent_work_log",
+        "write",
         "--root",
         str(tmp_path),
         "--title",
@@ -755,7 +740,11 @@ def test_concurrent_apply_and_writer_share_exclusive_lock(tmp_path: Path) -> Non
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        env={
+            **os.environ,
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONPATH": str(SCRIPTS),
+        },
     )
     second = subprocess.run(command, text=True, capture_output=True, env=environment, check=False)
     first_stdout, first_stderr = first.communicate(timeout=10)

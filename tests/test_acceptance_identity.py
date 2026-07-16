@@ -1,31 +1,19 @@
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
+import sys
 from typing import Any
 
 import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def load_module(path: Path, name: str) -> Any:
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-acceptance_identity = load_module(
-    ROOT / "normalize-acceptance-and-demo" / "scripts" / "acceptance_identity.py",
-    "acceptance_identity_tests",
-)
-result_contract = load_module(
-    ROOT / "orchestrate-task-cycle" / "scripts" / "result_contract.py",
-    "acceptance_identity_result_contract_tests",
-)
+sys.path[:0] = [
+    str(ROOT / "normalize-acceptance-and-demo" / "scripts"),
+    str(ROOT / "orchestrate-task-cycle" / "scripts"),
+]
+from normalize_acceptance_and_demo import acceptance_identity  # noqa: E402
+from orchestrate_task_cycle.result_contract import api as result_contract  # noqa: E402
 
 
 def final_packet() -> dict[str, Any]:

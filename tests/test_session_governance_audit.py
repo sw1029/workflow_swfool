@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -11,29 +11,21 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "audit-session-governance" / "scripts" / "session_audit.py"
-CONSUMER = (
-    ROOT
-    / "orchestrate-task-cycle"
-    / "scripts"
-    / "result_contract_lib"
-    / "session_audit.py"
-)
-MODE_SCRIPT = ROOT / "orchestrate-task-cycle" / "scripts" / "mode_profile.py"
+AUDIT_SCRIPTS = ROOT / "audit-session-governance" / "scripts"
+ORCHESTRATION_SCRIPTS = ROOT / "orchestrate-task-cycle" / "scripts"
 MODE_REGISTRY = ROOT / "orchestrate-task-cycle" / "references" / "mode-profiles.json"
 
-
-def load(path: Path, name: str) -> Any:
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+sys.path[:0] = [str(AUDIT_SCRIPTS), str(ORCHESTRATION_SCRIPTS)]
+from audit_session_governance import session_audit as audit  # noqa: E402
+from orchestrate_task_cycle import mode_profile  # noqa: E402
+from orchestrate_task_cycle.result_contract import session_audit as consumer  # noqa: E402
 
 
-audit = load(SCRIPT, "session_audit_producer")
-consumer = load(CONSUMER, "session_audit_consumer")
-mode_profile = load(MODE_SCRIPT, "session_audit_mode_profile")
+def module_env() -> dict[str, str]:
+    env = dict(os.environ)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PYTHONPATH"] = os.pathsep.join((str(AUDIT_SCRIPTS), str(ORCHESTRATION_SCRIPTS)))
+    return env
 
 
 def write_jsonl(path: Path, events: list[Any]) -> None:
@@ -560,7 +552,9 @@ def test_cli_is_fail_quiet_for_quarantine_but_validation_detects_tamper(
     inspected = subprocess.run(
         [
             sys.executable,
-            str(SCRIPT),
+            "-m",
+            "audit_session_governance",
+            "audit",
             "inspect",
             "--root",
             str(tmp_path),
@@ -572,6 +566,7 @@ def test_cli_is_fail_quiet_for_quarantine_but_validation_detects_tamper(
         check=False,
         capture_output=True,
         text=True,
+        env=module_env(),
     )
     assert inspected.returncode == 0
     summary = json.loads(inspected.stdout)
@@ -584,7 +579,9 @@ def test_cli_is_fail_quiet_for_quarantine_but_validation_detects_tamper(
     validated = subprocess.run(
         [
             sys.executable,
-            str(SCRIPT),
+            "-m",
+            "audit_session_governance",
+            "audit",
             "validate",
             "--root",
             str(tmp_path),
@@ -594,6 +591,7 @@ def test_cli_is_fail_quiet_for_quarantine_but_validation_detects_tamper(
         check=False,
         capture_output=True,
         text=True,
+        env=module_env(),
     )
     assert validated.returncode == 2
     assert json.loads(validated.stdout)["valid"] is False

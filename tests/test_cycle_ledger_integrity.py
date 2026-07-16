@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
 import hashlib
 import json
 import sys
@@ -9,26 +8,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from orchestrate_task_cycle import cycle_ledger
 
 
 sys.dont_write_bytecode = True
-ROOT = Path(__file__).resolve().parents[1]
-
-
-def load_module(path: Path, name: str) -> Any:
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-cycle_ledger = load_module(
-    ROOT / "orchestrate-task-cycle" / "scripts" / "cycle_ledger.py",
-    "cycle_ledger_integrity",
-)
-
-
 EXPECTED_STEPS = [
     "context",
     "authority",

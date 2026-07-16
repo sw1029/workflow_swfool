@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
 import hashlib
 import json
 import os
@@ -16,40 +15,23 @@ import pytest
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
+for package_root in (
+    ROOT / "record-agent-work-log" / "scripts",
+    ROOT / "manage-task-state-index" / "scripts",
+    ROOT / "manage-external-advice" / "scripts",
+    ROOT / "orchestrate-task-cycle" / "scripts",
+    ROOT / "validate-task-completion" / "scripts",
+):
+    if str(package_root) not in sys.path:
+        sys.path.insert(0, str(package_root))
 
 
-def load_module(path: Path, name: str) -> Any:
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-work_log = load_module(
-    ROOT / "record-agent-work-log" / "scripts" / "write_agent_log.py",
-    "agent_work_log_integrity_tests",
-)
-cycle_context = load_module(
-    ROOT / "orchestrate-task-cycle" / "scripts" / "collect_cycle_context.py",
-    "agent_work_log_cycle_context_tests",
-)
-completion_evidence = load_module(
-    ROOT / "validate-task-completion" / "scripts" / "collect_completion_evidence.py",
-    "agent_work_log_completion_evidence_tests",
-)
-task_state_index = load_module(
-    ROOT / "manage-task-state-index" / "scripts" / "task_state_index.py",
-    "agent_work_log_task_state_index_tests",
-)
-advice_registry = load_module(
-    ROOT / "manage-external-advice" / "scripts" / "advice_registry.py",
-    "agent_work_log_advice_registry_tests",
-)
-progress_loop = load_module(
-    ROOT / "orchestrate-task-cycle" / "scripts" / "detect_progress_loop.py",
-    "agent_work_log_progress_loop_tests",
-)
+from record_agent_work_log import write as work_log  # noqa: E402
+from manage_task_state_index import index as task_state_index  # noqa: E402
+from manage_external_advice import registry as advice_registry  # noqa: E402
+from orchestrate_task_cycle import collect_cycle_context as cycle_context  # noqa: E402
+from orchestrate_task_cycle.progress import api as progress_loop  # noqa: E402
+from validate_task_completion import collect_completion_evidence as completion_evidence  # noqa: E402
 
 
 def args_for(root: Path, index: int = 0, **overrides: Any) -> Namespace:
@@ -198,14 +180,19 @@ def test_concurrent_writes_have_unique_ids_paths_and_complete_jsonl_rows(tmp_pat
 
 
 def test_concurrent_cli_processes_share_the_workspace_lock(tmp_path: Path) -> None:
-    script = ROOT / "record-agent-work-log" / "scripts" / "write_agent_log.py"
-    environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+    environment = {
+        **os.environ,
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": str(ROOT / "record-agent-work-log" / "scripts"),
+    }
 
     def invoke(index: int) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [
                 sys.executable,
-                str(script),
+                "-m",
+                "record_agent_work_log",
+                "write",
                 "--root",
                 str(tmp_path),
                 "--title",

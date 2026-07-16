@@ -57,7 +57,9 @@ Do not define identifier surfaces, meaning floors, regeneration commands, storag
    - Use the bundled collector for a compact inventory:
 
      ```bash
-     python3 "${CODEX_HOME:-$HOME/.codex}/skills/validate-task-completion/scripts/collect_completion_evidence.py" --root . --include-git
+     SKILLS_ROOT="${CODEX_HOME:-$HOME/.codex}/skills"
+     PYTHONPATH="$SKILLS_ROOT/validate-task-completion/scripts:$SKILLS_ROOT/orchestrate-task-cycle/scripts:$SKILLS_ROOT/record-agent-work-log/scripts" \
+       python3 -m validate_task_completion collect-evidence --root . --include-git
      ```
 
 2. Ensure task-state traceability.

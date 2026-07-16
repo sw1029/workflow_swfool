@@ -1,0 +1,1 @@
+"""Model/effort routing implementation."""

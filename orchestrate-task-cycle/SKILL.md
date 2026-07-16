@@ -29,6 +29,18 @@ Read these first-level references only when the corresponding part of the cycle 
 
 Do not add README, changelog, quick-reference, or auxiliary process documents. Put future detailed rules in the relevant `references/` file and link them here.
 
+## Module Invocation
+
+Resolve the installed skills root once and invoke the static module command registry. Include the agent-log and session-governance package roots because context, progress, and result-contract commands consume their public APIs.
+
+```bash
+SKILLS_ROOT="${CODEX_HOME:-$HOME/.codex}/skills"
+PYTHONPATH="$SKILLS_ROOT/orchestrate-task-cycle/scripts:$SKILLS_ROOT/record-agent-work-log/scripts:$SKILLS_ROOT/audit-session-governance/scripts" \
+  python3 -m orchestrate_task_cycle --help
+```
+
+Use `python3 -m orchestrate_task_cycle <command> ...` for every helper invocation. Do not call a file under `scripts/` directly.
+
 ## Domain Adapter Contract
 
 The orchestrator normally receives adapter-derived fields through subskill packets. When close accounting has direct adapter access, it may consume these optional Part O/P hooks without interpreting domain-specific meanings:
@@ -50,7 +62,7 @@ Do not hardcode goal axes, thresholds, proxy names, feature classes, producer-ex
 
 ## Core Invariants
 
-- Keep pre-validation evaluation write-free. Run, qualitative review, and loopback emit immutable observations or prepared state mutations; they must not update a current registry, root-cause ledger, blocker seal, or active attempt pointer. Completion validation emits an identity-bound `final_candidate` with the existing six verdict axes and may only preserve or downgrade earlier claims. Finalize that candidate inside the existing `validate` boundary with `scripts/cycle_ledger.py`: assign the same-attempt revision/supersession relation, publish one immutable snapshot, atomically compare-and-swap the current pointer, and issue a content-bound `cycle_finalization_receipt`. Only a receipt that re-verifies against the current snapshot exposes the closed `authoritative_final: success|failure|blocked|partial|not_evaluated` verdict. Derive, report, dashboard, closeout, and later cycles must reject a missing, stale, mismatched, or uncommitted receipt. Required actual-body truth, report convergence, artifact class/freshness/lane, consumer context, or verifier completeness at `not_evaluated` prohibits `advanced`.
+- Keep pre-validation evaluation write-free. Run, qualitative review, and loopback emit immutable observations or prepared state mutations; they must not update a current registry, root-cause ledger, blocker seal, or active attempt pointer. Completion validation emits an identity-bound `final_candidate` with the existing six verdict axes and may only preserve or downgrade earlier claims. Finalize that candidate inside the existing `validate` boundary with `python3 -m orchestrate_task_cycle ledger`: assign the same-attempt revision/supersession relation, publish one immutable snapshot, atomically compare-and-swap the current pointer, and issue a content-bound `cycle_finalization_receipt`. Only a receipt that re-verifies against the current snapshot exposes the closed `authoritative_final: success|failure|blocked|partial|not_evaluated` verdict. Derive, report, dashboard, closeout, and later cycles must reject a missing, stale, mismatched, or uncommitted receipt. Required actual-body truth, report convergence, artifact class/freshness/lane, consumer context, or verifier completeness at `not_evaluated` prohibits `advanced`.
 - Before starting a full cycle from a terminal wait state, compare `(terminal_outcome_family_key, blocker_signature, input_state_fingerprint, authority_state_fingerprint, external_state_fingerprint)`. An identical current-version tuple reuses the existing terminal wait record instead of producing another full cycle; a stale `material_delta` flag cannot reopen it. Do not latch when loopback reports self-resolvable or unverified residuals. Require one atomic seal/registry/pack/index receipt before the single reopen, and keep an incomplete reopen out of cycle initialization.
 
 - Preserve one active `task.md`. Use task packs only as planning state; a pack item becomes executable only after `$derive-improvement-task` promotes it into `task.md`.
@@ -127,7 +139,7 @@ When `$audit-session-governance` is enabled, resolve its tracked mode profile fi
 
 ## Coordination Rules
 
-Initialize ledger storage in `initialization.json`; this is not a stage event. Append `context` as the first canonical ledger row. Before each major subskill call, render the applicable packet with `scripts/render_subskill_packet.py`, validate accumulated ordering state with `scripts/validate_cycle_transition.py --stage ...`, and pass the current target routing packet separately with `--routing-json ...`. Validate important subskill results with `scripts/result_contract.py`, supplying `--context` whenever pending long-run state is in scope, using `warn` by default and `block` for acceptance task-revision provenance, final report, running-state, issue lifecycle provenance, candidate deletion, task-pack promotion provenance, and commit gates.
+Initialize ledger storage in `initialization.json`; this is not a stage event. Append `context` as the first canonical ledger row. Before each major subskill call, render the applicable packet with `python3 -m orchestrate_task_cycle packet`, validate accumulated ordering state with `python3 -m orchestrate_task_cycle transition --stage ...`, and pass the current target routing packet separately with `--routing-json ...`. Validate important subskill results with `python3 -m orchestrate_task_cycle result-contract`, supplying `--context` whenever pending long-run state is in scope, using `warn` by default and `block` for acceptance task-revision provenance, final report, running-state, issue lifecycle provenance, candidate deletion, task-pack promotion provenance, and commit gates.
 
 Use [workflow-interface-contracts.md](references/workflow-interface-contracts.md) to determine producer/consumer ownership for `gate_satisfiability`, `failure_autopsy_packet`, `qualitative_review_packet`, `anti_loop_progress_gate`, `loop_breaker_packet`, `terminal_escalation_gate`, `terminal_blocker`, `repo_skill_adapter_packet`, and `repo_skill_gap_packet`.
 
@@ -137,7 +149,7 @@ When acceptance reachability, loopback, or validation builds disposition options
 
 When loopback or validation would route `positive_input_delta=false` to terminal/user escalation, preserve S4/Q1 self-resolvable evidence in the same disposition packet. If `self_resolvable_input` or the Q1 probe says the missing input is self-resolvable without new authority, route the next derive call as `in_scope_engineering_task`; otherwise keep the existing terminal/escalation path.
 
-Use [model-effort-routing.md](references/model-effort-routing.md) for every agent-bearing phase and `scripts/model_effort_router.py` for dynamic selection. Record `routing_tier`, `requested_model_ref`, requested model/effort, model configuration status, reason codes, and `routing_enforcement`; never report reference-only, prompt-only, or inherited routing as enforced execution.
+Use [model-effort-routing.md](references/model-effort-routing.md) for every agent-bearing phase and `python3 -m orchestrate_task_cycle model-effort` for dynamic selection. Record `routing_tier`, `requested_model_ref`, requested model/effort, model configuration status, reason codes, and `routing_enforcement`; never report reference-only, prompt-only, or inherited routing as enforced execution.
 
 - Use Tier 1 balanced-profile/low for Git finalization, Tier 2 balanced-profile/medium for routine implementation and ID work, Tier 3 balanced-profile/high for high-reliability implementation and complex analysis, and Tier 4 balanced-profile/xhigh for decisive review or cross-contract analysis.
 - Use Tier 5 direction-profile/xhigh only when an agent owns the final future direction: next-task synthesis, GT/authority resolution, task-pack topology, terminal disposition, or final architecture direction.

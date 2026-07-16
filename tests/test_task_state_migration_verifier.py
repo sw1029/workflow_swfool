@@ -39,7 +39,7 @@ def test_verifier_source_is_read_only_and_does_not_import_producer_truth() -> No
         "rename",
         "truncate",
     }
-    paths = sorted(SCRIPT_DIR.glob("task_state_migration_verifier*.py"))
+    paths = sorted((SCRIPT_DIR / "manage_task_state_index" / "verifier").glob("*.py"))
     assert paths
     for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))

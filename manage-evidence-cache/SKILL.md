@@ -9,7 +9,7 @@ description: "Fingerprint and classify reusable task-cycle evidence. Use when Co
 
 Use this skill to avoid duplicate expensive checks while preserving validation integrity. The cache suggests whether prior evidence might be reused; the owning validator decides whether reuse is acceptable.
 
-Use `${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/scripts/evidence_cache.py`.
+Use `PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/scripts" python3 -m orchestrate_task_cycle evidence-cache`.
 
 ## Workflow
 

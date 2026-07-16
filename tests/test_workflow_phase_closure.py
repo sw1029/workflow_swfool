@@ -1,28 +1,20 @@
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
 from typing import Any
+
+from orchestrate_task_cycle import (
+    cycle_ledger,
+    render_cycle_dashboard as dashboard,
+    render_subskill_packet as packets,
+    validate_cycle_transition as transition,
+)
+from orchestrate_task_cycle.result_contract import api as result_contract
 
 
 ROOT = Path(__file__).resolve().parents[1]
 ORCHESTRATOR = ROOT / "orchestrate-task-cycle"
-SCRIPTS = ORCHESTRATOR / "scripts"
-
-
-def load_module(path: Path, name: str) -> Any:
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-transition = load_module(SCRIPTS / "validate_cycle_transition.py", "workflow_phase_transition")
-dashboard = load_module(SCRIPTS / "render_cycle_dashboard.py", "workflow_phase_dashboard")
-packets = load_module(SCRIPTS / "render_subskill_packet.py", "workflow_phase_packets")
-result_contract = load_module(SCRIPTS / "result_contract.py", "workflow_phase_result_contract")
-cycle_ledger = load_module(SCRIPTS / "cycle_ledger.py", "workflow_phase_cycle_ledger")
+PACKAGE_ROOT = ORCHESTRATOR / "scripts" / "orchestrate_task_cycle"
 
 
 EXPECTED_ORDER = [
@@ -125,7 +117,7 @@ def test_formal_packets_and_transitions_exist_for_new_phases() -> None:
 
 def test_packet_routing_reference_is_workspace_relative_and_preindex_is_deterministic() -> None:
     packet = packets.packet_for("index_pre_validate", {}, {})
-    packet_source = (SCRIPTS / "render_subskill_packet.py").read_text(encoding="utf-8")
+    packet_source = (PACKAGE_ROOT / "render_subskill_packet.py").read_text(encoding="utf-8")
 
     assert Path(packet["routing_reference"]).resolve() == (ORCHESTRATOR / "references" / "workflow-routing.md").resolve()
     assert '"/home/swfool/' not in packet_source

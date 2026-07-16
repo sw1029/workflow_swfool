@@ -18,7 +18,7 @@ Use split policy to control overfitting and label leakage.
 
 For a consumable set, assign every item exactly once. Reject unknown item IDs, missing members, duplicate cross-split membership, unreadable shards, and split manifests bound to another validation-set ID.
 
-When a plan already defines split membership, pass it to `build_validation_set.py --split-manifest`; otherwise the candidate scaffold uses a visible `dev` split. Finalization revalidates exact membership, and the finalization/root hashes bind the chosen split bytes.
+When a plan already defines split membership, pass it to the `build` module command with `--split-manifest`; otherwise the candidate scaffold uses a visible `dev` split. Finalization revalidates exact membership, and the finalization/root hashes bind the chosen split bytes.
 
 ## Visibility Rules
 

@@ -340,7 +340,7 @@ Pack rules:
 - Preserve Part H fields when present. Terminal-classification/stage contradictions and same-input mismatches cannot close or count work; repeated diagnostics unavailable must force instrumentation or explicit observability; independently verified fields need disjoint verification inputs or become attested; frozen-envelope unreachable acceptance needs `envelope_thaw_item`, residual/descope, terminal blocker, or user escalation.
 - Preserve Part L fields when present. Stale-lane passes cannot consume current-lane work; stale decision measurements need fresh runs or no-impact proof; producer-starved gating axes need producer supply before more verifier-like work; restrictive portfolio quota changes task ordering; cycle-unreachable targets need long-run/throughput/descope/terminal/escalation; basis-overclaimed metrics are downgraded; surface-field defect matrices preserve producer/field repair or residual scope.
 - Use `terminal_blocked` when no viable item remains and no supplied input delta, authority change, or external-state change exists. Include `semantic_signature`, `root_cause_attempted_for_family`, authorized-alternative-path status, provider re-attempt status, and dual-track attempt evidence when a hard loop gate applies, so later derivation can seal the family rather than only the current target surface.
-- Refresh the Markdown render with `$orchestrate-task-cycle/scripts/task_pack_queue.py --root . render --language <language>` after any JSON edit.
+- Refresh the Markdown render with `python3 -m orchestrate_task_cycle task-pack --root . render --language <language>` after any JSON edit.
 
 ## Candidate Application Rule
 

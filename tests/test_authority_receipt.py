@@ -2,29 +2,17 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.util
 import json
 from pathlib import Path
+import sys
 from typing import Any
 
 import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def load_module(path: Path, name: str) -> Any:
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-authority_receipt = load_module(
-    ROOT / "manage-agent-authority" / "scripts" / "authority_receipt.py",
-    "authority_receipt_tests",
-)
+sys.path.insert(0, str(ROOT / "manage-agent-authority" / "scripts"))
+from manage_agent_authority import authority_receipt  # noqa: E402
 
 
 def digest(path: Path) -> str:

@@ -1,0 +1,216 @@
+{
+  "schema_version": "anti-loop-refactor-constant-registry-v1",
+  "description": "Registry of refactor-owned constants exposed by the audit_cycle_loopback package.",
+  "entries": [
+    {
+      "module": "common",
+      "name": "REGISTRY_REL_PATH",
+      "category": "path",
+      "expected_type": "str",
+      "expected_value": ".task/anti_loop/family_progress_registry.jsonl"
+    },
+    {
+      "module": "common",
+      "name": "ROOT_CAUSE_LEDGER_REL_PATH",
+      "category": "path",
+      "expected_type": "str",
+      "expected_value": ".task/anti_loop/root_cause_ledger.jsonl"
+    },
+    {
+      "module": "common",
+      "name": "SCHEMA_VERSION",
+      "category": "schema",
+      "expected_type": "str",
+      "expected_value": "anti-loop-progress-gate-v1"
+    },
+    {
+      "module": "common",
+      "name": "DOMAIN_ADAPTER_ENV",
+      "category": "environment",
+      "expected_type": "str",
+      "expected_value": "TASK_CYCLE_DOMAIN_ADAPTER_PATH"
+    },
+    {
+      "module": "common",
+      "name": "DISPOSITION_UNIVERSE",
+      "category": "disposition",
+      "expected_type": "set",
+      "expected_value": ["consolidation", "goal_productive", "terminal_blocked", "user_escalation"]
+    },
+    {
+      "module": "common",
+      "name": "SAFETY_VALVES",
+      "category": "disposition",
+      "expected_type": "set",
+      "expected_value": ["terminal_blocked", "user_escalation"]
+    },
+    {
+      "module": "common",
+      "name": "ROOT_CAUSE_LEDGER_MAX_ROWS_PER_FAMILY_DEFAULT",
+      "category": "storage_safety_bound",
+      "expected_type": "int",
+      "expected_value": 200
+    },
+    {
+      "module": "common",
+      "name": "QUALITY_DELTA_KEYS",
+      "category": "metric_keys",
+      "expected_type": "tuple",
+      "expected_value": []
+    },
+    {
+      "module": "common",
+      "name": "ROOT_KEY_KEYS",
+      "category": "packet_keys",
+      "expected_type": "set",
+      "expected_value": ["loop_root_key", "root_key", "semantic_root_key"]
+    },
+    {
+      "module": "common",
+      "name": "IDEMPOTENT_REPLAY_KEYS",
+      "category": "packet_keys",
+      "expected_type": "tuple"
+    },
+    {
+      "module": "common",
+      "name": "FRONTIER_CHECK_KEYS",
+      "category": "measurement_keys",
+      "expected_type": "set",
+      "expected_value": []
+    },
+    {
+      "module": "common",
+      "name": "CHECK_ID_KEYS",
+      "category": "measurement_keys",
+      "expected_type": "set"
+    },
+    {
+      "module": "common",
+      "name": "BLOCKER_SIGNATURE_KEYS",
+      "category": "packet_keys",
+      "expected_type": "set"
+    },
+    {
+      "module": "common",
+      "name": "LADDER_RANK",
+      "category": "blocker_ladder",
+      "expected_type": "dict",
+      "expected_value": {}
+    },
+    {
+      "module": "common",
+      "name": "RUNG_ALIASES",
+      "category": "blocker_ladder",
+      "expected_type": "dict",
+      "expected_value": {}
+    },
+    {
+      "module": "common",
+      "name": "VOLATILE_KEYS",
+      "category": "normalization",
+      "expected_type": "set"
+    },
+    {
+      "module": "common",
+      "name": "FACET_SUFFIX_RE",
+      "category": "normalization",
+      "expected_type": "pattern",
+      "expected_pattern_contains": "version"
+    },
+    {
+      "module": "common",
+      "name": "PASS_STATUS_VALUES",
+      "category": "status",
+      "expected_type": "set"
+    },
+    {
+      "module": "common",
+      "name": "FAIL_STATUS_VALUES",
+      "category": "status",
+      "expected_type": "set"
+    },
+    {
+      "module": "common",
+      "name": "VALIDATOR_RESULT_KEYS",
+      "category": "validator",
+      "expected_type": "set"
+    },
+    {
+      "module": "common",
+      "name": "VALIDATOR_CHILD_KEYS",
+      "category": "validator",
+      "expected_type": "set"
+    },
+    {
+      "module": "common",
+      "name": "POPULATION_COUNT_KEYS",
+      "category": "validator",
+      "expected_type": "set"
+    },
+    {
+      "module": "common",
+      "name": "INSPECTED_COUNT_KEYS",
+      "category": "validator",
+      "expected_type": "set"
+    },
+    {
+      "module": "common",
+      "name": "DETECTION_TERMS_RE",
+      "category": "task_classification",
+      "expected_type": "pattern",
+      "expected_pattern_contains": "validator"
+    },
+    {
+      "module": "common",
+      "name": "CORRECTION_TERMS_RE",
+      "category": "task_classification",
+      "expected_type": "pattern",
+      "expected_pattern_contains": "implementation"
+    },
+    {
+      "module": "failure",
+      "name": "LAST_STAGE_KEYS",
+      "category": "failure_surface",
+      "expected_type": "set",
+      "expected_value": ["last_completed_stage", "last_stage_reached", "last_successful_stage"]
+    },
+    {
+      "module": "failure",
+      "name": "FAILURE_STAGE_KEYS",
+      "category": "failure_surface",
+      "expected_type": "set",
+      "expected_value": ["failed_stage", "failure_stage", "failure_surface_stage"]
+    },
+    {
+      "module": "failure",
+      "name": "TERMINAL_CLASSIFICATION_KEYS",
+      "category": "failure_surface",
+      "expected_type": "set"
+    },
+    {
+      "module": "root_cause",
+      "name": "ROOT_CAUSE_PROVENANCE_KEYS",
+      "category": "root_cause",
+      "expected_type": "tuple"
+    },
+    {
+      "module": "vectors",
+      "name": "INDEPENDENT_PROVENANCE_VALUES",
+      "category": "evidence_provenance",
+      "expected_type": "set"
+    },
+    {
+      "module": "vectors",
+      "name": "ATTESTED_PROVENANCE_VALUES",
+      "category": "evidence_provenance",
+      "expected_type": "set"
+    },
+    {
+      "module": "domain",
+      "name": "FINGERPRINT_CLAIM_RE",
+      "category": "advice_freshness",
+      "expected_type": "pattern",
+      "expected_pattern_contains": "fingerprints?"
+    }
+  ]
+}

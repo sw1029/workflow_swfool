@@ -25,10 +25,11 @@ def write_jsonl(path: Path, values: list[dict[str, Any]]) -> None:
     path.write_text("".join(json.dumps(value, sort_keys=True) + "\n" for value in values), encoding="utf-8")
 
 
-def run_script(name: str, *args: object) -> subprocess.CompletedProcess[str]:
+def run_module(command: str, *args: object) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
-    return subprocess.run([sys.executable, str(SCRIPTS / name), *(str(arg) for arg in args)], cwd=REPO, env=env, text=True, capture_output=True, check=False)
+    env["PYTHONPATH"] = str(SCRIPTS)
+    return subprocess.run([sys.executable, "-m", "build_validation_set_with_agents", command, *(str(arg) for arg in args)], cwd=REPO, env=env, text=True, capture_output=True, check=False)
 
 
 def make_valid_set(root: Path) -> Path:
@@ -91,9 +92,9 @@ def make_valid_set(root: Path) -> Path:
             "results": [],
         },
     )
-    oracle_run = run_script("run_validation_oracles.py", "--root", root, "--set-root", set_root)
+    oracle_run = run_module("run-oracles", "--root", root, "--set-root", set_root)
     assert oracle_run.returncode == 0, oracle_run.stdout + oracle_run.stderr
-    finalized = run_script("finalize_validation_set.py", "--root", root, "--set-root", set_root)
+    finalized = run_module("finalize", "--root", root, "--set-root", set_root)
     assert finalized.returncode == 0, finalized.stdout + finalized.stderr
     return set_root
 
@@ -103,11 +104,11 @@ def codes(report: dict[str, Any]) -> set[str]:
 
 
 def freeze(root: Path, set_root: Path) -> subprocess.CompletedProcess[str]:
-    return run_script("freeze_validation_set_root.py", "--root", root, "--set-root", set_root)
+    return run_module("freeze", "--root", root, "--set-root", set_root)
 
 
 def verify(root: Path, set_root: Path) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
-    result = run_script("verify_validation_set_root.py", "--root", root, "--set-root", set_root)
+    result = run_module("verify-root", "--root", root, "--set-root", set_root)
     return result, json.loads(result.stdout)
 
 

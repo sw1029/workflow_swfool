@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import json
 import os
 import subprocess
@@ -16,20 +15,15 @@ import pytest
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
-MIGRATION_PATH = ROOT / "manage-task-state-index" / "scripts" / "task_state_migration.py"
-INDEX_PATH = ROOT / "manage-task-state-index" / "scripts" / "task_state_index.py"
+TASK_STATE_SCRIPTS = ROOT / "manage-task-state-index" / "scripts"
+AGENT_LOG_SCRIPTS = ROOT / "record-agent-work-log" / "scripts"
+for package_root in (TASK_STATE_SCRIPTS, AGENT_LOG_SCRIPTS):
+    if str(package_root) not in sys.path:
+        sys.path.insert(0, str(package_root))
 
 
-def load_module(path: Path, name: str) -> Any:
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-migration = load_module(MIGRATION_PATH, "task_state_migration_tests")
-task_index = load_module(INDEX_PATH, "task_state_index_migration_tests")
+from manage_task_state_index.migration import api as migration  # noqa: E402
+from manage_task_state_index import index as task_index  # noqa: E402
 
 
 def sha(data: bytes) -> str:
@@ -933,10 +927,15 @@ def test_migration_lock_excludes_standard_writer_process(tmp_path: Path) -> None
     fixture = make_workspace(tmp_path)
     apply_fixture(fixture, tmp_path)
     command = [
-        sys.executable, str(INDEX_PATH), "--root", str(fixture["root"]), "link",
+        sys.executable, "-m", "manage_task_state_index", "index",
+        "--root", str(fixture["root"]), "link",
         "--source-id", fixture["task_id"], "--link", f"related_to:{fixture['pack_id']}",
     ]
-    environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+    environment = {
+        **os.environ,
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": os.pathsep.join((str(TASK_STATE_SCRIPTS), str(AGENT_LOG_SCRIPTS))),
+    }
     with migration._index_lock(fixture["root"]):
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=environment)
         with pytest.raises(subprocess.TimeoutExpired):
@@ -995,9 +994,13 @@ def test_seal_less_malformed_prefix_still_fails_all_mutation_readers(tmp_path: P
 
 def test_cli_help_and_inspect(tmp_path: Path) -> None:
     fixture = make_workspace(tmp_path)
-    environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
-    help_result = subprocess.run([sys.executable, str(MIGRATION_PATH), "migrate", "--help"], capture_output=True, text=True, env=environment, check=False)
-    inspect_result = subprocess.run([sys.executable, str(MIGRATION_PATH), "--root", str(fixture["root"]), "inspect"], capture_output=True, text=True, env=environment, check=False)
+    environment = {
+        **os.environ,
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": str(TASK_STATE_SCRIPTS),
+    }
+    help_result = subprocess.run([sys.executable, "-m", "manage_task_state_index", "migrate", "migrate", "--help"], capture_output=True, text=True, env=environment, check=False)
+    inspect_result = subprocess.run([sys.executable, "-m", "manage_task_state_index", "migrate", "--root", str(fixture["root"]), "inspect"], capture_output=True, text=True, env=environment, check=False)
     assert help_result.returncode == 0
     assert inspect_result.returncode == 0
     assert json.loads(inspect_result.stdout)["mutation_performed"] is False

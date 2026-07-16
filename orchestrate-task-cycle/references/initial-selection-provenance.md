@@ -51,7 +51,7 @@ Create with a complete bounded pack:
 Run:
 
 ```bash
-python3 -B "${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/scripts/task_pack_queue.py" \
+python3 -B "${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/python3 -m orchestrate_task_cycle task-pack" \
   --root . apply-mutation --plan create-plan.json --render
 ```
 
@@ -114,7 +114,7 @@ Issue contemporaneous initial-selection authority. Set `issued_at` and `effectiv
 ```
 
 ```bash
-python3 -B "${CODEX_HOME:-$HOME/.codex}/skills/manage-agent-authority/scripts/authority_receipt.py" \
+PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/manage-agent-authority/scripts" python3 -B -m manage_agent_authority receipt \
   --root . issue --plan initial-authority-plan.json \
   --output .task/authority_receipts/authr-R.json
 ```
@@ -265,7 +265,7 @@ sha256sum /tmp/pack-P-creation.json
 Compute both canonical digests through the public helper instead of recreating its rules:
 
 ```bash
-PACK_TOOL="${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/scripts/task_pack_queue.py"
+PACK_TOOL="${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/python3 -m orchestrate_task_cycle task-pack"
 python3 -B - "$PACK_TOOL" /tmp/pack-P-creation.json <<'PY'
 import importlib.util
 import json

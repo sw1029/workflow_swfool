@@ -3,88 +3,28 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
-from types import ModuleType
 from typing import Any, Callable
 
 
 SKILLS_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_DIR = SKILLS_ROOT / "manage-task-state-index" / "scripts"
-MIGRATION_PATH = SCRIPT_DIR / "task_state_migration.py"
-INDEX_PATH = SCRIPT_DIR / "task_state_index.py"
-VERIFIER_PATH = SCRIPT_DIR / "task_state_migration_verifier.py"
+AGENT_LOG_SCRIPT_DIR = SKILLS_ROOT / "record-agent-work-log" / "scripts"
+for package_root in (SCRIPT_DIR, AGENT_LOG_SCRIPT_DIR):
+    if str(package_root) not in sys.path:
+        sys.path.insert(0, str(package_root))
 
 
-def _load_standalone_module(path: Path, name: str) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+from manage_task_state_index import index as task_index  # noqa: E402
+from manage_task_state_index.migration import api as migration  # noqa: E402
+from manage_task_state_index.verifier import cli as verifier  # noqa: E402
+from manage_task_state_index.verifier import evidence as verifier_evidence  # noqa: E402
 
-
-migration = _load_standalone_module(
-    MIGRATION_PATH, "task_state_migration_verifier_fixture_producer"
-)
-task_index = _load_standalone_module(
-    INDEX_PATH, "task_state_migration_verifier_fixture_index"
-)
-
-
-class _LazyVerifierModules:
-    """Load sibling verifier scripts lazily through explicit file specs."""
-
-    _module: ModuleType | None = None
-
-    def _load(self) -> ModuleType:
-        if self._module is not None:
-            return self._module
-        for name in (
-            "task_state_migration_verifier_core",
-            "task_state_migration_verifier_evidence",
-            "task_state_migration_verifier_recovery",
-            "task_state_migration_verifier_graph",
-            "task_state_migration_verifier",
-        ):
-            existing = sys.modules.get(name)
-            expected = SCRIPT_DIR / f"{name}.py"
-            if existing is not None and Path(existing.__file__).resolve() == expected:
-                module = existing
-            else:
-                spec = importlib.util.spec_from_file_location(name, expected)
-                assert spec is not None and spec.loader is not None
-                module = importlib.util.module_from_spec(spec)
-                sys.modules[name] = module
-                spec.loader.exec_module(module)
-            if name == "task_state_migration_verifier":
-                self._module = module
-        assert self._module is not None
-        return self._module
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._load(), name)
-
-
-verifier = _LazyVerifierModules()
-
-
-class _LazyVerifierSibling:
-    def __init__(self, module_name: str) -> None:
-        self.module_name = module_name
-
-    def __getattr__(self, name: str) -> Any:
-        verifier._load()
-        return getattr(sys.modules[self.module_name], name)
-
-
-verifier_evidence = _LazyVerifierSibling(
-    "task_state_migration_verifier_evidence"
-)
+__all__ = ["task_index", "verifier_evidence"]
 
 
 def sha(data: bytes) -> str:
@@ -578,7 +518,9 @@ def run_verifier_cli(
     return subprocess.run(
         [
             sys.executable,
-            str(VERIFIER_PATH),
+            "-m",
+            "manage_task_state_index",
+            "verify-migration",
             "--root",
             str(root),
             "--receipt",
@@ -591,5 +533,9 @@ def run_verifier_cli(
         capture_output=True,
         text=True,
         check=False,
-        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        env={
+            **os.environ,
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONPATH": os.pathsep.join((str(SCRIPT_DIR), str(AGENT_LOG_SCRIPT_DIR))),
+        },
     )

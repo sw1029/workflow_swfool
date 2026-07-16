@@ -50,9 +50,9 @@ Use stable IDs for all important artifacts:
 
 Use only the closed lifecycle vocabulary documented in [index-schema.md](references/index-schema.md). Keep `partially_resolved` active: it means evidence resolved part of the artifact while an explicit residual remains. Never collapse it to `resolved` because its text contains that substring.
 
-For an explicitly authorized malformed/legacy-ledger migration, read [legacy-migration.md](references/legacy-migration.md) and use `scripts/task_state_migration.py`. Keep repository-specific mappings outside the helper, preserve the source as a byte-identical sealed prefix, and require its committed receipt before normal mutation readers consume any quarantined prefix row. Review every observed token exactly: reject a mapping builder that uses prefix, substring, suffix, regex, or wildcard logic to decide lifecycle meaning even when its emitted JSON keys are exact tokens. Require `mapping_method: exact_token_review` and `pattern_inference_used: false`. Current migration plan, resolution-manifest, and receipt schema version 2 also requires lock-time safe task/pack anchor revalidation, exact original-token/reason preservation for mapped event/status/type values, correction ID/SHA bindings for every non-independent quarantine, a hash-bound final journal, and an immutable completion marker. Missing or tampered v2 bindings keep `scan|add|link|rebuild|audit` fail-closed.
+For an explicitly authorized malformed/legacy-ledger migration, read [legacy-migration.md](references/legacy-migration.md) and use `python3 -m manage_task_state_index migrate`. Keep repository-specific mappings outside the helper, preserve the source as a byte-identical sealed prefix, and require its committed receipt before normal mutation readers consume any quarantined prefix row. Review every observed token exactly: reject a mapping builder that uses prefix, substring, suffix, regex, or wildcard logic to decide lifecycle meaning even when its emitted JSON keys are exact tokens. Require `mapping_method: exact_token_review` and `pattern_inference_used: false`. Current migration plan, resolution-manifest, and receipt schema version 2 also requires lock-time safe task/pack anchor revalidation, exact original-token/reason preservation for mapped event/status/type values, correction ID/SHA bindings for every non-independent quarantine, a hash-bound final journal, and an immutable completion marker. Missing or tampered v2 bindings keep `scan|add|link|rebuild|audit` fail-closed.
 
-Use `scripts/task_state_migration_verifier.py` when a committed migration needs source-separated completion evidence. The verifier is read-only, does not import `task_state_migration.py` as truth, and requires a caller-owned exact mapping manifest outside every `.task/migrations` tree that is byte-identical to, but neither the same file nor a hard link to, the published snapshot. It independently recomputes the sealed graph and reports immutable migration-boundary task/pack IDs and evidence refs separately from legitimate current-tail task/pack IDs and evidence refs. Its recovery evidence is limited to externally hash-bound observations over synthetic or copied fixtures: bind every observation field into the verification graph, prove the exact phase-specific owned transition, require the live projection and protected task/pack artifacts to be unchanged except for the phase's exact authorized publication, and never use verification to apply, recover, or replay the live ledger. See [Independent verifier](references/legacy-migration.md#independent-verifier).
+Use `python3 -m manage_task_state_index verify-migration` when a committed migration needs source-separated completion evidence. The verifier is read-only, does not import the migration producer as truth, and requires a caller-owned exact mapping manifest outside every `.task/migrations` tree that is byte-identical to, but neither the same file nor a hard link to, the published snapshot. It independently recomputes the sealed graph and reports immutable migration-boundary task/pack IDs and evidence refs separately from legitimate current-tail task/pack IDs and evidence refs. Its recovery evidence is limited to externally hash-bound observations over synthetic or copied fixtures: bind every observation field into the verification graph, prove the exact phase-specific owned transition, require the live projection and protected task/pack artifacts to be unchanged except for the phase's exact authorized publication, and never use verification to apply, recover, or replay the live ledger. See [Independent verifier](references/legacy-migration.md#independent-verifier).
 
 Validation artifacts may also record a separate progress status such as `advanced`, `safety_only`, `no_progress`, or `regressed` in their title, links, or concise metadata. Do not treat progress status as a replacement for validation status.
 
@@ -67,7 +67,8 @@ For the complete event schema and link relationship names, read [index-schema.md
    - Prefer the bundled script:
 
      ```bash
-     python3 "${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts/task_state_index.py" --root . init
+     PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts:${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts" \
+     python3 -m manage_task_state_index index --root . init
      ```
 
 2. Discover current artifacts.
@@ -83,8 +84,10 @@ For the complete event schema and link relationship names, read [index-schema.md
    - When a caller restricts indexing to exact-path add/link, record that restriction in the created/updated artifact note and include the reason global scan/audit was skipped.
 
      ```bash
-     python3 "${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts/task_state_index.py" --root . scan
-     python3 "${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts/task_state_index.py" --root . scan --check
+     PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts:${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts" \
+     python3 -m manage_task_state_index index --root . scan
+     PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts:${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts" \
+     python3 -m manage_task_state_index index --root . scan --check
      ```
 
 3. Add or update a specific artifact when another workflow creates it.
@@ -93,7 +96,8 @@ For the complete event schema and link relationship names, read [index-schema.md
    - Before adding a timestamped log or miss artifact, check whether an existing indexed artifact has the same type, task parent, canonical result path/check path, status, and content digest. If so, reuse/link the existing artifact rather than creating duplicate lifecycle meaning.
 
      ```bash
-     python3 "${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts/task_state_index.py" --root . add \
+     PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts:${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts" \
+     python3 -m manage_task_state_index index --root . add \
        --type task \
        --path task.md \
        --status active \
@@ -109,7 +113,8 @@ For the complete event schema and link relationship names, read [index-schema.md
    - Use relationship names such as `derived_from`, `promoted_from_pack`, `pack_for_task`, `inserted_after`, `reordered_by`, `terminal_blocker_for`, `input_delta_for`, `consolidation_candidate_for`, `supersedes`, `produced`, `audit_for`, `run_for`, `miss_for`, `resolves`, `validates`, `issue_for`, `tracks_task`, `derived_from_issue`, `fixes_issue`, `closes_issue`, `resolved_by`, `worktree_for`, `branch_for`, `advice_for`, `incorporated_into`, `applied_by`, `rejected_by`, `superseded_by`, `conflicts_with_goal`, `conflicts_with_authority`, `contract_for`, `schema_for`, `module_contract_for`, `script_contract_for`, `depends_on`, `produces_schema`, `consumes_schema`, `compatible_with`, `breaks_contract`, and `supersedes_contract`.
 
      ```bash
-     python3 "${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts/task_state_index.py" --root . link \
+     PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts:${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts" \
+     python3 -m manage_task_state_index index --root . link \
        --source-id task-20260522-213000-example \
        --link produced:miss-20260522-214000-generalization-gap
      ```
@@ -133,13 +138,15 @@ For the complete event schema and link relationship names, read [index-schema.md
    - Use this command for a non-mutating audit:
 
      ```bash
-     python3 "${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts/task_state_index.py" --root . audit
+     PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts:${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts" \
+     python3 -m manage_task_state_index index --root . audit
      ```
 
    - Use this command when the audit itself should become a durable artifact:
 
      ```bash
-     python3 "${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts/task_state_index.py" --root . audit --write-report
+     PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts:${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts" \
+     python3 -m manage_task_state_index index --root . audit --write-report
      ```
 
    - Use `audit --summary-only --focus-path <path>` for cycle reports that need global counts and current-surface issues without dumping unrelated historical debt. The summary output is not a replacement for full audit evidence when deletion, issue closure, or completion depends on global consistency.
@@ -163,7 +170,7 @@ For the complete event schema and link relationship names, read [index-schema.md
 
 ## Script Commands
 
-Use `scripts/task_state_index.py` for deterministic updates:
+Use `python3 -m manage_task_state_index index` for deterministic updates:
 
 - `init`: create `.task/index.jsonl` if needed and rebuild `.task/index.md`.
 - `scan`: discover standard artifacts, append missing or changed index events, and publish the Markdown view only when its projection changes. Add `--dry-run` for a zero-write plan or `--check` for the same plan with CI-friendly `0`/`1` exit status.
@@ -172,9 +179,9 @@ Use `scripts/task_state_index.py` for deterministic updates:
 - `rebuild`: regenerate `.task/index.md` from `.task/index.jsonl`.
 - `audit`: inspect global ID consistency, broken links, duplicate active paths, stale digests, missing files, active task conflicts, and unindexed standard artifacts. Add `--write-report` to write `.task/id_audit/*.md` and index it as `audit-*`. Add `--summary-only --focus-path <path>` to emit compact counts and focused issues for report packets.
 
-Use `scripts/task_state_migration.py` only for the bounded `inspect` and `migrate plan|apply|validate|recover` transaction documented in [legacy-migration.md](references/legacy-migration.md). `plan` and `apply --dry-run` must leave canonical `.task` state unchanged. Never use migration as a general malformed-row ignore mode.
+Use `python3 -m manage_task_state_index migrate` only for the bounded `inspect` and `migrate plan|apply|validate|recover` transaction documented in [legacy-migration.md](references/legacy-migration.md). `plan` and `apply --dry-run` must leave canonical `.task` state unchanged. Never use migration as a general malformed-row ignore mode.
 
-Use `scripts/task_state_migration_verifier.py` only to verify a committed receipt with an external exact mapping manifest and caller-owned recovery expectation. It emits safe scalar, bounded opaque identity, evidence-ref, count, digest, and status evidence, with separate migration-boundary and current task/pack surfaces; failures expose only an allowlisted error code. A fixture recovery pass requires an exact, fully graph-bound pre-recovery observation and a phase-specific before/after transition; a path-name allowlist alone is not recovery ownership evidence. The verifier proves physical source separation, while the governing cycle must separately attest who selected the external expectation because equal bytes cannot prove human ownership. The verifier must not mutate the ledger, projection, transaction, task, pack, or local bytecode cache. Issue state and cycle-wide live-operation counts require external cycle evidence rather than relocated-fixture constants.
+Use `python3 -m manage_task_state_index verify-migration` only to verify a committed receipt with an external exact mapping manifest and caller-owned recovery expectation. It emits safe scalar, bounded opaque identity, evidence-ref, count, digest, and status evidence, with separate migration-boundary and current task/pack surfaces; failures expose only an allowlisted error code. A fixture recovery pass requires an exact, fully graph-bound pre-recovery observation and a phase-specific before/after transition; a path-name allowlist alone is not recovery ownership evidence. The verifier proves physical source separation, while the governing cycle must separately attest who selected the external expectation because equal bytes cannot prove human ownership. The verifier must not mutate the ledger, projection, transaction, task, pack, or local bytecode cache. Issue state and cycle-wide live-operation counts require external cycle evidence rather than relocated-fixture constants.
 
 All commands print JSON so the caller can capture IDs and changed paths.
 

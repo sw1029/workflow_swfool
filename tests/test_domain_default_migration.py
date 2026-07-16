@@ -1,40 +1,26 @@
 from __future__ import annotations
 
-import importlib.util
 import hashlib
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
-from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-LOOPBACK_SCRIPT = ROOT / "audit-cycle-loopback" / "scripts" / "anti_loop_gate_provider.py"
+LOOPBACK_SCRIPTS = ROOT / "audit-cycle-loopback" / "scripts"
+ORCHESTRATE_SCRIPTS = ROOT / "orchestrate-task-cycle" / "scripts"
 
 
-def load_module(path: Path, name: str) -> Any:
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+for package_root in (LOOPBACK_SCRIPTS, ORCHESTRATE_SCRIPTS):
+    if str(package_root) not in sys.path:
+        sys.path.insert(0, str(package_root))
 
-
-loopback = load_module(LOOPBACK_SCRIPT, "domain_default_loopback")
-progress_loop = load_module(
-    ROOT / "orchestrate-task-cycle" / "scripts" / "detect_progress_loop.py",
-    "domain_default_progress_loop",
-)
-output_delta = load_module(
-    ROOT / "orchestrate-task-cycle" / "scripts" / "output_delta_contract.py",
-    "domain_default_output_delta",
-)
-gt_conflict = load_module(
-    ROOT / "orchestrate-task-cycle" / "scripts" / "detect_gt_constraint_conflict.py",
-    "domain_default_gt_conflict",
-)
+import audit_cycle_loopback as loopback  # noqa: E402
+from orchestrate_task_cycle import detect_gt_constraint_conflict as gt_conflict  # noqa: E402
+from orchestrate_task_cycle import output_delta_contract as output_delta  # noqa: E402
+from orchestrate_task_cycle.progress import api as progress_loop  # noqa: E402
 
 
 LEGACY_METRIC_KEYS = {
@@ -50,7 +36,9 @@ def run_loopback(root: Path, *extra: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
             sys.executable,
-            str(LOOPBACK_SCRIPT),
+            "-m",
+            "audit_cycle_loopback",
+            "evaluate",
             "--root",
             str(root),
             "--cycle-id",
@@ -66,7 +54,20 @@ def run_loopback(root: Path, *extra: str) -> subprocess.CompletedProcess[str]:
         check=False,
         capture_output=True,
         text=True,
-        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        cwd=root,
+        env={
+            **os.environ,
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONPATH": os.pathsep.join(
+                item
+                for item in (
+                    str(LOOPBACK_SCRIPTS),
+                    str(ORCHESTRATE_SCRIPTS),
+                    os.environ.get("PYTHONPATH", ""),
+                )
+                if item
+            ),
+        },
     )
 
 

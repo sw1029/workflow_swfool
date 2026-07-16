@@ -9,7 +9,13 @@ description: "Normalize task acceptance criteria and demo evidence before govern
 
 Use this skill to turn an active `task.md` into a concise acceptance packet that code-writing and validation steps can follow.
 
-Use `scripts/acceptance_identity.py` to bind the final packet to the exact active task revision. The helper emits a deterministic `acceptance_id` plus `acceptance_provenance.source_task_id`, root-relative `source_task_path`, and SHA-256 `source_task_fingerprint`. It refuses a missing/empty task, task-ID mismatch, workspace path escape, semantically empty criteria, inconsistent status/blocker state, an unresolved satisfiability row presented as normalized acceptance, and a final packet without explicit criteria, blockers, status, and evidence paths.
+Use the `identity` module command to bind the final packet to the exact active task revision. The helper emits a deterministic `acceptance_id` plus `acceptance_provenance.source_task_id`, root-relative `source_task_path`, and SHA-256 `source_task_fingerprint`. It refuses a missing/empty task, task-ID mismatch, workspace path escape, semantically empty criteria, inconsistent status/blocker state, an unresolved satisfiability row presented as normalized acceptance, and a final packet without explicit criteria, blockers, status, and evidence paths.
+
+```bash
+SKILLS_ROOT="${CODEX_HOME:-$HOME/.codex}/skills"
+PYTHONPATH="$SKILLS_ROOT/normalize-acceptance-and-demo/scripts" \
+  python3 -m normalize_acceptance_and_demo identity [arguments]
+```
 
 Use the closed `acceptance_status` vocabulary `normalized | partial | blocked | needs_review`; acceptance normalization is not completion validation and therefore never emits `complete` or `passed`.
 
@@ -63,13 +69,13 @@ Do not hardcode proxy names, new-behavior definitions, sample thresholds, freshn
 22. When `unreachable_within_cycle=true` implies a long-run launch and the adapter/caller supplies `harvest_gate_inventory`, attach `harvest_contract_preflight` to the launch acceptance. Preserve non-degradable `lane_incompatible`, `scale_incompatible`, and `contract_conflict` findings. If any are present, require repair/mitigation before launch or explicit `harvest_risk_accepted=true`; do not silently consume launch acceptance.
 23. When acceptance creates or changes a validation predicate, floor, inclusion check, required output class, or producer directive, build criterion-bound satisfiability rows inside the existing `validation_predicate_contract`; do not add a separate gate.
    - Give each criterion and producer directive an opaque ID. Map every criterion to exactly one directive and preserve required/permitted output classes, required/guaranteed-non-empty output classes, required/allowed task mutation surfaces, freshness and producer-execution permission when fresh execution is required, body-movement requirement and permission when body movement is required, required/verifier-observable input classes, a non-empty satisfying execution path, and local repair routes for conflicts.
-   - Let `acceptance_identity.py` recompute `satisfiability_rows` with the closed `evaluation_status: pass | fail | not_evaluated`. Treat prohibited output, non-empty population that cannot be produced, forbidden required mutation, forbidden fresh producer execution, or forbidden required body movement as `fail`. Treat missing mappings, ambiguous directive binding, an unobservable required verifier input, or a missing execution path as `not_evaluated`.
+   - Let the `identity` command recompute `satisfiability_rows` with the closed `evaluation_status: pass | fail | not_evaluated`. Treat prohibited output, non-empty population that cannot be produced, forbidden required mutation, forbidden fresh producer execution, or forbidden required body movement as `fail`. Treat missing mappings, ambiguous directive binding, an unobservable required verifier input, or a missing execution path as `not_evaluated`.
    - Derive the existing `mutually_unsatisfiable_contract` boolean from failed rows; do not accept a caller-provided contradictory value. Preserve `unverifiable_acceptance_contract=true` when any row is `not_evaluated`.
    - A failed or not-evaluated row cannot coexist with `acceptance_status: normalized`. Keep a concrete blocker and repair route or residual scope. Green direct tests, empty fixtures, and report-only evidence do not repair the contract.
-   - For every failed row, require the uniquely bound producer directive to provide at least one non-empty `local_repair_routes` entry before emitting a final packet. A blocker label alone is not a repair route; let `acceptance_identity.py` reject that packet.
+   - For every failed row, require the uniquely bound producer directive to provide at least one non-empty `local_repair_routes` entry before emitting a final packet. A blocker label alone is not a repair route; let the `identity` command reject that packet.
    - Keep output-class meanings, field supply, thresholds, verifier mappings, and permitted mutation surfaces adapter- or caller-owned. When those mappings are unavailable, return `not_evaluated`; do not invent them.
 24. Mark unclear, missing, or unverifiable criteria as blockers or assumptions rather than silently widening scope.
-25. Before handoff, run `acceptance_identity.py --root . --task-id <active-task-id> --task-path task.md --packet-json <draft.json> --final --output .task/cycle/<cycle-id>/packets/acceptance.json`. Save a human-readable view as `acceptance.md` when useful, but treat the bound JSON as the result-contract and ledger source. A later task edit invalidates the fingerprint and requires renormalization.
+25. Before handoff, run `python3 -m normalize_acceptance_and_demo identity --root . --task-id <active-task-id> --task-path task.md --packet-json <draft.json> --final --output .task/cycle/<cycle-id>/packets/acceptance.json` under the package `PYTHONPATH`. Save a human-readable view as `acceptance.md` when useful, but treat the bound JSON as the result-contract and ledger source. A later task edit invalidates the fingerprint and requires renormalization.
 26. Pass the packet to `$task-md-agent-governance`, `$plan-validation-scope`, and `$build-validation-set-with-agents` when `acceptance_scenarios`, Part M harvest preflight, or comparison/adoption validation fixtures are needed.
 
 ## Guardrails

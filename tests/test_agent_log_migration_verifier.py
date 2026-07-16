@@ -23,7 +23,7 @@ from test_agent_log_migration import (
     writer_args,
 )
 
-import agent_log_migration_verifier as migration_verifier  # noqa: E402
+from record_agent_work_log.verifier import cli as migration_verifier  # noqa: E402
 
 
 def verify_migration(

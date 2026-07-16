@@ -1,0 +1,75 @@
+"""Public facade for goal-truth constraint conflict detection."""
+
+from .gt_constraint.analysis import (
+    analyze,
+    behavior_conflicts,
+    generalization_sources,
+    goal_truth_matches,
+    latest_user_override_evidence,
+    normalize_generalization_policy,
+    regex_matches,
+    relevant_task_context,
+    single_unit_generalization_conflicts,
+    task_forbidden_matches,
+)
+from .gt_constraint.cli import main
+from .gt_constraint.common import (
+    DEFAULT_ACTION_SPECS,
+    GT_FILES,
+    LATEST_USER_OVERRIDE_RE,
+    OVERRIDE_QUOTE_RE,
+    OVERRIDE_SOURCE_PATH_RE,
+    OVERRIDE_TIMESTAMP_RE,
+    TASK_CONTEXT_RE,
+    boolish,
+    collect_matches,
+    deep_get,
+    first_present,
+    int_value,
+    line_for_offset,
+    list_value,
+    normalize_action_specs,
+    now_iso,
+    read_json_arg,
+    read_text,
+    rel_path,
+    string_items,
+)
+
+__all__ = [
+    "DEFAULT_ACTION_SPECS",
+    "GT_FILES",
+    "LATEST_USER_OVERRIDE_RE",
+    "OVERRIDE_QUOTE_RE",
+    "OVERRIDE_SOURCE_PATH_RE",
+    "OVERRIDE_TIMESTAMP_RE",
+    "TASK_CONTEXT_RE",
+    "analyze",
+    "behavior_conflicts",
+    "boolish",
+    "collect_matches",
+    "deep_get",
+    "first_present",
+    "generalization_sources",
+    "goal_truth_matches",
+    "int_value",
+    "latest_user_override_evidence",
+    "line_for_offset",
+    "list_value",
+    "main",
+    "normalize_action_specs",
+    "normalize_generalization_policy",
+    "now_iso",
+    "read_json_arg",
+    "read_text",
+    "regex_matches",
+    "rel_path",
+    "relevant_task_context",
+    "single_unit_generalization_conflicts",
+    "string_items",
+    "task_forbidden_matches",
+]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

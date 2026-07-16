@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -8,8 +9,14 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "audit-session-governance" / "scripts" / "capture_projection.py"
-AUDITOR = ROOT / "audit-session-governance" / "scripts" / "session_audit.py"
+SCRIPTS = ROOT / "audit-session-governance" / "scripts"
+
+
+def module_env() -> dict[str, str]:
+    env = dict(os.environ)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PYTHONPATH"] = str(SCRIPTS)
+    return env
 
 
 def run_capture(
@@ -28,7 +35,8 @@ def run_capture(
     }
     payload.update(extra_payload or {})
     return subprocess.run(
-        [sys.executable, str(SCRIPT), "--root", str(root), "--tool", tool],
+        [sys.executable, "-m", "audit_session_governance", "capture", "--root", str(root), "--tool", tool],
+        env=module_env(),
         input=json.dumps(payload),
         text=True,
         capture_output=True,
@@ -132,7 +140,9 @@ def test_codex_capture_rebuilds_minimal_projection_without_raw_fallback(
     audited = subprocess.run(
         [
             sys.executable,
-            str(AUDITOR),
+            "-m",
+            "audit_session_governance",
+            "audit",
             "inspect",
             "--root",
             str(tmp_path),
@@ -141,6 +151,7 @@ def test_codex_capture_rebuilds_minimal_projection_without_raw_fallback(
             "--tool",
             "codex",
         ],
+        env=module_env(),
         text=True,
         capture_output=True,
         check=False,

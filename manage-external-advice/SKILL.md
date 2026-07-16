@@ -11,6 +11,16 @@ Use this skill to manage external advice as a separate non-GT workflow input und
 
 Read [advice-contract.md](references/advice-contract.md) when writing or auditing advice artifacts.
 
+## Module Invocation
+
+Run the registry from any working directory with both owning package roots because advice retirement delegates work-log publication to `$record-agent-work-log`:
+
+```bash
+SKILLS_ROOT="${CODEX_HOME:-$HOME/.codex}/skills"
+PYTHONPATH="$SKILLS_ROOT/manage-external-advice/scripts:$SKILLS_ROOT/record-agent-work-log/scripts" \
+python3 -m manage_external_advice registry --root . audit
+```
+
 ## Storage Model
 
 Use this workspace layout:
@@ -51,7 +61,7 @@ Do not infer blocker families, hook wiring, or verification success from advice 
 ## Workflow
 
 1. Intake raw advice.
-   - Use `scripts/advice_registry.py --root . intake --source <path.md> --title <title>` when a local Markdown file is provided.
+   - Use `python3 -m manage_external_advice registry --root . intake --source <path.md> --title <title>` with the module path above when a local Markdown file is provided.
    - When a root steering doc is named or detected by an `orphan_advice_not_intaken` finding, intake that root file directly and keep the normalized active artifact under `.agent_advice/active/`.
    - Use `--source -` only when the user provided text in the current turn and it is safe to store.
    - Preserve the raw document under `.agent_advice/raw/`.
@@ -73,7 +83,7 @@ Do not infer blocker families, hook wiring, or verification success from advice 
    - If the advice is too ambiguous to normalize, create a rejected or deferred record with the reason.
 
 3. Inject advice into workflow packets.
-   - Use `scripts/advice_registry.py --root . render-packet --format markdown|json`.
+   - Use `python3 -m manage_external_advice registry --root . render-packet --format markdown|json` with the module path above.
    - Pass active advice packet summaries to `$orchestrate-task-cycle`, `$task-doctor`, `$derive-improvement-task`, `$task-md-agent-governance`, `$validate-task-completion`, and `.agent_goal` management skills when they use goal context.
    - Require called skills to report `used_advice` separately from `used_goal_truth`.
    - When advice is used by a Git-backed workflow, classify the safe normalized active/applied advice file as an intentional workflow artifact for staging/commit unless a `local_only` reason is recorded.
@@ -86,8 +96,8 @@ Do not infer blocker families, hook wiring, or verification success from advice 
    - Use `reject` when a conflict makes the advice unsuitable; record the conflict source and keep the raw artifact.
 
 5. Audit and index.
-   - Run `scripts/advice_registry.py --root . audit` after intake, apply, or reject.
-   - When an adapter or loopback packet has a current output fingerprint, run `scripts/advice_registry.py --root . audit --current-output-fingerprint <fingerprint>` or `--current-output-fingerprint-json <packet.json>` so audit emits `advice_freshness_gate` and `advice_metrics_stale` findings.
+   - Run `python3 -m manage_external_advice registry --root . audit` with the module path above after intake, apply, or reject.
+   - When an adapter or loopback packet has a current output fingerprint, add `--current-output-fingerprint <fingerprint>` or `--current-output-fingerprint-json <packet.json>` so audit emits `advice_freshness_gate` and `advice_metrics_stale` findings.
    - When a root-cause ledger exists, audit also emits `re_advised_dead_hypothesis` and `dead_hypothesis_claims`; downstream workflows must refresh, defer, reject, or require a new input delta before treating that advice as untried root-cause provenance.
    - When a later cycle packet reports recurrence of a blocker-signature family targeted by an advice clause and that clause has `consumption_state != verified`, emit `unconsumed_advice_regression` debt, keep dependent judgment clauses marked `unenforced` when applicable, and preserve a derive backlog item to consume or retire the clause. This is visibility only: do not fail-close the underlying judgment and do not create a new detector/report/phase.
    - Treat root steering docs that remain outside `.agent_advice/active/` as warn-only orphan advice until they are intaken, deferred, rejected, or explicitly ignored with a recorded rationale.

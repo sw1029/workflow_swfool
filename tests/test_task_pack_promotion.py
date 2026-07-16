@@ -4,29 +4,12 @@ import argparse
 import base64
 import concurrent.futures
 import hashlib
-import importlib.util
 import json
 from pathlib import Path
 from typing import Any
 
 import pytest
-
-
-ROOT = Path(__file__).resolve().parents[1]
-
-
-def load_module(path: Path, name: str) -> Any:
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-task_pack_queue = load_module(
-    ROOT / "orchestrate-task-cycle" / "scripts" / "task_pack_queue.py",
-    "task_pack_queue_promotion",
-)
+from orchestrate_task_cycle.task_pack import api as task_pack_queue
 
 
 def pack_item(item_id: str, order: int) -> dict[str, Any]:

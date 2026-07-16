@@ -26,7 +26,7 @@ Use this contract for durable assets under `.validation/sets/<validation_set_id>
 ## Status and Consumption
 
 - Use `candidate_only`, `partial`, or `blocked` while items, oracles, splits, or leakage evidence are empty or unevaluated.
-- Use `complete` only after `finalize_validation_set.py` verifies at least one byte/hash-bound or authoritatively attested item, at least one executed passing oracle pair, exact counts, complete split membership, and a completed non-blocking leakage check.
+- Use `complete` only after the `finalize` module command verifies at least one byte/hash-bound or authoritatively attested item, at least one executed passing oracle pair, exact counts, complete split membership, and a completed non-blocking leakage check.
 - Let deterministic runners return `not_evaluated` when no runnable item-oracle pairs exist. Do not translate `not_evaluated` into pass/ok.
 - Treat versionless legacy manifests as readable migration inputs only. Report `migration_required`; do not consume or freeze them.
 
@@ -52,7 +52,7 @@ Require:
 - `split_manifest_path`
 - `leakage_report_path`
 
-Additionally require `finalization_record` when `validation_set_status` is `complete`. Generate it atomically with `finalize_validation_set.py`; direct status edits are invalid.
+Additionally require `finalization_record` when `validation_set_status` is `complete`. Generate it atomically with `python3 -m build_validation_set_with_agents finalize` under the skill package `PYTHONPATH`; direct status edits are invalid.
 
 Require JSON booleans, not strings or integers, for `not_gold` and every other boolean field. Require non-negative JSON integers, not numeric strings or booleans, for counts.
 

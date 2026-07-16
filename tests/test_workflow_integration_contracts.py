@@ -1,31 +1,18 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
 from pathlib import Path
 from typing import Any
 
 import pytest
-
-
-ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS = ROOT / "orchestrate-task-cycle" / "scripts"
-
-
-def load_module(path: Path, name: str) -> Any:
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-transition = load_module(SCRIPTS / "validate_cycle_transition.py", "integration_transition")
-packets = load_module(SCRIPTS / "render_subskill_packet.py", "integration_packets")
-contracts = load_module(SCRIPTS / "result_contract.py", "integration_contracts")
-visible = load_module(SCRIPTS / "visible_increment.py", "integration_visible")
-profile = load_module(SCRIPTS / "profile_cycle_efficiency.py", "integration_profile")
-ledger = load_module(SCRIPTS / "cycle_ledger.py", "integration_ledger")
+from orchestrate_task_cycle import (
+    cycle_ledger as ledger,
+    profile_cycle_efficiency as profile,
+    render_subskill_packet as packets,
+    validate_cycle_transition as transition,
+    visible_increment as visible,
+)
+from orchestrate_task_cycle.result_contract import api as contracts
 
 
 def codes(result: dict[str, Any]) -> set[str]:

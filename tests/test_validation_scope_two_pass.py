@@ -1,31 +1,15 @@
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
+import sys
 from typing import Any
 
 import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def load_module(path: Path, name: str) -> Any:
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-changed_surface = load_module(
-    ROOT / "plan-validation-scope" / "scripts" / "changed_surface.py",
-    "changed_surface_two_pass",
-)
-validation_scope = load_module(
-    ROOT / "plan-validation-scope" / "scripts" / "validation_scope.py",
-    "validation_scope_two_pass",
-)
+sys.path.insert(0, str(ROOT / "plan-validation-scope" / "scripts"))
+from plan_validation_scope import changed_surface, validation_scope  # noqa: E402
 
 
 def build(

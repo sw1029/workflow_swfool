@@ -145,7 +145,7 @@ Use these relationship names consistently:
 
 ## Global ID Audit
 
-Use `scripts/task_state_index.py --root . audit` for deterministic checks before completion, deletion, miss resolution, or `task.md` replacement. The audit checks:
+Use `PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts:${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts" python3 -m manage_task_state_index index --root . audit` for deterministic checks before completion, deletion, miss resolution, or `task.md` replacement. The audit checks:
 
 - ID prefix/type mismatches,
 - missing paths for non-deleted artifacts,

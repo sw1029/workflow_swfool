@@ -1,0 +1,132 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from .analysis_context import AnalysisContext, ContextBoundStage
+from .constants import FAILURE_CLASS_RE, PROVIDER_REQUEST_COUNT_RE
+from .evidence import (
+    classify_progress,
+    evidence_item_from_value,
+    extract_blockers,
+    extract_input_kinds,
+    has_positive_source_backed_signal,
+    progress_kind,
+    structured_evidence,
+    task_correction_class,
+)
+from .io_utils import read_text, rel_path
+from .registry import load_symbol_registry_state
+
+from record_agent_work_log.integrity import inspect_agent_log_store
+
+def candidate_files(root: Path) -> list[Path]:
+    groups = [root / ".task" / "validation", root / ".task" / "task_miss", root / ".issue"]
+    files: list[Path] = []
+    for group in groups:
+        if group.is_dir():
+            files.extend(path for path in group.rglob("*") if path.is_file() and path.suffix.lower() in {".md", ".json", ".jsonl"})
+    log_integrity, log_markdown, _ = inspect_agent_log_store(root)
+    if log_integrity["status"] in {"valid", "legacy_unverified"}:
+        files.extend(log_markdown)
+    if (root / "task.md").is_file():
+        files.append(root / "task.md")
+    return sorted(files, key=lambda path: path.stat().st_mtime if path.exists() else 0, reverse=True)
+
+class EvidenceCollectionStage(ContextBoundStage):
+    name = "evidence"
+
+    def run(self, context: AnalysisContext) -> None:
+        self.bind(context)
+        registry_state = load_symbol_registry_state(
+            self.root,
+            self.finalized_cycle_id,
+        )
+        self.state.clear()
+        self.state.update({"policy": self.policy, "registry_state": registry_state})
+        self.state["evidence"] = (
+            self._collect_evidence() if registry_state["status"] != "block" else []
+        )
+
+    def _collect_evidence(self) -> list[dict[str, Any]]:
+        registry = self.state["registry_state"]["rows"]
+        if self.recent is None:
+            return []
+        evidence: list[dict[str, Any]] = structured_evidence(
+            self.root,
+            self.recent,
+            self.policy,
+            registry,
+        )
+        seen_paths = {item.get("path") for item in evidence}
+        paths = candidate_files(self.root)
+        if self.recent is not None:
+            paths = paths[: self.recent]
+        for path in paths:
+            if rel_path(self.root, path) in seen_paths:
+                continue
+            evidence.append(self._fallback_evidence_item(path, registry))
+            if self.recent is not None and len(evidence) >= self.recent:
+                break
+        return evidence
+
+    def _fallback_evidence_item(self, path: Path, registry: dict[str, dict[str, Any]]) -> dict[str, Any]:
+        text = read_text(path)
+        progress = classify_progress(text)
+        blockers = extract_blockers(text)
+        lowered = text.lower()
+        pseudo_value: dict[str, Any] = {"evidence_family": "regex_text_fallback"}
+        if blockers:
+            pseudo_value["blocker_taxonomy"] = blockers[:3]
+        if "produced_domain_delta=false" in lowered:
+            pseudo_value["produced_domain_delta"] = False
+        if "produced_domain_delta=true" in lowered:
+            pseudo_value["produced_domain_delta"] = True
+        if "metadata-only" in lowered or "metadata_only" in lowered:
+            pseudo_value["metadata_only"] = True
+        if request_match := PROVIDER_REQUEST_COUNT_RE.search(text):
+            pseudo_value["provider_request_count"] = int(request_match.group(1))
+        if failure_match := FAILURE_CLASS_RE.search(text):
+            pseudo_value["failure_class"] = failure_match.group(1).lower()
+        if "authority_allows_retry=true" in lowered or "provider_retry_allowed=true" in lowered:
+            pseudo_value["authority_allows_retry"] = True
+        attempted = self._fallback_mitigations(lowered)
+        if attempted:
+            pseudo_value["mitigations_attempted"] = attempted
+        item = evidence_item_from_value(
+            self.root,
+            path,
+            "regex_text_fallback",
+            "low",
+            pseudo_value,
+            progress,
+            blockers[:5],
+            registry,
+            self.policy,
+        )
+        fallback_kind = progress_kind(pseudo_value, progress, lowered)
+        if not (item.get("output_delta_gate") or {}).get("observed_override_applied") and fallback_kind:
+            item["progress_kind"] = fallback_kind
+        item["new_input_kinds"] = extract_input_kinds(text)
+        item["positive_input_delta_required"] = "positive_input_delta_required" in lowered or "positive input delta" in lowered
+        item["metadata_only"] = bool((item.get("output_delta_gate") or {}).get("metadata_only")) or item.get("progress_kind") == "governance_only"
+        item["task_correction_class"] = task_correction_class(
+            pseudo_value,
+            item.get("output_delta_gate") or {},
+            item.get("coverage_quality_delta_gate") or {},
+            item.get("provider_scale_dispatch_gate") or {},
+            lowered,
+            self.policy,
+        )
+        item["detection_only"] = item["task_correction_class"] == "detection" and item.get("progress_kind") != "goal_productive"
+        item["has_no_live_language"] = any(term in lowered for term in ("no-live", "fail-closed", "non-dispatchable", "safety_only"))
+        item["has_source_backed_language"] = has_positive_source_backed_signal(lowered)
+        return item
+
+    def _fallback_mitigations(self, lowered: str) -> list[str]:
+        # Free-text mitigation vocabularies are adapter policy, not global truth.
+        return []
+
+
+class EvidenceCollectionMixin(EvidenceCollectionStage):
+    """Compatibility name for the evidence stage strategy."""

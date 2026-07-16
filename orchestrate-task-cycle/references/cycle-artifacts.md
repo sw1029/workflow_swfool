@@ -193,7 +193,7 @@ Stop-hook capture must not repair workflow, source, task, acceptance, or goal ar
 
 ## Result Contracts
 
-Use `$validate-subskill-result-contract` or `scripts/result_contract.py` before advancing major stages.
+Use `$validate-subskill-result-contract` or `python3 -m orchestrate_task_cycle result-contract` before advancing major stages.
 
 - Default mode is `warn`.
 - Use `block` mode for final report fields, running execution details, issue closure, candidate deletion, or commit creation gates.

@@ -13,7 +13,9 @@ workflow phase or positive completion/progress authority.
 Configure an optional Stop hook to pass its JSON object on stdin and invoke:
 
 ```bash
-python3 scripts/capture_projection.py \
+SKILLS_ROOT="${CODEX_HOME:-$HOME/.codex}/skills"
+PYTHONPATH="$SKILLS_ROOT/audit-session-governance/scripts" \
+python3 -m audit_session_governance capture \
   --root /absolute/path/to/repo --tool codex
 ```
 
@@ -41,7 +43,8 @@ any index removal as a separate, explicitly reviewed operation.
 2. Run:
 
    ```bash
-   python3 scripts/session_audit.py inspect \
+   PYTHONPATH="$SKILLS_ROOT/audit-session-governance/scripts" \
+   python3 -m audit_session_governance audit inspect \
      --root /path/to/repo --source logs/codex/session.jsonl --tool codex
    ```
 
@@ -56,9 +59,11 @@ packet or fall back to raw transcript storage.
 ## Validate and rebuild
 
 ```bash
-python3 scripts/session_audit.py validate \
+PYTHONPATH="$SKILLS_ROOT/audit-session-governance/scripts" \
+python3 -m audit_session_governance audit validate \
   --root /path/to/repo --packet .task/session_audit/audit-....json
-python3 scripts/session_audit.py rebuild-index --root /path/to/repo
+PYTHONPATH="$SKILLS_ROOT/audit-session-governance/scripts" \
+python3 -m audit_session_governance audit rebuild-index --root /path/to/repo
 ```
 
 `rebuild-index` is the explicit/manual path. For unattended reconstruction, first
@@ -66,7 +71,8 @@ resolve the tracked `audit-index-repair` mode with non-default caller/user/autho
 activation, save that body-free resolution inside the repository, then run:
 
 ```bash
-python3 scripts/session_audit.py auto-rebuild-index \
+PYTHONPATH="$SKILLS_ROOT/audit-session-governance/scripts:$SKILLS_ROOT/orchestrate-task-cycle/scripts" \
+python3 -m audit_session_governance audit auto-rebuild-index \
   --root /path/to/repo --mode-resolution .task/mode-resolution.json
 ```
 
@@ -91,6 +97,5 @@ validation.
 - Never let a packet self-authorize a close gate or semantic repair.
 
 Read [the contract](references/session-observation-contract.md) before integrating a
-packet. Use [`scripts/capture_projection.py`](scripts/capture_projection.py) for
-Stop-hook projection and [`scripts/session_audit.py`](scripts/session_audit.py) for
+packet. Use the package's `capture` command for Stop-hook projection and `audit` for
 inspection, validation, and index reconstruction.

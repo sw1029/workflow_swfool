@@ -9,7 +9,7 @@ description: "Render a human-readable task-cycle dashboard from ledger, validati
 
 Use this skill to summarize a cycle's current state for handoff and final reporting. The dashboard is workflow state, not a validation verdict.
 
-Use `${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/scripts/render_cycle_dashboard.py` when possible. The default output remains Korean Markdown; use `--format json` or `--result-output <path>` to emit the directly validatable dashboard result contract.
+Use `PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/scripts" python3 -m orchestrate_task_cycle dashboard` when possible. The default output remains Korean Markdown; use `--format json` or `--result-output <path>` to emit the directly validatable dashboard result contract.
 
 ## Domain Adapter Contract
 

@@ -24,7 +24,7 @@ Before any terminal/user-escalation recommendation, classify every residual as `
 Preserve an existing required structure-repair lineage even when the debt predates the current task. An outer packet cannot override `refactor_effect_required`; only adapter-scoped structure high-water movement or explicit residual/descope handling clears it.
 
 1. Select the exact caller artifact before discovery. Pass its opaque id, class, SHA-256, production lane, path/store reference, and discovery basis with `--artifact-ref-json`; explicit `--artifact-path` values take precedence over discovered candidates. Keep conflicting or identity-incomplete discovery advisory and do not let it drive a gate decision. When supplied, collect only the trusted-collector session-audit projection and any separate comparator receipt; do not load transcript text into the loopback packet or registry.
-2. Run `scripts/anti_loop_gate_provider.py` with the cycle id, artifact family, semantic signature, suffix-normalized root key when known, provider request count, exact artifact reference, and artifact path. Pass `--finalized-cycle-id <cycle-id>` when recurrence state comes from another cycle. Load that cycle only through `cycle_ledger.load_current_finalized_state`; reject malformed, stale, or hash-mismatched finalizations and use legacy flat files only when no canonical pointer exists. When available, also pass loop-detection or portfolio gates with `--gate-state-json`, recent progress items with `--recent-progress-json`, strict runner validation with `--runner-validation-json`, the output-delta packet with `--output-delta-json`, and changed-file evidence with `--changed-file` or `--changed-files-json` so verifier-source coupling can be evaluated.
+2. Run `python3 -m audit_cycle_loopback evaluate` with both the loopback and orchestration script roots on `PYTHONPATH`, plus the cycle id, artifact family, semantic signature, suffix-normalized root key when known, provider request count, exact artifact reference, and artifact path. Pass `--finalized-cycle-id <cycle-id>` when recurrence state comes from another cycle. Load that cycle only through the public `orchestrate_task_cycle.load_current_finalized_state` adapter; reject malformed, stale, or hash-mismatched finalizations and use legacy flat files only when no canonical pointer exists. When available, also pass loop-detection or portfolio gates with `--gate-state-json`, recent progress items with `--recent-progress-json`, strict runner validation with `--runner-validation-json`, the output-delta packet with `--output-delta-json`, and changed-file evidence with `--changed-file` or `--changed-files-json` so verifier-source coupling can be evaluated.
    - Pass stable oracle/check identities with `--measurement-check-id` or `--measurement-check-ids-json` when the cycle introduces or first exercises a validator, oracle, metric, or reconstruction check.
    - Pass `--measurement-frontier` for first-observed frontiers such as `frontier_a`, `coverage_axis_b`, `class_axis_c`, or another opaque adapter-owned frontier id.
    - Pass `--blocker-signature` and `--blocker-rung` when qualitative review, loop detection, or a task pack identifies the current blocker and capability-ladder rung.
@@ -131,7 +131,9 @@ Use conservative missing-policy handling:
 ## Producer Command
 
 ```bash
-python3 "${CODEX_HOME:-$HOME/.codex}/skills/audit-cycle-loopback/scripts/anti_loop_gate_provider.py" \
+SKILLS_ROOT="${CODEX_HOME:-$HOME/.codex}/skills"
+PYTHONPATH="$SKILLS_ROOT/audit-cycle-loopback/scripts:$SKILLS_ROOT/orchestrate-task-cycle/scripts" \
+python3 -m audit_cycle_loopback evaluate \
   --root . \
   --cycle-id cycle-YYYYMMDD-HHMMSS \
   --finalized-cycle-id cycle-prior \

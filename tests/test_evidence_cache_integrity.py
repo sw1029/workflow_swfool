@@ -1,34 +1,19 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
 
 import pytest
+from orchestrate_task_cycle import evidence_cache
 
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def load_module(path: Path, name: str) -> Any:
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-evidence_cache = load_module(
-    ROOT / "orchestrate-task-cycle" / "scripts" / "evidence_cache.py",
-    "evidence_cache_integrity",
-)
 
 
 def args_for(
@@ -95,12 +80,18 @@ def test_relative_custom_cache_path_is_root_relative(tmp_path: Path) -> None:
 
 def test_cli_store_and_check_use_root_relative_custom_cache(tmp_path: Path) -> None:
     create_source_and_evidence(tmp_path)
-    script = ROOT / "orchestrate-task-cycle" / "scripts" / "evidence_cache.py"
-    environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+    scripts = ROOT / "orchestrate-task-cycle" / "scripts"
+    environment = {
+        **os.environ,
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": str(scripts),
+    }
     common = [
         sys.executable,
         "-B",
-        str(script),
+        "-m",
+        "orchestrate_task_cycle",
+        "evidence-cache",
         "--root",
         str(tmp_path),
         "--command",
@@ -112,7 +103,9 @@ def test_cli_store_and_check_use_root_relative_custom_cache(tmp_path: Path) -> N
         [
             sys.executable,
             "-B",
-            str(script),
+            "-m",
+            "orchestrate_task_cycle",
+            "evidence-cache",
             "store",
             "--root",
             str(tmp_path),
@@ -137,7 +130,7 @@ def test_cli_store_and_check_use_root_relative_custom_cache(tmp_path: Path) -> N
     assert Path(stored_json["cache_path"]) == tmp_path / "var" / "cache.jsonl"
 
     checked = subprocess.run(
-        [common[0], common[1], common[2], "check", *common[3:], "--cache", "var/cache.jsonl"],
+        [*common[:5], "check", *common[5:], "--cache", "var/cache.jsonl"],
         cwd=tmp_path.parent,
         env=environment,
         check=True,

@@ -8,17 +8,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_DIR = ROOT / "manage-task-state-index" / "scripts"
-PACKAGE_DIR = SCRIPT_DIR / "task_state_lib"
+PACKAGE_DIR = SCRIPT_DIR / "manage_task_state_index"
+STATE_DIR = PACKAGE_DIR / "state"
+MIGRATION_DIR = PACKAGE_DIR / "migration"
 
 
 def _python_files() -> list[Path]:
-    return sorted(PACKAGE_DIR.rglob("*.py"))
+    return sorted((*STATE_DIR.rglob("*.py"), *MIGRATION_DIR.rglob("*.py")))
 
 
 def test_task_state_facades_and_modules_stay_below_hard_size_budgets() -> None:
     paths = [
-        SCRIPT_DIR / "task_state_index.py",
-        SCRIPT_DIR / "task_state_migration.py",
+        PACKAGE_DIR / "index.py",
         *_python_files(),
     ]
     oversized_files: dict[str, int] = {}
@@ -54,7 +55,8 @@ def test_task_state_package_imports_without_facade_bootstrap() -> None:
     code = (
         "import sys; "
         f"sys.path.insert(0, {str(SCRIPT_DIR)!r}); "
-        "import task_state_lib.artifacts, task_state_lib.scan_service"
+        f"sys.path.insert(0, {str(ROOT / 'record-agent-work-log' / 'scripts')!r}); "
+        "import manage_task_state_index.state.artifacts, manage_task_state_index.state.scan_service"
     )
     completed = subprocess.run(
         [sys.executable, "-I", "-c", code],

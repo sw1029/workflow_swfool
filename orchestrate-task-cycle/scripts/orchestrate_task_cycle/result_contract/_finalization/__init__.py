@@ -1,0 +1,1 @@
+"""Internal finalization contract components."""

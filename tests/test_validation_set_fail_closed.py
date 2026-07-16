@@ -26,11 +26,12 @@ def write_jsonl(path: Path, values: list[dict[str, Any]]) -> None:
     path.write_text("".join(json.dumps(value, sort_keys=True) + "\n" for value in values), encoding="utf-8")
 
 
-def run_script(name: str, *args: object) -> subprocess.CompletedProcess[str]:
+def run_module(command: str, *args: object) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PYTHONPATH"] = str(SCRIPTS)
     return subprocess.run(
-        [sys.executable, str(SCRIPTS / name), *(str(arg) for arg in args)],
+        [sys.executable, "-m", "build_validation_set_with_agents", command, *(str(arg) for arg in args)],
         cwd=REPO,
         env=env,
         text=True,
@@ -134,16 +135,16 @@ def make_set(root: Path, *, status: str = "complete", items: list[dict[str, Any]
     )
     write_json(set_root / "validation_set_manifest.json", manifest)
     if status == "complete" and default_items:
-        oracle_run = run_script("run_validation_oracles.py", "--root", root, "--set-root", set_root)
+        oracle_run = run_module("run-oracles", "--root", root, "--set-root", set_root)
         assert oracle_run.returncode == 0, oracle_run.stdout + oracle_run.stderr
-        finalized = run_script("finalize_validation_set.py", "--root", root, "--set-root", set_root)
+        finalized = run_module("finalize", "--root", root, "--set-root", set_root)
         assert finalized.returncode == 0, finalized.stdout + finalized.stderr
         manifest = json.loads((set_root / "validation_set_manifest.json").read_text(encoding="utf-8"))
     return set_root, manifest
 
 
 def validate(root: Path, set_root: Path) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
-    result = run_script("validate_validation_set.py", "--root", root, "--set-root", set_root)
+    result = run_module("validate", "--root", root, "--set-root", set_root)
     return result, json.loads(result.stdout)
 
 
@@ -175,7 +176,7 @@ def test_empty_complete_set_is_blocked_but_empty_candidate_is_explicit(tmp_path:
 
 
 def test_empty_packager_output_remains_a_frozen_candidate_not_consumable_evidence(tmp_path: Path) -> None:
-    built = run_script("build_validation_set.py", "--root", tmp_path, "--set-id", "empty-candidate")
+    built = run_module("build", "--root", tmp_path, "--set-id", "empty-candidate")
     assert built.returncode == 0, built.stdout + built.stderr
     build_report = json.loads(built.stdout)
     assert build_report["status"] == "candidate_only"
@@ -185,9 +186,9 @@ def test_empty_packager_output_remains_a_frozen_candidate_not_consumable_evidenc
     assert result.returncode == 0
     assert report["status"] == "warn"
     assert report["readiness"] == "candidate"
-    frozen = run_script("freeze_validation_set_root.py", "--root", tmp_path, "--set-root", set_root)
+    frozen = run_module("freeze", "--root", tmp_path, "--set-root", set_root)
     assert frozen.returncode == 0, frozen.stdout + frozen.stderr
-    verified = run_script("verify_validation_set_root.py", "--root", tmp_path, "--set-root", set_root)
+    verified = run_module("verify-root", "--root", tmp_path, "--set-root", set_root)
     verify_report = json.loads(verified.stdout)
     assert verified.returncode == 0
     assert verify_report["status"] == "verified"
@@ -203,13 +204,13 @@ def test_empty_oracle_and_leakage_runs_never_pass_or_report_ok(tmp_path: Path) -
     write_jsonl(labels, [])
     write_json(oracle_manifest, {"oracles": []})
 
-    oracle_result = run_script("run_validation_oracles.py", "--items", items, "--oracle-manifest", oracle_manifest)
+    oracle_result = run_module("run-oracles", "--items", items, "--oracle-manifest", oracle_manifest)
     oracle_report = json.loads(oracle_result.stdout)
     assert oracle_result.returncode == 3
     assert oracle_report["status"] == "not_evaluated"
     assert oracle_report["execution_status"] == "not_evaluated"
 
-    leakage_result = run_script("leakage_check.py", "--items", items, "--labels", labels)
+    leakage_result = run_module("leakage", "--items", items, "--labels", labels)
     leakage_report = json.loads(leakage_result.stdout)
     assert leakage_result.returncode == 3
     assert leakage_report["status"] == "not_evaluated"
@@ -221,7 +222,7 @@ def test_labels_without_items_block_leakage_instead_of_becoming_not_evaluated(tm
     labels = tmp_path / "labels.jsonl"
     write_jsonl(items, [])
     write_jsonl(labels, [{"label_id": "label-1", "item_id": "missing"}])
-    result = run_script("leakage_check.py", "--items", items, "--labels", labels)
+    result = run_module("leakage", "--items", items, "--labels", labels)
     report = json.loads(result.stdout)
     assert result.returncode == 2
     assert report["status"] == "block"
@@ -357,9 +358,9 @@ def test_gold_requires_concrete_human_or_authoritative_oracle_evidence(tmp_path:
     oracle_manifest["oracles"][0].update({"authoritative": True, "evidence_paths": ["evidence/oracle-run.json"]})
     write_json(set_root / "oracle_manifest.json", oracle_manifest)
     write_json(set_root / "validation_set_manifest.json", manifest)
-    oracle_run = run_script("run_validation_oracles.py", "--root", tmp_path / "valid", "--set-root", set_root)
+    oracle_run = run_module("run-oracles", "--root", tmp_path / "valid", "--set-root", set_root)
     assert oracle_run.returncode == 0, oracle_run.stdout + oracle_run.stderr
-    finalized = run_script("finalize_validation_set.py", "--root", tmp_path / "valid", "--set-root", set_root)
+    finalized = run_module("finalize", "--root", tmp_path / "valid", "--set-root", set_root)
     assert finalized.returncode == 0, finalized.stdout + finalized.stderr
     result, report = validate(tmp_path / "valid", set_root)
     assert result.returncode == 0, result.stdout + result.stderr

@@ -24,7 +24,7 @@ Inspect only the ID traceability layer and report:
 2. Missing links that should connect task, candidate, issue, miss, log, run, audit, validation, goal, interview, or environment artifacts.
 3. Lifecycle inconsistencies such as active/superseded/deleted/resolved conflicts.
 4. Any ID issue that should block completion, deletion, issue close/archive, or miss cleanup.
-5. Concrete `task_state_index.py add` or `link` commands the main agent could run.
+5. Concrete `python3 -m manage_task_state_index index ... add|link` commands the main agent could run.
 
 Keep findings concise and classify severity as high, medium, or low.
 ```

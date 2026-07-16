@@ -60,7 +60,7 @@ When task-state IDs are available, link the run evidence and log entry through `
    - If a process is long-running, monitor it until it completes, fails, reaches the authorized startup/heartbeat evidence threshold, or the user explicitly asks to leave it running.
    - When leaving an authorized process running, capture the PID, process/session/job ID when available, log file path, current output tail or heartbeat, checkpoint/artifact path if any, monitor command, stop command, and next recommended check.
    - If execution fails, do not hide the failure. Capture the error and stop unless the user requested retries or a fallback.
-   - When execution fails with a nonzero exit, traceback, RuntimeError, or HTTP/provider-style error, run `scripts/safe_failure_autopsy.py` on captured stdout/stderr or bounded log files when available. Include only scalar diagnostics such as `error_type`, `exception_class`, `traceback_last_frame`, `http_status`, `missing_env_key_names`, `provider_request_count`, `provider_status`, `failure_class`, `provider_response_empty`, `provider_response_parse_failed`, `classification`, `alternative_evidence_source`, `gate_selfcheck`, `mitigations_attempted`, and `mitigations_unavailable`; do not persist raw source, prompt, provider, generated, stdout/stderr body, credential value, token, or secret-bearing payloads.
+   - When execution fails with a nonzero exit, traceback, RuntimeError, or HTTP/provider-style error, run the `failure-autopsy` module command on captured stdout/stderr or bounded log files when available. Include only scalar diagnostics such as `error_type`, `exception_class`, `traceback_last_frame`, `http_status`, `missing_env_key_names`, `provider_request_count`, `provider_status`, `failure_class`, `provider_response_empty`, `provider_response_parse_failed`, `classification`, `alternative_evidence_source`, `gate_selfcheck`, `mitigations_attempted`, and `mitigations_unavailable`; do not persist raw source, prompt, provider, generated, stdout/stderr body, credential value, token, or secret-bearing payloads.
    - For every failed run, include `last_successful_stage` and an adapter/caller `execution_stage_ladder` when available. Use `execution_stage_ladder(**context)` from the domain adapter or pass `--execution-stage-ladder-json`; the autopsy derives `failure_surface_stage` as the next ladder rung after `last_successful_stage`. After the failure, include safe scalar/enum diagnostics with `--post-failure-diagnostics-json` or explicitly emit `diagnostics_unavailable=true` with a reason. A no-body policy still permits bounded scalar fields such as counts, enum labels, stage names, and status codes; it does not permit leaving the autopsy opaque when those fields are available.
    - For failed runs, include adapter/caller `runtime_config_echo` when available. Use only scalar/enum effective settings, `config_origin: cli|config_file|code_default|backend_default`, and derived `config_overrides`; never store prompt bodies, source text, provider payloads, credentials, secrets, or raw logs. A `code_default` override that plausibly caused the failure should be preserved as self-inflicted gate/root-cause routing evidence.
    - After producing safe output artifacts, classify execution disposition with adapter `run_disposition(safety_violations, quality_vector, **context)` when available. Record `failed_closed` for safety-contract violations and discard unsafe outputs; record `candidate_degraded` for quality misses and preserve safe scalar artifacts with degradation reasons and verification flags, without promoting them as canonical success; record `candidate_written` only when the run met the output/write criteria. If the hook exists but required safety/quality scalars are missing, record `disposition_unclassified` as warning evidence.
@@ -124,7 +124,9 @@ When task-state IDs are available, link the run evidence and log entry through `
 After execution, call the `$record-agent-work-log` writer script in the current workspace:
 
 ```bash
-python3 "${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts/write_agent_log.py" \
+SKILLS_ROOT="${CODEX_HOME:-$HOME/.codex}/skills"
+PYTHONPATH="$SKILLS_ROOT/record-agent-work-log/scripts" \
+python3 -m record_agent_work_log write \
   --root . \
   --title "run task code" \
   --status completed \
@@ -142,7 +144,9 @@ Choose `--status completed|partial|blocked|failed|informational` from the factua
 For failed pre-execution gate runs with a safe gate artifact, add the bounded gate artifact and repository-owned confirmation when known:
 
 ```bash
-python3 "${CODEX_HOME:-$HOME/.codex}/skills/run-task-code-and-log/scripts/safe_failure_autopsy.py" \
+SKILLS_ROOT="${CODEX_HOME:-$HOME/.codex}/skills"
+PYTHONPATH="$SKILLS_ROOT/run-task-code-and-log/scripts" \
+python3 -m run_task_code_and_log failure-autopsy \
   --stderr-path path/to/stderr.log \
   --exit-code 1 \
   --execution-stage-ladder-json .task/cycle/cycle-YYYYMMDD-HHMMSS/packets/execution_stage_ladder.json \

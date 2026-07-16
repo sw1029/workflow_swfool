@@ -9,7 +9,7 @@ description: "Monitor long-running task executions recorded by `$run-task-code-a
 
 Use this skill to keep long-running execution state explicit while preserving the rule that `running` is not `success`.
 
-Use `${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/scripts/monitor_running_execution.py` for deterministic checks.
+Use `PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/scripts" python3 -m orchestrate_task_cycle monitor` for deterministic checks.
 
 ## Workflow
 
