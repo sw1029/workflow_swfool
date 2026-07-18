@@ -5,15 +5,19 @@ from typing import Any
 
 from .canonical import object_sha256
 from .canonical import parse_time
+from .execution_results import validate_execution_result
+from .execution_results import validate_pre_commit_verification
 from .projection_contracts import AUTHORIZATION_ROOT
 from .projection_contracts import RELEASE_RECEIPT_KEYS
 from .projection_contracts import STATE_ROOT
 from .projection_contracts import USE_RECEIPT_KEYS
+from .projection_contracts import TYPED_USE_RECEIPT_KEYS
 from .projection_contracts import closed
 from .projection_contracts import identifier
 from .projection_io import changes_by_ref
 from .projection_io import expected_path
 from .projection_io import intent_changes
+from .projection_io import load_bound_json
 from .projection_io import load_grant_artifact
 from .projection_io import validate_grant_state
 from .projection_io import validate_reservation_state
@@ -21,10 +25,44 @@ from .projection_io import verify_file_binding
 from .projection_reservations import load_bound_reservation
 
 
+def _validate_typed_use_receipt(
+    root: Path,
+    receipt: dict[str, Any],
+    reservation: dict[str, Any],
+    reservation_binding: dict[str, str],
+) -> None:
+    decision, _, _ = load_bound_json(
+        root, reservation["decision"], "use receipt.decision"
+    )
+    validate_pre_commit_verification(
+        root,
+        reservation,
+        reservation_binding,
+        receipt["pre_commit_verification"],
+        expected_version=0,
+        require_current_state=False,
+    )
+    result = validate_execution_result(
+        root,
+        receipt["execution_result"],
+        reservation,
+        reservation_binding,
+        receipt["pre_commit_verification"],
+        decision["request"]["subject"],
+    )
+    if result["owner_result"] != receipt["owner_execution_result"]:
+        raise SystemExit("Authority use receipt owner result binding is invalid.")
+
+
 def validate_use_receipt(
     root: Path, artifact: dict[str, Any], path: Path
 ) -> list[dict[str, Any]]:
-    receipt = closed(artifact, USE_RECEIPT_KEYS, "authority use receipt")
+    typed = set(artifact) == TYPED_USE_RECEIPT_KEYS
+    receipt = closed(
+        artifact,
+        TYPED_USE_RECEIPT_KEYS if typed else USE_RECEIPT_KEYS,
+        "authority use receipt",
+    )
     if (
         receipt["schema_version"] != 2
         or receipt["artifact_kind"] != "authority_use_receipt"
@@ -49,9 +87,15 @@ def validate_use_receipt(
         raise SystemExit(
             "Authority use receipt ID is not deterministic for its binding."
         )
-    verify_file_binding(
-        root, receipt["execution_result"], "use receipt.execution_result"
-    )
+    if typed:
+        _validate_typed_use_receipt(
+            root, receipt, reservation, reservation_binding
+        )
+    else:
+        # Preserve validation of immutable receipts issued before typed settlement.
+        verify_file_binding(
+            root, receipt["execution_result"], "use receipt.execution_result"
+        )
     parse_time(receipt["consumed_at"], "use receipt.consumed_at")
     versions = receipt["grant_versions_after"]
     if not isinstance(versions, dict) or set(versions) != {

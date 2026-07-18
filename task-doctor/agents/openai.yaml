@@ -1,4 +1,4 @@
 interface:
   display_name: "Task Doctor"
-  short_description: "Adjust task direction and packs"
-  default_prompt: "Use $task-doctor to replace or retarget task.md from explicit direction, record quiescence overrides when needed, optionally create/update .task/task_pack proposals, consume complete named .agent_advice only as non-GT direction evidence, require raw review for incomplete normalization, and prepare the repository for the next orchestrated cycle."
+  short_description: "Coordinate task retargeting and recovery"
+  default_prompt: "Use $task-doctor to prepare the supported advice, canonical-task, and final-index effects, consolidate genuinely missing decisions into at most one review, and resume safely after interruptions."

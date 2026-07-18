@@ -767,6 +767,13 @@ def _publish_terminal_baseline(
                 reservation_ref=reserved["reservation_ref"],
                 reservation_sha256=reserved["reservation_sha256"],
                 execution_result=json.dumps(prepared["execution_result"]),
+                pre_commit_verification=json.dumps(
+                    {
+                        "ref": pre_commit["verification_ref"],
+                        "sha256": pre_commit["verification_sha256"],
+                    }
+                ),
+                expected_subject_after_sha256=sha256_file(root / subject["ref"]),
                 at=CONSUMED_AT,
                 expected_version=0,
                 idempotency_key=consume_key,

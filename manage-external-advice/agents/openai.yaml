@@ -1,4 +1,4 @@
 interface:
   display_name: "Manage External Advice"
   short_description: "Normalize non-GT advice inputs"
-  default_prompt: "Use $manage-external-advice to digest-deduplicate and structure-first normalize canonical non-GT advice clauses, keep table/prose echoes as owner references, surface incomplete raw-direct fallback, and evidence-retire directives without treating lifecycle or self-attestation as clause verification."
+  default_prompt: "Use $manage-external-advice to digest-deduplicate and structure-first normalize canonical non-GT advice clauses; prefer a body-safe immutable advice_intake_plan with its digest-named non-canonical source snapshot plus intake --apply-plan, never persist the caller locator, return the exact plan-bound effect or verified no-effect receipt-file execution_result_binding, preserve legacy external_advice lifecycle compatibility, keep table/prose echoes as owner references, and never treat lifecycle or self-attestation as clause verification."

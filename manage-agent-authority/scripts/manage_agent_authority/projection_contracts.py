@@ -14,6 +14,7 @@ INTENT_DIRECTORIES = {
     "reservations": "authority_reservation",
     "use_receipts": "authority_use_receipt",
     "release_receipts": "authority_release_receipt",
+    "reconciliation_receipts": "authority_reconciliation_receipt",
     "events": "authority_grant_transition",
 }
 
@@ -70,6 +71,10 @@ USE_RECEIPT_KEYS = {
     "state_changes",
     "idempotency_key",
 }
+TYPED_USE_RECEIPT_KEYS = USE_RECEIPT_KEYS | {
+    "owner_execution_result",
+    "pre_commit_verification",
+}
 RELEASE_RECEIPT_KEYS = {
     "schema_version",
     "artifact_kind",
@@ -92,6 +97,19 @@ TRANSITION_KEYS = {
     "transitioned_at",
     "affected_before",
     "affected_grant_ids",
+    "state_changes",
+}
+RECONCILIATION_RECEIPT_KEYS = {
+    "schema_version",
+    "artifact_kind",
+    "receipt_id",
+    "reservation",
+    "effect_evidence",
+    "pre_commit_verification",
+    "outcome",
+    "reconciled_at",
+    "grant_versions_after",
+    "idempotency_key",
     "state_changes",
 }
 DECISION_KEYS = {

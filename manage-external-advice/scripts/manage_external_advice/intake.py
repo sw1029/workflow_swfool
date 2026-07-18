@@ -7,27 +7,15 @@ import json
 from pathlib import Path
 import sys
 
-from .common import (
-    extract_fingerprint_claims,
-    now_iso,
-    rel_path,
-    sha256_file,
-    sha256_text,
+from .intake_plan import (
+    apply_intake_plan,
+    build_intake_plan,
+    exact_duplicate_result,
+    publish_intake_plan,
 )
-from .normalization import (
-    analyze_advice,
-    advice_fidelity,
-    classify_scope,
-    normalize_text,
-)
-from .source_metadata import opaque_source_id, safe_title
 from .storage import (
-    advice_root,
-    append_event,
     ensure_dirs,
-    find_exact_raw_digest,
     rebuild_index,
-    unique_advice_key,
 )
 
 
@@ -38,6 +26,37 @@ def load_source(source: str) -> tuple[str, str]:
     path = Path(source)
     text = path.read_text(encoding="utf-8", errors="replace")
     return text, str(path)
+
+
+def bounded_source_ref(
+    root: Path,
+    source: str,
+    text: str,
+    staging_ref: str | None,
+) -> str:
+    candidate_value = staging_ref or (None if source == "-" else source)
+    if not candidate_value:
+        raise SystemExit(
+            "stdin intake planning requires --staging-ref to an existing workspace UTF-8 file"
+        )
+    candidate = Path(candidate_value)
+    candidate = candidate if candidate.is_absolute() else Path.cwd() / candidate
+    if candidate.is_symlink() or not candidate.is_file():
+        raise SystemExit("Advice intake source_ref must be a regular non-symlink file")
+    resolved = candidate.resolve(strict=False)
+    try:
+        relative = resolved.relative_to(root)
+    except ValueError as exc:
+        raise SystemExit(
+            "Advice intake planning source must be workspace-relative; use --staging-ref"
+        ) from exc
+    try:
+        staged_text = resolved.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise SystemExit("Advice intake source_ref must contain valid UTF-8") from exc
+    if staged_text != text:
+        raise SystemExit("Advice intake --staging-ref does not match the supplied source")
+    return relative.as_posix()
 
 
 def cmd_init(args: argparse.Namespace) -> None:
@@ -53,100 +72,45 @@ def cmd_init(args: argparse.Namespace) -> None:
 
 def cmd_intake(args: argparse.Namespace) -> None:
     root = Path(args.root).resolve()
-    text, _transient_source_locator = load_source(args.source)
-    raw_sha256 = sha256_text(text)
-    duplicate = find_exact_raw_digest(root, raw_sha256)
-    if duplicate:
-        print(
-            json.dumps(
-                {
-                    "status": "duplicate_exact_raw_source",
-                    "raw_sha256": raw_sha256,
-                    "deduplicated": True,
-                    **duplicate,
-                },
-                ensure_ascii=False,
-                indent=2,
-                sort_keys=True,
+    apply_plan = getattr(args, "apply_plan", None)
+    if apply_plan:
+        result = apply_intake_plan(root, apply_plan)
+    else:
+        source = getattr(args, "source", None)
+        if not source:
+            raise SystemExit("intake requires --source unless --apply-plan is used")
+        text, _transient_source_locator = load_source(source)
+        duplicate = exact_duplicate_result(root, text)
+        if duplicate:
+            print(
+                json.dumps(
+                    duplicate,
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                )
             )
+            return
+        source_ref = bounded_source_ref(
+            root, source, text, getattr(args, "staging_ref", None)
         )
-        return
-    source_id = opaque_source_id(raw_sha256)
-    title, title_policy = safe_title(args.title, raw_sha256)
-    claims, directives, extraction_stats, directive_records = analyze_advice(
-        text, raw_sha256
-    )
-    directive_ids = [record["directive_id"] for record in directive_records]
-    if len(directive_ids) != len(set(directive_ids)):
-        raise SystemExit(
-            "Duplicate explicit directive_id values in one raw advice source."
+        plan = build_intake_plan(
+            root,
+            text,
+            getattr(args, "title", None),
+            getattr(args, "priority", "normal"),
+            at=getattr(args, "at", None),
+            source_ref=source_ref,
         )
-    ensure_dirs(root)
-    advice_id, raw_name = unique_advice_key(root, title)
-    raw_path = advice_root(root) / "raw" / raw_name
-    raw_path.write_text(text, encoding="utf-8")
-    fidelity = advice_fidelity(claims, directives, extraction_stats)
-    declared_fingerprints = extract_fingerprint_claims(text)
-    normalized = normalize_text(
-        advice_id,
-        text,
-        rel_path(root, raw_path),
-        title,
-        args.priority,
-        raw_sha256,
-        source_id=source_id,
-    )
-    active_path = advice_root(root) / "active" / raw_name
-    active_path.write_text(normalized, encoding="utf-8")
-    event = {
-        "event": "intake",
-        "advice_id": advice_id,
-        "type": "external_advice",
-        "status": "active",
-        "title": title,
-        "path": rel_path(root, active_path),
-        "raw_source_path": rel_path(root, raw_path),
-        "source_label": source_id,
-        "source_id": source_id,
-        "source_label_policy": "opaque_content_id",
-        "title_policy": title_policy,
-        "priority": args.priority,
-        "content_sha256": sha256_file(active_path),
-        "raw_sha256": raw_sha256,
-        "updated_at": now_iso(),
-        "fields": {
-            "not_goal_truth": "true",
-            "scope": classify_scope(text),
-            "priority": args.priority,
-            "fidelity_status": fidelity["fidelity_status"],
-            "fidelity_reason": fidelity["fidelity_reason"],
-            "raw_direct_reference_required": str(
-                fidelity["raw_direct_reference_required"]
-            ).lower(),
-            "normalization_complete": str(fidelity["fidelity_status"] == "ok").lower(),
-            "execution_plan_eligible": "false",
-            "normalized_packet_use": (
-                "direction_evidence_only"
-                if fidelity["fidelity_status"] == "ok"
-                else "warning_only_raw_review"
-            ),
-            "canonical_declaration_count": fidelity.get(
-                "canonical_declaration_count", 0
-            ),
-            "reference_echo_count": fidelity.get("reference_echo_count", 0),
-            "raw_direct_fallback_used": fidelity.get("raw_direct_fallback_used", False),
-            "advice_metrics_stale": "unknown",
-            "declared_output_fingerprints": declared_fingerprints,
-            "current_output_fingerprint": "unknown",
-            "directives": directive_records,
-            "semantic_dedup_policy": "explicit_directive_id_only",
-        },
-    }
-    append_event(root, event)
-    result = rebuild_index(root)
+        if plan.get("plan_kind") is None:
+            result = plan
+        else:
+            plan_output = getattr(args, "plan", None)
+            planned = publish_intake_plan(root, plan, plan_output)
+            result = planned if plan_output else apply_intake_plan(root, planned["plan_ref"])
     print(
         json.dumps(
-            {"status": "ok", "event": event, **result},
+            result,
             ensure_ascii=False,
             indent=2,
             sort_keys=True,

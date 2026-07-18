@@ -5,6 +5,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from manage_agent_authority.evaluator import evaluate as evaluate_owner_decision
 from orchestrate_task_cycle.authority_artifacts import (
     validate_authority_use_receipt_settlement,
@@ -1015,7 +1017,10 @@ def test_packet_builder_preserves_real_owner_grant_approval_projection(
 
     packet = build_authority_packet(tmp_path, binding)
 
-    assert decision["reason_codes"] == ["no_single_covering_active_grant"]
+    assert decision["reason_codes"] == [
+        "no_authority_grants_registered",
+        "no_single_covering_active_grant",
+    ]
     assert packet["approval_projection"] == decision["approval_projection"]
     assert packet["approval_projection"]["typed_intent"] == "grant_authority"
     assert packet["approval_projection"]["excluded_effects"] == [
@@ -1513,6 +1518,49 @@ def _settlement_fixture(
     return packet, precommit_binding, receipt_binding, execution_result
 
 
+def _typed_settlement_fixture(
+    root: Path,
+) -> tuple[dict[str, object], dict[str, str], dict[str, str], dict[str, str]]:
+    packet, precommit, receipt_binding, owner_result = _settlement_fixture(root)
+    reservation = packet["reservation_binding"]  # type: ignore[assignment]
+    subject = packet["subject"]  # type: ignore[assignment]
+    result_core = {
+        "schema_version": 2,
+        "artifact_kind": "authority_execution_result",
+        "reservation": {
+            "ref": reservation["artifact_ref"],
+            "sha256": reservation["artifact_sha256"],
+        },
+        "pre_commit_verification": precommit,
+        "owner_result": owner_result,
+        "effect_status": "confirmed_effect",
+        "subject_before": subject,
+        "subject_after": {
+            "ref": subject["ref"],
+            "sha256": subject["digest"],
+        },
+        "expected_subject_after_sha256": subject["digest"],
+        "completed_at": "2026-07-17T00:02:00+00:00",
+    }
+    result_id = f"authr-{canonical_sha256(result_core)[:24]}"
+    typed_result = {"result_id": result_id, **result_core}
+    result_ref = f".task/authorization/execution_results/{result_id}.json"
+    result_binding = {
+        "ref": result_ref,
+        "sha256": _write_json(root / result_ref, typed_result),
+    }
+    receipt = json.loads((root / receipt_binding["ref"]).read_text(encoding="utf-8"))
+    receipt.update(
+        {
+            "execution_result": result_binding,
+            "owner_execution_result": owner_result,
+            "pre_commit_verification": precommit,
+        }
+    )
+    receipt_binding["sha256"] = _write_json(root / receipt_binding["ref"], receipt)
+    return packet, receipt_binding, owner_result, result_binding
+
+
 def test_precommit_verification_binds_exact_reserved_packet(tmp_path: Path) -> None:
     packet, precommit, _, _ = _settlement_fixture(tmp_path)
 
@@ -1574,6 +1622,86 @@ def test_use_receipt_settlement_validates_activation_and_history(
         idempotency_key="settle-overlay-A",
         phase="historical",
     )
+
+
+def test_typed_use_receipt_settlement_uses_owner_validator(tmp_path: Path) -> None:
+    packet, receipt, owner_result, _ = _typed_settlement_fixture(tmp_path)
+
+    assert not validate_authority_use_receipt_settlement(
+        packet,
+        receipt,
+        tmp_path,
+        execution_result=owner_result,
+        idempotency_key="settle-overlay-A",
+    )
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    (
+        "extra_key",
+        "reservation",
+        "subject_before",
+        "subject_after",
+        "completed_at",
+        "pre_commit_verification",
+    ),
+)
+def test_typed_use_receipt_rejects_rehashed_closed_contract_forgery(
+    tmp_path: Path,
+    tamper: str,
+) -> None:
+    packet, receipt_binding, owner_result, result_binding = _typed_settlement_fixture(
+        tmp_path
+    )
+    result = json.loads(
+        (tmp_path / result_binding["ref"]).read_text(encoding="utf-8")
+    )
+    receipt = json.loads(
+        (tmp_path / receipt_binding["ref"]).read_text(encoding="utf-8")
+    )
+    if tamper == "extra_key":
+        result["forged"] = True
+    elif tamper == "reservation":
+        result["reservation"] = {**result["reservation"], "sha256": "f" * 64}
+    elif tamper == "subject_before":
+        result["subject_before"] = {
+            **result["subject_before"],
+            "digest": "e" * 64,
+        }
+    elif tamper == "subject_after":
+        result["subject_after"] = {
+            **result["subject_after"],
+            "ref": ".task/a-different-subject.md",
+        }
+    elif tamper == "completed_at":
+        result["completed_at"] = "not-a-timestamp"
+    else:
+        receipt["pre_commit_verification"] = owner_result
+        result["pre_commit_verification"] = owner_result
+    result.pop("result_id")
+    result_id = f"authr-{canonical_sha256(result)[:24]}"
+    result = {"result_id": result_id, **result}
+    forged_ref = f".task/authorization/execution_results/{result_id}.json"
+    receipt["execution_result"] = {
+        "ref": forged_ref,
+        "sha256": _write_json(tmp_path / forged_ref, result),
+    }
+    receipt_binding["sha256"] = _write_json(
+        tmp_path / receipt_binding["ref"], receipt
+    )
+
+    codes = {
+        row["code"]
+        for row in validate_authority_use_receipt_settlement(
+            packet,
+            receipt_binding,
+            tmp_path,
+            execution_result=owner_result,
+            idempotency_key="settle-overlay-A",
+        )
+    }
+    assert "authority_execution_result_contract_invalid" in codes
 
 
 def test_use_receipt_rejects_execution_result_and_idempotency_drift(

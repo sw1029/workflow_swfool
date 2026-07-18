@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import stat
 from pathlib import Path
 from typing import Any
 
@@ -24,17 +22,7 @@ from .projection_contracts import identifier
 from .projection_contracts import nonnegative_int
 from .projection_contracts import positive_int
 from .projection_contracts import sha
-
-
-def _signature(value: os.stat_result) -> tuple[int, int, int, int, int, int]:
-    return (
-        value.st_dev,
-        value.st_ino,
-        value.st_mode,
-        value.st_size,
-        value.st_mtime_ns,
-        value.st_ctime_ns,
-    )
+from .stable_store import read_regular
 
 
 def _stable_file_bytes(root: Path, path: Path, label: str, *, max_bytes: int) -> bytes:
@@ -44,26 +32,10 @@ def _stable_file_bytes(root: Path, path: Path, label: str, *, max_bytes: int) ->
     except ValueError as exc:
         raise SystemExit(f"{label} escapes the workspace.") from exc
     resolved = resolve_workspace_path(root, ref, label)
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        descriptor = os.open(resolved, flags)
-        with os.fdopen(descriptor, "rb") as handle:
-            before = os.fstat(handle.fileno())
-            if not stat.S_ISREG(before.st_mode):
-                raise SystemExit(f"{label} must remain a regular file.")
-            if before.st_size > max_bytes:
-                raise SystemExit(f"{label} exceeds the {max_bytes}-byte safety limit.")
-            data = handle.read(max_bytes + 1)
-            after = os.fstat(handle.fileno())
-        path_after = os.stat(resolved, follow_symlinks=False)
-    except OSError as exc:
-        raise SystemExit(f"{label} could not be acquired safely: {exc}") from exc
+    data = read_regular(resolved, label=label)
+    assert data is not None
     if len(data) > max_bytes:
         raise SystemExit(f"{label} exceeds the {max_bytes}-byte safety limit.")
-    if _signature(before) != _signature(after) or _signature(before) != _signature(
-        path_after
-    ):
-        raise SystemExit(f"{label} changed during acquisition.")
     return data
 
 
@@ -74,25 +46,9 @@ def _stable_file_digest(root: Path, path: Path, label: str) -> str:
     except ValueError as exc:
         raise SystemExit(f"{label} escapes the workspace.") from exc
     resolved = resolve_workspace_path(root, ref, label)
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        descriptor = os.open(resolved, flags)
-        with os.fdopen(descriptor, "rb") as handle:
-            before = os.fstat(handle.fileno())
-            if not stat.S_ISREG(before.st_mode):
-                raise SystemExit(f"{label} must remain a regular file.")
-            digest = hashlib.sha256()
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-            after = os.fstat(handle.fileno())
-        path_after = os.stat(resolved, follow_symlinks=False)
-    except OSError as exc:
-        raise SystemExit(f"{label} could not be acquired safely: {exc}") from exc
-    if _signature(before) != _signature(after) or _signature(before) != _signature(
-        path_after
-    ):
-        raise SystemExit(f"{label} changed during acquisition.")
-    return digest.hexdigest()
+    data = read_regular(resolved, label=label)
+    assert data is not None
+    return hashlib.sha256(data).hexdigest()
 
 
 def safe_json(
@@ -106,6 +62,22 @@ def safe_json(
     if not isinstance(value, dict):
         raise SystemExit(f"{label} must be a JSON object.")
     return value, hashlib.sha256(data).hexdigest()
+
+
+def safe_owned_directory(root: Path, relative: Path, label: str) -> Path | None:
+    """Resolve an optional owned directory without following any symlink component."""
+    if relative.is_absolute() or ".." in relative.parts:
+        raise SystemExit(f"{label} path is not workspace-relative.")
+    current = root.resolve()
+    for part in relative.parts:
+        current /= part
+        if current.is_symlink():
+            raise SystemExit(f"{label} must not traverse a symlink directory.")
+        if not current.exists():
+            return None
+        if not current.is_dir():
+            raise SystemExit(f"{label} must be a regular directory.")
+    return current
 
 
 def binding(value: Any, label: str) -> dict[str, str]:

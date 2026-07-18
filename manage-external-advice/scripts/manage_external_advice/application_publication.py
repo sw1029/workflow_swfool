@@ -314,7 +314,7 @@ def _ensure_log(
         "log_receipt",
         {"operation_digest": operation_digest, "log": indexed},
     )
-    publish_immutable(receipt_path, _sealed_bytes(receipt))
+    publish_immutable(root, receipt_path, _sealed_bytes(receipt))
     return indexed["path"], receipt
 
 
@@ -405,7 +405,7 @@ def _finalize(
             "source_cleanup": cleanup,
         },
     )
-    publish_immutable(commit_path, _sealed_bytes(commit))
+    publish_immutable(root, commit_path, _sealed_bytes(commit))
     return commit, result
 
 
@@ -423,12 +423,15 @@ def publish_mark_applied(
     request = _request(advice_id, evidence, dispositions, note)
     request_digest = _digest(request)
     with registry_lock(root):
+        from .intake_intent import assert_no_pending_intake_intents
+
+        assert_no_pending_intake_intents(root)
         _payload, events = registry_snapshot(root)
         prepare = _matching_prepare(root, advice_id, request_digest)
         if prepare is None:
             prepare = _new_prepare(root, item, request, events)
             prepare_path = _journal_path(root, prepare["operation_digest"], "prepare")
-            publish_immutable(prepare_path, _sealed_bytes(prepare))
+            publish_immutable(root, prepare_path, _sealed_bytes(prepare))
             _crash_point("after_prepare")
         operation_digest = prepare["operation_digest"]
         operation_event = _operation_event(events, prepare)
@@ -439,7 +442,7 @@ def publish_mark_applied(
         )
         if operation_event is None:
             applied_payload = _verify_source_cas(root, events, prepare)
-            publish_immutable(applied_path, applied_payload)
+            publish_immutable(root, applied_path, applied_payload)
             if sha256_file(applied_path) != applied["content_sha256"]:
                 raise SystemExit("Staged applied advice digest mismatch.")
             _crash_point("after_applied_copy")
@@ -456,7 +459,9 @@ def publish_mark_applied(
                 if payload and not payload.endswith(b"\n"):
                     payload += b"\n"
                 atomic_replace(
-                    index_jsonl(root), payload + event_bytes(operation_event)
+                    root,
+                    index_jsonl(root),
+                    payload + event_bytes(operation_event),
                 )
                 _crash_point("after_event")
             else:

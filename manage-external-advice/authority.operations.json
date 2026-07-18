@@ -5,6 +5,23 @@
   "skill_version": "2.0.0",
   "operations": [
     {
+      "operation_id": "prepare_advice_intake_plan",
+      "operation_version": "1",
+      "authorization_mechanism": "none",
+      "mutation_class": "local_mutation",
+      "required_capabilities": ["advice.intake.plan.prepare"],
+      "source_rank_floor": "S0",
+      "risk_floor": "R1",
+      "decision_class": "D2",
+      "effect_classes": [
+        "publish_noncanonical_intake_plan_and_opaque_source_snapshot"
+      ],
+      "data_classes": ["workflow_metadata", "external_advice_staging"],
+      "reversibility": "reversible",
+      "subject_kinds": ["advice_intake_plan"],
+      "authority_applicability": "none"
+    },
+    {
       "operation_id": "mutate_advice_lifecycle",
       "operation_version": "1",
       "authorization_mechanism": "grant",
@@ -16,7 +33,7 @@
       "effect_classes": ["intake_apply_defer_reject_or_retire_advice"],
       "data_classes": ["external_advice"],
       "reversibility": "conditionally_reversible",
-      "subject_kinds": ["external_advice"],
+      "subject_kinds": ["advice_intake_plan", "external_advice"],
       "authority_applicability": "required"
     }
   ]

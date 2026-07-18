@@ -24,6 +24,17 @@ def build_approval_projection(
         alternative = "select_bounded_design_or_use_ratified_default"
     elif request["intent_type"] == "ratify_goal_truth":
         alternative = "request_goal_owner_ratification_or_preserve_current_gt"
+    scope = {
+        "cardinality": request["cardinality_requested"],
+        "use_budget": request["use_budget_requested"],
+        "session_id": context["session_ceiling"]["evidence_id"],
+        "cycle_id": request["cycle_id"],
+        "task_id": request["task_id"],
+        "improvement_id": request["pack_id"],
+        "attempt_id": request["attempt_id"],
+    }
+    if "reservation_units" in request:
+        scope["reservation_units"] = request["reservation_units"]
     core = {
         "schema_version": 2,
         "artifact_kind": "authority_approval_projection",
@@ -51,15 +62,7 @@ def build_approval_projection(
                 "decision_class",
             )
         },
-        "scope": {
-            "cardinality": request["cardinality_requested"],
-            "use_budget": request["use_budget_requested"],
-            "session_id": context["session_ceiling"]["evidence_id"],
-            "cycle_id": request["cycle_id"],
-            "task_id": request["task_id"],
-            "improvement_id": request["pack_id"],
-            "attempt_id": request["attempt_id"],
-        },
+        "scope": scope,
         "excluded_effects": sorted(
             {
                 "accept_risk_or_cost",

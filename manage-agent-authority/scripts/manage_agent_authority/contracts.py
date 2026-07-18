@@ -84,10 +84,12 @@ REQUEST_KEYS = {
     "intent_type",
     "cardinality_requested",
     "use_budget_requested",
+    "reservation_units",
     "idempotency_key",
     "context",
     "composition_receipt",
 }
+REQUIRED_REQUEST_KEYS = REQUEST_KEYS - {"reservation_units"}
 SUBJECT_KEYS = {"kind", "ref", "digest", "revision"}
 CONTEXT_KEYS = {
     "external_input_status",
@@ -204,7 +206,7 @@ def validate_subject(value: Any, label: str = "subject") -> dict[str, str]:
 
 def validate_request(value: dict[str, Any]) -> dict[str, Any]:
     _closed(value, REQUEST_KEYS, "authority request")
-    _required(value, REQUEST_KEYS, "authority request")
+    _required(value, REQUIRED_REQUEST_KEYS, "authority request")
     if (
         value.get("schema_version") != 2
         or value.get("request_kind") != "authority_operation"
@@ -220,6 +222,19 @@ def validate_request(value: dict[str, Any]) -> dict[str, Any]:
     budget = value.get("use_budget_requested")
     if not isinstance(budget, int) or isinstance(budget, bool) or budget < 1:
         raise SystemExit("use_budget_requested must be a positive integer.")
+    raw_reservation_units = value.get("reservation_units")
+    if raw_reservation_units is not None and (
+        not isinstance(raw_reservation_units, int)
+        or isinstance(raw_reservation_units, bool)
+        or raw_reservation_units < 1
+    ):
+        raise SystemExit("reservation_units must be a positive integer when present.")
+    # Requests written before reservation_units existed retain their historical
+    # semantics. New callers must set reservation_units explicitly (normally 1)
+    # so a reusable approval budget is not spent by one dispatch.
+    units = budget if raw_reservation_units is None else raw_reservation_units
+    if units > budget:
+        raise SystemExit("reservation_units cannot exceed use_budget_requested.")
     cardinality = _enum(
         value["cardinality_requested"], CARDINALITIES, "cardinality_requested"
     )
@@ -227,6 +242,8 @@ def validate_request(value: dict[str, Any]) -> dict[str, Any]:
     pack_id = _identifier(value["pack_id"], "pack_id", nullable=True)
     if cardinality == "single_use" and budget != 1:
         raise SystemExit("single_use requests require use_budget_requested=1.")
+    if cardinality == "single_use" and units != 1:
+        raise SystemExit("single_use requests require reservation_units=1.")
     if cardinality == "task_lease" and task_id is None:
         raise SystemExit("task_lease requests require an exact task_id.")
     if cardinality == "improvement_lease" and pack_id is None:
@@ -261,7 +278,7 @@ def validate_request(value: dict[str, Any]) -> dict[str, Any]:
         evidence[field] = (
             _binding(candidate, f"context.{field}") if candidate is not None else None
         )
-    return {
+    normalized = {
         "schema_version": 2,
         "request_kind": "authority_operation",
         "request_id": _identifier(value["request_id"], "request_id"),
@@ -317,6 +334,14 @@ def validate_request(value: dict[str, Any]) -> dict[str, Any]:
         },
         "composition_receipt": composition,
     }
+    if raw_reservation_units is not None:
+        normalized["reservation_units"] = units
+    return normalized
+
+
+def reservation_units(request: dict[str, Any]) -> int:
+    """Return dispatch units while preserving pre-field request semantics."""
+    return int(request.get("reservation_units", request["use_budget_requested"]))
 
 
 def _binding(value: Any, label: str) -> dict[str, str]:

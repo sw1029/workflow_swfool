@@ -220,6 +220,8 @@ def normalize_text(
     raw_sha256: str,
     *,
     source_id: str | None = None,
+    received_at: str | None = None,
+    normalized_at: str | None = None,
 ) -> str:
     summary = (
         "Deterministically normalized external advice; consult the registry-owned "
@@ -236,6 +238,8 @@ def normalize_text(
     )
     fidelity = advice_fidelity(claims, directives, extraction_stats)
     declared_fingerprints = extract_fingerprint_claims(text)
+    fixed_received_at = received_at or now_iso()
+    fixed_normalized_at = normalized_at or fixed_received_at
     rendered = [
         "# External Advice",
         "",
@@ -243,8 +247,8 @@ def normalize_text(
         "- status: active",
         "- not_goal_truth: true",
         f"- raw_source_path: {raw_path}",
-        f"- received_at: {now_iso()}",
-        f"- normalized_at: {now_iso()}",
+        f"- received_at: {fixed_received_at}",
+        f"- normalized_at: {fixed_normalized_at}",
         f"- scope: {scope}",
         f"- priority: {priority}",
         f"- source_label: {source_id or f'src-sha256-{raw_sha256}'}",

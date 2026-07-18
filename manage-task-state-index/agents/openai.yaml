@@ -1,4 +1,4 @@
 interface:
   display_name: "Manage Task State Index"
   short_description: "Link task workflow artifacts by ID"
-  default_prompt: "Use $manage-task-state-index with deterministic helpers first and configured Tier 2 model_ref:balanced/medium for delegated ID-only work, while linking task, task_pack, issue, goal, advice, schema/contract, execution, audit, and validation artifacts."
+  default_prompt: "Use $manage-task-state-index with deterministic helpers first; prefer an immutable task_index_transition_plan, verify planning-time before anchors and apply-time expected anchors separately, use exact apply or settled-no-effect receipt-file execution_result_binding without repeating a settled decision, preserve legacy task_index direct-call compatibility, and use configured Tier 2 model_ref:balanced/medium only for delegated ID-only work."

@@ -78,10 +78,10 @@ from .state.events import (
     parse_links,
     path_records,
     stable_path_id,
-    validate_completed_task_alias_batch,
     validate_event,
     versioned_event,
 )
+from .state.event_batch_validation import validate_completed_task_alias_batch
 from .state.artifacts import (
     advice_pointer_file,
     discover_standard_artifacts,
@@ -116,6 +116,14 @@ from .state.audit import (
     severity_counts,
     summarize_audit,
     write_audit_report,
+)
+from .state.transition_plan import (
+    apply_transition_plan,
+    build_transition_plan,
+    load_request_json,
+    publish_transition_plan,
+    settle_transition_no_effect,
+    verify_transition_plan,
 )
 
 
@@ -250,6 +258,75 @@ def cmd_audit(args: argparse.Namespace) -> None:
         print(json.dumps(audit, ensure_ascii=False, indent=2))
 
 
+def cmd_plan_transition(args: argparse.Namespace) -> None:
+    root = Path(args.root).resolve()
+    try:
+        request = load_request_json(args.request_json)
+        plan = build_transition_plan(root, request, at=args.at)
+        if args.dry_run:
+            result = {
+                "result_kind": "task_state_transition_plan_result",
+                "schema_version": 1,
+                "status": "dry_run",
+                "plan_id": plan["plan_id"],
+                "plan_ref": None,
+                "plan_sha256": plan["plan_sha256"],
+                "plan_content_sha256": hashlib.sha256(
+                    json.dumps(
+                        plan,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ).encode("utf-8")
+                ).hexdigest(),
+                "plan_file_sha256": hashlib.sha256(
+                    (
+                        json.dumps(
+                            plan,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        )
+                        + "\n"
+                    ).encode("utf-8")
+                ).hexdigest(),
+                "would_change": True,
+                "mutation_performed": False,
+                "plan": plan,
+            }
+        else:
+            result = publish_transition_plan(root, plan, args.output)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def cmd_apply_plan(args: argparse.Namespace) -> None:
+    try:
+        result = apply_transition_plan(Path(args.root), args.plan)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def cmd_verify_plan(args: argparse.Namespace) -> None:
+    try:
+        result = verify_transition_plan(Path(args.root), args.plan, phase=args.phase)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def cmd_settle_plan_no_effect(args: argparse.Namespace) -> None:
+    try:
+        result = settle_transition_no_effect(
+            Path(args.root), args.plan, at=args.at
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Maintain .task/index.jsonl and .task/index.md.")
     parser.add_argument("--root", default=".", help="Workspace root.")
@@ -291,6 +368,55 @@ def build_parser() -> argparse.ArgumentParser:
     audit_parser.add_argument("--summary-only", action="store_true", help="Print compact counts and focused issues instead of the full historical issue list.")
     audit_parser.add_argument("--focus-path", action="append", default=[], help="Limit emitted issues to workspace-relative paths or IDs while preserving global counts.")
     audit_parser.set_defaults(func=cmd_audit)
+
+    plan_parser = subparsers.add_parser(
+        "plan-transition",
+        help="Build and optionally publish an immutable task-state event batch.",
+    )
+    plan_parser.add_argument(
+        "--request-json",
+        required=True,
+        help="JSON text or path with schema_version, events, and optional render/updated_at.",
+    )
+    plan_parser.add_argument(
+        "--output",
+        help="Workspace-relative immutable plan path; defaults under .task/transition_plans/.",
+    )
+    plan_parser.add_argument("--at", help="Fixed RFC3339 event timestamp.")
+    plan_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the complete plan without creating task-state files.",
+    )
+    plan_parser.set_defaults(func=cmd_plan_transition)
+
+    apply_parser = subparsers.add_parser(
+        "apply-plan", help="CAS-apply one immutable task-state transition plan."
+    )
+    apply_parser.add_argument("--plan", required=True, help="Workspace-relative plan path.")
+    apply_parser.set_defaults(func=cmd_apply_plan)
+
+    verify_parser = subparsers.add_parser(
+        "verify-plan", help="Read-only verify plan integrity, CAS readiness, or replay state."
+    )
+    verify_parser.add_argument("--plan", required=True, help="Workspace-relative plan path.")
+    verify_parser.add_argument(
+        "--phase",
+        choices=("planning", "apply"),
+        default="apply",
+        help="Check planning-time before anchors or apply-time expected anchors.",
+    )
+    verify_parser.set_defaults(func=cmd_verify_plan)
+
+    settle_parser = subparsers.add_parser(
+        "settle-plan-no-effect",
+        help="Publish an immutable no-effect receipt for one stale untouched plan.",
+    )
+    settle_parser.add_argument(
+        "--plan", required=True, help="Workspace-relative immutable plan path."
+    )
+    settle_parser.add_argument("--at", help="Fixed receipt timestamp for deterministic runs.")
+    settle_parser.set_defaults(func=cmd_settle_plan_no_effect)
     return parser
 
 

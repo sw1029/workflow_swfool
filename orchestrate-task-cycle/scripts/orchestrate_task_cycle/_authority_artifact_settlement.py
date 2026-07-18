@@ -5,6 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from manage_agent_authority.execution_results import (
+    validate_execution_result as validate_owner_execution_result,
+)
+from manage_agent_authority.execution_results import validate_pre_commit_verification
+
 from ._authority_artifact_io import (
     artifact_finding as _finding,
     read_bound_bytes as _read_bytes,
@@ -79,6 +84,15 @@ def validate_authority_use_receipt_settlement(
             )
         )
         return findings
+    if "owner_execution_result" in receipt:
+        _verify_typed_execution_result(
+            root,
+            packet,
+            reservation,
+            receipt,
+            execution_result,
+            findings,
+        )
     mismatches = _receipt_binding_mismatches(
         packet, receipt, receipt_id, execution_result, idempotency_key
     )
@@ -180,12 +194,76 @@ def _receipt_binding_mismatches(
     expected = {
         "receipt_id": receipt_id,
         "reservation": reservation_artifact_binding(packet),
-        "execution_result": execution_result,
         "idempotency_key": idempotency_key,
     }
-    return sorted(
+    mismatches = [
         field for field, value in expected.items() if receipt.get(field) != value
+    ]
+    recorded_result = receipt.get(
+        "owner_execution_result", receipt.get("execution_result")
     )
+    if recorded_result != execution_result:
+        mismatches.append("execution_result")
+    return sorted(mismatches)
+
+
+def _verify_typed_execution_result(
+    root: Path,
+    packet: dict[str, Any],
+    reservation: dict[str, Any] | None,
+    receipt: dict[str, Any],
+    owner_result: dict[str, Any],
+    findings: list[dict[str, Any]],
+) -> None:
+    if reservation is None:
+        findings.append(
+            _finding(
+                "authority_execution_result_contract_invalid",
+                "Typed authority execution result requires a valid immutable reservation.",
+                "authority_execution_result",
+            )
+        )
+        return
+    reservation_binding = reservation_artifact_binding(packet)
+    verification_binding = receipt["pre_commit_verification"]
+    expected_version = packet["reservation_binding"].get("state_version")
+    try:
+        if not isinstance(expected_version, int) or isinstance(expected_version, bool):
+            raise SystemExit("Authority packet has no exact reserved-state version.")
+        validate_pre_commit_verification(
+            root,
+            reservation,
+            reservation_binding,
+            verification_binding,
+            expected_version=expected_version,
+            require_current_state=False,
+        )
+        result = validate_owner_execution_result(
+            root,
+            receipt["execution_result"],
+            reservation,
+            reservation_binding,
+            verification_binding,
+            packet["subject"],
+        )
+        if result["owner_result"] != owner_result:
+            raise SystemExit(
+                "Authority execution result binds a different owner result."
+            )
+    except (KeyError, TypeError, SystemExit, ValueError) as exc:
+        findings.append(
+            {
+                **_finding(
+                    "authority_execution_result_contract_invalid",
+                    "Typed authority execution result does not bind this exact settlement.",
+                    "authority_execution_result",
+                ),
+                "evidence": {
+                    "artifact": "authority_execution_result",
+                    "reason": str(exc),
+                },
+            }
+        )
 
 
 __all__ = ("validate_authority_use_receipt_settlement",)

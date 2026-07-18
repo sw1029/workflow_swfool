@@ -16,26 +16,178 @@ sys.path.insert(0, str(ROOT / "manage-agent-authority" / "scripts"))
 from manage_agent_authority import authority_receipt  # noqa: E402
 from manage_agent_authority import artifact_store as artifact_store_module  # noqa: E402
 from manage_agent_authority import lifecycle as lifecycle_module  # noqa: E402
+from manage_agent_authority import authority_cli  # noqa: E402
 from manage_agent_authority.artifact_store import load_grant  # noqa: E402
 from manage_agent_authority.artifact_store import register_grant  # noqa: E402
 from manage_agent_authority.artifact_store import snapshot_file  # noqa: E402
 from manage_agent_authority.artifact_store import transition_grants  # noqa: E402
 from manage_agent_authority.canonical import object_sha256  # noqa: E402
+from manage_agent_authority.canonical import parse_time  # noqa: E402
 from manage_agent_authority.canonical import sha256_file  # noqa: E402
 from manage_agent_authority.canonical import write_immutable_json  # noqa: E402
 from manage_agent_authority.composition import create_composition  # noqa: E402
+from manage_agent_authority.contracts import validate_grant  # noqa: E402
 from manage_agent_authority.evaluator import evaluate  # noqa: E402
-from manage_agent_authority.lifecycle import consume  # noqa: E402
+from manage_agent_authority.lifecycle import consume as _consume  # noqa: E402
 from manage_agent_authority.lifecycle import release  # noqa: E402
+from manage_agent_authority.reconciliation import reconcile_quarantine  # noqa: E402
+from manage_agent_authority.reconciliation_evidence import (  # noqa: E402
+    prepare_reconciliation_evidence,
+)
+from manage_agent_authority.source_recovery import prepare_source_recovery  # noqa: E402
+from manage_agent_authority.source_approval import validate_source_approval  # noqa: E402
 from manage_agent_authority.lifecycle import reserve  # noqa: E402
+from manage_agent_authority.lifecycle import verify_reservation_with_recovery  # noqa: E402
 from manage_agent_authority.operations import load_operation  # noqa: E402
 from manage_agent_authority.projection_recovery import MAX_INTENT_BYTES  # noqa: E402
 from manage_agent_authority.projection_recovery import recover_projection_intents  # noqa: E402
+from manage_agent_authority.workflow_status import resolve_operation  # noqa: E402
+from manage_agent_authority.workflow_status import status_snapshot  # noqa: E402
 
 
 AT = "2026-07-17T10:00:00+09:00"
 LATER = "2026-07-17T10:05:00+09:00"
+APPROVAL_AT = "2026-07-17T10:10:00+09:00"
 EXPIRY = "2026-07-17T11:00:00+09:00"
+AFTER_EXPIRY = "2026-07-17T11:05:00+09:00"
+
+
+def precommit_binding(
+    root: Path,
+    reservation_ref: str,
+    reservation_sha256: str,
+    *,
+    expected_version: int,
+    at: str = LATER,
+) -> dict[str, str]:
+    verification_dir = root / ".task/authorization/verifications"
+    for existing_path in sorted(verification_dir.glob("*.json")):
+        existing = json.loads(existing_path.read_text(encoding="utf-8"))
+        if (
+            existing.get("stage") == "pre_commit"
+            and existing.get("reservation")
+            == {"ref": reservation_ref, "sha256": reservation_sha256}
+        ):
+            return {
+                "ref": str(existing_path.relative_to(root)),
+                "sha256": sha256_file(existing_path),
+            }
+    reservation, state, verified, state_sha256 = verify_reservation_with_recovery(
+        root,
+        reservation_ref,
+        reservation_sha256,
+        verified_at=at,
+        expected_version=expected_version,
+        skills_root=ROOT,
+    )
+    state_path = (
+        root
+        / ".task/authorization/state/reservations"
+        / f"{reservation['reservation_id']}.json"
+    )
+    core = {
+        "schema_version": 2,
+        "artifact_kind": "authority_verification",
+        "stage": "pre_commit",
+        "reservation": {
+            "ref": reservation_ref,
+            "sha256": reservation_sha256,
+        },
+        "reservation_state": {
+            "ref": str(state_path.relative_to(root)),
+            "sha256": state_sha256,
+            "version": state["version"],
+            "status": state["status"],
+        },
+        "grant_states": verified["grant_states"],
+        "request_id": verified["decision"]["request"]["request_id"],
+        "effective_authority_fingerprint": reservation[
+            "effective_authority_fingerprint"
+        ],
+        "verified_at": parse_time(at, "at").isoformat(),
+    }
+    artifact = {
+        "verification_id": f"authv-{object_sha256(core)[:24]}",
+        **core,
+    }
+    path = (
+        root
+        / ".task/authorization/verifications"
+        / f"{artifact['verification_id']}.json"
+    )
+    digest = write_immutable_json(path, artifact, "test pre-commit verification")
+    return {"ref": str(path.relative_to(root)), "sha256": digest}
+
+
+def consume(
+    root: Path,
+    reservation_ref: str,
+    reservation_sha256: str,
+    execution_result: dict[str, str],
+    **kwargs: Any,
+) -> dict[str, Any]:
+    kwargs.setdefault(
+        "pre_commit_verification",
+        precommit_binding(
+            root,
+            reservation_ref,
+            reservation_sha256,
+            expected_version=kwargs["expected_version"],
+            at=kwargs["consumed_at"],
+        ),
+    )
+    subject_ref = json.loads(
+        (
+            root / reservation_ref
+        ).read_text(encoding="utf-8")
+    )["decision"]["ref"]
+    decision = json.loads((root / subject_ref).read_text(encoding="utf-8"))
+    current_subject = root / decision["request"]["subject"]["ref"]
+    kwargs.setdefault("expected_subject_after_sha256", sha256_file(current_subject))
+    return _consume(
+        root,
+        reservation_ref,
+        reservation_sha256,
+        execution_result,
+        **kwargs,
+    )
+
+
+def reconciliation_evidence(
+    root: Path,
+    reserved: dict[str, Any],
+    outcome: str,
+    *,
+    at: str = LATER,
+) -> dict[str, str]:
+    owner_binding = None
+    if outcome != "still_unknown":
+        owner = write(
+            root / f".task/authorization/results/{outcome}-owner.json",
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "artifact_kind": "test_effect_reconciliation_result",
+                    "outcome": outcome,
+                },
+                sort_keys=True,
+            )
+            + "\n",
+        )
+        owner_binding = {
+            "ref": str(owner.relative_to(root)),
+            "sha256": sha256_file(owner),
+        }
+    prepared = prepare_reconciliation_evidence(
+        root,
+        reserved["reservation_ref"],
+        reserved["reservation_sha256"],
+        outcome=outcome,
+        owner_result=owner_binding,
+        observed_at=at,
+        expected_version=1,
+    )
+    return prepared["effect_evidence"]
 
 
 def write(path: Path, body: str) -> Path:
@@ -301,6 +453,50 @@ def persist_decision(root: Path, decision: dict[str, Any]) -> tuple[str, str]:
     return str(path.relative_to(root)), digest
 
 
+def reserve_default_operation(root: Path, *, idempotency_key: str) -> dict[str, Any]:
+    workspace = setup_workspace(root)
+    request = request_for(workspace)
+    context = context_for(workspace, request)
+    register_grant(root, grant_for(workspace, request))
+    decision = evaluate(root, request, context, evaluated_at=AT, skills_root=ROOT)
+    decision_ref, decision_sha = persist_decision(root, decision)
+    return reserve(
+        root,
+        decision_ref,
+        decision_sha,
+        reserved_at=LATER,
+        idempotency_key=idempotency_key,
+        skills_root=ROOT,
+    )
+
+
+def isolated_skills_root(root: Path) -> Path:
+    skills_root = root / "isolated-skills"
+    skill_id = "task-md-agent-governance"
+    source = ROOT / skill_id / "authority.operations.json"
+    write(
+        skills_root / skill_id / "authority.operations.json",
+        source.read_text(encoding="utf-8"),
+    )
+    return skills_root
+
+
+def replace_with_narrow_source(
+    root: Path, workspace: dict[str, Any], grant_ids: list[str]
+) -> dict[str, Any]:
+    previous_snapshot = root / workspace["source_binding"]["ref"]
+    body = json.loads(workspace["approval"].read_text(encoding="utf-8"))
+    body["approval_id"] = "approval-narrow-source"
+    body["grant_ids"] = grant_ids
+    source = write(
+        root / ".task/authorization/narrow-source.json",
+        json.dumps(body, indent=2, sort_keys=True) + "\n",
+    )
+    binding = snapshot_file(root, str(source.relative_to(root)), "source_approval")
+    previous_snapshot.unlink()
+    return {**workspace, "source_binding": binding}
+
+
 def legacy_receipt(root: Path, schema_version: int) -> dict[str, Any]:
     workspace = setup_workspace(root)
     return {
@@ -483,6 +679,1473 @@ def test_single_use_reserve_consume_is_idempotent_and_cannot_double_spend(
     assert state["consumed_uses"] == 1
     after = evaluate(tmp_path, request, context, evaluated_at=LATER, skills_root=ROOT)
     assert after["decision"] == "approval_required"
+
+
+def test_consume_accepts_exact_mutable_subject_after_precommit(tmp_path: Path) -> None:
+    workspace = setup_workspace(tmp_path)
+    request = request_for(workspace)
+    register_grant(tmp_path, grant_for(workspace, request))
+    decision = evaluate(
+        tmp_path, request, context_for(workspace, request), evaluated_at=AT, skills_root=ROOT
+    )
+    decision_ref, decision_sha = persist_decision(tmp_path, decision)
+    reserved = reserve(
+        tmp_path,
+        decision_ref,
+        decision_sha,
+        reserved_at=LATER,
+        idempotency_key="mutable-reserve",
+        skills_root=ROOT,
+    )
+    precommit = precommit_binding(
+        tmp_path,
+        reserved["reservation_ref"],
+        reserved["reservation_sha256"],
+        expected_version=0,
+    )
+    write(workspace["task"], "# Task\n\nExact expected after state.\n")
+    owner_result = write(
+        tmp_path / ".task/authorization/results/mutable-result.json",
+        '{"schema_version": 1, "artifact_kind": "test_execution_result"}\n',
+    )
+    result = _consume(
+        tmp_path,
+        reserved["reservation_ref"],
+        reserved["reservation_sha256"],
+        {"ref": str(owner_result.relative_to(tmp_path)), "sha256": sha256_file(owner_result)},
+        pre_commit_verification=precommit,
+        expected_subject_after_sha256=sha256_file(workspace["task"]),
+        consumed_at=LATER,
+        expected_version=0,
+        idempotency_key="mutable-consume",
+        skills_root=ROOT,
+    )
+    typed_binding = result["use_receipt"]["execution_result"]
+    typed = json.loads((tmp_path / typed_binding["ref"]).read_text(encoding="utf-8"))
+    assert typed["artifact_kind"] == "authority_execution_result"
+    assert typed["subject_before"]["digest"] == request["subject"]["digest"]
+    assert typed["subject_after"]["sha256"] == sha256_file(workspace["task"])
+
+
+def test_consume_requires_explicit_precommit_and_expected_after(tmp_path: Path) -> None:
+    workspace = setup_workspace(tmp_path)
+    request = request_for(workspace)
+    register_grant(tmp_path, grant_for(workspace, request))
+    decision = evaluate(
+        tmp_path, request, context_for(workspace, request), evaluated_at=AT, skills_root=ROOT
+    )
+    decision_ref, decision_sha = persist_decision(tmp_path, decision)
+    reserved = reserve(
+        tmp_path,
+        decision_ref,
+        decision_sha,
+        reserved_at=LATER,
+        idempotency_key="strict-reserve",
+        skills_root=ROOT,
+    )
+    owner_result = write(
+        tmp_path / ".task/authorization/results/strict-result.json", "{}\n"
+    )
+    binding = {
+        "ref": str(owner_result.relative_to(tmp_path)),
+        "sha256": sha256_file(owner_result),
+    }
+    with pytest.raises(SystemExit, match="explicit exact pre_commit"):
+        _consume(
+            tmp_path,
+            reserved["reservation_ref"],
+            reserved["reservation_sha256"],
+            binding,
+            expected_subject_after_sha256=sha256_file(workspace["task"]),
+            consumed_at=LATER,
+            expected_version=0,
+            idempotency_key="strict-consume",
+            skills_root=ROOT,
+        )
+    precommit = precommit_binding(
+        tmp_path,
+        reserved["reservation_ref"],
+        reserved["reservation_sha256"],
+        expected_version=0,
+    )
+    with pytest.raises(SystemExit, match="requires expected_subject_after"):
+        _consume(
+            tmp_path,
+            reserved["reservation_ref"],
+            reserved["reservation_sha256"],
+            binding,
+            pre_commit_verification=precommit,
+            consumed_at=LATER,
+            expected_version=0,
+            idempotency_key="strict-consume",
+            skills_root=ROOT,
+        )
+
+
+def test_reusable_budget_reserves_only_explicit_dispatch_units(tmp_path: Path) -> None:
+    workspace = setup_workspace(tmp_path)
+    request = request_for(
+        workspace,
+        cardinality_requested="bounded_reusable",
+        use_budget_requested=5,
+        reservation_units=1,
+    )
+    register_grant(tmp_path, grant_for(workspace, request, max_uses=5))
+    decision = evaluate(
+        tmp_path, request, context_for(workspace, request), evaluated_at=AT, skills_root=ROOT
+    )
+    decision_ref, decision_sha = persist_decision(tmp_path, decision)
+    reserved = reserve(
+        tmp_path,
+        decision_ref,
+        decision_sha,
+        reserved_at=LATER,
+        idempotency_key="split-units-reserve",
+        skills_root=ROOT,
+    )
+    assert {use["units"] for use in reserved["reservation"]["grant_uses"]} == {1}
+    assert load_grant(tmp_path, "grant-1")[2]["reserved_uses"] == 1
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected_status", "remaining", "consumed"),
+    [
+        ("confirmed_effect", "consumed", 0, 1),
+        ("confirmed_no_effect", "released", 1, 0),
+        ("still_unknown", "quarantined_unknown_effect", 1, 0),
+    ],
+)
+def test_quarantine_reconciliation_has_closed_cas_outcomes(
+    tmp_path: Path,
+    outcome: str,
+    expected_status: str,
+    remaining: int,
+    consumed: int,
+) -> None:
+    workspace = setup_workspace(tmp_path)
+    request = request_for(workspace)
+    register_grant(tmp_path, grant_for(workspace, request))
+    decision = evaluate(
+        tmp_path, request, context_for(workspace, request), evaluated_at=AT, skills_root=ROOT
+    )
+    decision_ref, decision_sha = persist_decision(tmp_path, decision)
+    reserved = reserve(
+        tmp_path,
+        decision_ref,
+        decision_sha,
+        reserved_at=LATER,
+        idempotency_key=f"reconcile-{outcome}-reserve",
+        skills_root=ROOT,
+    )
+    precommit = precommit_binding(
+        tmp_path,
+        reserved["reservation_ref"],
+        reserved["reservation_sha256"],
+        expected_version=0,
+    )
+    unknown_evidence = write(
+        tmp_path / f".task/authorization/results/quarantine-{outcome}.json",
+        json.dumps({"schema_version": 1, "artifact_kind": "unknown_effect_evidence"}) + "\n",
+    )
+    unknown_binding = {
+        "ref": str(unknown_evidence.relative_to(tmp_path)),
+        "sha256": sha256_file(unknown_evidence),
+    }
+    release(
+        tmp_path,
+        reserved["reservation_ref"],
+        reserved["reservation_sha256"],
+        unknown_binding,
+        released_at=LATER,
+        expected_version=0,
+        idempotency_key=f"reconcile-{outcome}-quarantine",
+        effect_status="unknown_effect",
+    )
+    evidence_binding = reconciliation_evidence(tmp_path, reserved, outcome)
+    assert reconciliation_evidence(tmp_path, reserved, outcome) == evidence_binding
+    reconciled = reconcile_quarantine(
+        tmp_path,
+        reserved["reservation_ref"],
+        reserved["reservation_sha256"],
+        evidence_binding,
+        outcome=outcome,
+        pre_commit_verification=precommit if outcome == "confirmed_effect" else None,
+        reconciled_at=LATER,
+        expected_version=1,
+        idempotency_key=f"reconcile-{outcome}-settle",
+    )
+    state_path = (
+        tmp_path
+        / ".task/authorization/state/reservations"
+        / f"{reserved['reservation']['reservation_id']}.json"
+    )
+    assert json.loads(state_path.read_text(encoding="utf-8"))["status"] == expected_status
+    grant_state = load_grant(tmp_path, "grant-1")[2]
+    assert grant_state["remaining_uses"] == remaining
+    assert grant_state["consumed_uses"] == consumed
+    assert reconciled["reconciliation_receipt"]["outcome"] == outcome
+
+
+def test_quarantine_reconciliation_rejects_arbitrary_json_evidence(tmp_path: Path) -> None:
+    workspace = setup_workspace(tmp_path)
+    request = request_for(workspace)
+    register_grant(tmp_path, grant_for(workspace, request))
+    decision = evaluate(
+        tmp_path, request, context_for(workspace, request), evaluated_at=AT, skills_root=ROOT
+    )
+    decision_ref, decision_sha = persist_decision(tmp_path, decision)
+    reserved = reserve(
+        tmp_path,
+        decision_ref,
+        decision_sha,
+        reserved_at=LATER,
+        idempotency_key="forged-evidence-reserve",
+        skills_root=ROOT,
+    )
+    arbitrary = write(
+        tmp_path / ".task/authorization/results/arbitrary-evidence.json", "{}\n"
+    )
+    arbitrary_binding = {
+        "ref": str(arbitrary.relative_to(tmp_path)),
+        "sha256": sha256_file(arbitrary),
+    }
+    release(
+        tmp_path,
+        reserved["reservation_ref"],
+        reserved["reservation_sha256"],
+        arbitrary_binding,
+        released_at=LATER,
+        expected_version=0,
+        idempotency_key="forged-evidence-quarantine",
+        effect_status="unknown_effect",
+    )
+    with pytest.raises(SystemExit, match="not closed"):
+        reconcile_quarantine(
+            tmp_path,
+            reserved["reservation_ref"],
+            reserved["reservation_sha256"],
+            arbitrary_binding,
+            outcome="confirmed_no_effect",
+            pre_commit_verification=None,
+            reconciled_at=LATER,
+            expected_version=1,
+            idempotency_key="forged-evidence-settle",
+        )
+
+
+def test_prepare_reconciliation_evidence_cli_is_deterministic(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    workspace = setup_workspace(tmp_path)
+    request = request_for(workspace)
+    register_grant(tmp_path, grant_for(workspace, request))
+    decision = evaluate(
+        tmp_path, request, context_for(workspace, request), evaluated_at=AT, skills_root=ROOT
+    )
+    decision_ref, decision_sha = persist_decision(tmp_path, decision)
+    reserved = reserve(
+        tmp_path,
+        decision_ref,
+        decision_sha,
+        reserved_at=LATER,
+        idempotency_key="evidence-cli-reserve",
+        skills_root=ROOT,
+    )
+    unknown = write(tmp_path / ".task/authorization/results/cli-unknown.json", "{}\n")
+    release(
+        tmp_path,
+        reserved["reservation_ref"],
+        reserved["reservation_sha256"],
+        {"ref": str(unknown.relative_to(tmp_path)), "sha256": sha256_file(unknown)},
+        released_at=LATER,
+        expected_version=0,
+        idempotency_key="evidence-cli-quarantine",
+        effect_status="unknown_effect",
+    )
+    owner = write(
+        tmp_path / ".task/authorization/results/cli-owner.json",
+        '{"schema_version": 1, "artifact_kind": "verified_no_effect"}\n',
+    )
+    argv = [
+        "prepare-reconciliation-evidence",
+        "--root",
+        str(tmp_path),
+        "--reservation-ref",
+        reserved["reservation_ref"],
+        "--reservation-sha256",
+        reserved["reservation_sha256"],
+        "--owner-result",
+        json.dumps({"ref": str(owner.relative_to(tmp_path)), "sha256": sha256_file(owner)}),
+        "--expected-version",
+        "1",
+        "--outcome",
+        "confirmed_no_effect",
+        "--at",
+        LATER,
+    ]
+    assert authority_cli.main(argv) == 0
+    first = json.loads(capsys.readouterr().out)
+    assert authority_cli.main(argv) == 0
+    second = json.loads(capsys.readouterr().out)
+    assert first["effect_evidence"] == second["effect_evidence"]
+    assert first["evidence"]["artifact_kind"] == "authority_effect_reconciliation_evidence"
+
+
+def test_resolve_reuses_source_approval_and_stable_wait_without_prompt(
+    tmp_path: Path,
+) -> None:
+    workspace = setup_workspace(tmp_path)
+    request = request_for(workspace)
+    context = context_for(workspace, request)
+    first = resolve_operation(
+        tmp_path, request, context, evaluated_at=AT, skills_root=ROOT
+    )
+    second = resolve_operation(
+        tmp_path, request, context, evaluated_at=LATER, skills_root=ROOT
+    )
+    assert first["decision"] == "approval_required"
+    assert first["resolution"] == "source_approval_ready_for_grant"
+    assert first["outcome"] == first["workflow_state"] == first["resolution"]
+    assert first["should_prompt"] is False
+    assert first["approval_projection"] is None
+    assert second["approval_projection"] is None
+    assert first["user_action"] is None
+    assert first["next_action"]["code"] == "materialize_grant"
+    assert first["wait_identity"] == second["wait_identity"]
+    assert "no_authority_grants_registered" in first["reason_codes"]
+
+
+def test_resolve_returns_one_common_user_interaction_projection(
+    tmp_path: Path,
+) -> None:
+    workspace = setup_workspace(tmp_path)
+    request = request_for(workspace)
+    context = context_for(workspace, request)
+    (tmp_path / workspace["source_binding"]["ref"]).unlink()
+
+    result = resolve_operation(
+        tmp_path, request, context, evaluated_at=AT, skills_root=ROOT
+    )
+    assert result["resolution"] == "needs_user_approval"
+    assert result["outcome"] == result["workflow_state"] == result["resolution"]
+    assert result["should_prompt"] is True
+    assert result["approval_projection"] is not None
+    assert result["user_action"] == result["next_action"] == {
+        "actor": "user",
+        "code": "approve_exact_projection",
+    }
+
+
+def test_status_reuses_existing_usable_source_grant_without_prompt(
+    tmp_path: Path,
+) -> None:
+    workspace = replace_with_narrow_source(
+        tmp_path, setup_workspace(tmp_path), ["grant-1"]
+    )
+    request = request_for(workspace)
+    context = context_for(workspace, request)
+    waiting = evaluate(tmp_path, request, context, evaluated_at=AT, skills_root=ROOT)
+    persist_decision(tmp_path, waiting)
+    register_grant(tmp_path, grant_for(workspace, request))
+
+    status = status_snapshot(
+        tmp_path,
+        request_sha256=waiting["request_sha256"],
+        evaluated_at=LATER,
+        skills_root=ROOT,
+    )
+    assert status["workflow_state"] == "source_approval_ready_for_grant"
+    assert status["should_prompt"] is False
+    assert status["approval_projection"] is None
+    assert status["next_action"] == {
+        "actor": "system",
+        "code": "evaluate_existing_grant",
+    }
+    source = status["workflow_basis"]["source_approval"]
+    assert source["materializable_grant_ids"] == []
+    assert source["usable_grant_ids"] == ["grant-1"]
+    assert status["pending_waits"] == []
+
+
+def test_exhausted_exact_source_prepares_one_closed_recovery_approval(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    workspace = replace_with_narrow_source(
+        tmp_path, setup_workspace(tmp_path), ["grant-1"]
+    )
+    first_request = request_for(workspace)
+    first_context = context_for(workspace, first_request)
+    register_grant(tmp_path, grant_for(workspace, first_request))
+    allowed = evaluate(
+        tmp_path,
+        first_request,
+        first_context,
+        evaluated_at=AT,
+        skills_root=ROOT,
+    )
+    decision_ref, decision_sha = persist_decision(tmp_path, allowed)
+    reserved = reserve(
+        tmp_path,
+        decision_ref,
+        decision_sha,
+        reserved_at=LATER,
+        idempotency_key="exhaust-source-reserve",
+        skills_root=ROOT,
+    )
+    owner_result = write(
+        tmp_path / ".task/authorization/results/exhaust-source.json", "{}\n"
+    )
+    consume(
+        tmp_path,
+        reserved["reservation_ref"],
+        reserved["reservation_sha256"],
+        {
+            "ref": str(owner_result.relative_to(tmp_path)),
+            "sha256": sha256_file(owner_result),
+        },
+        consumed_at=LATER,
+        expected_version=0,
+        idempotency_key="exhaust-source-consume",
+        skills_root=ROOT,
+    )
+    request = request_for(
+        workspace,
+        request_id="request-2",
+        attempt_id="attempt-2",
+        idempotency_key="request-key-2",
+    )
+    context = context_for(workspace, request)
+    waiting = evaluate(
+        tmp_path, request, context, evaluated_at=LATER, skills_root=ROOT
+    )
+    recovery_decision_ref, recovery_decision_sha = persist_decision(tmp_path, waiting)
+
+    status = status_snapshot(
+        tmp_path,
+        request_sha256=waiting["request_sha256"],
+        evaluated_at=LATER,
+        skills_root=ROOT,
+    )
+    assert status["workflow_state"] == "source_authority_exhausted"
+    assert status["should_prompt"] is False
+    assert status["approval_projection"] is None
+    assert status["next_action"] == {
+        "actor": "system",
+        "code": "prepare_exact_recovery_recipe",
+    }
+    refresh_wait = status["source_exhausted_waits"][0]
+    assert refresh_wait["reason_codes"] == [
+        "source_authority_no_usable_or_materializable_grant"
+    ]
+    assert refresh_wait["wait_identity"] is None
+    assert refresh_wait["recovery_identity"] != refresh_wait["previous_wait_identity"]
+    assert status["pending_waits"] == []
+    assert status["historical_waits"][0]["wait_identity"] == refresh_wait[
+        "previous_wait_identity"
+    ]
+    source = refresh_wait["source_approvals"][0]
+    assert source["materialization_status"] == "fresh_authority_required"
+    assert source["materializable_grant_ids"] == []
+    assert source["usable_grant_ids"] == []
+    assert source["unavailable_grants"][0]["state_binding"]["sha256"]
+
+    resolved = resolve_operation(
+        tmp_path, request, context, evaluated_at=LATER, skills_root=ROOT
+    )
+    assert resolved["workflow_state"] == "source_authority_exhausted"
+    assert resolved["should_prompt"] is False
+    assert resolved["next_action"]["code"] == "prepare_exact_recovery_recipe"
+    assert (
+        "source_authority_no_usable_or_materializable_grant"
+        in resolved["reason_codes"]
+    )
+    assert resolved["wait_identity"] is None
+    assert resolved["recovery_identity"] == refresh_wait["recovery_identity"]
+    assert resolved["approval_projection"] is None
+
+    prepared = prepare_source_recovery(
+        tmp_path,
+        recovery_decision_ref,
+        recovery_decision_sha,
+        prepared_at=LATER,
+        skills_root=ROOT,
+    )
+    assert prepared["status"] == "prepared"
+    assert prepared["authority_status"] == "non_authoritative_prepare_only"
+    assert prepared["should_prompt"] is True
+    assert prepared["next_action"] == {
+        "actor": "user",
+        "code": "approve_exact_recovery_projection",
+    }
+    recipe_path = tmp_path / prepared["recovery_recipe"]["ref"]
+    recipe = json.loads(recipe_path.read_text(encoding="utf-8"))
+    assert sha256_file(recipe_path) == prepared["recovery_recipe"]["sha256"]
+    assert recipe["recovery_identity"] == refresh_wait["recovery_identity"]
+    assert recipe["exhausted_authority"]["decision"] == {
+        "ref": recovery_decision_ref,
+        "sha256": recovery_decision_sha,
+        "decision_id": waiting["decision_id"],
+        "request_sha256": waiting["request_sha256"],
+    }
+    old_ids = {
+        request["request_id"],
+        request["attempt_id"],
+        workspace["source_binding"]["ref"],
+        "approval-narrow-source",
+        "grant-1",
+        "lineage-1",
+        request["idempotency_key"],
+    }
+    replacement_ids = set(recipe["replacement_ids"].values())
+    assert len(replacement_ids) == 6
+    assert not replacement_ids.intersection(old_ids)
+    assert recipe["replacement_request"]["request_id"] == recipe[
+        "replacement_ids"
+    ]["request_id"]
+    assert recipe["replacement_request"]["attempt_id"] == recipe[
+        "replacement_ids"
+    ]["attempt_id"]
+    assert recipe["replacement_request"]["idempotency_key"] == recipe[
+        "replacement_ids"
+    ]["exact_replay_key"]
+    requirements = recipe["approval_requirements"]
+    assert requirements["status"] == "requires_exact_user_approval"
+    source_requirements = recipe["source_approval_requirements"]
+    assert source_requirements["approval_id"] == recipe[
+        "replacement_ids"
+    ]["source_approval_id"]
+    assert source_requirements["grant_ids_required"] == [
+        recipe["replacement_ids"]["grant_id"]
+    ]
+    assert source_requirements["evidence_id_requirement"] == (
+        "exact_explicit_user_decision_evidence_id"
+    )
+    assert source_requirements["prepared_at_floor"] == LATER
+    assert source_requirements["not_before_requirement"] == (
+        "actual_explicit_user_decision_time"
+    )
+    assert "integrity_status" not in source_requirements
+    grant_requirements = recipe["grant_requirements"]
+    assert grant_requirements["grant_id"] == recipe["replacement_ids"][
+        "grant_id"
+    ]
+    assert "source_approval" not in grant_requirements
+    assert grant_requirements["prepared_at_floor"] == LATER
+    assert grant_requirements["not_before_requirement"] == (
+        "at_or_after_actual_explicit_user_decision_time"
+    )
+    assert grant_requirements["source_approval_binding_requirement"][
+        "binding"
+    ] == "actual_post_user_approval_snapshot_ref_and_sha256"
+
+    nested_dicts: list[dict[str, Any]] = []
+    pending_values: list[Any] = [recipe]
+    while pending_values:
+        value = pending_values.pop()
+        if isinstance(value, dict):
+            nested_dicts.append(value)
+            pending_values.extend(value.values())
+        elif isinstance(value, list):
+            pending_values.extend(value)
+    for candidate in nested_dicts:
+        with pytest.raises(SystemExit):
+            validate_source_approval(candidate)
+        with pytest.raises(SystemExit):
+            validate_grant(candidate)
+
+    source_snapshot_dir = tmp_path / ".task/authorization/source_snapshots"
+    snapshots_before = set(source_snapshot_dir.iterdir())
+    extracted_source = write(
+        tmp_path / ".task/authorization/extracted-recovery-source.json",
+        json.dumps(source_requirements),
+    )
+    with pytest.raises(SystemExit):
+        snapshot_file(
+            tmp_path, str(extracted_source.relative_to(tmp_path)), "source_approval"
+        )
+    assert set(source_snapshot_dir.iterdir()) == snapshots_before
+    with pytest.raises(SystemExit):
+        register_grant(tmp_path, grant_requirements)
+    projection = recipe["approval_projection"]
+    assert "authority.grant.issue" in projection["capabilities"]
+    assert projection["grant_id"] == recipe["replacement_ids"]["grant_id"]
+    assert projection["lineage_id"] == recipe["replacement_ids"]["lineage_id"]
+    assert projection["exact_replay_key"] == recipe["replacement_ids"][
+        "exact_replay_key"
+    ]
+
+    replay = prepare_source_recovery(
+        tmp_path,
+        recovery_decision_ref,
+        recovery_decision_sha,
+        prepared_at=LATER,
+        skills_root=ROOT,
+    )
+    assert replay == prepared
+    assert (
+        authority_cli.main(
+            [
+                "prepare-source-recovery",
+                "--root",
+                str(tmp_path),
+                "--decision-ref",
+                recovery_decision_ref,
+                "--decision-sha256",
+                recovery_decision_sha,
+                "--at",
+                LATER,
+                "--skills-root",
+                str(ROOT),
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["recovery_recipe"] == prepared[
+        "recovery_recipe"
+    ]
+
+    status_after = status_snapshot(
+        tmp_path,
+        request_sha256=waiting["request_sha256"],
+        evaluated_at=LATER,
+        skills_root=ROOT,
+    )
+    assert status_after["workflow_state"] == "needs_user_approval"
+    assert status_after["should_prompt"] is True
+    assert status_after["next_action"] == {
+        "actor": "user",
+        "code": "approve_exact_recovery_projection",
+    }
+    assert status_after["source_exhausted_waits"] == []
+    assert len(status_after["pending_waits"]) == 1
+    assert len(status_after["recovery_waits"]) == 1
+    assert status_after["approval_projection"] == projection
+    assert status_after["wait_identity"] == prepared["wait_identity"]
+
+    resolved_after = resolve_operation(
+        tmp_path, request, context, evaluated_at=LATER, skills_root=ROOT
+    )
+    assert resolved_after["workflow_state"] == "needs_user_approval"
+    assert resolved_after["next_action"]["code"] == (
+        "approve_exact_recovery_projection"
+    )
+    assert resolved_after["approval_projection"] == projection
+    assert resolved_after["wait_identity"] == prepared["wait_identity"]
+    assert resolved_after["recovery_identity"] == recipe["recovery_identity"]
+
+    handoff = status_after["post_approval_handoff"]
+    assert handoff == prepared["post_approval_handoff"]
+    assert handoff == resolved_after["post_approval_handoff"]
+    assert handoff["commands"] == [
+        "snapshot-source",
+        "register-grant",
+        "evaluate",
+    ]
+    assert handoff["continuation_request_sha256"] == recipe[
+        "replacement_request_sha256"
+    ]
+
+    actual_source_body = {
+        "schema_version": 2,
+        "artifact_kind": "authority_source_approval",
+        "approval_id": source_requirements["approval_id"],
+        "source_kind": source_requirements["source_kind_required"],
+        "source_rank": source_requirements["source_rank_required"],
+        "decision_type": source_requirements["decision_type_required"],
+        "capabilities": source_requirements["capabilities_required"],
+        "subjects": source_requirements["subjects_required"],
+        "operations": source_requirements["operations_required"],
+        "risk_ceiling": source_requirements["risk_ceiling_required"],
+        "decision_classes": source_requirements["decision_classes_required"],
+        "cardinalities": source_requirements["cardinalities_required"],
+        "max_uses": source_requirements["max_uses_required"],
+        "grant_ids": source_requirements["grant_ids_required"],
+        "request_digests": source_requirements["request_digests_required"],
+        "lineage_ids": source_requirements["lineage_ids_required"],
+        "delegation_binding": source_requirements["delegation_binding_required"],
+        "not_before": APPROVAL_AT,
+        "expires_at": source_requirements["expires_at_ceiling"],
+        "evidence_id": "explicit-user-decision-recovery-1",
+        "integrity_status": "verified",
+    }
+    actual_source_path = write(
+        tmp_path / ".task/authorization/approved-recovery-source.json",
+        json.dumps(actual_source_body, indent=2, sort_keys=True) + "\n",
+    )
+    assert (
+        authority_cli.main(
+            [
+                "snapshot-source",
+                "--root",
+                str(tmp_path),
+                "--source-ref",
+                str(actual_source_path.relative_to(tmp_path)),
+            ]
+        )
+        == 0
+    )
+    actual_source_binding = json.loads(capsys.readouterr().out)["source_approval"]
+
+    actual_grant = {
+        "schema_version": 2,
+        "artifact_kind": "authority_grant",
+        "grant_id": grant_requirements["grant_id"],
+        "lineage_id": grant_requirements["lineage_id"],
+        "parent_grant_id": grant_requirements["parent_grant_id_required"],
+        "issuer_rank": grant_requirements["issuer_rank_required"],
+        "holder_rank": grant_requirements["holder_rank_required"],
+        "capabilities": grant_requirements["capabilities_required"],
+        "subjects": grant_requirements["subjects_required"],
+        "operations": grant_requirements["operations_required"],
+        "risk_ceiling": grant_requirements["risk_ceiling_required"],
+        "decision_classes": grant_requirements["decision_classes_required"],
+        "cardinality": grant_requirements["cardinality_required"],
+        "max_uses": grant_requirements["max_uses_required"],
+        "not_before": APPROVAL_AT,
+        "expires_at": grant_requirements["expires_at_ceiling"],
+        "session_id": grant_requirements["session_id_required"],
+        "task_id": grant_requirements["task_id_required"],
+        "improvement_id": grant_requirements["improvement_id_required"],
+        "source_approval": actual_source_binding,
+        "policy_snapshot": grant_requirements["policy_snapshot_required"],
+        "created_at": APPROVAL_AT,
+        "idempotency_key": grant_requirements["idempotency_key_required"],
+    }
+    actual_grant_path = write(
+        tmp_path / ".task/authorization/approved-recovery-grant.json",
+        json.dumps(actual_grant, indent=2, sort_keys=True) + "\n",
+    )
+    assert (
+        authority_cli.main(
+            [
+                "register-grant",
+                "--root",
+                str(tmp_path),
+                "--grant",
+                str(actual_grant_path),
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["status"] == "registered"
+
+    replacement_request_path = write(
+        tmp_path / ".task/authorization/replacement-request.json",
+        json.dumps(recipe["replacement_request"]),
+    )
+    replacement_context_path = write(
+        tmp_path / ".task/authorization/replacement-context.json",
+        json.dumps(context_for(workspace, recipe["replacement_request"])),
+    )
+    assert (
+        authority_cli.main(
+            [
+                "evaluate",
+                "--root",
+                str(tmp_path),
+                "--request",
+                str(replacement_request_path),
+                "--context",
+                str(replacement_context_path),
+                "--at",
+                LATER,
+                "--skills-root",
+                str(ROOT),
+            ]
+        )
+        == 0
+    )
+    replacement_before_approval = json.loads(capsys.readouterr().out)
+    assert replacement_before_approval["decision"] != "allowed"
+    assert replacement_before_approval["evaluated_at"] == LATER
+    assert (
+        authority_cli.main(
+            [
+                "evaluate",
+                "--root",
+                str(tmp_path),
+                "--request",
+                str(replacement_request_path),
+                "--context",
+                str(replacement_context_path),
+                "--at",
+                APPROVAL_AT,
+                "--skills-root",
+                str(ROOT),
+            ]
+        )
+        == 0
+    )
+    replacement_decision = json.loads(capsys.readouterr().out)
+    assert replacement_decision["decision"] == "allowed"
+    assert replacement_decision["evaluated_at"] == APPROVAL_AT
+    assert replacement_decision["request_sha256"] == handoff[
+        "continuation_request_sha256"
+    ]
+    assert (
+        authority_cli.main(
+            [
+                "status",
+                "--root",
+                str(tmp_path),
+                "--request-sha256",
+                handoff["continuation_request_sha256"],
+                "--at",
+                APPROVAL_AT,
+                "--skills-root",
+                str(ROOT),
+            ]
+        )
+        == 0
+    )
+    continuation_status = json.loads(capsys.readouterr().out)
+    assert continuation_status["workflow_state"] == "ready_to_reserve"
+    assert continuation_status["should_prompt"] is False
+
+    expired_status = status_snapshot(
+        tmp_path,
+        request_sha256=waiting["request_sha256"],
+        evaluated_at=AFTER_EXPIRY,
+        skills_root=ROOT,
+    )
+    assert expired_status["workflow_state"] == "source_authority_exhausted"
+    assert expired_status["should_prompt"] is False
+    assert expired_status["next_action"] == {
+        "actor": "system",
+        "code": "prepare_fresh_recovery_plan",
+    }
+    assert expired_status["approval_projection"] is None
+    assert expired_status["wait_identity"] is None
+    assert expired_status["pending_waits"] == []
+    assert len(expired_status["recovery_replans"]) == 1
+    assert expired_status["workflow_basis"]["kind"] == (
+        "source_recovery_window_closed"
+    )
+    assert expired_status["workflow_basis"]["recovery_recipe"] == prepared[
+        "recovery_recipe"
+    ]
+    assert expired_status["post_approval_handoff"]["continuation_status"] == (
+        "replanning_required"
+    )
+    assert expired_status["wait_identity"] != refresh_wait[
+        "previous_wait_identity"
+    ]
+
+    expired_resolution = resolve_operation(
+        tmp_path,
+        request,
+        context,
+        evaluated_at=AFTER_EXPIRY,
+        skills_root=ROOT,
+    )
+    assert expired_resolution["workflow_state"] == "source_authority_exhausted"
+    assert expired_resolution["should_prompt"] is False
+    assert expired_resolution["next_action"]["code"] == (
+        "prepare_fresh_recovery_plan"
+    )
+    assert expired_resolution["reason_codes"] == ["source_recovery_window_closed"]
+    assert expired_resolution["approval_projection"] is None
+    assert expired_resolution["wait_identity"] is None
+    assert expired_resolution["recovery_identity"] == recipe["recovery_identity"]
+
+    with pytest.raises(SystemExit, match="Conflicting authority source recovery recipe"):
+        prepare_source_recovery(
+            tmp_path,
+            recovery_decision_ref,
+            recovery_decision_sha,
+            prepared_at="2026-07-17T10:06:00+09:00",
+            skills_root=ROOT,
+        )
+
+    recipe["authority_status"] = "authoritative"
+    recipe_path.write_text(json.dumps(recipe), encoding="utf-8")
+    with pytest.raises(SystemExit, match="conflicting or stale"):
+        status_snapshot(
+            tmp_path,
+            request_sha256=waiting["request_sha256"],
+            evaluated_at=LATER,
+            skills_root=ROOT,
+        )
+    recipe_path.unlink()
+    recipe_path.symlink_to(tmp_path / "missing-recovery-recipe.json")
+    with pytest.raises(SystemExit, match="must not be a symlink"):
+        status_snapshot(
+            tmp_path,
+            request_sha256=waiting["request_sha256"],
+            evaluated_at=LATER,
+            skills_root=ROOT,
+        )
+
+
+def test_orphan_grant_projection_is_internal_source_defect(tmp_path: Path) -> None:
+    workspace = replace_with_narrow_source(
+        tmp_path, setup_workspace(tmp_path), ["grant-1"]
+    )
+    request = request_for(workspace)
+    context = context_for(workspace, request)
+    waiting = evaluate(tmp_path, request, context, evaluated_at=AT, skills_root=ROOT)
+    persist_decision(tmp_path, waiting)
+    write(tmp_path / ".task/authorization/state/grants/grant-1.json", "{}\n")
+
+    status = status_snapshot(
+        tmp_path,
+        request_sha256=waiting["request_sha256"],
+        evaluated_at=LATER,
+        skills_root=ROOT,
+    )
+    assert status["workflow_state"] == "source_authority_defect"
+    assert status["should_prompt"] is False
+    assert status["next_action"]["code"] == "repair_source_authority_candidate"
+    assert "conflicting_or_orphan_grant_projection" in status["workflow_basis"][
+        "blocker_codes"
+    ]
+
+
+def test_status_rejects_symlinked_owned_decision_directory(tmp_path: Path) -> None:
+    workspace = setup_workspace(tmp_path)
+    request = request_for(workspace)
+    decision = evaluate(
+        tmp_path,
+        request,
+        context_for(workspace, request),
+        evaluated_at=AT,
+        skills_root=ROOT,
+    )
+    persist_decision(tmp_path, decision)
+    directory = tmp_path / ".task/authorization/decisions"
+    real = tmp_path / "real-decisions"
+    directory.rename(real)
+    directory.symlink_to(real, target_is_directory=True)
+
+    with pytest.raises(SystemExit, match="must not traverse a symlink directory"):
+        status_snapshot(tmp_path, evaluated_at=LATER, skills_root=ROOT)
+
+
+def test_status_rejects_symlinked_source_snapshot_directory(tmp_path: Path) -> None:
+    workspace = setup_workspace(tmp_path)
+    request = request_for(workspace)
+    decision = evaluate(
+        tmp_path,
+        request,
+        context_for(workspace, request),
+        evaluated_at=AT,
+        skills_root=ROOT,
+    )
+    persist_decision(tmp_path, decision)
+    directory = tmp_path / ".task/authorization/source_snapshots"
+    real = tmp_path / "real-source-snapshots"
+    directory.rename(real)
+    directory.symlink_to(real, target_is_directory=True)
+
+    with pytest.raises(SystemExit, match="must not traverse a symlink directory"):
+        status_snapshot(tmp_path, evaluated_at=LATER, skills_root=ROOT)
+
+
+def test_status_rejects_symlinked_owned_directory_ancestor(tmp_path: Path) -> None:
+    real = tmp_path / "real-task"
+    (real / "authorization").mkdir(parents=True)
+    (tmp_path / ".task").symlink_to(real, target_is_directory=True)
+
+    with pytest.raises(SystemExit, match="must not traverse a symlink directory"):
+        status_snapshot(tmp_path, evaluated_at=LATER, skills_root=ROOT)
+
+
+def test_status_rehashes_bound_operation_manifest(tmp_path: Path) -> None:
+    workspace = setup_workspace(tmp_path)
+    request = request_for(workspace)
+    context = context_for(workspace, request)
+    skills_root = isolated_skills_root(tmp_path)
+    decision = evaluate(
+        tmp_path,
+        request,
+        context,
+        evaluated_at=AT,
+        skills_root=skills_root,
+    )
+    persist_decision(tmp_path, decision)
+    manifest = skills_root / request["skill_id"] / "authority.operations.json"
+    manifest.unlink()
+
+    with pytest.raises(SystemExit, match="operation manifest binding is stale"):
+        status_snapshot(tmp_path, evaluated_at=LATER, skills_root=skills_root)
+
+
+def test_resolve_rejects_tampered_bound_operation_manifest(tmp_path: Path) -> None:
+    workspace = setup_workspace(tmp_path)
+    request = request_for(workspace)
+    context = context_for(workspace, request)
+    skills_root = isolated_skills_root(tmp_path)
+    decision = evaluate(
+        tmp_path,
+        request,
+        context,
+        evaluated_at=AT,
+        skills_root=skills_root,
+    )
+    persist_decision(tmp_path, decision)
+    manifest = skills_root / request["skill_id"] / "authority.operations.json"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8") + "\n", encoding="utf-8"
+    )
+
+    with pytest.raises(SystemExit, match="operation manifest binding is stale"):
+        resolve_operation(
+            tmp_path,
+            request,
+            context,
+            evaluated_at=LATER,
+            skills_root=skills_root,
+        )
+
+
+def test_status_rejects_allowed_decision_when_operation_identity_disappears(
+    tmp_path: Path,
+) -> None:
+    workspace = setup_workspace(tmp_path)
+    request = request_for(workspace)
+    context = context_for(workspace, request)
+    skills_root = isolated_skills_root(tmp_path)
+    register_grant(tmp_path, grant_for(workspace, request))
+    decision = evaluate(
+        tmp_path,
+        request,
+        context,
+        evaluated_at=AT,
+        skills_root=skills_root,
+    )
+    manifest = skills_root / request["skill_id"] / "authority.operations.json"
+    body = json.loads(manifest.read_text(encoding="utf-8"))
+    for operation in body["operations"]:
+        if operation["operation_id"] == request["operation_id"]:
+            operation["operation_id"] = "renamed_operation"
+            break
+    manifest.write_text(json.dumps(body, sort_keys=True) + "\n", encoding="utf-8")
+    decision["operation_manifest"]["sha256"] = sha256_file(manifest)
+    core = {key: value for key, value in decision.items() if key != "decision_id"}
+    decision["decision_id"] = f"authd-{object_sha256(core)[:24]}"
+    persist_decision(tmp_path, decision)
+
+    with pytest.raises(SystemExit, match="operation identity is no longer valid"):
+        status_snapshot(tmp_path, evaluated_at=LATER, skills_root=skills_root)
+
+
+def test_status_suppresses_superseded_wait_and_reports_full_lifecycle(
+    tmp_path: Path,
+) -> None:
+    workspace = setup_workspace(tmp_path)
+    request = request_for(workspace)
+    context = context_for(workspace, request)
+    waiting = evaluate(tmp_path, request, context, evaluated_at=AT, skills_root=ROOT)
+    persist_decision(tmp_path, waiting)
+    register_grant(tmp_path, grant_for(workspace, request))
+    allowed = evaluate(tmp_path, request, context, evaluated_at=AT, skills_root=ROOT)
+    decision_ref, decision_sha = persist_decision(tmp_path, allowed)
+    ready = status_snapshot(
+        tmp_path,
+        request_sha256=allowed["request_sha256"],
+        evaluated_at=LATER,
+        skills_root=ROOT,
+    )
+    assert ready["workflow_state"] == "ready_to_reserve"
+    assert ready["should_prompt"] is False
+    assert ready["pending_waits"] == []
+    assert ready["workflow_basis"]["decision"]["ref"] == decision_ref
+    assert len(ready["historical_waits"]) == 1
+    reserved = reserve(
+        tmp_path,
+        decision_ref,
+        decision_sha,
+        reserved_at=LATER,
+        idempotency_key="status-reserve",
+        skills_root=ROOT,
+    )
+    before = status_snapshot(
+        tmp_path,
+        request_sha256=allowed["request_sha256"],
+        evaluated_at=LATER,
+    )
+    assert before["workflow_state"] == "ready_to_resume"
+    assert before["outcome"] == before["workflow_state"]
+    assert before["should_prompt"] is False
+    assert before["user_action"] is None
+    assert before["pending_waits"] == []
+    assert len(before["historical_waits"]) == 1
+    result_path = write(
+        tmp_path / ".task/authorization/results/status-result.json", "{}\n"
+    )
+    consume(
+        tmp_path,
+        reserved["reservation_ref"],
+        reserved["reservation_sha256"],
+        {"ref": str(result_path.relative_to(tmp_path)), "sha256": sha256_file(result_path)},
+        consumed_at=LATER,
+        expected_version=0,
+        idempotency_key="status-consume",
+        skills_root=ROOT,
+    )
+    after = status_snapshot(
+        tmp_path,
+        request_sha256=allowed["request_sha256"],
+        evaluated_at=LATER,
+    )
+    assert after["workflow_state"] == "already_consumed"
+    assert after["outcome"] == after["workflow_state"]
+    assert after["should_prompt"] is False
+    assert after["verifications"]
+    assert after["execution_results"]
+    assert after["use_receipts"]
+
+
+def test_status_marks_child_unusable_when_parent_is_suspended(tmp_path: Path) -> None:
+    workspace = setup_workspace(tmp_path)
+    request = request_for(workspace)
+    parent = grant_for(
+        workspace,
+        request,
+        grant_id="grant-parent",
+        holder_rank="S1",
+        max_uses=2,
+    )
+    parent_result = register_grant(tmp_path, parent)
+    child = grant_for(
+        workspace,
+        request,
+        grant_id="grant-child",
+        issuer_rank="S1",
+        holder_rank="S0",
+        parent_grant_id="grant-parent",
+        max_uses=2,
+    )
+    child["source_approval"] = {
+        "ref": ".task/authorization/grants/grant-parent.json",
+        "sha256": parent_result["grant_sha256"],
+    }
+    register_grant(tmp_path, child, parent_id="grant-parent")
+    transition_grants(
+        tmp_path,
+        "grant-parent",
+        "suspended",
+        event_id="suspend-parent-for-status",
+        expected_version=0,
+        source_approval=workspace["source_binding"],
+        transitioned_at=LATER,
+    )
+    child_status = status_snapshot(
+        tmp_path, grant_id="grant-child", evaluated_at=LATER
+    )["grants"][0]
+    assert child_status["state"]["status"] == "active"
+    assert child_status["effective_usable"] is False
+    assert child_status["lineage_blocker_codes"] == [
+        "ancestor_grant_suspended:grant-parent"
+    ]
+
+
+def test_status_uses_one_time_for_grant_and_ancestor_windows(tmp_path: Path) -> None:
+    workspace = setup_workspace(tmp_path)
+    request = request_for(workspace)
+    parent = grant_for(
+        workspace,
+        request,
+        grant_id="grant-parent",
+        holder_rank="S1",
+        max_uses=2,
+    )
+    parent_result = register_grant(tmp_path, parent)
+    child = grant_for(
+        workspace,
+        request,
+        grant_id="grant-child",
+        issuer_rank="S1",
+        holder_rank="S0",
+        parent_grant_id="grant-parent",
+        max_uses=2,
+    )
+    child["source_approval"] = {
+        "ref": ".task/authorization/grants/grant-parent.json",
+        "sha256": parent_result["grant_sha256"],
+    }
+    register_grant(tmp_path, child, parent_id="grant-parent")
+
+    early_at = "2026-07-17T09:59:59+09:00"
+    early = status_snapshot(
+        tmp_path, grant_id="grant-child", evaluated_at=early_at
+    )
+    assert early["evaluated_at"] == early_at
+    assert early["grants"][0]["lineage_blocker_codes"] == [
+        "grant_not_yet_active",
+        "ancestor_grant_not_yet_active:grant-parent",
+    ]
+
+    expired = status_snapshot(
+        tmp_path, grant_id="grant-child", evaluated_at=EXPIRY
+    )
+    assert expired["evaluated_at"] == EXPIRY
+    assert expired["grants"][0]["lineage_blocker_codes"] == [
+        "grant_time_expired",
+        "ancestor_grant_time_expired:grant-parent",
+    ]
+
+
+def test_status_does_not_resume_reserved_operation_after_expiry(tmp_path: Path) -> None:
+    reserved = reserve_default_operation(tmp_path, idempotency_key="expiry-reserve")
+
+    status = status_snapshot(
+        tmp_path,
+        request_sha256=reserved["reservation"]["request_sha256"],
+        evaluated_at=EXPIRY,
+        skills_root=ROOT,
+    )
+    assert status["workflow_state"] == "reserved_authority_recovery"
+    assert status["should_prompt"] is False
+    assert status["resumable_reservations"] == []
+    assert status["blocked_reservations"][0]["authority_blocker_codes"] == [
+        "selected_grant_time_expired:grant-1"
+    ]
+    assert status["release_receipts"] == []
+    assert status["workflow_basis"]["reservation"]["ref"] == reserved[
+        "reservation_ref"
+    ]
+    assert status["workflow_basis"]["reservation_state"]["sha256"]
+
+
+def test_status_does_not_resume_when_reserved_ancestor_is_suspended(
+    tmp_path: Path,
+) -> None:
+    workspace = setup_workspace(tmp_path)
+    request = request_for(workspace)
+    context = context_for(workspace, request)
+    parent = grant_for(
+        workspace,
+        request,
+        grant_id="grant-parent",
+        holder_rank="S1",
+        max_uses=2,
+    )
+    parent_result = register_grant(tmp_path, parent)
+    child = grant_for(
+        workspace,
+        request,
+        grant_id="grant-child",
+        issuer_rank="S1",
+        holder_rank="S0",
+        parent_grant_id="grant-parent",
+        max_uses=2,
+    )
+    child["source_approval"] = {
+        "ref": ".task/authorization/grants/grant-parent.json",
+        "sha256": parent_result["grant_sha256"],
+    }
+    register_grant(tmp_path, child, parent_id="grant-parent")
+    decision = evaluate(tmp_path, request, context, evaluated_at=AT, skills_root=ROOT)
+    decision_ref, decision_sha = persist_decision(tmp_path, decision)
+    reserve(
+        tmp_path,
+        decision_ref,
+        decision_sha,
+        reserved_at=LATER,
+        idempotency_key="ancestor-reserve",
+        skills_root=ROOT,
+    )
+    transition_grants(
+        tmp_path,
+        "grant-parent",
+        "suspended",
+        event_id="suspend-reserved-parent",
+        expected_version=1,
+        source_approval=workspace["source_binding"],
+        transitioned_at=LATER,
+    )
+
+    status = status_snapshot(
+        tmp_path,
+        request_sha256=decision["request_sha256"],
+        evaluated_at=LATER,
+        skills_root=ROOT,
+    )
+    assert status["workflow_state"] == "reserved_authority_recovery"
+    assert status["blocked_reservations"][0]["authority_blocker_codes"] == [
+        "ancestor_grant_status_suspended:grant-parent"
+    ]
+    state_path = tmp_path / status["workflow_basis"]["reservation_state"]["ref"]
+    assert json.loads(state_path.read_text(encoding="utf-8"))["status"] == "reserved"
+    assert status["release_receipts"] == []
+
+
+def test_status_returns_exact_verified_no_effect_settlement(tmp_path: Path) -> None:
+    reserved = reserve_default_operation(tmp_path, idempotency_key="release-reserve")
+    evidence = write(tmp_path / ".task/authorization/results/no-effect.json", "{}\n")
+    released = release(
+        tmp_path,
+        reserved["reservation_ref"],
+        reserved["reservation_sha256"],
+        {
+            "ref": str(evidence.relative_to(tmp_path)),
+            "sha256": sha256_file(evidence),
+        },
+        released_at=LATER,
+        expected_version=0,
+        idempotency_key="release-settlement",
+        effect_status="verified_no_effect",
+    )
+
+    status = status_snapshot(
+        tmp_path,
+        request_sha256=reserved["reservation"]["request_sha256"],
+        evaluated_at=LATER,
+        skills_root=ROOT,
+    )
+    assert status["workflow_state"] == "already_released"
+    assert status["should_prompt"] is False
+    assert status["next_action"]["code"] == "return_existing_no_effect_settlement"
+    assert status["workflow_basis"]["settlement_receipt"]["ref"] == released["ref"]
+    assert status["workflow_basis"]["settlement_receipt"]["sha256"] == released[
+        "sha256"
+    ]
+    reservation_artifact = json.loads(
+        (tmp_path / reserved["reservation_ref"]).read_text(encoding="utf-8")
+    )
+    decision = json.loads(
+        (tmp_path / reservation_artifact["decision"]["ref"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    resolved = resolve_operation(
+        tmp_path,
+        decision["request"],
+        decision["evaluation_context"],
+        evaluated_at=LATER,
+        skills_root=ROOT,
+    )
+    assert resolved["workflow_state"] == "already_released"
+    assert resolved["workflow_basis"]["settlement_receipt"]["ref"] == released["ref"]
+
+
+def test_status_cli_accepts_deterministic_evaluation_time(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert (
+        authority_cli.main(
+            [
+                "status",
+                "--root",
+                str(tmp_path),
+                "--at",
+                AT,
+                "--skills-root",
+                str(ROOT),
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["evaluated_at"] == AT
+
+
+def test_status_rejects_malformed_decision(tmp_path: Path) -> None:
+    workspace = setup_workspace(tmp_path)
+    request = request_for(workspace)
+    context = context_for(workspace, request)
+    decision = evaluate(tmp_path, request, context, evaluated_at=AT, skills_root=ROOT)
+    decision_ref, _ = persist_decision(tmp_path, decision)
+    pending = status_snapshot(tmp_path, evaluated_at=LATER, skills_root=ROOT)
+    assert (
+        pending["outcome"]
+        == pending["workflow_state"]
+        == "source_approval_ready_for_grant"
+    )
+    assert pending["should_prompt"] is False
+    assert pending["user_action"] is None
+    assert pending["workflow_basis"]["source_approval"]["ref"]
+    assert pending["workflow_basis"]["source_approval"][
+        "materializable_grant_ids"
+    ]
+    path = tmp_path / decision_ref
+    malformed = json.loads(path.read_text(encoding="utf-8"))
+    malformed["unknown_field"] = True
+    path.write_text(json.dumps(malformed) + "\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="decision is not closed"):
+        status_snapshot(tmp_path, evaluated_at=LATER)
+    with pytest.raises(SystemExit, match="decision is not closed"):
+        resolve_operation(
+            tmp_path,
+            request,
+            context,
+            evaluated_at=LATER,
+            skills_root=ROOT,
+        )
+
+
+def test_status_rejects_malformed_reservation(tmp_path: Path) -> None:
+    reserved = reserve_default_operation(
+        tmp_path, idempotency_key="malformed-reservation"
+    )
+    path = tmp_path / reserved["reservation_ref"]
+    malformed = json.loads(path.read_text(encoding="utf-8"))
+    malformed["unknown_field"] = True
+    path.write_text(json.dumps(malformed) + "\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="reservation is not closed"):
+        status_snapshot(tmp_path, evaluated_at=LATER)
+
+
+def test_status_rejects_malformed_release_receipt(tmp_path: Path) -> None:
+    reserved = reserve_default_operation(tmp_path, idempotency_key="receipt-reserve")
+    evidence = write(tmp_path / ".task/authorization/results/no-effect.json", "{}\n")
+    released = release(
+        tmp_path,
+        reserved["reservation_ref"],
+        reserved["reservation_sha256"],
+        {
+            "ref": str(evidence.relative_to(tmp_path)),
+            "sha256": sha256_file(evidence),
+        },
+        released_at=LATER,
+        expected_version=0,
+        idempotency_key="malformed-release-receipt",
+        effect_status="verified_no_effect",
+    )
+    path = tmp_path / released["ref"]
+    malformed = json.loads(path.read_text(encoding="utf-8"))
+    malformed["unknown_field"] = True
+    path.write_text(json.dumps(malformed) + "\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="release receipt is not closed"):
+        status_snapshot(tmp_path, evaluated_at=LATER)
+
+
+def test_status_rejects_malformed_grant_state(tmp_path: Path) -> None:
+    workspace = setup_workspace(tmp_path)
+    request = request_for(workspace)
+    register_grant(tmp_path, grant_for(workspace, request))
+    path = tmp_path / ".task/authorization/state/grants/grant-1.json"
+    malformed = json.loads(path.read_text(encoding="utf-8"))
+    malformed["unknown_field"] = True
+    path.write_text(json.dumps(malformed) + "\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="grant state is not closed"):
+        status_snapshot(tmp_path, evaluated_at=LATER)
+
+
+def test_cli_failures_use_stable_structured_json(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = authority_cli.main(
+        [
+            "snapshot-source",
+            "--root",
+            str(tmp_path),
+            "--source-ref",
+            ".task/authorization/missing.json",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 2
+    assert payload["status"] == "error"
+    assert payload["command"] == "snapshot-source"
+    assert payload["error"]["code"] == "authority_operation_failed"
+    assert payload["error"]["user_action_required"] is False
 
 
 def test_subject_change_is_rejected_at_reserve_preflight(tmp_path: Path) -> None:
@@ -2043,6 +3706,7 @@ def test_manifest_binding_is_raw_file_digest_and_cli_operations_are_covered() ->
         "verify_reservation",
         "consume_use",
         "release_use",
+        "prepare_source_authority_recovery",
         "transition_grant",
         "status",
     }

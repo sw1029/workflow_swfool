@@ -126,6 +126,17 @@ def approval_projection(decision: dict[str, Any]) -> dict[str, Any] | None:
         alternative = "select_bounded_design_or_use_ratified_default"
     elif request.get("intent_type") == "ratify_goal_truth":
         alternative = "request_goal_owner_ratification_or_preserve_current_gt"
+    approval_scope = {
+        "cardinality": request.get("cardinality_requested"),
+        "use_budget": request.get("use_budget_requested"),
+        "session_id": ceiling.get("evidence_id"),
+        "cycle_id": request.get("cycle_id"),
+        "task_id": request.get("task_id"),
+        "improvement_id": request.get("pack_id"),
+        "attempt_id": request.get("attempt_id"),
+    }
+    if "reservation_units" in request:
+        approval_scope["reservation_units"] = request.get("reservation_units")
     core = {
         "schema_version": 2,
         "artifact_kind": "authority_approval_projection",
@@ -153,15 +164,7 @@ def approval_projection(decision: dict[str, Any]) -> dict[str, Any] | None:
                 "decision_class",
             )
         },
-        "scope": {
-            "cardinality": request.get("cardinality_requested"),
-            "use_budget": request.get("use_budget_requested"),
-            "session_id": ceiling.get("evidence_id"),
-            "cycle_id": request.get("cycle_id"),
-            "task_id": request.get("task_id"),
-            "improvement_id": request.get("pack_id"),
-            "attempt_id": request.get("attempt_id"),
-        },
+        "scope": approval_scope,
         "excluded_effects": sorted(
             {
                 "accept_risk_or_cost",

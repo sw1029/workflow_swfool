@@ -6,6 +6,7 @@ import datetime as dt
 import hashlib
 import os
 import re
+import stat
 import tempfile
 import threading
 from pathlib import Path
@@ -91,12 +92,58 @@ def _thread_lock(root: Path) -> threading.RLock:
         return _THREAD_LOCKS.setdefault(key, threading.RLock())
 
 
+def _ensure_owned_task_directory(root: Path) -> Path:
+    path = root.resolve() / ".task"
+    if not path.exists() and not path.is_symlink():
+        try:
+            os.mkdir(path, mode=0o700)
+        except FileExistsError:
+            pass
+    mode = path.lstat().st_mode
+    if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+        raise ValueError("Task-state root must be a regular owned directory")
+    return path
+
+
+@contextlib.contextmanager
+def _owned_lock_handle(root: Path) -> Iterator[object]:
+    directory = _ensure_owned_task_directory(root)
+    if os.name != "posix":  # pragma: no cover - platform fallback
+        path = directory / "index.lock"
+        if path.exists() or path.is_symlink():
+            mode = path.lstat().st_mode
+            if stat.S_ISLNK(mode) or not stat.S_ISREG(mode):
+                raise ValueError("Task-state lock must be a regular file")
+        with path.open("a+b") as handle:
+            yield handle
+        return
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    directory_fd = os.open(directory, directory_flags)
+    descriptor = -1
+    try:
+        lock_flags = os.O_RDWR | os.O_CREAT | os.O_APPEND
+        lock_flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+        try:
+            descriptor = os.open("index.lock", lock_flags, 0o600, dir_fd=directory_fd)
+        except OSError as exc:
+            raise ValueError("Task-state lock must be a regular owned file") from exc
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ValueError("Task-state lock must be a regular file")
+        with os.fdopen(descriptor, "a+b") as handle:
+            descriptor = -1
+            yield handle
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        os.close(directory_fd)
+
+
 @contextlib.contextmanager
 def index_lock(root: Path) -> Iterator[None]:
     root = root.resolve()
     with _thread_lock(root):
-        task_dir(root).mkdir(parents=True, exist_ok=True)
-        with lock_path(root).open("a+b") as handle:
+        with _owned_lock_handle(root) as handle:
             if fcntl is not None:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
             try:

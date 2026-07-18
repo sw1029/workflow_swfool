@@ -1,6 +1,6 @@
 ---
 name: manage-agent-authority
-description: Manage deterministic workspace authority policy, grants, leases, and subject-bound receipts without expanding active permissions. Use when Codex must summarize or update `.agent_goal/agent_authority.md`; distinguish approval, goal ratification, risk acceptance, external-input supply, and design choice; evaluate a versioned skill operation against S0-S4 source rank, R0-R3 risk, D0-D3 decision class, exact subject scope, capability namespace, and use budget; reserve/consume/release authority; delegate, suspend, explicitly reactivate, expire, or revoke a grant; or validate legacy and immutable operation receipts.
+description: Manage deterministic workspace authority policy, grants, leases, exact operation settlement, exhausted-source recovery recipes, and workflow-aware approval state without expanding active permissions. Use when Codex must summarize or update `.agent_goal/agent_authority.md`; distinguish approval from goal truth, risk acceptance, external input, and design choice; evaluate or resolve a versioned operation; reserve, verify, consume, release, or reconcile authority; prepare a non-authoritative exact recovery projection; resume an existing reservation instead of re-prompting; transition a grant; or validate legacy and immutable receipts.
 ---
 
 # Manage Agent Authority
@@ -56,7 +56,7 @@ Route unsupplyable external input to a local-data alternative, descope, or an ex
    - Load adapter classifications only as narrowing evidence.
 
 2. Classify the operation.
-   - Bind skill/operation IDs and versions, cycle/task/pack/attempt IDs, actor rank, exact subject `{kind, ref, digest, revision}`, namespaced capabilities, effect/data/mutation/reversibility, risk, decision class, requested cardinality/use budget, and idempotency key.
+   - Bind skill/operation IDs and versions, cycle/task/pack/attempt IDs, actor rank, exact subject `{kind, ref, digest, revision}`, namespaced capabilities, effect/data/mutation/reversibility, risk, decision class, requested cardinality/grant budget, per-dispatch `reservation_units`, and idempotency key.
    - Under schema v2, treat `subject.ref` as a workspace-relative existing regular file. Reject a missing, symlinked, or non-regular subject and require its current bytes to match `subject.digest` again before reserve, dispatch, and commit.
    - Require `single_use` budget 1, an exact task ID for `task_lease`, and an exact pack/improvement ID for `improvement_lease`.
    - Build a session ceiling and goal-autonomy envelope. Bind the envelope to exact concept/subject/operation IDs and evidence digest.
@@ -99,6 +99,29 @@ PYTHONPATH="$SKILLS_ROOT/manage-agent-authority/scripts" \
 
 Use `effective_authority_fingerprint` for approval-wait wakeup and exact replay. It contains only operation-relevant projections and selected immutable grant/policy bindings. Do not substitute a hash of the mutable whole policy or goal context.
 
+Before prompting, run `authority resolve` or inspect `authority status`. For replayable diagnostics, pass `authority status --at <RFC3339>` and the same `--skills-root` used for evaluation; omission uses the current UTC time and default skills root, and every status result reports `evaluated_at`. Judge both the selected grant and every ancestor against that one time, including `not_before` and `expires_at`, while preserving each raw projection state separately from effective usability. Status and resolve must rehash and validate the bound operation manifest and fail closed if it is missing, changed, invalid for the exact operation identity, or if any decision, reservation, grant/reservation state, or lifecycle receipt is not a closed, deterministic, fully settled artifact. Reject symlinks in every component of authority-owned decision, source-snapshot, grant, state, and receipt directories; acquire inspected JSON as stable bytes and bind the reported digest to those same bytes. Publish authority-owned snapshots, immutable artifacts, and mutable state through stable directory descriptors with `O_NOFOLLOW` and pre/post parent-identity checks so an ancestor swap fails closed instead of redirecting a write.
+
+Select workflow state in this order: unknown-effect quarantine; settled consumed or released reservation; usable reserved operation; reserved operation whose selected or ancestor authority is no longer usable; current exact allowed decision; exact source approval with a usable or cleanly materializable grant ID; source-authority defect; exhausted source authority; genuine approval wait. Return `should_prompt=false` for every system-recovery or reusable-authority state. A released reservation is terminal only with an exact release or reconciliation receipt proving no effect; return `already_released` and never redispatch it. Keep an unusable reserved projection reserved, preserve unknown-effect safety, return `reserved_authority_recovery`, and do not silently release it.
+
+For an exact source approval, classify a missing grant ID as materializable only when both its grant and state paths are absent and safe. Reuse an existing grant only when its exact source binding, scope, lineage, time, status, and budget remain usable. Treat an orphan or conflicting projection as `source_authority_defect`. Treat an exhausted, revoked, expired, or source-binding-conflicted existing ID as `source_authority_exhausted`: supersede the old wait, do not prompt, and route the system to `prepare_exact_recovery_recipe`.
+
+Run `authority prepare-source-recovery` against the exact persisted exhausted decision binding. It publishes one immutable, prepare-only `authority_source_recovery_recipe` under `.task/authorization/recovery_recipes/`. The recipe binds the old decision, source snapshot, exhausted grant, and exact grant-state evidence; allocates distinct unused replacement request, attempt, source-approval, grant, lineage, and replay IDs; and includes a closed replacement request plus non-artifact source-approval and grant requirements. Exact replay is idempotent, while conflicting content for the same recovery identity fails closed. The recipe is neither approval nor authority. It must not contain any nested object accepted as `authority_source_approval` or `authority_grant`, any projected source-snapshot binding, or any claim that approval integrity is already verified. Materialize a source only from the actual later user-decision evidence and bind a grant only to the resulting immutable snapshot bytes; until then snapshot, registration, reserve, dispatch, and commit must fail closed.
+
+Treat recipe `prepared_at` as T1 preparation evidence, never as the later user-decision time. The actual explicit decision supplies T2, with T2 greater than or equal to T1. A materialized source must set `not_before` to T2 or later; its grant must set both `not_before` and `created_at` to T2 or later. Evaluation at T1 must therefore remain non-allowed even if post-approval artifacts have subsequently been registered.
+
+After a valid recipe exists, `status` and `resolve` supersede the system repair state with exactly one `needs_user_approval` result whose action is `approve_exact_recovery_projection`. Use the recovery projection, replay key, and effective-authority fingerprint as its new wait identity. Never revive the old projection or reuse an exhausted request, attempt, source, grant, lineage, or replay identity.
+
+Preserve the machine-readable `post_approval_handoff` in prepare, status, and resolve output. After the exact user decision arrives, use the existing public commands in order: create a source artifact from that actual decision evidence and run `snapshot-source`; complete the grant requirements with that resulting binding and run `register-grant`; then run `evaluate` with the recipe's replacement request. From that point, poll `status` or `resolve` with `continuation_request_sha256`, not the exhausted original request digest. The handoff is guidance, not authority, and remains blocked until the actual user-decision evidence exists.
+
+Discover an existing recipe from its immutable historical decision/source/grant/state evidence before classifying a current generic approval wait. A later source expiry or other loss of current coverage must never revive the original approval projection or wait identity. If the recipe remains within its exact continuation window, preserve its one recovery prompt. If its expiry ceiling has closed, reuse `source_authority_exhausted` with reason `source_recovery_window_closed`, `should_prompt=false`, action `prepare_fresh_recovery_plan`, the exact recipe binding, and a non-authoritative closed-window handoff. Every non-prompt status or resolution exposes `approval_projection=null`.
+
+```bash
+PYTHONPATH="$SKILLS_ROOT/manage-agent-authority/scripts" \
+  python3 -m manage_agent_authority authority prepare-source-recovery \
+  --root . --decision-ref .task/authorization/decisions/authd-id.json \
+  --decision-sha256 <sha256> --at 2026-01-01T00:00:00Z
+```
+
 When the decision is `approval_required`, present the deterministic `approval_projection`: typed intent, exact operation/subject/capabilities/effect, bounded scope and budget, excluded effects, safe alternative, reason codes, and replay key. An approval of that projection does not authorize any excluded effect or broader reuse.
 
 6. Reserve before dispatch.
@@ -109,9 +132,10 @@ When the decision is `approval_required`, present the deterministic `approval_pr
 
 7. Verify before commit, then consume or release.
    - Run `authority verify --stage pre_commit` before committing effects.
-   - Bind an immutable execution-result artifact and run `authority consume` after a known effect.
+   - Pass that exact verification binding, a typed owner-result binding, and the exact expected subject-after digest to `authority consume` after a known effect. Consume creates a closed `authority_execution_result`; it does not require the pre-effect subject digest to remain current after a legitimate mutation.
    - Run `authority release` only with evidence of `not_started` or `verified_no_effect`.
    - Quarantine `unknown_effect`; do not restore its reserved budget automatically.
+   - Run `authority prepare-reconciliation-evidence` to deterministically bind the quarantined reservation, operation, observed subject, outcome, time, and typed owner result. Pass its exact binding to `authority reconcile`. Map `confirmed_effect` to consumed, `confirmed_no_effect` to released, and `still_unknown` to a versioned quarantined state. Do not ask the user to approve the original operation again.
 
 8. Transition grants explicitly.
    - Use CAS-bound `suspended`, `reactivated`, `revoked`, or `expired` transitions with immutable typed source approval.
@@ -145,7 +169,9 @@ Keep `python3 -m manage_agent_authority receipt issue|validate` compatible with 
 
 ## Report contract
 
-Return the operation, typed intent, decision/reasons, exact subject, required and covering capabilities, source/risk/decision axes, cardinality and remaining budget, immutable artifact refs/digests, lifecycle state/version, effective scoped fingerprint, open questions, and conflicts. For orchestration, also return a compact Korean summary without embedding raw private or copyrighted source text.
+Return the same compact interaction projection from both status and resolve: `outcome`, `workflow_state`, `should_prompt`, nullable `user_action`, and one `next_action`. Set `outcome=workflow_state` to the selected machine state. Set `user_action=next_action` only when its actor is `user`; otherwise use `null`. Keep operation-specific detail, typed intent, reasons, exact subject, capabilities, axes, grant budget versus reservation units, immutable bindings, lifecycle version, scoped fingerprint, and conflicts in structured detail. Do not embed raw private or copyrighted source text.
+
+For exact-request consumers, preserve `request_sha256_filter`, `workflow_basis`, and the exact decision, reservation/state, source-approval, recovery-recipe, settlement-receipt, and blocker bindings that justify the selected state. Public system states include `effect_reconciliation`, `already_consumed`, `already_released`, `ready_to_resume`, `reserved_authority_recovery`, `ready_to_reserve`, `source_approval_ready_for_grant`, `source_authority_defect`, and `source_authority_exhausted`. The only user-prompt state is `needs_user_approval`; its recovery variant uses `approve_exact_recovery_projection`. `idle` and `decision_<typed-decision>` remain non-prompt routing states.
 
 ## Guardrails
 
@@ -154,5 +180,7 @@ Return the operation, typed intent, decision/reasons, exact subject, required an
 - Do not use wildcard capabilities, wildcard subjects, implicit grant unions, self-delegation, circular delegation, rank escalation, retroactive receipts, or current mutable policy hashes for new receipts.
 - Do not let task authority imply action authority, improvement authority rewrite core GT, authority imply risk consent, or approval imply external-input availability.
 - Do not retry an unchanged approval wait as a new task. Replay the exact request and wake only when its scoped authority fingerprint or separate required input changes.
+- Do not expose internal missing-grant state as a user approval when an exact effective source approval can materialize the grant.
+- Do not turn an exhausted, revoked, expired, or source-conflicted existing grant ID into another approval for the same projection. Rebuild a new exact grant recipe first.
 - Do not release a reservation with unknown effects. Quarantine it for evidence-backed recovery.
 - Do not store secrets, credentials, tokens, raw private transcripts, or large copyrighted excerpts in authority artifacts.

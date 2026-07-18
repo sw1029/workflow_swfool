@@ -9,14 +9,14 @@ description: "Maintain workspace `.task/index.md` and `.task/index.jsonl` as a d
 
 Use this skill to keep one workspace-local task lifecycle index under `.task/`. The canonical record is append-only `.task/index.jsonl`; the human-readable view is `.task/index.md`.
 
-Every index/lifecycle write is `mutate_task_state_index` in `authority.operations.json` and follows the shared [authority v2 contract](../manage-agent-authority/references/authority-v2-contract.md). An owning task artifact or a correct scan result does not authorize changing the canonical index for a different subject digest.
+Every canonical index/lifecycle write is `mutate_task_state_index` in `authority.operations.json` and follows the shared [authority v2 contract](../manage-agent-authority/references/authority-v2-contract.md). Immutable plan preparation/publication alone is the authority-free `prepare_task_state_transition_plan`: it is reversible, non-canonical workflow metadata and grants no permission to apply the plan. An owning task artifact, published plan, or correct scan result does not authorize changing the canonical index for a different subject digest.
 
 This skill records traceability only. It does not decide task completion, delete artifacts, or replace the source workflows that create `task.md`, candidate tasks, implementation issues, task misses, execution logs, goal/interview outputs, or audit logs.
 
 ## Routing Policy
 
 - When called from `$orchestrate-task-cycle`, consume the canonical orchestration reference [workflow-routing.md](../orchestrate-task-cycle/references/workflow-routing.md) as caller context, but keep this skill's fixed ID-only routing below.
-- Run deterministic scan/audit/render helpers without assigning a model. When an optional ID insight or delegated ID correction agent is needed, request Tier 2 `model_ref: model_ref:balanced` with `reasoning_effort: medium` under `configured-tiered-routing-v3`.
+- Run deterministic scan/audit/render helpers without assigning a model. When an optional ID insight or delegated ID correction agent is needed, request Tier 2 `requested_model_ref: model_ref:balanced` with `requested_reasoning_effort: medium` under `configured-tiered-routing-v3`.
 - Apply the same Tier 2 balanced-profile/medium route to delegated scan interpretation, link repair, lifecycle transition recording, candidate/miss cleanup gating, or durable ID audit reporting.
 - Do not inherit `high` or `xhigh` routing from caller workflows for `$manage-task-state-index` ID correction. This skill's ID-specific routing is fixed at medium unless the user explicitly changes it.
 - Keep runtime model bindings in caller configuration or a repository adapter. If the binding is absent, retain `model_configuration_status: reference_only`; if the delegation tool cannot enforce the resolved model/effort, report `routing_enforcement: prompt_only|inherited_unverified` and a limitation. Never claim enforced routing or actual-model execution from an abstract reference alone.
@@ -161,7 +161,7 @@ For the complete event schema and link relationship names, read [index-schema.md
 
 7. Optionally request additional ID insight from a dedicated agent.
    - Use one separate read-only ID insight agent only when the calling workflow already authorizes agents or the user explicitly asks for ID/governance audit.
-   - Spawn or request this ID insight agent with Tier 2 `model_ref: model_ref:balanced` and fixed `reasoning_effort: medium`.
+   - Spawn or request this ID insight agent with Tier 2 `requested_model_ref: model_ref:balanced` and fixed `requested_reasoning_effort: medium`.
    - This agent is additional; never count it as one of the existing implementation, inspection, question, review, or synthesis agents.
    - Give the agent `.task/index.md`, the deterministic `audit` JSON, and relevant artifact paths only. Do not assign repo implementation, OOM analysis, env discovery, prompt shaping, or task synthesis to it.
    - The agent may suggest missing links, stale IDs, duplicate lifecycle records, parent/child relationship corrections, and candidate/miss cleanup risks. The main agent owns all writes.
@@ -182,6 +182,33 @@ Use `python3 -m manage_task_state_index index` for deterministic updates:
 - `link`: append a relationship from one indexed artifact to another.
 - `rebuild`: regenerate `.task/index.md` from `.task/index.jsonl`.
 - `audit`: inspect global ID consistency, broken links, duplicate active paths, stale digests, missing files, active task conflicts, and unindexed standard artifacts. Add `--write-report` to write `.task/id_audit/*.md` and index it as `audit-*`. Add `--summary-only --focus-path <path>` to emit compact counts and focused issues for report packets.
+- `plan-transition`: build one content-bound event batch from `--request-json <json-or-path>`. The request contains a non-empty exact `events` list plus an optional fixed `updated_at`; Markdown rendering is mandatory. Use `--dry-run` for a zero-write plan or omit it to immutably publish reversible, non-canonical workflow metadata at the sole canonical `.task/transition_plans/<plan-id>.json` path. If `--output` is supplied it must equal that path exactly; aliases are rejected because intent and receipt sidecars are keyed by `plan_id`. This prepare operation is authority-free; it cannot authorize `apply-plan`.
+- `verify-plan`: read-only verify the immutable plan digest, event bindings, ledger/Markdown/artifact CAS anchors, exact replay state, and receipt consistency. Use `--phase planning` before dependency owners publish prospective artifacts: ledger/Markdown must still match the plan prestate and every artifact must match `before_sha256`. Use `--phase apply` after dependencies finish: the same ledger/Markdown prestate must hold and artifacts must match `expected_sha256`. Do not emulate this distinction by ignoring artifact defects.
+- `apply-plan`: under `.task/index.lock`, CAS-apply every planned task/archive/supersede/advice/task-pack link event as one append batch, render once, and publish an immutable receipt. Apply remains the separately authorized `mutate_task_state_index` operation. Before canonical append it publishes an immutable pending intent; every normal writer fails closed on an unfinished foreign intent. Exact replay appends zero events; a post-append render/receipt interruption is repaired only from one unique exact plan-tagged event batch, preserving and re-rendering any later unrelated suffix.
+- `settle-plan-no-effect`: close one stale plan that has no plan-tagged event, no pending intent, and no apply receipt. It publishes an immutable plan/file-bound no-effect receipt only when apply-time CAS is no longer current. A still-applicable plan, partial or ambiguous intent, any observed plan effect, conflicting receipt, or unsafe owned path fails closed. Replay returns the original receipt. This supporting settlement record can release the existing reservation; it is not canonical index mutation, a new authority source, or permission to apply a replacement plan.
+
+For task switches or other multi-artifact lifecycle projections, prefer the immutable `task_index_transition_plan` as the authority subject. The legacy `task_index` subject remains accepted for existing direct `scan|add|link|rebuild` callers. Apply results expose `execution_result_binding: {ref, sha256}` whose SHA-256 is the exact receipt file digest; `plan_sha256` and `receipt_content_sha256` are canonical body digests and must not be substituted for the exact `plan_file_sha256` or `receipt_file_sha256` bindings.
+
+Example:
+
+```bash
+PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts:${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts" \
+python3 -m manage_task_state_index index --root . plan-transition \
+  --request-json .task/transition-request.json
+PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts:${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts" \
+python3 -m manage_task_state_index index --root . verify-plan \
+  --phase planning \
+  --plan .task/transition_plans/<plan-id>.json
+PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts:${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts" \
+python3 -m manage_task_state_index index --root . verify-plan \
+  --phase apply \
+  --plan .task/transition_plans/<plan-id>.json
+PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts:${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts" \
+python3 -m manage_task_state_index index --root . apply-plan \
+  --plan .task/transition_plans/<plan-id>.json
+```
+
+If a foreign index write or a genuinely foreign artifact digest makes that exact plan stale before its intent is published, do not request the same semantic approval again. Verify `plan_effect_observed: false`, `plan_intent_observed: false`, and `no_effect_eligible: true`; publish the exact no-effect receipt; release the old reservation against that receipt; then prepare a new exact plan from the unchanged source decision. Artifacts that are all still at `before_sha256`, all at `expected_sha256`, or partially moving only between those two states are normal dependency states (`ready` or `materializing`), never no-effect. Only a changed semantic subject, effect, risk, or exclusion requires another user decision.
 
 Use `python3 -m manage_task_state_index migrate` only for the bounded `inspect` and `migrate plan|apply|validate|recover` transaction documented in [legacy-migration.md](references/legacy-migration.md). `plan` and `apply --dry-run` must leave canonical `.task` state unchanged. Never use migration as a general malformed-row ignore mode.
 
@@ -196,6 +223,7 @@ All writers serialize through workspace-local `.task/index.lock`, validate the e
 - Do not use the index as proof that work is complete; use `$validate-task-completion` for verdicts.
 - Do not delete, move, or rewrite task artifacts from this skill unless the user or owning workflow explicitly requested it.
 - Do not overwrite `.task/index.jsonl`.
+- Do not dispatch a plan after `settled_no_effect`. Do not accept `stale`, the plan file, or arbitrary JSON as no-effect evidence. Require `status: settled_no_effect`, `no_effect_verified: true`, both observed activity flags false, and the exact no-effect receipt file binding.
 - Do not compare an immutable historical snapshot digest with the current mutable alias body. Store `record_class: mutable_alias|immutable_snapshot`, `snapshot_digest`, and `canonical_id` in the existing event `fields` when applicable.
 - Do not remove historical events from `.task/index.jsonl`; append a correcting event instead.
 - Do not store secrets, private tokens, raw sensitive data, or large copyrighted excerpts in index fields.

@@ -45,6 +45,7 @@ REQUIRED_WORKFLOW_OPERATIONS = {
         "delegate_grant",
         "evaluate_operation",
         "issue_grant",
+        "prepare_source_authority_recovery",
         "release_use",
         "reserve_use",
         "snapshot_policy",
@@ -56,7 +57,10 @@ REQUIRED_WORKFLOW_OPERATIONS = {
         "validate_policy",
         "verify_reservation",
     },
-    "manage-external-advice": {"mutate_advice_lifecycle"},
+    "manage-external-advice": {
+        "mutate_advice_lifecycle",
+        "prepare_advice_intake_plan",
+    },
     "manage-evidence-cache": {
         "append_evidence_cache_record",
         "query_evidence_cache",
@@ -71,7 +75,10 @@ REQUIRED_WORKFLOW_OPERATIONS = {
         "mutate_local_issue_lifecycle",
     },
     "manage-schema-contracts": {"inspect_contracts", "publish_contract"},
-    "manage-task-state-index": {"mutate_task_state_index"},
+    "manage-task-state-index": {
+        "mutate_task_state_index",
+        "prepare_task_state_transition_plan",
+    },
     "monitor-running-execution": {
         "record_execution_monitor_event",
         "terminate_running_execution",
@@ -105,9 +112,9 @@ REQUIRED_WORKFLOW_OPERATIONS = {
     },
     "shape-agent-goal-prompt": {"shape_goal_draft"},
     "task-doctor": {
+        "coordinate_task_doctor_workflow",
         "diagnose_task",
         "mutate_task_scope",
-        "normalize_initial_selection",
     },
     "task-md-agent-governance": {
         "advance_task_state",
@@ -128,13 +135,17 @@ PROJECTION_ONLY_MUTATIONS = {
     ("audit-session-governance", "rebuild_session_audit_index"),
     ("deep-interview-goal-context", "draft_concept_graph"),
     ("manage-agent-authority", "evaluate_operation"),
+    ("manage-agent-authority", "prepare_source_authority_recovery"),
     ("manage-agent-authority", "snapshot_policy"),
     ("manage-agent-authority", "snapshot_source_approval"),
     ("manage-evidence-cache", "append_evidence_cache_record"),
+    ("manage-external-advice", "prepare_advice_intake_plan"),
+    ("manage-task-state-index", "prepare_task_state_transition_plan"),
     ("orchestrate-task-cycle", "materialize_terminal_wait_baseline_subject"),
     ("record-agent-work-log", "publish_agent_work_log"),
     ("record-visible-increment", "publish_visible_increment"),
     ("render-cycle-dashboard", "publish_cycle_dashboard"),
+    ("task-doctor", "coordinate_task_doctor_workflow"),
     ("validate-task-completion", "publish_validation_projection"),
 }
 

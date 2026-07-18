@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-import os
-import stat
-import tempfile
+import json
 from pathlib import Path
 from typing import Any
 
@@ -20,8 +18,11 @@ from .contracts import rank_value
 from .contracts import risk_value
 from .contracts import validate_grant
 from .source_approval import load_source_approval
+from .source_approval import validate_source_approval
 from .source_approval import validate_for_grant
 from .source_approval import validate_for_transition
+from .stable_store import publish_immutable
+from .stable_store import read_regular
 from .projection_recovery import apply_projection_changes
 from .projection_recovery import projection_change
 from .projection_recovery import recover_projection_intents
@@ -35,81 +36,6 @@ def _relative(path: Path, root: Path) -> str:
     return path.relative_to(root.resolve()).as_posix()
 
 
-def _source_signature(value: os.stat_result) -> tuple[int, int, int, int, int, int]:
-    return (
-        value.st_dev,
-        value.st_ino,
-        value.st_mode,
-        value.st_size,
-        value.st_mtime_ns,
-        value.st_ctime_ns,
-    )
-
-
-def _stage_snapshot(source: Path, directory: Path) -> tuple[Path, str]:
-    directory.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_value = tempfile.mkstemp(
-        prefix=".snapshot.", suffix=".tmp", dir=directory
-    )
-    temporary = Path(temporary_value)
-    source_descriptor: int | None = None
-    staged = False
-    try:
-        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
-        flags |= getattr(os, "O_NOFOLLOW", 0)
-        source_descriptor = os.open(source, flags)
-        with os.fdopen(descriptor, "wb") as output:
-            descriptor = -1
-            with os.fdopen(source_descriptor, "rb") as input_handle:
-                source_descriptor = None
-                before = os.fstat(input_handle.fileno())
-                if not stat.S_ISREG(before.st_mode):
-                    raise SystemExit("Snapshot source must remain a regular file.")
-                digest = hashlib.sha256()
-                for chunk in iter(lambda: input_handle.read(1024 * 1024), b""):
-                    digest.update(chunk)
-                    output.write(chunk)
-                after = os.fstat(input_handle.fileno())
-                path_after = os.stat(source, follow_symlinks=False)
-                if _source_signature(before) != _source_signature(
-                    after
-                ) or _source_signature(before) != _source_signature(path_after):
-                    raise SystemExit("Snapshot source changed during acquisition.")
-                output.flush()
-                os.fsync(output.fileno())
-        staged = True
-        return temporary, digest.hexdigest()
-    except OSError as exc:
-        raise SystemExit(
-            f"Snapshot source could not be acquired safely: {exc}"
-        ) from exc
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-        if source_descriptor is not None:
-            os.close(source_descriptor)
-        if not staged and temporary.exists():
-            temporary.unlink()
-
-
-def _install_snapshot(temporary: Path, target: Path, digest: str) -> None:
-    created = False
-    try:
-        try:
-            os.link(temporary, target)
-            created = True
-        except FileExistsError:
-            pass
-        if target.is_symlink() or not target.is_file():
-            raise SystemExit("A conflicting content-addressed snapshot exists.")
-        if sha256_file(target) != digest:
-            if created:
-                target.unlink(missing_ok=True)
-            raise SystemExit("A conflicting content-addressed snapshot exists.")
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
 def snapshot_file(root: Path, source_ref: str, kind: str) -> dict[str, str]:
     if kind not in {"policy", "source_approval"}:
         raise SystemExit("Snapshot kind must be policy or source_approval.")
@@ -118,19 +44,27 @@ def snapshot_file(root: Path, source_ref: str, kind: str) -> dict[str, str]:
     with authority_lock(root):
         directory = "policy_snapshots" if kind == "policy" else "source_snapshots"
         snapshot_directory = root / AUTHORIZATION_ROOT / directory
-        temporary, digest = _stage_snapshot(source, snapshot_directory)
+        payload = read_regular(source, label="snapshot source")
+        assert payload is not None
+        digest_builder = hashlib.sha256()
+        for offset in range(0, len(payload), 1024 * 1024):
+            digest_builder.update(payload[offset : offset + 1024 * 1024])
+        if read_regular(source, label="snapshot source") != payload:
+            raise SystemExit("Snapshot source changed during acquisition.")
+        digest = digest_builder.hexdigest()
+        if kind == "source_approval":
+            try:
+                raw_approval = json.loads(payload.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise SystemExit("Source approval must be closed JSON.") from exc
+            if not isinstance(raw_approval, dict):
+                raise SystemExit("Source approval must be a JSON object.")
+            validate_source_approval(raw_approval)
         extension = (
             source.suffix if source.suffix in {".md", ".json", ".txt"} else ".bin"
         )
         target = snapshot_directory / f"{kind}-{digest}{extension}"
-        try:
-            if kind == "source_approval":
-                load_source_approval(temporary)
-            _install_snapshot(temporary, target, digest)
-            if kind == "source_approval":
-                load_source_approval(target)
-        finally:
-            temporary.unlink(missing_ok=True)
+        publish_immutable(target, payload)
         metadata = {
             "schema_version": 2,
             "artifact_kind": f"{kind}_snapshot",

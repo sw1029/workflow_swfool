@@ -36,11 +36,11 @@ Do not add README, changelog, quick-reference, or auxiliary process documents. P
 
 ## Module Invocation
 
-Resolve the installed skills root once and invoke the static module command registry. Include the agent-log and session-governance package roots because context, progress, and result-contract commands consume their public APIs.
+Resolve the installed skills root once and invoke the static module command registry. Include the authority-owner, agent-log, and session-governance package roots because authority settlement, context, progress, and result-contract commands consume their public APIs. Settlement calls the authority owner's closed execution-result validator instead of maintaining a weaker local copy.
 
 ```bash
 SKILLS_ROOT="${CODEX_HOME:-$HOME/.codex}/skills"
-PYTHONPATH="$SKILLS_ROOT/orchestrate-task-cycle/scripts:$SKILLS_ROOT/record-agent-work-log/scripts:$SKILLS_ROOT/audit-session-governance/scripts" \
+PYTHONPATH="$SKILLS_ROOT/orchestrate-task-cycle/scripts:$SKILLS_ROOT/manage-agent-authority/scripts:$SKILLS_ROOT/record-agent-work-log/scripts:$SKILLS_ROOT/audit-session-governance/scripts" \
   python3 -m orchestrate_task_cycle --help
 ```
 

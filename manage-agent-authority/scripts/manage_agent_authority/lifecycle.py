@@ -7,6 +7,9 @@ from .artifact_store import AUTHORIZATION_ROOT, load_grant, state_path, verify_b
 from .canonical import authority_lock, object_sha256, parse_time, read_object
 from .canonical import resolve_workspace_path, sha256_file, write_immutable_json
 from .evaluator import evaluate, load_bound_decision
+from .contracts import reservation_units
+from .execution_results import create_execution_result
+from .execution_results import resolve_pre_commit_verification
 from .lifecycle_preflight import decision_grant_bindings
 from .lifecycle_preflight import subject_preflight
 from .lifecycle_preflight import validate_selected_grants
@@ -93,7 +96,7 @@ def reserve(
         records = validate_selected_grants(
             root, decision_grant_bindings(decision), at=reserved_at
         )
-        units = decision["request"]["use_budget_requested"]
+        units = reservation_units(decision["request"])
         grant_uses: list[dict[str, Any]] = []
         changes: list[dict[str, Any]] = []
         for grant, _, state in records:
@@ -187,13 +190,15 @@ def verify_reservation(
     verified_at: str,
     expected_version: int,
     skills_root: Path | None = None,
+    verify_subject: bool = True,
 ) -> dict[str, Any]:
     if state["status"] != "reserved" or state["version"] != expected_version:
         raise SystemExit("Reservation is not in the expected reserved CAS state.")
     decision, _ = load_bound_decision(
         root, reservation["decision"]["ref"], reservation["decision"]["sha256"]
     )
-    subject_preflight(root, decision["request"])
+    if verify_subject:
+        subject_preflight(root, decision["request"])
     verify_manifest(decision, skills_root)
     verify_bound_decision_evidence(root, decision)
     versions = {
@@ -265,13 +270,15 @@ def consume(
     reservation_sha256: str,
     execution_result: dict[str, str],
     *,
+    pre_commit_verification: dict[str, str] | None = None,
+    expected_subject_after_sha256: str | None = None,
     consumed_at: str,
     expected_version: int,
     idempotency_key: str,
     skills_root: Path | None = None,
 ) -> dict[str, Any]:
     root = root.resolve()
-    verify_binding(root, execution_result, "execution_result")
+    verify_binding(root, execution_result, "owner execution_result")
     receipt_id = f"authu-{object_sha256({'reservation': reservation_sha256, 'key': idempotency_key})[:24]}"
     receipt_path = root / AUTHORIZATION_ROOT / "use_receipts" / f"{receipt_id}.json"
     with authority_lock(root):
@@ -281,9 +288,17 @@ def consume(
         )
         if receipt_path.exists():
             receipt = validated_settled_intent(root, receipt_path)
+            recorded_owner_result = receipt.get(
+                "owner_execution_result", receipt.get("execution_result")
+            )
             if (
-                receipt.get("execution_result") != execution_result
+                recorded_owner_result != execution_result
                 or receipt.get("idempotency_key") != idempotency_key
+                or (
+                    pre_commit_verification is not None
+                    and receipt.get("pre_commit_verification")
+                    != pre_commit_verification
+                )
             ):
                 raise SystemExit("Use-receipt idempotency conflict.")
             return {
@@ -291,13 +306,32 @@ def consume(
                 "ref": receipt_path.relative_to(root).as_posix(),
                 "sha256": sha256_file(receipt_path),
             }
-        verify_reservation(
+        verification = verify_reservation(
             root,
             reservation,
             state,
             verified_at=consumed_at,
             expected_version=expected_version,
             skills_root=skills_root,
+            verify_subject=False,
+        )
+        reservation_binding = _artifact_binding(root, reservation_path)
+        verification_binding, _ = resolve_pre_commit_verification(
+            root,
+            reservation,
+            reservation_binding,
+            pre_commit_verification,
+            expected_version=expected_version,
+        )
+        _, typed_result_binding = create_execution_result(
+            root,
+            reservation,
+            verification["decision"],
+            reservation_binding,
+            verification_binding,
+            execution_result,
+            completed_at=consumed_at,
+            expected_subject_after_sha256=expected_subject_after_sha256,
         )
         updates: list[dict[str, Any]] = []
         changes: list[dict[str, Any]] = []
@@ -343,7 +377,9 @@ def consume(
             "artifact_kind": "authority_use_receipt",
             "receipt_id": receipt_id,
             "reservation": _artifact_binding(root, reservation_path),
-            "execution_result": execution_result,
+            "execution_result": typed_result_binding,
+            "owner_execution_result": execution_result,
+            "pre_commit_verification": verification_binding,
             "consumed_at": parse_time(consumed_at, "consumed_at").isoformat(),
             "grant_versions_after": {
                 item["grant_id"]: item["version"] for item in updates

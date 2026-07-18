@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import datetime as dt
-import fcntl
 import hashlib
 import json
-import os
-import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 from typing import Iterator
+
+from .stable_store import atomic_replace
+from .stable_store import locked_file
+from .stable_store import publish_immutable
+from .stable_store import read_regular
 
 
 def canonical_bytes(value: Any) -> bytes:
@@ -31,11 +33,9 @@ def object_sha256(value: Any) -> str:
 
 
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    payload = read_regular(path, label="SHA-256 source")
+    assert payload is not None
+    return sha256_bytes(payload)
 
 
 def parse_time(value: Any, label: str) -> dt.datetime:
@@ -96,8 +96,14 @@ def load_object(value: str) -> dict[str, Any]:
     except OSError:
         is_file = False
     try:
-        loaded = json.loads(candidate.read_text(encoding="utf-8") if is_file else value)
-    except (json.JSONDecodeError, OSError) as exc:
+        if is_file:
+            payload = read_regular(candidate.absolute(), label="JSON input")
+            assert payload is not None
+            source = payload.decode("utf-8")
+        else:
+            source = value
+        loaded = json.loads(source)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise SystemExit(f"JSON input is invalid: {exc}") from exc
     if not isinstance(loaded, dict):
         raise SystemExit("JSON input must be an object.")
@@ -106,8 +112,10 @@ def load_object(value: str) -> dict[str, Any]:
 
 def read_object(path: Path, label: str = "artifact") -> dict[str, Any]:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
+        payload = read_regular(path, label=label)
+        assert payload is not None
+        value = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise SystemExit(f"{label} is not readable JSON: {exc}") from exc
     if not isinstance(value, dict):
         raise SystemExit(f"{label} must be a JSON object.")
@@ -115,40 +123,25 @@ def read_object(path: Path, label: str = "artifact") -> dict[str, Any]:
 
 
 def write_json_atomic(path: Path, value: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_value = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    temporary = Path(temporary_value)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(value, handle, ensure_ascii=False, indent=2, sort_keys=True)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
+    payload = (
+        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    atomic_replace(path, payload)
 
 
 def write_immutable_json(path: Path, value: dict[str, Any], label: str) -> str:
-    if path.exists():
-        existing = read_object(path, label)
-        if existing != value:
-            raise SystemExit(f"Conflicting {label} already exists: {path}")
-    else:
-        write_json_atomic(path, value)
-    return sha256_file(path)
+    payload = (
+        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    try:
+        publish_immutable(path, payload)
+    except SystemExit as exc:
+        raise SystemExit(f"Conflicting {label} already exists: {path}") from exc
+    return sha256_bytes(payload)
 
 
 @contextmanager
 def authority_lock(root: Path) -> Iterator[None]:
     lock_path = root / ".task" / "authorization" / "state" / ".authority.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a+", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    with locked_file(lock_path):
+        yield

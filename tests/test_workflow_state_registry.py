@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import subprocess
@@ -21,6 +22,10 @@ for package_root in (TASK_STATE_SCRIPTS, AGENT_LOG_SCRIPTS):
 
 
 from manage_task_state_index import index as task_state_index  # noqa: E402
+from manage_task_state_index.state import transition_intent as transition_intent_module  # noqa: E402
+from manage_task_state_index.state import transition_plan as transition_plan_module  # noqa: E402
+from manage_task_state_index.state import transition_plan_contract as transition_contract_module  # noqa: E402
+from manage_task_state_index.state import transition_publication as transition_publication_module  # noqa: E402
 
 
 def test_scan_keeps_stable_id_for_ordinary_same_path_edit(tmp_path: Path) -> None:
@@ -517,6 +522,1394 @@ def test_concurrent_cli_processes_share_the_workspace_lock(tmp_path: Path) -> No
     state = task_state_index.merge_state(rows)
     assert len(rows) == 12
     assert len(state) == 1
+
+
+def _transition_request(tmp_path: Path, old_id: str) -> dict[str, object]:
+    task = tmp_path / "task.md"
+    advice = tmp_path / ".agent_advice" / "active" / "advice.md"
+    pack = tmp_path / ".task" / "task_pack" / "pack-A.json"
+    archive = tmp_path / ".agent_log" / "past-task.md"
+    advice.parent.mkdir(parents=True, exist_ok=True)
+    pack.parent.mkdir(parents=True, exist_ok=True)
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    advice.write_text("# Advice\n", encoding="utf-8")
+    pack.write_text('{"pack_id":"pack-A","status":"active"}\n', encoding="utf-8")
+    archive.write_text("# Archived task\n", encoding="utf-8")
+    task.write_text("# Successor task\n", encoding="utf-8")
+    return {
+        "schema_version": 1,
+        "updated_at": "2026-07-18T12:00:00+09:00",
+        "render": True,
+        "events": [
+            {
+                "event": "upsert",
+                "id": old_id,
+                "status": "superseded",
+            },
+            {
+                "event": "link",
+                "id": old_id,
+                "links": [{"rel": "superseded_by", "id": "task-successor"}],
+            },
+            {
+                "event": "upsert",
+                "id": "past-archive",
+                "type": "past_task",
+                "status": "archived",
+                "path": ".agent_log/past-task.md",
+                "title": "Archived task",
+                "content_sha256": task_state_index.sha256_file(archive),
+                "links": [{"rel": "related_to", "id": old_id}],
+            },
+            {
+                "event": "upsert",
+                "id": "adv-direction",
+                "type": "external_advice",
+                "status": "active",
+                "path": ".agent_advice/active/advice.md",
+                "title": "Advice",
+                "content_sha256": task_state_index.sha256_file(advice),
+            },
+            {
+                "event": "upsert",
+                "id": "pack-A",
+                "type": "task_pack",
+                "status": "active",
+                "path": ".task/task_pack/pack-A.json",
+                "title": "pack-A",
+                "content_sha256": task_state_index.sha256_file(pack),
+            },
+            {
+                "event": "upsert",
+                "id": "task-successor",
+                "type": "task",
+                "status": "active",
+                "path": "task.md",
+                "title": "Successor task",
+                "content_sha256": task_state_index.sha256_file(task),
+                "links": [
+                    {"rel": "supersedes", "id": old_id},
+                    {"rel": "archived_as", "id": "past-archive"},
+                    {"rel": "advice_for", "id": "adv-direction"},
+                    {"rel": "promoted_from_pack", "id": "pack-A"},
+                ],
+            },
+            {
+                "event": "link",
+                "id": "adv-direction",
+                "links": [{"rel": "advice_for", "id": "task-successor"}],
+            },
+            {
+                "event": "link",
+                "id": "pack-A",
+                "links": [{"rel": "pack_for_task", "id": "task-successor"}],
+            },
+        ],
+    }
+
+
+def test_transition_plan_applies_task_archive_supersede_advice_and_pack_links_once(
+    tmp_path: Path,
+) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("# Original task\n", encoding="utf-8")
+    original = task_state_index.upsert_item(
+        tmp_path,
+        "task",
+        "task.md",
+        "active",
+        item_id="task-original",
+        replace_existing=False,
+    )
+    request = _transition_request(tmp_path, original["id"])
+
+    dry_run = task_state_index.build_transition_plan(tmp_path, request)
+    assert dry_run["plan_kind"] == "task_state_transition_plan"
+    assert not (tmp_path / ".task" / "transition_plans").exists()
+
+    planned = task_state_index.publish_transition_plan(tmp_path, dry_run)
+    verified = task_state_index.verify_transition_plan(tmp_path, planned["plan_ref"])
+    before_rows = task_state_index.load_events(tmp_path)
+    applied = task_state_index.apply_transition_plan(tmp_path, planned["plan_ref"])
+    after_rows = task_state_index.load_events(tmp_path)
+    replay = task_state_index.apply_transition_plan(tmp_path, planned["plan_ref"])
+    state = task_state_index.merge_state(after_rows)
+
+    assert planned["result_kind"] == "task_state_transition_plan_result"
+    assert verified["status"] == "ready"
+    assert applied["status"] == "applied"
+    assert applied["events_appended"] == len(request["events"])
+    assert replay["status"] == "already_applied"
+    assert replay["events_appended"] == 0
+    assert task_state_index.load_events(tmp_path) == after_rows
+    assert len(after_rows) == len(before_rows) + len(request["events"])
+    assert state["task-original"]["status"] == "superseded"
+    assert state["task-successor"]["status"] == "active"
+    assert state["past-archive"]["status"] == "archived"
+    assert {link["rel"] for link in state["task-successor"]["links"]} >= {
+        "supersedes",
+        "archived_as",
+        "advice_for",
+        "promoted_from_pack",
+    }
+    assert (tmp_path / applied["receipt_ref"]).is_file()
+    assert task_state_index.sha256_file(tmp_path / planned["plan_ref"]) == planned[
+        "plan_file_sha256"
+    ]
+    assert task_state_index.sha256_file(tmp_path / applied["receipt_ref"]) == applied[
+        "receipt_file_sha256"
+    ]
+    assert applied["execution_result_binding"] == {
+        "ref": applied["receipt_ref"],
+        "sha256": applied["receipt_file_sha256"],
+    }
+
+
+def test_transition_plan_stale_ledger_cas_fails_without_partial_batch(
+    tmp_path: Path,
+) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("# Original task\n", encoding="utf-8")
+    original = task_state_index.upsert_item(
+        tmp_path,
+        "task",
+        "task.md",
+        "active",
+        item_id="task-original",
+        replace_existing=False,
+    )
+    request = _transition_request(tmp_path, original["id"])
+    plan = task_state_index.build_transition_plan(tmp_path, request)
+    planned = task_state_index.publish_transition_plan(tmp_path, plan)
+    task_state_index.append_event(
+        tmp_path,
+        {
+            "event": "link",
+            "id": original["id"],
+            "updated_at": "2026-07-18T12:00:01+09:00",
+            "links": [{"rel": "related_to", "id": original["id"]}],
+        },
+    )
+    before = task_state_index.load_events(tmp_path)
+
+    with pytest.raises(ValueError, match="CAS mismatch"):
+        task_state_index.apply_transition_plan(tmp_path, planned["plan_ref"])
+
+    assert task_state_index.load_events(tmp_path) == before
+    assert not any(row.get("transition_plan_id") == plan["plan_id"] for row in before)
+    assert task_state_index.verify_transition_plan(
+        tmp_path, planned["plan_ref"]
+    )["status"] == "stale"
+
+
+def test_transition_plan_accepts_owner_published_prospective_artifact(
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / ".task" / "task_pack" / "pack-new.json"
+    payload = b'{"pack_id":"pack-new","status":"active"}\n'
+    expected = hashlib.sha256(payload).hexdigest()
+    request = {
+        "updated_at": "2026-07-18T15:20:00+09:00",
+        "events": [
+            {
+                "event": "upsert",
+                "id": "pack-new",
+                "type": "task_pack",
+                "status": "active",
+                "path": ".task/task_pack/pack-new.json",
+                "title": "Prospective pack",
+                "content_sha256": expected,
+            }
+        ],
+    }
+    plan = task_state_index.build_transition_plan(tmp_path, request)
+    assert plan["artifact_anchors"] == [
+        {
+            "path": ".task/task_pack/pack-new.json",
+            "before_sha256": None,
+            "expected_sha256": expected,
+            "expectation": "planned_content_sha256",
+        }
+    ]
+    planned = task_state_index.publish_transition_plan(tmp_path, plan)
+    planning_before = task_state_index.verify_transition_plan(
+        tmp_path, planned["plan_ref"], phase="planning"
+    )
+    apply_before = task_state_index.verify_transition_plan(
+        tmp_path, planned["plan_ref"], phase="apply"
+    )
+    assert planning_before["status"] == "ready"
+    assert planning_before["prestate_current"] is True
+    assert apply_before["status"] == "stale"
+    assert apply_before["prestate_current"] is False
+    assert apply_before["no_effect_eligible"] is False
+    with pytest.raises(ValueError, match="not eligible for no-effect"):
+        task_state_index.settle_transition_no_effect(
+            tmp_path, planned["plan_ref"]
+        )
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(payload)
+
+    replayed_plan = task_state_index.publish_transition_plan(tmp_path, plan)
+    assert replayed_plan["status"] == "already_planned"
+    assert replayed_plan["mutation_performed"] is False
+
+    planning_after = task_state_index.verify_transition_plan(
+        tmp_path, planned["plan_ref"], phase="planning"
+    )
+    apply_after = task_state_index.verify_transition_plan(
+        tmp_path, planned["plan_ref"], phase="apply"
+    )
+    assert planning_after["status"] == "stale"
+    assert apply_after["status"] == "ready"
+
+    applied = task_state_index.apply_transition_plan(tmp_path, planned["plan_ref"])
+
+    assert applied["status"] == "applied"
+
+
+def test_transition_plan_partial_dependency_materialization_is_not_no_effect(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "first.json"
+    second = tmp_path / "second.json"
+    first_payload = b'{"id":"first"}\n'
+    second_payload = b'{"id":"second"}\n'
+    plan = task_state_index.build_transition_plan(
+        tmp_path,
+        {
+            "updated_at": "2026-07-18T15:20:10+09:00",
+            "events": [
+                {
+                    "event": "upsert",
+                    "id": "issue-first",
+                    "type": "issue",
+                    "status": "active",
+                    "path": "first.json",
+                    "title": "First",
+                    "content_sha256": hashlib.sha256(first_payload).hexdigest(),
+                },
+                {
+                    "event": "upsert",
+                    "id": "issue-second",
+                    "type": "issue",
+                    "status": "active",
+                    "path": "second.json",
+                    "title": "Second",
+                    "content_sha256": hashlib.sha256(second_payload).hexdigest(),
+                },
+            ],
+        },
+    )
+    planned = task_state_index.publish_transition_plan(tmp_path, plan)
+    first.write_bytes(first_payload)
+
+    planning = task_state_index.verify_transition_plan(
+        tmp_path, planned["plan_ref"], phase="planning"
+    )
+    applying = task_state_index.verify_transition_plan(
+        tmp_path, planned["plan_ref"], phase="apply"
+    )
+
+    assert planning["status"] == "materializing"
+    assert applying["status"] == "materializing"
+    assert applying["dependency_materialization_status"] == "partial"
+    assert applying["no_effect_eligible"] is False
+    with pytest.raises(ValueError, match="not eligible for no-effect"):
+        task_state_index.settle_transition_no_effect(
+            tmp_path, planned["plan_ref"]
+        )
+
+    second.write_bytes(second_payload)
+    assert task_state_index.verify_transition_plan(
+        tmp_path, planned["plan_ref"], phase="apply"
+    )["status"] == "ready"
+
+
+def test_transition_plan_stale_without_intent_settles_with_immutable_no_effect_receipt(
+    tmp_path: Path,
+) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("# Original task\n", encoding="utf-8")
+    original = task_state_index.upsert_item(
+        tmp_path,
+        "task",
+        "task.md",
+        "active",
+        item_id="task-original",
+        replace_existing=False,
+    )
+    plan = task_state_index.build_transition_plan(
+        tmp_path, _transition_request(tmp_path, original["id"])
+    )
+    planned = task_state_index.publish_transition_plan(tmp_path, plan)
+    task_state_index.append_event(
+        tmp_path,
+        {
+            "event": "link",
+            "id": original["id"],
+            "updated_at": "2026-07-18T15:20:30+09:00",
+            "links": [{"rel": "related_to", "id": original["id"]}],
+        },
+    )
+
+    stale = task_state_index.verify_transition_plan(tmp_path, planned["plan_ref"])
+    assert stale["status"] == "stale"
+    assert stale["plan_effect_observed"] is False
+    assert stale["plan_intent_observed"] is False
+    assert stale["no_effect_eligible"] is True
+
+    settled = task_state_index.settle_transition_no_effect(
+        tmp_path, planned["plan_ref"], at="2026-07-18T15:20:31+09:00"
+    )
+    replay = task_state_index.settle_transition_no_effect(
+        tmp_path, planned["plan_ref"], at="2026-07-18T15:20:32+09:00"
+    )
+    verified = task_state_index.verify_transition_plan(tmp_path, planned["plan_ref"])
+
+    assert settled["status"] == "settled_no_effect"
+    assert replay["status"] == "already_settled_no_effect"
+    assert replay["receipt_file_sha256"] == settled["receipt_file_sha256"]
+    assert settled["execution_result_binding"] == {
+        "ref": settled["receipt_ref"],
+        "sha256": settled["receipt_file_sha256"],
+    }
+    assert verified["status"] == "settled_no_effect"
+    assert verified["no_effect_verified"] is True
+    assert verified["no_effect_receipt_file_sha256"] == settled[
+        "receipt_file_sha256"
+    ]
+    assert not any(
+        row.get("transition_plan_id") == plan["plan_id"]
+        for row in task_state_index.load_events(tmp_path)
+    )
+    with pytest.raises(ValueError, match="settled with no effect"):
+        task_state_index.apply_transition_plan(tmp_path, planned["plan_ref"])
+
+    receipt_path = tmp_path / settled["receipt_ref"]
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt_path.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="bytes are not canonical"):
+        task_state_index.verify_transition_plan(tmp_path, planned["plan_ref"])
+
+
+def test_transition_plan_cannot_settle_no_effect_while_still_apply_ready(
+    tmp_path: Path,
+) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("# Original task\n", encoding="utf-8")
+    original = task_state_index.upsert_item(
+        tmp_path,
+        "task",
+        "task.md",
+        "active",
+        item_id="task-original",
+        replace_existing=False,
+    )
+    plan = task_state_index.build_transition_plan(
+        tmp_path, _transition_request(tmp_path, original["id"])
+    )
+    planned = task_state_index.publish_transition_plan(tmp_path, plan)
+
+    with pytest.raises(ValueError, match="not eligible for no-effect"):
+        task_state_index.settle_transition_no_effect(
+            tmp_path, planned["plan_ref"]
+        )
+
+    assert task_state_index.verify_transition_plan(
+        tmp_path, planned["plan_ref"]
+    )["status"] == "ready"
+
+
+def test_transition_plan_apply_after_no_effect_is_zero_canonical_mutation(
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "prospective.json"
+    expected = b'{"state":"expected"}\n'
+    foreign = b'{"state":"foreign"}\n'
+    plan = task_state_index.build_transition_plan(
+        tmp_path,
+        {
+            "updated_at": "2026-07-18T15:20:40+09:00",
+            "events": [
+                {
+                    "event": "upsert",
+                    "id": "issue-prospective",
+                    "type": "issue",
+                    "status": "active",
+                    "path": "prospective.json",
+                    "title": "Prospective",
+                    "content_sha256": hashlib.sha256(expected).hexdigest(),
+                }
+            ],
+        },
+    )
+    planned = task_state_index.publish_transition_plan(tmp_path, plan)
+    artifact.write_bytes(foreign)
+    settled = task_state_index.settle_transition_no_effect(
+        tmp_path, planned["plan_ref"], at="2026-07-18T15:20:41+09:00"
+    )
+    ledger = tmp_path / ".task" / "index.jsonl"
+    markdown = tmp_path / ".task" / "index.md"
+    assert settled["status"] == "settled_no_effect"
+    assert not ledger.exists()
+    assert not markdown.exists()
+
+    with pytest.raises(ValueError, match="settled with no effect"):
+        task_state_index.apply_transition_plan(tmp_path, planned["plan_ref"])
+
+    assert not ledger.exists()
+    assert not markdown.exists()
+
+
+def test_transition_plan_rejects_symlinked_owned_receipt_root(tmp_path: Path) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("# Original task\n", encoding="utf-8")
+    original = task_state_index.upsert_item(
+        tmp_path,
+        "task",
+        "task.md",
+        "active",
+        item_id="task-original",
+        replace_existing=False,
+    )
+    plan = task_state_index.build_transition_plan(
+        tmp_path, _transition_request(tmp_path, original["id"])
+    )
+    planned = task_state_index.publish_transition_plan(tmp_path, plan)
+    outside = tmp_path / "outside-receipts"
+    outside.mkdir()
+    (tmp_path / ".task" / "transition_receipts").symlink_to(
+        outside, target_is_directory=True
+    )
+
+    with pytest.raises(ValueError, match="owned root"):
+        task_state_index.apply_transition_plan(tmp_path, planned["plan_ref"])
+
+    assert list(outside.iterdir()) == []
+
+
+def test_transition_plan_rejects_symlinked_index_lock_leaf(tmp_path: Path) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("# Original task\n", encoding="utf-8")
+    original = task_state_index.upsert_item(
+        tmp_path,
+        "task",
+        "task.md",
+        "active",
+        item_id="task-original",
+        replace_existing=False,
+    )
+    plan = task_state_index.build_transition_plan(
+        tmp_path, _transition_request(tmp_path, original["id"])
+    )
+    planned = task_state_index.publish_transition_plan(tmp_path, plan)
+    lock = tmp_path / ".task" / "index.lock"
+    lock.unlink()
+    outside = tmp_path / "outside.lock"
+    lock.symlink_to(outside)
+
+    with pytest.raises(ValueError, match="regular owned file"):
+        task_state_index.apply_transition_plan(tmp_path, planned["plan_ref"])
+
+    assert not outside.exists()
+
+
+def test_transition_plan_rejects_symlinked_artifact_ancestor(tmp_path: Path) -> None:
+    outside = tmp_path / "outside-artifacts"
+    outside.mkdir()
+    payload = b"{}\n"
+    (outside / "artifact.json").write_bytes(payload)
+    (tmp_path / "artifact-alias").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="must not be a symlink"):
+        task_state_index.build_transition_plan(
+            tmp_path,
+            {
+                "updated_at": "2026-07-18T15:21:30+09:00",
+                "events": [
+                    {
+                        "event": "upsert",
+                        "id": "issue-symlink",
+                        "type": "issue",
+                        "status": "active",
+                        "path": "artifact-alias/artifact.json",
+                        "title": "Symlink",
+                        "content_sha256": hashlib.sha256(payload).hexdigest(),
+                    }
+                ],
+            },
+        )
+
+
+def test_transition_plan_rejects_noncanonical_artifact_path_text(
+    tmp_path: Path,
+) -> None:
+    aliases = (
+        "./issue.md",
+        "nested//issue.md",
+        "nested\\issue.md",
+        str(tmp_path / "issue.md"),
+    )
+    for offset, alias in enumerate(aliases):
+        with pytest.raises(ValueError, match="canonical workspace-relative"):
+            task_state_index.build_transition_plan(
+                tmp_path,
+                {
+                    "updated_at": f"2026-07-18T15:21:{40 + offset:02d}+09:00",
+                    "events": [
+                        {
+                            "event": "upsert",
+                            "id": f"issue-path-{offset}",
+                            "type": "issue",
+                            "status": "active",
+                            "path": alias,
+                            "title": "Path",
+                        }
+                    ],
+                },
+            )
+
+
+def test_transition_plan_publication_rejects_owned_directory_swap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan = task_state_index.build_transition_plan(
+        tmp_path,
+        {
+            "updated_at": "2026-07-18T15:21:50+09:00",
+            "events": [
+                {
+                    "event": "upsert",
+                    "id": "issue-race",
+                    "type": "issue",
+                    "status": "active",
+                    "path": "issue.md",
+                    "title": "Race",
+                }
+            ],
+        },
+    )
+    original = transition_plan_module._publish_immutable
+    outside = tmp_path / "outside-publication"
+    outside.mkdir()
+
+    def swap_then_publish(path: Path, payload: bytes) -> bool:
+        owned = path.parent
+        backup = owned.with_name("transition_plans-backup")
+        owned.rename(backup)
+        owned.symlink_to(outside, target_is_directory=True)
+        return original(path, payload)
+
+    monkeypatch.setattr(
+        transition_plan_module, "_publish_immutable", swap_then_publish
+    )
+    with pytest.raises(ValueError, match="publication path is unsafe"):
+        task_state_index.publish_transition_plan(tmp_path, plan)
+
+    assert list(outside.iterdir()) == []
+
+
+def test_transition_directory_creation_rolls_back_child_after_parent_swap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan = task_state_index.build_transition_plan(
+        tmp_path,
+        {
+            "updated_at": "2026-07-18T15:21:49+09:00",
+            "events": [
+                {
+                    "event": "upsert",
+                    "id": "issue-parent-create-race",
+                    "type": "issue",
+                    "status": "active",
+                    "path": "issue.md",
+                    "title": "Parent create race",
+                }
+            ],
+        },
+    )
+    original_mkdir = transition_publication_module.os.mkdir
+    moved_parent = tmp_path / "moved-task-parent"
+    moved_parent.mkdir()
+    injected = False
+
+    def swap_parent_then_mkdir(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        nonlocal injected
+        if path == "transition_plans" and not injected:
+            injected = True
+            (tmp_path / ".task").rename(moved_parent / ".task")
+            original_mkdir(tmp_path / ".task", 0o700)
+        original_mkdir(path, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(
+        transition_publication_module.os, "mkdir", swap_parent_then_mkdir
+    )
+    with pytest.raises(ValueError, match="root changed"):
+        task_state_index.publish_transition_plan(tmp_path, plan)
+
+    assert list((moved_parent / ".task").iterdir()) == []
+    assert list((tmp_path / ".task").iterdir()) == []
+
+
+def test_transition_directory_creation_detects_new_child_swap_before_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan = task_state_index.build_transition_plan(
+        tmp_path,
+        {
+            "updated_at": "2026-07-18T15:21:48+09:00",
+            "events": [
+                {
+                    "event": "upsert",
+                    "id": "issue-child-create-race",
+                    "type": "issue",
+                    "status": "active",
+                    "path": "issue.md",
+                    "title": "Child create race",
+                }
+            ],
+        },
+    )
+    original_open = transition_publication_module.os.open
+    moved_parent = tmp_path / "moved-child-parent"
+    moved_parent.mkdir()
+    injected = False
+
+    def swap_child_then_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal injected
+        if path == "transition_plans" and not injected:
+            injected = True
+            owned = tmp_path / ".task" / "transition_plans"
+            owned.rename(moved_parent / "transition_plans")
+            owned.mkdir()
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(
+        transition_publication_module.os, "open", swap_child_then_open
+    )
+    with pytest.raises(ValueError, match="changed before it was opened"):
+        task_state_index.publish_transition_plan(tmp_path, plan)
+
+    assert list((moved_parent / "transition_plans").iterdir()) == []
+    assert list((tmp_path / ".task" / "transition_plans").iterdir()) == []
+
+
+def test_transition_plan_publication_cleans_final_after_mid_write_directory_swap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan = task_state_index.build_transition_plan(
+        tmp_path,
+        {
+            "updated_at": "2026-07-18T15:21:51+09:00",
+            "events": [
+                {
+                    "event": "upsert",
+                    "id": "issue-mid-write-race",
+                    "type": "issue",
+                    "status": "active",
+                    "path": "issue.md",
+                    "title": "Mid-write race",
+                }
+            ],
+        },
+    )
+    original_write = transition_publication_module._write_all
+    moved_parent = tmp_path / "moved-publication"
+    moved_parent.mkdir()
+
+    def write_then_swap(descriptor: int, payload: bytes) -> None:
+        original_write(descriptor, payload)
+        owned = tmp_path / ".task" / "transition_plans"
+        owned.rename(moved_parent / "transition_plans")
+        owned.mkdir()
+
+    monkeypatch.setattr(
+        transition_publication_module, "_write_all", write_then_swap
+    )
+    with pytest.raises(ValueError, match="publication root changed"):
+        task_state_index.publish_transition_plan(tmp_path, plan)
+
+    moved = moved_parent / "transition_plans"
+    assert list(moved.iterdir()) == []
+    assert list((tmp_path / ".task" / "transition_plans").iterdir()) == []
+
+
+def test_transition_plan_revalidates_event_semantics_before_intent(tmp_path: Path) -> None:
+    issue = tmp_path / "issue.md"
+    issue.write_text("# Issue\n", encoding="utf-8")
+    plan = task_state_index.build_transition_plan(
+        tmp_path,
+        {
+            "updated_at": "2026-07-18T15:21:31+09:00",
+            "events": [
+                {
+                    "event": "upsert",
+                    "id": "issue-invalid-plan",
+                    "type": "issue",
+                    "status": "active",
+                    "path": "issue.md",
+                    "title": "Issue",
+                    "content_sha256": task_state_index.sha256_file(issue),
+                }
+            ],
+        },
+    )
+    plan["events"][0]["type"] = "unsupported_type"
+    body = {key: value for key, value in plan.items() if key != "plan_sha256"}
+    plan["plan_sha256"] = transition_contract_module.sha256_bytes(
+        transition_contract_module.canonical_bytes(body)
+    )
+    plan_path = (
+        tmp_path / ".task" / "transition_plans" / f"{plan['plan_id']}.json"
+    )
+    plan_path.parent.mkdir(parents=True)
+    plan_path.write_bytes(
+        transition_contract_module.canonical_bytes(plan) + b"\n"
+    )
+
+    with pytest.raises(ValueError, match="request/event derivation|unsupported type"):
+        task_state_index.verify_transition_plan(
+            tmp_path, plan_path.relative_to(tmp_path).as_posix()
+        )
+    with pytest.raises(ValueError, match="request/event derivation|unsupported type"):
+        task_state_index.apply_transition_plan(
+            tmp_path, plan_path.relative_to(tmp_path).as_posix()
+        )
+    assert not (tmp_path / ".task" / "transition_intents").exists()
+
+
+def test_transition_plan_prepare_rejects_noncanonical_metadata_output(
+    tmp_path: Path,
+) -> None:
+    request = {
+        "updated_at": "2026-07-18T15:20:01+09:00",
+        "events": [
+            {
+                "event": "upsert",
+                "id": "issue-plan-output",
+                "type": "issue",
+                "status": "active",
+                "path": "issue.md",
+                "title": "Plan output",
+            }
+        ],
+    }
+    plan = task_state_index.build_transition_plan(tmp_path, request)
+
+    with pytest.raises(ValueError, match="plan output must be an exact canonical"):
+        task_state_index.publish_transition_plan(tmp_path, plan, "outside.json")
+
+    with pytest.raises(ValueError, match="exact canonical plan-id path"):
+        task_state_index.publish_transition_plan(
+            tmp_path, plan, ".task/transition_plans/alias.json"
+        )
+
+    assert not (tmp_path / "outside.json").exists()
+
+
+def test_transition_plan_requires_current_markdown_projection(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="require Markdown rendering"):
+        task_state_index.build_transition_plan(
+            tmp_path,
+            {
+                "render": False,
+                "updated_at": "2026-07-18T15:20:02+09:00",
+                "events": [
+                    {
+                        "event": "upsert",
+                        "id": "issue-render",
+                        "type": "issue",
+                        "status": "active",
+                        "path": "issue.md",
+                        "title": "Render",
+                    }
+                ],
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    ("request_update", "at", "message"),
+    (
+        ({"unregistered_metadata": "opaque"}, None, "unsupported fields"),
+        ({"updated_at": "not-a-time"}, None, "RFC3339"),
+        ({"schema_version": True}, None, "schema_version"),
+        ({}, "not-a-time", "RFC3339"),
+    ),
+)
+def test_transition_plan_request_contract_is_closed_before_dry_run(
+    tmp_path: Path,
+    request_update: dict[str, object],
+    at: str | None,
+    message: str,
+) -> None:
+    request: dict[str, object] = {
+        "events": [
+            {
+                "event": "upsert",
+                "id": "issue-request-contract",
+                "type": "issue",
+                "status": "active",
+                "path": "issue.md",
+                "title": "Issue",
+            }
+        ],
+        **request_update,
+    }
+    with pytest.raises(ValueError, match=message):
+        task_state_index.build_transition_plan(tmp_path, request, at=at)
+
+    assert not (tmp_path / ".task").exists()
+
+
+@pytest.mark.parametrize("tamper", ("extra", "request_digest", "plan_id", "ledger_extra"))
+def test_transition_plan_closed_metadata_and_identity_binding(
+    tmp_path: Path, tamper: str,
+) -> None:
+    plan = task_state_index.build_transition_plan(
+        tmp_path,
+        {
+            "updated_at": "2026-07-18T15:20:03+09:00",
+            "events": [
+                {
+                    "event": "upsert",
+                    "id": "issue-plan-contract",
+                    "type": "issue",
+                    "status": "active",
+                    "path": "issue.md",
+                    "title": "Issue",
+                }
+            ],
+        },
+    )
+    if tamper == "extra":
+        plan["unregistered_metadata"] = {"raw_locator": "forbidden"}
+    elif tamper == "request_digest":
+        plan["request_sha256"] = "0" * 64
+    elif tamper == "plan_id":
+        plan["plan_id"] = "transition-" + "0" * 32
+    else:
+        plan["ledger"]["unregistered"] = True
+    body = {key: value for key, value in plan.items() if key != "plan_sha256"}
+    plan["plan_sha256"] = transition_contract_module.sha256_bytes(
+        transition_contract_module.canonical_bytes(body)
+    )
+
+    with pytest.raises(ValueError):
+        transition_contract_module.validate_transition_plan(plan)
+
+
+def test_transition_plan_file_requires_exact_canonical_bytes(tmp_path: Path) -> None:
+    plan = task_state_index.build_transition_plan(
+        tmp_path,
+        {
+            "updated_at": "2026-07-18T15:20:04+09:00",
+            "events": [
+                {
+                    "event": "upsert",
+                    "id": "issue-plan-bytes",
+                    "type": "issue",
+                    "status": "active",
+                    "path": "issue.md",
+                    "title": "Plan bytes",
+                }
+            ],
+        },
+    )
+    planned = task_state_index.publish_transition_plan(tmp_path, plan)
+    plan_path = tmp_path / planned["plan_ref"]
+    plan_path.write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="bytes are not canonical"):
+        task_state_index.verify_transition_plan(tmp_path, planned["plan_ref"])
+
+
+def test_transition_plan_accepts_planned_mutable_task_replacement(
+    tmp_path: Path,
+) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("# Old task\n", encoding="utf-8")
+    original = task_state_index.upsert_item(
+        tmp_path,
+        "task",
+        "task.md",
+        "active",
+        item_id="task-old",
+        replace_existing=False,
+    )
+    replacement = b"# New task\n"
+    expected = hashlib.sha256(replacement).hexdigest()
+    request = {
+        "updated_at": "2026-07-18T15:21:00+09:00",
+        "events": [
+            {
+                "event": "upsert",
+                "id": original["id"],
+                "status": "superseded",
+                "links": [{"rel": "superseded_by", "id": "task-new"}],
+            },
+            {
+                "event": "upsert",
+                "id": "task-new",
+                "type": "task",
+                "status": "active",
+                "path": "task.md",
+                "title": "New task",
+                "content_sha256": expected,
+                "links": [{"rel": "supersedes", "id": original["id"]}],
+            },
+        ],
+    }
+    plan = task_state_index.build_transition_plan(tmp_path, request)
+    planned = task_state_index.publish_transition_plan(tmp_path, plan)
+    task.write_bytes(replacement)
+
+    applied = task_state_index.apply_transition_plan(tmp_path, planned["plan_ref"])
+
+    assert applied["status"] == "applied"
+    assert task_state_index.merge_state(task_state_index.load_events(tmp_path))[
+        "task-new"
+    ]["content_sha256"] == expected
+
+
+@pytest.mark.parametrize("tamper", ("missing", "duplicate", "expected"))
+def test_transition_plan_rejects_rehashed_artifact_anchor_tamper(
+    tmp_path: Path,
+    tamper: str,
+) -> None:
+    artifact = tmp_path / "artifact.json"
+    artifact.write_text("{}\n", encoding="utf-8")
+    request = {
+        "updated_at": "2026-07-18T15:22:00+09:00",
+        "events": [
+            {
+                "event": "upsert",
+                "id": "artifact-one",
+                "type": "issue",
+                "status": "active",
+                "path": "artifact.json",
+                "title": "Artifact",
+                "content_sha256": task_state_index.sha256_file(artifact),
+            }
+        ],
+    }
+    plan = task_state_index.build_transition_plan(tmp_path, request)
+    if tamper == "missing":
+        plan["artifact_anchors"] = []
+    elif tamper == "duplicate":
+        plan["artifact_anchors"].append(dict(plan["artifact_anchors"][0]))
+    else:
+        plan["artifact_anchors"][0]["expected_sha256"] = "0" * 64
+    body = {key: value for key, value in plan.items() if key != "plan_sha256"}
+    plan["plan_sha256"] = transition_plan_module._sha256_bytes(
+        transition_plan_module._canonical_bytes(body)
+    )
+
+    with pytest.raises(ValueError, match="artifact anchor"):
+        task_state_index.publish_transition_plan(tmp_path, plan)
+
+
+def test_transition_plan_recovers_post_append_render_and_rejects_receipt_tamper(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("# Original task\n", encoding="utf-8")
+    original = task_state_index.upsert_item(
+        tmp_path,
+        "task",
+        "task.md",
+        "active",
+        item_id="task-original",
+        replace_existing=False,
+    )
+    request = _transition_request(tmp_path, original["id"])
+    plan = task_state_index.build_transition_plan(tmp_path, request)
+    planned = task_state_index.publish_transition_plan(tmp_path, plan)
+    original_render = transition_plan_module._rebuild_markdown_unlocked
+
+    def crash_after_append(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise RuntimeError("injected post-append render failure")
+
+    monkeypatch.setattr(
+        transition_plan_module, "_rebuild_markdown_unlocked", crash_after_append
+    )
+    with pytest.raises(RuntimeError, match="post-append"):
+        task_state_index.apply_transition_plan(tmp_path, planned["plan_ref"])
+
+    assert len(
+        [
+            row
+            for row in task_state_index.load_events(tmp_path)
+            if row.get("transition_plan_id") == plan["plan_id"]
+        ]
+    ) == len(plan["events"])
+    assert task_state_index.verify_transition_plan(
+        tmp_path, planned["plan_ref"]
+    )["status"] == "recovery_required"
+    with pytest.raises(ValueError, match="Pending task-state transition intent"):
+        task_state_index.append_event(
+            tmp_path,
+            {
+                "event": "link",
+                "id": original["id"],
+                "updated_at": "2026-07-18T12:00:02+09:00",
+                "links": [{"rel": "related_to", "id": original["id"]}],
+            },
+        )
+    competing = task_state_index.build_transition_plan(
+        tmp_path,
+        {
+            "updated_at": "2026-07-18T12:00:03+09:00",
+            "events": [
+                {
+                    "event": "link",
+                    "id": original["id"],
+                    "links": [{"rel": "related_to", "id": original["id"]}],
+                }
+            ],
+        },
+    )
+    competing_plan = task_state_index.publish_transition_plan(tmp_path, competing)
+    with pytest.raises(ValueError, match="Pending task-state transition intent"):
+        task_state_index.apply_transition_plan(tmp_path, competing_plan["plan_ref"])
+
+    monkeypatch.setattr(
+        transition_plan_module, "_rebuild_markdown_unlocked", original_render
+    )
+    recovered = task_state_index.apply_transition_plan(tmp_path, planned["plan_ref"])
+    assert recovered["status"] == "already_applied"
+    assert recovered["publication_recovered"] is True
+    assert recovered["events_appended"] == 0
+
+    receipt = tmp_path / recovered["receipt_ref"]
+    receipt.write_text("{}\n", encoding="utf-8")
+    assert task_state_index.verify_transition_plan(
+        tmp_path, planned["plan_ref"]
+    )["status"] == "conflict"
+    with pytest.raises(ValueError, match="receipt conflict"):
+        task_state_index.apply_transition_plan(tmp_path, planned["plan_ref"])
+
+
+def test_transition_receipt_without_committed_batch_does_not_release_intent_barrier(
+    tmp_path: Path,
+) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("# Original task\n", encoding="utf-8")
+    original = task_state_index.upsert_item(
+        tmp_path,
+        "task",
+        "task.md",
+        "active",
+        item_id="task-original",
+        replace_existing=False,
+    )
+    plan = task_state_index.build_transition_plan(
+        tmp_path, _transition_request(tmp_path, original["id"])
+    )
+    planned = task_state_index.publish_transition_plan(tmp_path, plan)
+    transition_intent_module.publish_transition_intent(
+        tmp_path, plan, planned["plan_ref"], planned["plan_file_sha256"]
+    )
+    receipt = transition_contract_module.receipt_for_plan(
+        plan, planned["plan_ref"], planned["plan_file_sha256"]
+    )
+    receipt_path = transition_contract_module.owned_transition_file(
+        tmp_path,
+        "transition_receipts",
+        f"{plan['plan_id']}.json",
+        create_parent=True,
+    )
+    transition_contract_module.publish_immutable(
+        receipt_path, transition_contract_module.canonical_bytes(receipt) + b"\n"
+    )
+
+    verification = task_state_index.verify_transition_plan(
+        tmp_path, planned["plan_ref"]
+    )
+    assert verification["status"] == "conflict"
+    assert "apply_receipt_without_committed_batch" in verification["cas_defects"]
+    with pytest.raises(ValueError, match="lacks its committed event batch"):
+        task_state_index.append_event(
+            tmp_path,
+            {
+                "event": "link",
+                "id": original["id"],
+                "updated_at": "2026-07-18T15:28:00+09:00",
+                "links": [{"rel": "related_to", "id": original["id"]}],
+            },
+        )
+    with pytest.raises(ValueError, match="lacks its committed event batch"):
+        task_state_index.apply_transition_plan(tmp_path, planned["plan_ref"])
+
+
+def test_transition_intent_file_requires_exact_canonical_bytes(tmp_path: Path) -> None:
+    plan = task_state_index.build_transition_plan(
+        tmp_path,
+        {
+            "updated_at": "2026-07-18T15:28:01+09:00",
+            "events": [
+                {
+                    "event": "upsert",
+                    "id": "issue-intent-bytes",
+                    "type": "issue",
+                    "status": "active",
+                    "path": "issue.md",
+                    "title": "Intent bytes",
+                }
+            ],
+        },
+    )
+    planned = task_state_index.publish_transition_plan(tmp_path, plan)
+    transition_intent_module.publish_transition_intent(
+        tmp_path, plan, planned["plan_ref"], planned["plan_file_sha256"]
+    )
+    intent_path = (
+        tmp_path / ".task" / "transition_intents" / f"{plan['plan_id']}.json"
+    )
+    intent = json.loads(intent_path.read_text(encoding="utf-8"))
+    intent_path.write_text(json.dumps(intent, indent=2) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="bytes are not canonical"):
+        transition_intent_module.assert_no_pending_transition_intents(tmp_path)
+
+
+def test_transition_plan_recovers_unique_batch_with_unrelated_suffix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("# Original task\n", encoding="utf-8")
+    original = task_state_index.upsert_item(
+        tmp_path,
+        "task",
+        "task.md",
+        "active",
+        item_id="task-original",
+        replace_existing=False,
+    )
+    plan = task_state_index.build_transition_plan(
+        tmp_path, _transition_request(tmp_path, original["id"])
+    )
+    planned = task_state_index.publish_transition_plan(tmp_path, plan)
+    original_render = transition_plan_module._rebuild_markdown_unlocked
+
+    def crash_after_append(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise RuntimeError("injected suffix recovery failure")
+
+    monkeypatch.setattr(
+        transition_plan_module, "_rebuild_markdown_unlocked", crash_after_append
+    )
+    with pytest.raises(RuntimeError, match="suffix recovery failure"):
+        task_state_index.apply_transition_plan(tmp_path, planned["plan_ref"])
+    index = tmp_path / ".task" / "index.jsonl"
+    suffix = task_state_index.versioned_event(
+        {
+            "event": "link",
+            "id": "task-successor",
+            "updated_at": "2026-07-18T12:10:00+09:00",
+            "links": [{"rel": "related_to", "id": "task-successor"}],
+        }
+    )
+    with index.open("ab") as handle:
+        handle.write((json.dumps(suffix, sort_keys=True) + "\n").encode("utf-8"))
+    suffix_bytes = index.read_bytes()
+    assert task_state_index.verify_transition_plan(
+        tmp_path, planned["plan_ref"]
+    )["status"] == "recovery_required"
+
+    monkeypatch.setattr(
+        transition_plan_module, "_rebuild_markdown_unlocked", original_render
+    )
+    recovered = task_state_index.apply_transition_plan(tmp_path, planned["plan_ref"])
+
+    assert recovered["status"] == "already_applied"
+    assert recovered["publication_recovered"] is True
+    assert index.read_bytes() == suffix_bytes
+    assert task_state_index.load_events(tmp_path)[-1] == suffix
+
+
+def test_transition_plan_replay_repairs_stale_current_suffix_projection(
+    tmp_path: Path,
+) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("# Original task\n", encoding="utf-8")
+    original = task_state_index.upsert_item(
+        tmp_path,
+        "task",
+        "task.md",
+        "active",
+        item_id="task-original",
+        replace_existing=False,
+    )
+    plan = task_state_index.build_transition_plan(
+        tmp_path, _transition_request(tmp_path, original["id"])
+    )
+    planned = task_state_index.publish_transition_plan(tmp_path, plan)
+    task_state_index.apply_transition_plan(tmp_path, planned["plan_ref"])
+    task_state_index.append_event(
+        tmp_path,
+        {
+            "event": "link",
+            "id": "task-successor",
+            "updated_at": "2026-07-18T15:29:00+09:00",
+            "links": [{"rel": "related_to", "id": "task-successor"}],
+        },
+    )
+
+    before = task_state_index.verify_transition_plan(tmp_path, planned["plan_ref"])
+    repaired = task_state_index.apply_transition_plan(tmp_path, planned["plan_ref"])
+    after = task_state_index.verify_transition_plan(tmp_path, planned["plan_ref"])
+
+    assert before["status"] == "recovery_required"
+    assert before["historical_completion_observed"] is True
+    assert before["current_projection_healthy"] is False
+    assert "markdown_projection_repair_required" in before["cas_defects"]
+    assert repaired["status"] == "already_applied"
+    assert repaired["events_appended"] == 0
+    assert repaired["publication_recovered"] is True
+    assert after["status"] == "already_applied"
+    assert after["historical_completion_observed"] is True
+    assert after["current_projection_healthy"] is True
+
+
+@pytest.mark.parametrize("tamper", ("wrong_prefix", "noncontiguous", "invalid_suffix"))
+def test_transition_plan_recovery_rejects_unproven_historical_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tamper: str,
+) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("# Original task\n", encoding="utf-8")
+    original = task_state_index.upsert_item(
+        tmp_path,
+        "task",
+        "task.md",
+        "active",
+        item_id="task-original",
+        replace_existing=False,
+    )
+    plan = task_state_index.build_transition_plan(
+        tmp_path, _transition_request(tmp_path, original["id"])
+    )
+    planned = task_state_index.publish_transition_plan(tmp_path, plan)
+
+    def crash_after_append(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise RuntimeError("injected boundary proof failure")
+
+    monkeypatch.setattr(
+        transition_plan_module, "_rebuild_markdown_unlocked", crash_after_append
+    )
+    with pytest.raises(RuntimeError, match="boundary proof failure"):
+        task_state_index.apply_transition_plan(tmp_path, planned["plan_ref"])
+    index = tmp_path / ".task" / "index.jsonl"
+    rows = task_state_index.load_events(tmp_path)
+    start = next(
+        offset
+        for offset, row in enumerate(rows)
+        if row.get("transition_plan_id") == plan["plan_id"]
+    )
+    if tamper == "wrong_prefix":
+        rows[0] = {**rows[0], "note": "mutated historical prefix"}
+    elif tamper == "noncontiguous":
+        rows.insert(
+            start + 1,
+            task_state_index.versioned_event(
+                {
+                    "event": "link",
+                    "id": original["id"],
+                    "updated_at": "2026-07-18T12:20:00+09:00",
+                    "links": [{"rel": "related_to", "id": original["id"]}],
+                }
+            ),
+        )
+    else:
+        rows.append(
+            task_state_index.versioned_event(
+                {
+                    "event": "upsert",
+                    "id": "invalid-suffix",
+                    "type": "unsupported_type",
+                    "status": "active",
+                    "path": "invalid.md",
+                    "updated_at": "2026-07-18T12:20:01+09:00",
+                }
+            )
+        )
+    index.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="committed boundary"):
+        task_state_index.apply_transition_plan(tmp_path, planned["plan_ref"])
+
+
+def test_transition_plan_build_reuses_suffix_and_completed_alias_validators(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="unsupported type"):
+        task_state_index.build_transition_plan(
+            tmp_path,
+            {
+                "updated_at": "2026-07-18T15:30:00+09:00",
+                "events": [
+                    {
+                        "event": "upsert",
+                        "id": "unsupported-one",
+                        "type": "unsupported_type",
+                        "status": "active",
+                        "path": "unsupported.md",
+                    }
+                ],
+            },
+        )
+
+    task = tmp_path / "task.md"
+    task.write_text("# Completed alias\n", encoding="utf-8")
+    task_state_index.append_event(
+        tmp_path,
+        {
+            "event": "upsert",
+            "id": "task-completed",
+            "type": "task",
+            "status": "completed",
+            "path": "task.md",
+            "title": "Completed alias",
+            "updated_at": "2026-07-18T15:30:01+09:00",
+            "content_sha256": task_state_index.sha256_file(task),
+            "fields": {
+                "record_class": "mutable_alias",
+                "canonical_id": "task-completed",
+            },
+        },
+    )
+    with pytest.raises(ValueError, match="distinct linked successor"):
+        task_state_index.build_transition_plan(
+            tmp_path,
+            {
+                "updated_at": "2026-07-18T15:30:02+09:00",
+                "events": [
+                    {
+                        "event": "upsert",
+                        "id": "task-completed",
+                        "status": "active",
+                    }
+                ],
+            },
+        )
 
 
 def test_scan_prefers_canonical_advice_id_over_superseded_same_path_alias(tmp_path: Path) -> None:

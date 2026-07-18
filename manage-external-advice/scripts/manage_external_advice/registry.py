@@ -35,6 +35,7 @@ from .contracts import (
     SENSITIVE_PATTERNS,
 )
 from .intake import cmd_init, cmd_intake, load_source
+from .intake_plan import apply_intake_plan, build_intake_plan, publish_intake_plan
 from .lifecycle import (
     cmd_defer,
     cmd_mark_applied,
@@ -82,12 +83,29 @@ def build_parser() -> argparse.ArgumentParser:
         "intake",
         help="Preserve raw advice and create a normalized active advice document.",
     )
-    intake.add_argument(
-        "--source", required=True, help="Markdown source path, or '-' for stdin."
-    )
+    intake.add_argument("--source", help="Markdown source path, or '-' for stdin.")
     intake.add_argument("--title", help="Human label for the advice.")
     intake.add_argument(
         "--priority", choices=("low", "normal", "high"), default="normal"
+    )
+    intake_mode = intake.add_mutually_exclusive_group()
+    intake_mode.add_argument(
+        "--plan",
+        metavar="PATH",
+        help="Publish a frozen immutable intake plan without applying it.",
+    )
+    intake_mode.add_argument(
+        "--apply-plan",
+        metavar="PATH",
+        help="Apply an existing immutable intake plan; --source is not required.",
+    )
+    intake.add_argument(
+        "--at",
+        help="Fixed RFC3339 plan timestamp; primarily for deterministic orchestration.",
+    )
+    intake.add_argument(
+        "--staging-ref",
+        help="Existing workspace-relative UTF-8 source used when --source is stdin or outside the workspace.",
     )
     intake.set_defaults(func=cmd_intake)
 
@@ -167,10 +185,12 @@ __all__ = [
     "ROOT_CAUSE_LEDGER_REL_PATH",
     "SENSITIVE_PATTERNS",
     "active_items",
+    "apply_intake_plan",
     "advice_fidelity",
     "advice_root",
     "append_event",
     "bool_value",
+    "build_intake_plan",
     "build_parser",
     "bulletize",
     "candidate_advice_lines",
@@ -206,6 +226,7 @@ __all__ = [
     "now_iso",
     "read_jsonl",
     "read_title_from_text",
+    "publish_intake_plan",
     "rebuild_index",
     "rel_path",
     "sha256_file",

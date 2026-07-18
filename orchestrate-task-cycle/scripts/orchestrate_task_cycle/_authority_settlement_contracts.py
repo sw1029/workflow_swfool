@@ -42,6 +42,10 @@ USE_RECEIPT_KEYS = {
     "state_changes",
     "idempotency_key",
 }
+TYPED_USE_RECEIPT_KEYS = USE_RECEIPT_KEYS | {
+    "owner_execution_result",
+    "pre_commit_verification",
+}
 STATE_CHANGE_KEYS = {"ref", "before", "after"}
 GRANT_STATE_KEYS = {
     "schema_version",
@@ -242,11 +246,19 @@ def receipt_contract_valid(value: dict[str, Any]) -> bool:
     changes = value.get("state_changes")
     versions = value.get("grant_versions_after")
     return bool(
-        set(value) == USE_RECEIPT_KEYS
+        frozenset(value)
+        in {frozenset(USE_RECEIPT_KEYS), frozenset(TYPED_USE_RECEIPT_KEYS)}
         and value.get("schema_version") == 2
         and value.get("artifact_kind") == "authority_use_receipt"
         and closed_binding(value.get("reservation"))
         and closed_binding(value.get("execution_result"))
+        and (
+            set(value) == USE_RECEIPT_KEYS
+            or (
+                closed_binding(value.get("owner_execution_result"))
+                and closed_binding(value.get("pre_commit_verification"))
+            )
+        )
         and valid_timestamp(value.get("consumed_at"))
         and isinstance(versions, dict)
         and all(

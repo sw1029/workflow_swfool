@@ -11,6 +11,8 @@
 - [Grant and delegation](#grant-and-delegation)
 - [Decision and fingerprint](#decision-and-fingerprint)
 - [Reservation lifecycle](#reservation-lifecycle)
+- [Execution settlement and reconciliation](#execution-settlement-and-reconciliation)
+- [Workflow status and resolution](#workflow-status-and-resolution)
 - [Transition and revocation](#transition-and-revocation)
 - [Typed decisions](#typed-decisions)
 - [CLI surface](#cli-surface)
@@ -30,8 +32,11 @@ Use this workspace-local layout:
 ├── decisions/              immutable evaluator decisions
 ├── reservations/           immutable reserve events
 ├── verifications/          immutable pre-dispatch/pre-commit checks
+├── execution_results/      typed authority settlement wrappers
+├── reconciliation_evidence/ closed effect-observation evidence
 ├── use_receipts/           immutable consume receipts
 ├── release_receipts/       immutable release or quarantine receipts
+├── reconciliation_receipts/ immutable quarantine settlements
 ├── events/                 immutable suspend/reactivate/revoke/expire events
 └── state/
     ├── current_policy.json mutable CAS pointer to one policy snapshot
@@ -129,6 +134,7 @@ Require exactly these top-level fields:
   "intent_type": "grant_authority",
   "cardinality_requested": "single_use",
   "use_budget_requested": 1,
+  "reservation_units": 1,
   "idempotency_key": "attempt-operation-key",
   "context": {
     "external_input_status": "not_required",
@@ -152,7 +158,7 @@ Use `composition_receipt: {"ref": "...", "sha256": "..."}` only for a separately
 
 Evidence bindings are positive assertions, not optional decoration. Require immutable `{ref, sha256}` evidence when external input is asserted `available`, `missing_supplyable`, or `missing_unsupplyable`, when risk acceptance is `resolved`, or when design selection is `resolved`. Require the corresponding field to be `null` for `unverified`, `unresolved`, and `not_required`. Re-hash these bindings during evaluation and pre-commit verification.
 
-Keep cardinality and scope internally consistent: `single_use` requires `use_budget_requested=1`, `task_lease` requires an exact non-null `task_id`, and `improvement_lease` requires an exact non-null `pack_id`. Reject the request before grant matching when any relation is missing.
+Keep cardinality and scope internally consistent: `single_use` requires both budgets to be 1; `reservation_units` must be positive and no greater than `use_budget_requested`; `task_lease` requires an exact non-null `task_id`; and `improvement_lease` requires an exact non-null `pack_id`. Treat `use_budget_requested` as the grant/reuse scope and `reservation_units` as the units charged by one dispatch. New requests must set `reservation_units` explicitly, normally to 1. Requests that predate the field retain their historical behavior by charging `use_budget_requested`; this is a compatibility rule, not the recommended request form.
 
 ## Evaluation context
 
@@ -303,6 +309,9 @@ grant:       draft -> active -> suspended -> active (explicit reactivation only)
 single use:  allowed -> reserved -> consumed
                            └----> released (only no effect)
                            └----> quarantined_unknown_effect
+                                      ├----> consumed (confirmed effect)
+                                      ├----> released (confirmed no effect)
+                                      └----> quarantined_unknown_effect (still unknown)
 ```
 
 Reserve under an exclusive workspace lock. Re-evaluate the exact request, resolve its subject as an existing workspace-relative non-symlink regular file, verify the scoped fingerprint, exact subject digest, raw-manifest binding, selected and lineage grant digest/state/version, policy snapshot, expiry, session/task/improvement scope, and budget. Increment `reserved_uses` and the CAS version for every de-duplicated grant in the lineage.
@@ -315,9 +324,71 @@ Before dispatch or commit, write an immutable `authority_verification` binding:
 - exact request ID and scoped fingerprint;
 - verification stage and time.
 
-Consume only with an immutable execution-result binding. Decrement remaining/reserved uses, increment consumed uses and state version, and exhaust a finite grant at zero.
+Consume only with an explicit exact `pre_commit` verification binding, a typed owner-result binding, and an exact expected subject-after SHA-256. Do not discover or silently select a verification. The pre-commit verification proves the pre-effect subject and reserved CAS state. After the effect, do not re-require the pre-effect subject digest. Instead, compare the current subject to the expected-after digest and create an immutable `authority_execution_result` that binds the reservation, verification, owner result, subject before/after, effect status, and completion time. Bind the use receipt to this typed result and the owner result. Decrement remaining/reserved uses, increment consumed uses and state version, and exhaust a finite grant at zero.
 
 Release only with immutable evidence of `not_started` or `verified_no_effect`. For `unknown_effect`, preserve reserved use and set reservation state to `quarantined_unknown_effect`.
+
+## Execution settlement and reconciliation
+
+Require this closed authority-generated execution result for every new consume:
+
+```text
+schema_version, artifact_kind=authority_execution_result, result_id,
+reservation, pre_commit_verification, owner_result, effect_status=confirmed_effect,
+subject_before, subject_after, expected_subject_after_sha256, completed_at
+```
+
+Derive `result_id` and its `execution_results/<result_id>.json` path from the canonical body. Require `subject_after.sha256=expected_subject_after_sha256`. Preserve validation of older immutable use receipts, but never issue a new untyped receipt.
+
+Prepare reconciliation evidence with `prepare-reconciliation-evidence`; do not hand-author paths or IDs. Settle a quarantined reservation only with the resulting closed `authority_effect_reconciliation_evidence` at its deterministic content-derived path. Bind its evidence ID, exact reservation, versioned operation, subject before, observed subject digest, outcome, observation time, and a typed owner result for a confirmed effect or confirmed no-effect. Require confirmed no-effect to preserve the exact subject-before digest. Reject arbitrary JSON, mismatched outcomes, stale observed subjects, or a missing typed owner result.
+
+Write an immutable reconciliation receipt before applying its CAS projections:
+
+- `confirmed_effect`: consume retained units and mark the reservation `consumed`; require the original exact pre-commit verification.
+- `confirmed_no_effect`: release retained units and mark the reservation `released`.
+- `still_unknown`: preserve units and advance the quarantined reservation version without changing its status.
+
+Reconciliation settles evidence about an existing effect. It does not create a new approval for the original operation.
+
+## Workflow status and resolution
+
+`status` must include `evaluated_at`, an optional exact `request_sha256_filter`, grants, reservations, quarantines, pending versus superseded waits, verifications, typed execution results, use/release/reconciliation receipts, `workflow_state`, `should_prompt`, and one machine-readable next action. It must also include a `workflow_basis` carrying the exact decision, reservation and reservation-state, source-approval, settlement-receipt, and blocker bindings that justify the selected state. Accept an optional explicit RFC3339 `--at` for deterministic diagnosis and replay; otherwise capture the current UTC time once. Use only that captured time for the selected grant and every ancestor. Report each grant's raw state separately from `effective_usable`, effective status, and lineage blocker codes. A raw `active` grant is effectively unusable before its `not_before`, at or after its `expires_at`, or under any ancestor that is inactive, not yet active, or time-expired.
+
+Before deriving workflow state or suppressing a prompt, validate the complete immutable lifecycle intent graph and prove every intent projection is at its exact `after` state or a validated descendant. Public closed validators must recheck deterministic identities, paths, bindings, and schemas for decisions, reservations, use/release/reconciliation receipts, grants, and current grant/reservation states. Resolve the decision's operation manifest from the same explicit skills root used for evaluation (or the declared default), validate its closed contents and exact requested operation identity, and require its current ref/digest binding to equal the persisted decision binding. A missing, changed, or identity-incompatible manifest and any malformed or unsettled artifact are errors, never evidence that a wait was superseded or that an operation can resume. Reject a symlink at any component of every authority-owned decision, source-snapshot, grant, state, and receipt directory. Read status-visible JSON through a stable no-follow acquisition and report the digest of the same bytes that were parsed. Suppress an approval wait only when the same request digest has a validated reserved, consumed, released, or quarantined lifecycle artifact, a current exact allowed decision, or an exact usable/materializable source candidate.
+
+Choose the public state using this precedence, after applying the optional exact request filter: `effect_reconciliation` for quarantine; `already_consumed` or `already_released` for settled lifecycle state; `ready_to_resume` for a reserved operation whose complete authority lineage remains usable; `reserved_authority_recovery` for a reserved operation blocked by selected or ancestor authority; `ready_to_reserve` for a current persisted exact allowed decision; `source_approval_ready_for_grant` for a usable or cleanly materializable exact source; `source_authority_defect` for an internally inconsistent source/grant projection; `source_authority_exhausted` for a source whose existing IDs cannot be reused; then `needs_user_approval` for a genuine remaining wait. Never let a lower-precedence stale wait override a higher-precedence lifecycle or authority fact.
+
+A released reservation is terminal only when status correlates its exact reservation ref/digest with a release receipt whose effect status is `not_started` or `verified_no_effect`, or a reconciliation receipt whose outcome is `confirmed_no_effect`. Return that receipt in `workflow_basis.settlement_receipt`, use `already_released`, and never dispatch the operation again. Apply the corresponding exact-receipt rule to consumed state. A reserved operation whose selected grant or any ancestor is suspended, revoked, expired, not yet active, or otherwise unusable must remain reserved and return `reserved_authority_recovery`; do not call it resumable and do not automatically release units while effect certainty is unresolved.
+
+For each exact covering source approval, classify every declared grant ID. A syntactically valid ID is materializable only if neither its immutable grant path nor mutable state path exists and neither path is a symlink. An existing ID is reusable only if the exact source-approval binding, operation, subject, capabilities, risk/decision/cardinality scope, lineage, time window, status, session, and remaining budget cover the request. A missing clean ID or at least one existing reusable ID yields `source_approval_ready_for_grant` with `materialize_grant` or `evaluate_existing_grant`. An orphan state, conflicting path, invalid ID, or impossible projection yields `source_authority_defect` and a system repair action. An exhausted, revoked, expired, suspended, not-yet-active, or source-binding-conflicted existing ID is not rematerializable: return `source_authority_exhausted`, set `should_prompt=false`, supersede the former generic wait, expose no active wait identity, derive a separate recovery identity from the exact request/source/state evidence, and route `prepare_exact_recovery_recipe`.
+
+`prepare-source-recovery` is the only publisher for that repair step. It consumes the exact immutable exhausted decision binding and one explicit preparation time, revalidates the operation manifest and current exhausted evidence, and publishes at most one immutable recipe at the recovery-identity path. The closed recipe binds the old decision/source/grant/state evidence and contains six mutually distinct, old-ID-disjoint replacement identities: request, attempt, source approval, grant, lineage, and exact replay. It also contains the exact replacement request and digest, non-artifact source-approval requirements, non-artifact grant requirements, and a deterministic recovery approval projection that explicitly names `authority.grant.issue`. Exact replay returns the same artifact; different content at the same recovery path is a conflict.
+
+The recipe has `authority_status=non_authoritative_prepare_only`. No nested recipe object may validate as `authority_source_approval` or `authority_grant`; it must not contain a precomputed source-snapshot binding, `integrity_status=verified`, or a substitute evidence ID. The actual explicit user decision must supply its own evidence ID, after which the source bytes are materialized and snapshotted and only that actual binding may complete a separately validated grant. Recipe publication does not express user approval, issue authority, consume a budget, or permit dispatch. Once the recipe validates, `status` and `resolve` replace the repair route with exactly one `needs_user_approval` wait and action `approve_exact_recovery_projection`, using the recipe projection and a new wait identity. Never expose the old approval projection as active and never reuse an exhausted request, attempt, source, grant, lineage, or replay ID.
+
+`prepared_at` is T1 preparation time, not approval evidence. The actual explicit user decision establishes T2 with T2 >= T1. Source `not_before`, grant `not_before`, and grant `created_at` must be T2 or later under the normal source/grant validators. A replayed evaluation at T1 remains non-allowed; no recipe field may backdate prospective authority.
+
+Prepare, status, and resolve expose the same non-authoritative `post_approval_handoff`. It names only existing public commands: `snapshot-source` for a source artifact derived from the actual explicit user-decision evidence, `register-grant` after substituting that actual snapshot binding into a newly validated grant, and `evaluate` for the closed replacement request. It also binds `continuation_request_sha256`. After exact approval and materialization, consumers must switch their status/resolve filter to that replacement digest; continued polling of the exhausted original digest is historical recovery observation, not forward progress.
+
+Recipe discovery precedes current covering-source wait classification. Reopen a recipe by its exact historical decision binding and by reproducing its T1 source/grant/state exhaustion evidence; do not require the old source to remain currently covering. If its continuation window is still open, keep the recovery projection as the sole active prompt. If its expiry ceiling is closed, return the existing `source_authority_exhausted` state with reason `source_recovery_window_closed`, action `prepare_fresh_recovery_plan`, `should_prompt=false`, the exact recipe binding, and a closed-window handoff. In both cases the original projection and wait identity remain historical. All non-prompt resolver outcomes return `approval_projection=null` rather than falling back to a persisted decision projection.
+
+Publish every authority-owned snapshot, immutable artifact, and mutable state projection through a stable directory descriptor. Traverse owned parent components with `O_NOFOLLOW`, bind the opened parent identity before publication, recheck it after publication, and remove a just-published artifact before failing when an ancestor swap is detected. A symlinked or swapped parent must never redirect an authority write outside the intended workspace path.
+
+`resolve` evaluates the exact request without mutating authority state, then classifies it as one of:
+
+- `ready_to_resume`, `effect_reconciliation`, `already_consumed`, or `already_released`: system action, no prompt;
+- `reserved_authority_recovery`: preserve the reservation and run effect/authority recovery, no prompt;
+- `ready_to_reserve`: allowed decision, no prompt;
+- `source_approval_ready_for_grant`: an exact effective closed source approval can materialize a grant, no prompt;
+- `source_authority_defect`: repair inconsistent local authority projections, no prompt;
+- `source_authority_exhausted`: prepare one non-authoritative exact recovery recipe with distinct replacement IDs, no prompt;
+- recovery recipe present: return one `needs_user_approval` / `approve_exact_recovery_projection` wait;
+- `needs_user_approval`: no existing lifecycle or exact effective source approval, prompt once;
+- `decision_<typed-decision>`: route the separate decision without relabeling it as authority approval.
+
+Use a stable wait identity derived from `projection_id`, `exact_replay_key`, and `effective_authority_fingerprint`. Use a separately named, evidence-derived recovery identity for non-user source repair; it is not an approval replay key. `no_single_covering_active_grant` is an evaluator reason, not proof that a user must approve again. Return specific grant near-miss reason codes and a closed structured error envelope with `retryable`, `user_action_required`, and `next_action`.
+
+Status and resolve share one interaction projection: `outcome`, `workflow_state`, `should_prompt`, `user_action`, and `next_action`. Set `outcome` and `workflow_state` to the same selected workflow/resolution state. Set `user_action` to the exact `next_action` only when `next_action.actor=user`; otherwise set it to `null`. Preserve command-specific aliases such as `resolution` for backward compatibility.
 
 Every reserve, consume, release, and transition artifact carries `state_changes`. Each change binds a workspace-relative projection path and exact `before`/`after` JSON objects. Write the immutable artifact before applying projections. Before every later lifecycle or transition entry, deterministically scan all immutable intents and finish any exact, uniquely connected partial projection—not only an identical idempotency replay. Current equal to `before` may advance; current equal to `after` or an exact descendant in the immutable state graph is already satisfied; competing branches or unconnected state require quarantine/manual resolution. This prevents one reservation from consuming another reservation's aggregate counter after a crash.
 
@@ -354,7 +425,7 @@ Use:
 
 - `snapshot-policy`, `snapshot-source`;
 - `register-grant`, `delegate`, `compose`;
-- `evaluate`, `reserve`, `verify`, `consume`, `release`;
+- `evaluate`, `resolve`, `prepare-source-recovery`, `reserve`, `verify`, `consume`, `release`, `prepare-reconciliation-evidence`, `reconcile`;
 - `transition`, `status`.
 
 Supply all times explicitly as RFC3339 for reproducible artifacts. Supply all CAS versions explicitly for mutable transitions.

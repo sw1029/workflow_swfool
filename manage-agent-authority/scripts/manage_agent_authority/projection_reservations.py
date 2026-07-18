@@ -3,9 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .approval_projection import build_approval_projection
 from .canonical import object_sha256
 from .canonical import parse_time
+from .contracts import DECISIONS
 from .contracts import validate_request
+from .contracts import reservation_units
+from .evaluation_context import validate_recorded_evaluation_context
+from .evaluation_context import verify_request_evidence
 from .projection_contracts import AUTHORIZATION_ROOT
 from .projection_contracts import DECISION_GRANT_KEYS
 from .projection_contracts import DECISION_KEYS
@@ -24,10 +29,32 @@ from .projection_io import load_bound_json
 from .projection_io import load_grant_artifact
 from .projection_io import validate_grant_state
 from .projection_io import verify_file_binding
+from .operations import load_operation
 
 
-def _validate_decision(
-    root: Path, artifact: dict[str, Any], path: Path
+def _validate_operation_manifest(
+    request: dict[str, Any], decision: dict[str, Any], skills_root: Path | None
+) -> None:
+    operation, current_binding = load_operation(
+        request["skill_id"],
+        request["skill_version"],
+        request["operation_id"],
+        request["operation_version"],
+        skills_root=skills_root,
+    )
+    if decision["operation_manifest"] != current_binding:
+        raise SystemExit("Authority decision operation manifest binding is stale.")
+    if decision["decision"] in {"allowed", "approval_required"} and operation is None:
+        raise SystemExit("Authority decision operation identity is no longer valid.")
+
+
+def validate_decision_artifact(
+    root: Path,
+    artifact: dict[str, Any],
+    path: Path,
+    *,
+    skills_root: Path | None = None,
+    verify_manifest: bool = True,
 ) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
     decision = closed(artifact, DECISION_KEYS, "authority decision")
     if (
@@ -46,14 +73,39 @@ def _validate_decision(
     if decision_id != f"authd-{object_sha256(core)[:24]}":
         raise SystemExit("Authority decision ID is not deterministic for its body.")
     request = validate_request(decision["request"])
-    if decision["request_sha256"] != object_sha256(request):
+    if decision["request"] != request or decision["request_sha256"] != object_sha256(
+        request
+    ):
         raise SystemExit("Authority decision request binding is invalid.")
-    if not isinstance(decision["evaluation_context"], dict) or decision[
+    verify_request_evidence(root, request)
+    context = validate_recorded_evaluation_context(decision["evaluation_context"])
+    if decision["evaluation_context"] != context or decision[
         "evaluation_context_sha256"
-    ] != object_sha256(decision["evaluation_context"]):
+    ] != object_sha256(context):
         raise SystemExit("Authority decision context binding is invalid.")
-    if decision["decision"] != "allowed":
-        raise SystemExit("A recovery reservation must bind an allowed decision.")
+    if decision["decision"] not in DECISIONS:
+        raise SystemExit("Authority decision enum is invalid.")
+    reasons = decision["reason_codes"]
+    if (
+        not isinstance(reasons, list)
+        or reasons != sorted(set(reasons))
+        or not all(isinstance(reason, str) and reason for reason in reasons)
+        or (decision["decision"] == "allowed" and reasons)
+        or (decision["decision"] != "allowed" and not reasons)
+    ):
+        raise SystemExit("Authority decision reason codes are invalid.")
+    expected_projection = (
+        build_approval_projection(request, context, reasons)
+        if decision["decision"] == "approval_required"
+        else None
+    )
+    if decision["approval_projection"] != expected_projection:
+        raise SystemExit("Authority decision approval projection is invalid.")
+    manifest = decision["operation_manifest"]
+    if manifest is not None:
+        binding(manifest, "authority decision.operation_manifest")
+    if verify_manifest:
+        _validate_operation_manifest(request, decision, skills_root)
     sha(
         decision["effective_authority_fingerprint"],
         "effective_authority_fingerprint",
@@ -74,6 +126,12 @@ def _validate_decision(
             verify_file_binding(
                 root, record["policy_snapshot"], f"{field}[{index}].policy_snapshot"
             )
+            grant, grant_digest = load_grant_artifact(root, grant_id)
+            if (
+                record["grant_sha256"] != grant_digest
+                or record["policy_snapshot"] != grant["policy_snapshot"]
+            ):
+                raise SystemExit("Authority decision grant binding is invalid.")
             existing = bindings.get(grant_id)
             if existing is not None:
                 if existing != record:
@@ -82,8 +140,21 @@ def _validate_decision(
                     )
                 raise SystemExit("Authority decision has duplicate grant bindings.")
             bindings[grant_id] = record
-    if not bindings:
+    if decision["decision"] == "allowed" and not bindings:
         raise SystemExit("Allowed authority decision has no grant bindings.")
+    if decision["decision"] != "allowed" and bindings:
+        raise SystemExit("Non-allowed authority decision must not bind grants.")
+    return request, bindings
+
+
+def _validate_decision(
+    root: Path, artifact: dict[str, Any], path: Path
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    request, bindings = validate_decision_artifact(
+        root, artifact, path, verify_manifest=False
+    )
+    if artifact["decision"] != "allowed":
+        raise SystemExit("A recovery reservation must bind an allowed decision.")
     return request, bindings
 
 
@@ -152,7 +223,7 @@ def validate_reservation(
         if (
             decision_grant["grant_sha256"] != grant_digest
             or decision_grant["state_version"] != use["state_version_before"]
-            or use["units"] != request["use_budget_requested"]
+            or use["units"] != reservation_units(request)
         ):
             raise SystemExit("Authority reservation grant use is not decision-bound.")
         ref = (STATE_ROOT / "grants" / f"{use['grant_id']}.json").as_posix()

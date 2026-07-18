@@ -5,14 +5,15 @@ import argparse
 import datetime as dt
 import hashlib
 import json
-import os
 import re
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
 from .artifact_store import snapshot_file
+from .stable_store import atomic_replace
+from .stable_store import publish_immutable
+from .stable_store import read_regular
 
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -53,11 +54,9 @@ INITIAL_SELECTION_ALLOWED_EFFECTS = {"promote_first_pack_item"}
 
 
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    payload = read_regular(path, label="authority receipt SHA-256 source")
+    assert payload is not None
+    return hashlib.sha256(payload).hexdigest()
 
 
 def resolve_workspace_file(root: Path, value: Any, label: str) -> Path:
@@ -335,7 +334,9 @@ def load_json_value(value: str) -> dict[str, Any]:
     except OSError:
         is_file = False
     if is_file:
-        loaded = json.loads(candidate.read_text(encoding="utf-8"))
+        payload = read_regular(candidate.absolute(), label="authority receipt JSON input")
+        assert payload is not None
+        loaded = json.loads(payload.decode("utf-8"))
     else:
         loaded = json.loads(value)
     if not isinstance(loaded, dict):
@@ -344,21 +345,10 @@ def load_json_value(value: str) -> dict[str, Any]:
 
 
 def write_json_atomic(path: Path, value: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_value = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    temporary = Path(temporary_value)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(value, handle, ensure_ascii=False, indent=2, sort_keys=True)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
+    payload = (
+        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    atomic_replace(path, payload)
 
 
 def command_issue(args: argparse.Namespace) -> int:
@@ -396,14 +386,15 @@ def command_issue(args: argparse.Namespace) -> int:
         ) from exc
     if output.suffix != ".json":
         raise SystemExit("Receipt output must be JSON.")
-    if output.exists():
-        existing = json.loads(output.read_text(encoding="utf-8"))
-        if existing != receipt:
-            raise SystemExit(
-                "A conflicting authority receipt already exists at the output path."
-            )
-    else:
-        write_json_atomic(output, receipt)
+    payload = (
+        json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    try:
+        publish_immutable(output, payload)
+    except SystemExit as exc:
+        raise SystemExit(
+            "A conflicting or unsafe authority receipt output exists."
+        ) from exc
     result = {
         **validated,
         "receipt_ref": output.relative_to(root).as_posix(),
@@ -421,7 +412,9 @@ def command_validate(args: argparse.Namespace) -> int:
         args.receipt_sha256, "receipt_sha256"
     ):
         raise SystemExit("Authority receipt SHA-256 does not match.")
-    receipt = json.loads(path.read_text(encoding="utf-8"))
+    payload = read_regular(path, label="authority receipt")
+    assert payload is not None
+    receipt = json.loads(payload.decode("utf-8"))
     expected = (
         load_json_value(args.expected_subject_json)
         if args.expected_subject_json

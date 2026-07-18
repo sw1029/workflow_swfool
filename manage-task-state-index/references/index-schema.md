@@ -1,5 +1,15 @@
 # Task State Index Schema
 
+## Contents
+
+- [JSONL event fields](#jsonl-event-fields)
+- [Stable path and replacement contract](#stable-path-and-replacement-contract)
+- [Durability contract](#durability-contract)
+- [Immutable transition plan contract](#immutable-transition-plan-contract)
+- [Link relationships](#link-relationships)
+- [Global ID audit](#global-id-audit)
+- [Markdown index](#markdown-index)
+
 ## JSONL Event Fields
 
 Each `.task/index.jsonl` line is one JSON object. Treat the file as append-only.
@@ -82,6 +92,20 @@ Use workspace-local `.task/index.lock` for every JSONL or Markdown mutation. Whi
 Before a mutating scan appends its first event, complete the same read-only plan over the entire discovered inventory, simulate canonical identity selection in discovery order, reject cross-path/cross-type collisions, and recheck the ledger and artifact anchors. This prevalidation prevents a deterministic later collision from leaving an earlier partial append; ordinary per-item append/recovery semantics remain unchanged.
 
 A committed legacy migration is the sole exception to ordinary whole-file current-row parsing. It preserves the original bytes at offset zero, then appends correction, seal, and receipt-anchor events. Before allowing any exact prefix quarantine, run the two-pass receipt graph validation in [legacy-migration.md](legacy-migration.md), including the hash-bound final journal, immutable completion marker, and quarantine-to-correction bindings. A missing or invalid receipt graph retains ordinary fail-closed mutation behavior.
+
+### Immutable transition plan contract
+
+For a task/archive/supersede/advice/task-pack link transition that spans several events, publish schema-v1 `task_state_transition_plan` JSON only at `.task/transition_plans/<plan-id>.json`. Filename aliases are invalid because intent and receipt sidecars use the same `plan_id`. The plan fixes one timestamp, ordered versioned events, a deterministic `transition_plan_id` binding on every event, artifact content anchors, exact pre/post ledger SHA-256 values, the exact pre-ledger byte length (`before_size`), mandatory Markdown rendering, and exact pre/post Markdown SHA-256 values. Final upsert paths and anchors form a one-to-one mapping. A planned `content_sha256` is the apply-time expected artifact digest, so prepare-all -> owner artifact publication -> index apply supports prospective missing files and mutable `task.md` replacement; an upsert without a content digest remains bound to its unchanged planning digest. Planning is read-only until the immutable plan itself is published; `plan-transition --dry-run` creates neither `.task/`, a lock, a plan, a snapshot, nor a render. Immutable plan publication is the authority-free, reversible `prepare_task_state_transition_plan` metadata operation and never grants canonical apply authority.
+
+`verify-plan --phase planning` checks each artifact's planning `before_sha256`; `verify-plan --phase apply` checks its `expected_sha256`. Both phases retain the exact ledger and Markdown before-CAS binding. When a multi-owner dependency set is partly published and every observed artifact is exactly either its before or expected digest, the public status is `materializing`; it is nonterminal, cannot be settled no-effect, and becomes apply-ready only when every expected digest is present. This closed distinction lets a coordinator validate a prospective task, advice, or archive transition before dependency publication and then validate the intended bytes after publication without relabeling normal dependency progress as drift.
+
+`apply-plan` validates the complete plan and every apply-phase CAS anchor before staging an append. Plan build reuses the same current-suffix and completed-alias batch validators required by apply. Under `.task/index.lock`, apply publishes an immutable `.task/transition_intents/<plan-id>.json` barrier before canonical append, appends the entire event list with the existing atomic JSONL writer, renders once, then publishes `.task/transition_receipts/<plan-id>.json`. Every normal suffix writer detects an unfinished intent and fails closed before append; only recovery of that same plan is allowed through the barrier. The canonical execution-result binding is the receipt file's actual SHA-256 (`execution_result_binding.ref|sha256` / `receipt_file_sha256`), not the canonical receipt-body digest. Likewise, `plan_file_sha256` binds the newline-bearing immutable plan file while `plan_sha256` identifies the canonical plan body. Transition plans, intents, apply receipts, and no-effect receipts reject symlinked owned directories, symlinked leaves, and non-canonical artifact paths.
+
+An exact replay finds the unique complete ordered set of plan-tagged events, appends zero rows, and verifies or recovers the render and receipt. Recovery additionally proves that the first `before_size` ledger bytes hash to `before_sha256`, the exact canonical planned-event bytes occur immediately afterward as one contiguous batch, and every remaining byte is the canonical encoding of a suffix that passes the shared current-suffix/batch validators. A partial, noncontiguous, conflicting, or duplicate tag set; changed historical prefix; invalid suffix; changed plan body; stale ledger/Markdown/artifact anchor; or conflicting receipt fails closed. If the ledger batch committed but render or receipt publication was interrupted, replay repairs those derived/post-commit surfaces from this proven boundary. When a valid unrelated later suffix is already present, recovery preserves it and renders the current full ledger projection; it never rewinds to the historical plan boundary. Historical transaction completion is reported independently from `current_projection_healthy`; an exact historical receipt with a stale current Markdown projection is `recovery_required`, not a false `already_applied`. `verify-plan` is read-only and reports `ready`, `materializing`, `already_applied`, `settled_no_effect`, `recovery_required`, `stale`, or `conflict`, including receipt consistency and observed effect/intent flags.
+
+For a stale untouched plan caused by canonical ledger/Markdown drift or an artifact digest that is neither its before nor expected value, `settle-plan-no-effect` records `.task/transition_no_effect_receipts/<plan-id>.json` under the same index lock. The receipt binds the exact plan body and newline-bearing plan file, the observed ledger, Markdown, and artifact digests, non-empty CAS defects, and false effect/intent observations. It contains no artifact body. Once present it is terminal for that plan: apply rejects it before creating canonical files, verifier reopens it, and a caller uses its actual file SHA-256 as no-effect execution evidence. All-before, all-expected, and partial before/expected dependency states are ineligible. An invalid or tampered receipt, an intent without a complete event batch, or any plan-tagged event requires conflict or recovery handling and can never be relabeled no-effect.
+
+Use `task_index_transition_plan` as the preferred authority subject for this batch. Retain `task_index` only as the compatibility subject for legacy direct writers.
 
 Relationship object:
 

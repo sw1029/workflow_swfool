@@ -8,6 +8,7 @@ from .canonical import sha256_file
 from .contracts import DECISION_CLASSES
 from .contracts import MUTATION_CLASSES
 from .contracts import RISK_TIERS
+from .contracts import SHA_RE
 from .contracts import risk_value
 
 
@@ -47,7 +48,7 @@ def _exact_strings(value: Any, label: str) -> list[str]:
     return normalized
 
 
-def validate_evaluation_context(root: Path, value: dict[str, Any]) -> dict[str, Any]:
+def _normalize_evaluation_context(value: dict[str, Any]) -> dict[str, Any]:
     _closed(value, EVALUATION_CONTEXT_KEYS, "evaluation context")
     if value["schema_version"] != 2 or value["context_kind"] != "authority_evaluation":
         raise SystemExit(
@@ -100,9 +101,16 @@ def validate_evaluation_context(root: Path, value: dict[str, Any]) -> dict[str, 
         raise SystemExit(
             "goal_autonomy_envelope.source_binding must contain ref and sha256."
         )
-    source = resolve_workspace_path(root, binding["ref"], "goal autonomy source")
-    if sha256_file(source) != binding["sha256"]:
-        raise SystemExit("Goal autonomy source digest mismatch.")
+    source_ref = str(binding["ref"] or "").strip()
+    source_digest = str(binding["sha256"] or "").strip()
+    if (
+        not source_ref
+        or Path(source_ref).is_absolute()
+        or ".." in Path(source_ref).parts
+        or "*" in source_ref
+        or not SHA_RE.fullmatch(source_digest)
+    ):
+        raise SystemExit("Goal autonomy source binding is invalid.")
     session_risk = str(session["risk_ceiling"])
     envelope_risk = str(envelope["risk_ceiling"])
     if session_risk not in RISK_TIERS or envelope_risk not in RISK_TIERS:
@@ -132,11 +140,25 @@ def validate_evaluation_context(root: Path, value: dict[str, Any]) -> dict[str, 
             "subjects": subjects,
             "operations": operations,
             "source_binding": {
-                "ref": str(binding["ref"]),
-                "sha256": str(binding["sha256"]),
+                "ref": source_ref,
+                "sha256": source_digest,
             },
         },
     }
+
+
+def validate_recorded_evaluation_context(value: dict[str, Any]) -> dict[str, Any]:
+    """Validate a persisted context without refreshing its mutable source binding."""
+    return _normalize_evaluation_context(value)
+
+
+def validate_evaluation_context(root: Path, value: dict[str, Any]) -> dict[str, Any]:
+    normalized = _normalize_evaluation_context(value)
+    binding = normalized["goal_autonomy_envelope"]["source_binding"]
+    source = resolve_workspace_path(root, binding["ref"], "goal autonomy source")
+    if sha256_file(source) != binding["sha256"]:
+        raise SystemExit("Goal autonomy source digest mismatch.")
+    return normalized
 
 
 def verify_request_evidence(root: Path, request: dict[str, Any]) -> None:

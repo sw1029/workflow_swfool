@@ -6,18 +6,18 @@ import contextlib
 import json
 import os
 from pathlib import Path
-import stat
-import tempfile
 import threading
 from typing import Any
 
 from .common import now_iso, rel_path, sha256_file, slugify, stamp
 from .contracts import ADVICE_DIR
-
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - Windows keeps in-process safety only.
-    fcntl = None  # type: ignore[assignment]
+from .stable_store import (
+    atomic_replace,
+    ensure_parent,
+    locked_file,
+    publish_immutable,
+    read_regular,
+)
 
 
 _THREAD_LOCKS: dict[str, threading.RLock] = {}
@@ -35,12 +35,6 @@ def index_jsonl(root: Path) -> Path:
 
 def index_md(root: Path) -> Path:
     return advice_root(root) / "index.md"
-
-
-def _ensure_directory(path: Path, label: str) -> None:
-    path.mkdir(parents=True, exist_ok=True)
-    if path.is_symlink() or not path.is_dir():
-        raise SystemExit(f"{label} must be a regular directory: {path}")
 
 
 def _thread_lock(root: Path) -> threading.RLock:
@@ -72,28 +66,13 @@ def registry_lock(root: Path):
             finally:
                 depths[key] -= 1
             return
-        _ensure_directory(advice_root(root), "Advice registry root")
         lock_path = advice_root(root) / "index.lock"
-        if lock_path.exists() or lock_path.is_symlink():
-            mode = lock_path.lstat().st_mode
-            if stat.S_ISLNK(mode) or not stat.S_ISREG(mode):
-                raise SystemExit("Advice registry lock must be a regular file.")
-        flags = os.O_CREAT | os.O_RDWR
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
-        descriptor = os.open(lock_path, flags, 0o600)
-        with os.fdopen(descriptor, "a+b", closefd=True) as handle:
-            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
-                raise SystemExit("Advice registry lock must be a regular file.")
-            if fcntl is not None:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        with locked_file(root, lock_path):
             depths[key] = 1
             try:
                 yield
             finally:
                 depths.pop(key, None)
-                if fcntl is not None:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def fsync_directory(path: Path) -> None:
@@ -107,82 +86,16 @@ def fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def atomic_replace(path: Path, payload: bytes, mode: int = 0o600) -> None:
-    """Replace one regular file only after durable temporary publication."""
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists() or path.is_symlink():
-        target_mode = path.lstat().st_mode
-        if stat.S_ISLNK(target_mode) or not stat.S_ISREG(target_mode):
-            raise SystemExit(f"Unsafe advice registry target: {path}")
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    temporary = Path(temporary_name)
-    try:
-        os.fchmod(descriptor, mode)
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        fsync_directory(path.parent)
-    except BaseException:
-        try:
-            os.close(descriptor)
-        except OSError:
-            pass
-        temporary.unlink(missing_ok=True)
-        raise
-
-
-def publish_immutable(path: Path, payload: bytes, mode: int = 0o600) -> None:
-    """Publish immutable bytes, accepting only an exact idempotent replay."""
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists() or path.is_symlink():
-        target_mode = path.lstat().st_mode
-        if stat.S_ISLNK(target_mode) or not stat.S_ISREG(target_mode):
-            raise SystemExit(f"Unsafe immutable advice target: {path}")
-        if path.read_bytes() != payload:
-            raise SystemExit(f"Immutable advice publication conflict: {path}")
-        return
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    temporary = Path(temporary_name)
-    try:
-        os.fchmod(descriptor, mode)
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        try:
-            os.link(temporary, path)
-        except FileExistsError:
-            if path.is_symlink() or not path.is_file() or path.read_bytes() != payload:
-                raise SystemExit(f"Immutable advice publication conflict: {path}")
-        fsync_directory(path.parent)
-    finally:
-        try:
-            os.close(descriptor)
-        except OSError:
-            pass
-        temporary.unlink(missing_ok=True)
-
-
 def ensure_dirs(root: Path) -> None:
     base = advice_root(root)
-    _ensure_directory(base, "Advice registry root")
+    ensure_parent(root, base / ".owned")
     for name in ("raw", "active", "deferred", "applied", "rejected"):
-        _ensure_directory(base / name, f"Advice {name} directory")
+        ensure_parent(root, base / name / ".owned")
     registry = index_jsonl(root)
-    if registry.exists() or registry.is_symlink():
-        mode = registry.lstat().st_mode
-        if stat.S_ISLNK(mode) or not stat.S_ISREG(mode):
-            raise SystemExit("Advice registry index must be a regular file.")
-    else:
-        registry.touch()
+    if read_regular(
+        root, registry, missing=None, label="Advice registry index"
+    ) is None:
+        publish_immutable(root, registry, b"")
 
 
 def unique_advice_key(root: Path, title: str) -> tuple[str, str]:
@@ -259,7 +172,7 @@ def parse_events(payload: bytes, path: Path) -> list[dict[str, Any]]:
 def registry_snapshot(root: Path) -> tuple[bytes, list[dict[str, Any]]]:
     ensure_dirs(root)
     path = index_jsonl(root)
-    payload = path.read_bytes()
+    payload = read_regular(root, path, label="Advice registry index")
     return payload, parse_events(payload, path)
 
 
@@ -275,10 +188,13 @@ def event_bytes(event: dict[str, Any]) -> bytes:
 
 def append_event(root: Path, event: dict[str, Any]) -> None:
     with registry_lock(root):
+        from .intake_intent import assert_no_pending_intake_intents
+
+        assert_no_pending_intake_intents(root)
         payload, _events = registry_snapshot(root)
         if payload and not payload.endswith(b"\n"):
             payload += b"\n"
-        atomic_replace(index_jsonl(root), payload + event_bytes(event))
+        atomic_replace(root, index_jsonl(root), payload + event_bytes(event))
 
 
 def merge_state(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -314,42 +230,47 @@ def merge_state(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return state
 
 
-def rebuild_index(root: Path) -> dict[str, Any]:
+def render_index_payload(
+    state: dict[str, dict[str, Any]], generated_at: str
+) -> bytes:
+    lines = [
+        "# External Advice Index",
+        "",
+        f"- Generated: {generated_at}",
+        "- Projection only; canonical JSONL: `.agent_advice/index.jsonl`",
+        f"- Advice count: {len(state)}",
+        "",
+        "| Advice ID | Status | Title | Normalized Path | Raw Source | Updated |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for item in sorted(
+        state.values(),
+        key=lambda row: (
+            str(row.get("status", "")),
+            str(row.get("advice_id", "")),
+        ),
+    ):
+        values = [
+            item.get("advice_id", ""),
+            item.get("status", ""),
+            item.get("title", ""),
+            item.get("path", ""),
+            item.get("raw_source_path", ""),
+            item.get("updated_at", ""),
+        ]
+        lines.append(
+            "| "
+            + " | ".join(str(value).replace("|", "\\|") for value in values)
+            + " |"
+        )
+    return ("\n".join(lines).rstrip() + "\n").encode("utf-8")
+
+
+def rebuild_index(root: Path, *, generated_at: str | None = None) -> dict[str, Any]:
     with registry_lock(root):
         state = merge_state(load_events(root))
-        lines = [
-            "# External Advice Index",
-            "",
-            f"- Generated: {now_iso()}",
-            "- Projection only; canonical JSONL: `.agent_advice/index.jsonl`",
-            f"- Advice count: {len(state)}",
-            "",
-            "| Advice ID | Status | Title | Normalized Path | Raw Source | Updated |",
-            "| --- | --- | --- | --- | --- | --- |",
-        ]
-        for item in sorted(
-            state.values(),
-            key=lambda row: (
-                str(row.get("status", "")),
-                str(row.get("advice_id", "")),
-            ),
-        ):
-            values = [
-                item.get("advice_id", ""),
-                item.get("status", ""),
-                item.get("title", ""),
-                item.get("path", ""),
-                item.get("raw_source_path", ""),
-                item.get("updated_at", ""),
-            ]
-            lines.append(
-                "| "
-                + " | ".join(str(value).replace("|", "\\|") for value in values)
-                + " |"
-            )
-        atomic_replace(
-            index_md(root), ("\n".join(lines).rstrip() + "\n").encode("utf-8")
-        )
+        payload = render_index_payload(state, generated_at or now_iso())
+        atomic_replace(root, index_md(root), payload)
         return {
             "index_md": rel_path(root, index_md(root)),
             "advice_count": len(state),

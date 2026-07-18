@@ -12,6 +12,7 @@ from .canonical import resolve_workspace_path
 from .canonical import sha256_file
 from .canonical import write_immutable_json
 from .contracts import risk_value
+from .contracts import reservation_units
 from .contracts import cardinality_covers
 from .contracts import rank_value
 from .source_approval import load_source_approval
@@ -177,7 +178,7 @@ def composition_covers(
         if (
             available is not None
             and available - state.get("reserved_uses", 0)
-            < request["use_budget_requested"]
+            < reservation_units(request)
         ):
             return False
         capabilities.update(grant["capabilities"])

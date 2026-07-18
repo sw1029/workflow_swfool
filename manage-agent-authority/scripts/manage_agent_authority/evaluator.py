@@ -16,12 +16,14 @@ from .composition import load_bound_composition
 from .contracts import MUTATION_CLASSES
 from .contracts import cardinality_covers
 from .contracts import rank_value
+from .contracts import reservation_units
 from .contracts import risk_value
 from .contracts import validate_request
 from .evaluation_context import context_decision
 from .evaluation_context import validate_evaluation_context
 from .evaluation_context import verify_request_evidence
 from .operations import load_operation
+from .grant_diagnostics import near_miss_reasons
 
 
 def _manifest_reasons(request: dict[str, Any], operation: dict[str, Any]) -> list[str]:
@@ -108,10 +110,14 @@ def _covers(
     ):
         return False
     available = state.get("remaining_uses")
+    if grant.get("max_uses") is not None and (
+        grant["max_uses"] < request["use_budget_requested"]
+    ):
+        return False
     if (
         available is not None
         and available - int(state.get("reserved_uses", 0))
-        < request["use_budget_requested"]
+        < reservation_units(request)
     ):
         return False
     return True
@@ -167,8 +173,12 @@ def _lineage_covers(
         if grant["improvement_id"] and grant["improvement_id"] != request["pack_id"]:
             return False
         remaining = state["remaining_uses"]
+        if grant.get("max_uses") is not None and (
+            grant["max_uses"] < request["use_budget_requested"]
+        ):
+            return False
         if remaining is not None and (
-            remaining - state["reserved_uses"] < request["use_budget_requested"]
+            remaining - state["reserved_uses"] < reservation_units(request)
         ):
             return False
     return True
@@ -210,7 +220,19 @@ def _grant_decision(
         lineage = [_selected_binding(*record) for record in chosen[3]]
         return "allowed", [], [_selected_binding(*chosen[:3])], lineage
     if request["composition_receipt"] is None:
-        return "approval_required", ["no_single_covering_active_grant"], [], []
+        return (
+            "approval_required",
+            ["no_single_covering_active_grant"]
+            + near_miss_reasons(
+                request,
+                records,
+                at,
+                operation["source_rank_floor"],
+                session_id,
+            ),
+            [],
+            [],
+        )
     base_request_sha = object_sha256({**request, "composition_receipt": None})
     composition = load_bound_composition(
         root, request["composition_receipt"], base_request_sha

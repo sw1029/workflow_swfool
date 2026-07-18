@@ -17,6 +17,7 @@ from .projection_receipts import validate_release_receipt
 from .projection_receipts import validate_use_receipt
 from .projection_reservations import validate_reservation
 from .projection_transitions import validate_transition
+from .projection_reconciliation import validate_reconciliation_receipt
 
 
 Intent = tuple[Path, dict[str, Any], list[dict[str, Any]]]
@@ -37,6 +38,8 @@ def _validate_intent(
         return validate_use_receipt(root, artifact, path)
     if directory == "release_receipts":
         return validate_release_receipt(root, artifact, path)
+    if directory == "reconciliation_receipts":
+        return validate_reconciliation_receipt(root, artifact, path)
     return validate_transition(root, artifact, path)
 
 
@@ -196,20 +199,28 @@ def _changes_settled(
 
 def validated_settled_intent(root: Path, artifact_path: Path) -> dict[str, Any]:
     """Return a validated intent after each projection reached it or a descendant."""
-    root = root.resolve()
-    intents = _load_intents(root)
-    graph = _state_graph(intents)
     target = artifact_path.resolve(strict=False)
-    for path, artifact, changes in intents:
+    for path, artifact in validated_settled_intents(root):
         if path.resolve(strict=False) == target:
-            if not _changes_settled(root, changes, graph):
-                raise SystemExit(
-                    "Authority intent replay is not settled at its exact after-state or a proven descendant."
-                )
             return artifact
     raise SystemExit(
         "Authority intent replay artifact is not a validated owner intent."
     )
+
+
+def validated_settled_intents(root: Path) -> list[tuple[Path, dict[str, Any]]]:
+    """Return all closed intents after proving their projections are settled."""
+    root = root.resolve()
+    intents = _load_intents(root)
+    graph = _state_graph(intents)
+    settled: list[tuple[Path, dict[str, Any]]] = []
+    for path, artifact, changes in intents:
+        if not _changes_settled(root, changes, graph):
+            raise SystemExit(
+                "Authority intent replay is not settled at its exact after-state or a proven descendant."
+            )
+        settled.append((path, artifact))
+    return settled
 
 
 def recover_projection_intents(root: Path) -> list[str]:
@@ -263,4 +274,5 @@ __all__ = [
     "projection_change",
     "recover_projection_intents",
     "validated_settled_intent",
+    "validated_settled_intents",
 ]

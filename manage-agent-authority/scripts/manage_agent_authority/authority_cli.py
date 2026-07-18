@@ -7,8 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from .artifact_store import AUTHORIZATION_ROOT
-from .artifact_store import list_grants
-from .artifact_store import load_grant
 from .artifact_store import register_grant
 from .artifact_store import snapshot_file
 from .artifact_store import transition_grants
@@ -21,8 +19,14 @@ from .composition import create_composition
 from .evaluator import evaluate
 from .lifecycle import consume
 from .lifecycle import release
+from .reconciliation import reconcile_quarantine
 from .lifecycle import reserve
 from .lifecycle import verify_reservation_with_recovery
+from .workflow_status import resolve_operation
+from .workflow_status import status_snapshot
+from .reconciliation_evidence import prepare_reconciliation_evidence
+from .source_recovery import prepare_source_recovery
+from .cli_errors import emit_error
 
 
 def _emit(value: Any) -> int:
@@ -172,11 +176,20 @@ def command_verify(args: argparse.Namespace) -> int:
 
 
 def command_consume(args: argparse.Namespace) -> int:
+    pre_commit_value = getattr(args, "pre_commit_verification", None)
     result = consume(
         _root(args),
         args.reservation_ref,
         args.reservation_sha256,
         _binding(args.execution_result, "execution_result"),
+        pre_commit_verification=(
+            _binding(pre_commit_value, "pre_commit_verification")
+            if pre_commit_value
+            else None
+        ),
+        expected_subject_after_sha256=getattr(
+            args, "expected_subject_after_sha256", None
+        ),
         consumed_at=args.at,
         expected_version=args.expected_version,
         idempotency_key=args.idempotency_key,
@@ -206,6 +219,56 @@ def command_release(args: argparse.Namespace) -> int:
     )
 
 
+def command_reconcile(args: argparse.Namespace) -> int:
+    pre_commit_value = getattr(args, "pre_commit_verification", None)
+    result = reconcile_quarantine(
+        _root(args),
+        args.reservation_ref,
+        args.reservation_sha256,
+        _binding(args.effect_evidence, "effect_evidence"),
+        outcome=args.outcome,
+        pre_commit_verification=(
+            _binding(pre_commit_value, "pre_commit_verification")
+            if pre_commit_value
+            else None
+        ),
+        reconciled_at=args.at,
+        expected_version=args.expected_version,
+        idempotency_key=args.idempotency_key,
+    )
+    return _emit(
+        {
+            "status": result["reconciliation_receipt"]["outcome"],
+            **result,
+        }
+    )
+
+
+def command_prepare_reconciliation_evidence(args: argparse.Namespace) -> int:
+    owner_value = getattr(args, "owner_result", None)
+    return _emit(
+        prepare_reconciliation_evidence(
+            _root(args),
+            args.reservation_ref,
+            args.reservation_sha256,
+            outcome=args.outcome,
+            owner_result=(
+                _binding(owner_value, "owner_result") if owner_value else None
+            ),
+            observed_at=args.at,
+            expected_version=args.expected_version,
+        )
+    )
+
+
+def command_prepare_source_recovery(args: argparse.Namespace) -> int:
+    result = prepare_source_recovery(
+        _root(args), args.decision_ref, args.decision_sha256,
+        prepared_at=args.at, skills_root=_skills_root(args),
+    )
+    return _emit(result)
+
+
 def command_transition(args: argparse.Namespace) -> int:
     root = _root(args)
     result = transition_grants(
@@ -221,16 +284,27 @@ def command_transition(args: argparse.Namespace) -> int:
 
 
 def command_status(args: argparse.Namespace) -> int:
-    root = _root(args)
-    if args.grant_id:
-        grant, digest, state = load_grant(root, args.grant_id)
-        records = [{"grant": grant, "grant_sha256": digest, "state": state}]
-    else:
-        records = [
-            {"grant": grant, "grant_sha256": digest, "state": state}
-            for grant, digest, state in list_grants(root)
-        ]
-    return _emit({"schema_version": 2, "status": "ok", "grants": records})
+    return _emit(
+        status_snapshot(
+            _root(args),
+            grant_id=args.grant_id,
+            request_sha256=getattr(args, "request_sha256", None),
+            evaluated_at=args.at,
+            skills_root=_skills_root(args),
+        )
+    )
+
+
+def command_resolve(args: argparse.Namespace) -> int:
+    return _emit(
+        resolve_operation(
+            _root(args),
+            load_object(args.request),
+            load_object(args.context),
+            evaluated_at=args.at,
+            skills_root=_skills_root(args),
+        )
+    )
 
 
 def _add_root(parser: argparse.ArgumentParser) -> None:
@@ -243,6 +317,38 @@ def _add_at(parser: argparse.ArgumentParser) -> None:
 
 def _add_skills_root(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--skills-root")
+
+
+def _add_reconciliation_parsers(subparsers: Any) -> None:
+    reconcile_parser = subparsers.add_parser("reconcile")
+    _add_root(reconcile_parser)
+    _add_at(reconcile_parser)
+    reconcile_parser.add_argument("--reservation-ref", required=True)
+    reconcile_parser.add_argument("--reservation-sha256", required=True)
+    reconcile_parser.add_argument("--effect-evidence", required=True)
+    reconcile_parser.add_argument("--pre-commit-verification")
+    reconcile_parser.add_argument("--expected-version", type=int, required=True)
+    reconcile_parser.add_argument("--idempotency-key", required=True)
+    reconcile_parser.add_argument(
+        "--outcome",
+        choices=("confirmed_effect", "confirmed_no_effect", "still_unknown"),
+        required=True,
+    )
+    reconcile_parser.set_defaults(func=command_reconcile)
+
+    evidence_parser = subparsers.add_parser("prepare-reconciliation-evidence")
+    _add_root(evidence_parser)
+    _add_at(evidence_parser)
+    evidence_parser.add_argument("--reservation-ref", required=True)
+    evidence_parser.add_argument("--reservation-sha256", required=True)
+    evidence_parser.add_argument("--owner-result")
+    evidence_parser.add_argument("--expected-version", type=int, required=True)
+    evidence_parser.add_argument(
+        "--outcome",
+        choices=("confirmed_effect", "confirmed_no_effect", "still_unknown"),
+        required=True,
+    )
+    evidence_parser.set_defaults(func=command_prepare_reconciliation_evidence)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -316,6 +422,8 @@ def build_parser() -> argparse.ArgumentParser:
     consume_parser.add_argument("--reservation-ref", required=True)
     consume_parser.add_argument("--reservation-sha256", required=True)
     consume_parser.add_argument("--execution-result", required=True)
+    consume_parser.add_argument("--pre-commit-verification", required=True)
+    consume_parser.add_argument("--expected-subject-after-sha256", required=True)
     consume_parser.add_argument("--expected-version", type=int, required=True)
     consume_parser.add_argument("--idempotency-key", required=True)
     consume_parser.set_defaults(func=command_consume)
@@ -335,6 +443,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     release_parser.set_defaults(func=command_release)
 
+    _add_reconciliation_parsers(subparsers)
+
+    recovery_parser = subparsers.add_parser("prepare-source-recovery")
+    _add_root(recovery_parser)
+    _add_at(recovery_parser)
+    _add_skills_root(recovery_parser)
+    recovery_parser.add_argument("--decision-ref", required=True)
+    recovery_parser.add_argument("--decision-sha256", required=True)
+    recovery_parser.set_defaults(func=command_prepare_source_recovery)
+
     transition = subparsers.add_parser("transition")
     _add_root(transition)
     _add_at(transition)
@@ -351,14 +469,31 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = subparsers.add_parser("status")
     _add_root(status)
+    _add_skills_root(status)
+    status.add_argument(
+        "--at",
+        help="RFC3339 evaluation time with timezone; defaults to the current UTC time",
+    )
     status.add_argument("--grant-id")
+    status.add_argument("--request-sha256")
     status.set_defaults(func=command_status)
+
+    resolve_parser = subparsers.add_parser("resolve")
+    _add_root(resolve_parser)
+    _add_at(resolve_parser)
+    _add_skills_root(resolve_parser)
+    resolve_parser.add_argument("--request", required=True)
+    resolve_parser.add_argument("--context", required=True)
+    resolve_parser.set_defaults(func=command_resolve)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except SystemExit as exc:
+        return emit_error(args.command, exc, _emit)
 
 
 if __name__ == "__main__":
