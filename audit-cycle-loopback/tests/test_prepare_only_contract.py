@@ -32,6 +32,134 @@ def load_cycle_ledger() -> Any:
     return importlib.import_module("orchestrate_task_cycle.cycle_ledger")
 
 
+def task_local_scoped_progress() -> dict[str, Any]:
+    return {
+        "progress_scope_contract": {
+            "task_family_id": "task_family_A",
+            "root_family_id": "root_family_A",
+            "global_scope_applicability": "applicable",
+            "global_goal_axis_id": "axis_A",
+            "task_terminal_predicate_id": "task_predicate_A",
+            "root_terminal_predicate_id": "root_predicate_A",
+            "global_terminal_predicate_id": "global_predicate_A",
+            "identity_basis_id": "basis_A",
+        },
+        "work_intent": {
+            "selected_transition_kind": "bounded_transition",
+            "expected_scope": "global",
+            "expected_progress_cap": "semantic",
+        },
+        "progress_observations": {
+            "task_scope": {
+                "terminal_outcome_changed": True,
+                "progress_class": "task_local",
+            },
+            "root_scope": {
+                "comparison_status": "comparable",
+                "movement_status": "flat",
+                "residual_relation_status": "unchanged",
+                "independent_verification_status": "unverified",
+                "progress_class": "none",
+            },
+            "global_scope": {
+                "movement_status": "not_evaluated",
+                "high_water_moved": False,
+                "independent_verification_status": "unverified",
+                "observation_binding_status": "not_evaluated",
+                "progress_class": "none",
+            },
+        },
+        "closeout_projection": {
+            "task_acceptance": "pass",
+            "review_axis": "not_evaluated",
+            "global_readiness": "blocked",
+            "task_lifecycle": "completed_local",
+            "successor_state": "terminal_wait",
+        },
+        "retained_change_classification": {
+            "effective_progress_class": "semantic",
+        },
+    }
+
+
+def progress_semantics_frame(scoped_progress_input: dict[str, Any] | None) -> Any:
+    frame_module = importlib.import_module("audit_cycle_loopback.evaluation_frame")
+    return frame_module._EvaluationFrame(
+        {
+            "artifact_decision_evaluated": True,
+            "budget_evaluations": {"same_family_nonsemantic_attempts": {}},
+            "changed_vs_previous": True,
+            "coverage_gate": {"quality_delta_pass": True, "improved_fields": []},
+            "coverage_reconciliation_blocks": False,
+            "disagreement": False,
+            "effective_count_key": "root_family_A",
+            "evidence_provenance_provided": False,
+            "insufficient_reason": None,
+            "measurement_progress_allowed": False,
+            "mutation_kind": "governance",
+            "output_delta": {},
+            "prev_high": {},
+            "provider_request_count": 0,
+            "quality": {},
+            "quality_delta_policy": {},
+            "registry_rows": [],
+            "scoped_progress_input": scoped_progress_input,
+            "validator_gate": {},
+        }
+    )
+
+
+def test_scoped_task_local_pass_cannot_reset_global_progress() -> None:
+    semantics = importlib.import_module(
+        "audit_cycle_loopback.evaluation_stages.progress_semantics"
+    )
+    packet_fields = importlib.import_module(
+        "audit_cycle_loopback.packet_progress_fields"
+    )
+    frame = progress_semantics_frame(task_local_scoped_progress())
+
+    semantics._evaluate_progress_semantics(frame)
+    state = frame.snapshot()
+    projection = packet_fields._scoped_progress_packet_fields(
+        task_local_scoped_progress()
+    )
+
+    assert state["semantic_progress"] is False
+    assert state["count"] == 1
+    assert projection["retained_change_classification"][
+        "effective_progress_class"
+    ] == "task_local"
+    assert projection["root_stall_reset"] is False
+    assert projection["global_stall_reset"] is False
+
+
+def test_absent_scoped_progress_preserves_legacy_semantic_path() -> None:
+    semantics = importlib.import_module(
+        "audit_cycle_loopback.evaluation_stages.progress_semantics"
+    )
+    frame = progress_semantics_frame(None)
+
+    semantics._evaluate_progress_semantics(frame)
+    state = frame.snapshot()
+
+    assert state["semantic_progress"] is True
+    assert state["count"] == 0
+
+
+def test_conflicting_scoped_gate_inputs_fail_closed_without_a_new_surface() -> None:
+    setup = importlib.import_module(
+        "audit_cycle_loopback.evaluation_stages.setup_external_gates"
+    )
+    first = task_local_scoped_progress()
+    second = task_local_scoped_progress()
+    second["progress_observations"]["task_scope"]["progress_class"] = "semantic"
+
+    selected, conflicted = setup._select_scoped_progress_input([first, second])
+
+    assert conflicted is True
+    assert selected == {"progress_scope_contract": {}}
+
+
 def evaluate_recurrence_identity(value: object) -> dict[str, Any]:
     module = importlib.import_module("audit_cycle_loopback.recurrence_identity")
     return module.evaluate_recurrence_identity(value)
@@ -1232,10 +1360,13 @@ def test_primary_metric_requires_exact_source_separation_for_high_water() -> Non
     assert separated["evidence_provenance"] == "independently_verified"
 
 
-def test_source_separation_also_requires_independent_invariant_owner() -> None:
+def test_source_separation_also_requires_independent_invariant_implementation() -> None:
     provider = load_provider()
 
-    def provenance(verifier_owner: str) -> dict[str, object]:
+    def provenance(
+        verifier_owner: str,
+        verifier_function: str = "verifier_function_B",
+    ) -> dict[str, object]:
         return {
             "verification_input_paths": ["evidence/verification.json"],
             "verification_input_ids": ["verification_input_A"],
@@ -1245,7 +1376,7 @@ def test_source_separation_also_requires_independent_invariant_owner() -> None:
                     "axis_kind": "semantic",
                     "axis_scope": "global",
                     "producer_function_id": "producer_function_A",
-                    "verifier_function_id": "verifier_function_B",
+                    "verifier_function_id": verifier_function,
                     "producer_input_fingerprint": "a" * 64,
                     "verifier_input_fingerprint": "b" * 64,
                     "producer_invariant_owner_id": "invariant_owner_A",
@@ -1265,6 +1396,13 @@ def test_source_separation_also_requires_independent_invariant_owner() -> None:
         verified_artifact_paths=["artifacts/current.json"],
         independently_verified_fields=["axis_G"],
     )
+    shared_implementation = provider.verification_source_separation_gate(
+        provenance_value=provenance(
+            "invariant_owner_B", verifier_function="producer_function_A"
+        ),
+        verified_artifact_paths=["artifacts/current.json"],
+        independently_verified_fields=["axis_G"],
+    )
 
     assert happy["status"] == "pass"
     assert happy["independent_invariant_separation_status"] == "pass"
@@ -1273,6 +1411,11 @@ def test_source_separation_also_requires_independent_invariant_owner() -> None:
     assert coupled["status"] == "block"
     assert coupled["independent_invariant_separation_status"] == "coupled"
     assert coupled["verification_axes"][0]["evidence_provenance"] == "producer_attested"
+    assert shared_implementation["status"] == "block"
+    assert (
+        shared_implementation["independent_invariant_separation_status"]
+        == "coupled"
+    )
 
 
 def test_self_grounded_is_limited_to_explicit_root_local_structure() -> None:

@@ -24,6 +24,8 @@
 - depth/fan-out는 단독 차단 신호가 아니며 cohesion, reuse-root import ratio, duplicate symbol, mechanical shard, repo-owned `code_convention_contract`와 결합될 때만 구조 부담으로 소비한다. same-directory numbered/flat sharding이나 `relocated_mechanical_shard`는 size-driven refactor 완료 근거가 아니다.
 - Part P/Q 증거는 기존 흐름의 pass/advance 소비를 더 엄격하게 만든다. `feature_regressed_artifact`, fresh producer execution 부재, `condition_unsatisfiable_for_input_generation`, `diminishing_reprocess`, fabricated hook provenance, primary reason-code 미수리는 completion/progress 전에 inheritance repair, producer re-execution/input refresh, existing-capability wiring, hook/provenance repair, explicit descope, terminal blocker, user escalation 중 하나로 보존한다. `adapter_hook_debt`/`unenforced`는 honest missing-hook debt이고, `terminal_delta_record`와 `governance_packet_budget`는 반복 기록 비용만 줄이며 blocker, escalation, validation 의미를 약화하지 않는다.
 - S7~S10은 기존 판정의 성립조건 보정이다. `target_metric_delta`가 `moved=false`를 반환하면 측정/프록시/observed 필드만으로 완료하지 않고, `policy_consumption_sites`의 미반영 site는 전파 부채로 남기며, `gate_artifact_compatibility=false`는 gate fail이 아니라 `not_evaluated` 스킵이다. `first_seen_generation`/`consecutive_generation_count`/`chronic_threshold`는 chronic blocker 부채를 보이게 할 뿐 완료/검증 verdict를 바꾸지 않는다.
+- scoped progress는 기존 `--gate-state-json` 입력에서 추출해 공통 계약으로 재평가한다. 실제 retained change가 task-local이면 bounded task close만 허용하고 root/global stall은 reset하지 않는다. root reset은 동일 basis의 residual 감소와 독립 observation 또는 완전한 self-grounded replay가, global reset은 모든 active axis에 대해 source·invariant owner·decisive function이 분리된 exact-bound receipt가 필요하다. 상충하거나 malformed인 scoped 입력은 선언된 surface만 보존하고 positive movement는 만들지 않는다.
+- `$plan-validation-scope`의 two-pass 경로는 `decision_artifact_ref`와 `verification_source_separation_gate`가 공급되면 plan에서 current identity와 source/invariant/function 분리를 검사하고, finalize에서 같은 decision subject/lineage의 최신 revision과 gate를 다시 요구한다. plan 결함은 `affected_chain` 이상으로 올려 warn하고, finalize의 누락·stale·subject 변경·coupling은 fail-close한다.
 - 장기 실행은 새 canonical phase가 아니라 `step: run`의 분기이다. `event_kind: long_run_launch|long_run_monitor|long_run_harvest|long_run_finalize`와 `long_run_role: launch|monitor|harvest|finalize`를 기록하며, `running`과 `completed_pending_validation`은 성공이 아니라 남은 harvest/validation의 증거이다.
 - 스킬 실행 진입점은 스킬별 underscore 패키지의 `python3 -m <package> <command>` 형식으로 통일한다. 평면 `scripts/*.py` 호환 shim은 두지 않으며, 패키지 내부는 명시적 import와 정적 명령 레지스트리를 사용한다.
 
@@ -140,7 +142,7 @@ flowchart TD
   DeriveInitial["$derive-improvement-task initial_init<br/>초기 task.md 생성"]
   SchemaPreInit["$manage-schema-contracts<br/>초기 task가 schema/contract 영향이면 계약 정렬"]
 
-  ValPlan["$plan-validation-scope<br/>python3 -m plan_validation_scope plan<br/>current_only / affected_chain / full_chain 결정<br/>S9 incompatible gate는 skipped/not_evaluated"]
+  ValPlan["$plan-validation-scope<br/>python3 -m plan_validation_scope plan<br/>current_only / affected_chain / full_chain 결정<br/>current decision identity + source/invariant/function 분리 검사<br/>결함은 warn + affected_chain floor"]
   ValSetPlan["$build-validation-set-with-agents planning workflow<br/>package build 입력으로 oracle/split/leakage 정책 공급<br/>plan/consume은 CLI root command가 아님"]
   Governance["$task-md-agent-governance<br/>task.md 구현, worker 위임, repo audit, task_miss 기록"]
   ResultContract1["$validate-subskill-result-contract<br/>python3 -m orchestrate_task_cycle result-contract<br/>result_contract/api.py → engine + validation_pipeline/*<br/>RuleRegistry → rules/*; sibling _rule_checks/* 지원"]
@@ -149,14 +151,14 @@ flowchart TD
   Run["$run-task-code-and-log<br/>명령 실행, full command_argv, 실패 autopsy,<br/>observed_producer_claim downgrade,<br/>.agent_log v3 content-bound 기록, long_run_launch 가능"]
   Running{"run status = running?"}
   Monitor["$monitor-running-execution<br/>python3 -m orchestrate_task_cycle monitor<br/>canonical step=run + event_kind long_run_*<br/>PID/log/heartbeat/artifact/remaining_validation 추적"]
-  Quality["$review-cycle-output-quality<br/>단일 read-only xhigh 출력 품질 리뷰<br/>goal-axis completeness, landed_feature_inventory,<br/>feature_presence_evidence body anchor"]
-  Loopback["$audit-cycle-loopback<br/>semantic_progress, same-family loop, explicit quality/domain metrics,<br/>3-state gates, verifier contract, count-key hygiene,<br/>gate/artifact compatibility skip, chronic blocker debt,<br/>goal-axis completeness, residual cost ratio,<br/>scenario/argv/blocker/stochastic findings,<br/>feature regression, frozen input, self-resolvable input routing,<br/>audit_cycle_loopback packet + root-cause ledger"]
+  Quality["$review-cycle-output-quality<br/>단일 read-only xhigh 출력 품질 리뷰<br/>goal-axis completeness, landed_feature_inventory,<br/>feature_presence_evidence body anchor<br/>applicable hook result id+digest가 final decision에 소비됐는지 확인"]
+  Loopback["$audit-cycle-loopback<br/>semantic_progress, same-family loop, explicit quality/domain metrics,<br/>3-state gates, verifier contract, count-key hygiene,<br/>scoped retained change → task/root/global reset 분리,<br/>source + invariant owner + decisive function separation,<br/>gate/artifact compatibility skip, chronic blocker debt,<br/>goal-axis completeness, residual cost ratio,<br/>scenario/argv/blocker/stochastic findings,<br/>feature regression, frozen input, self-resolvable input routing,<br/>audit_cycle_loopback packet + root-cause ledger"]
   ValSetBuild["python3 -m build_validation_set_with_agents<br/>build → leakage → run-oracles → finalize → validate<br/>선택적 frozen root: freeze → verify-root"]
   SchemaPreDerive["$manage-schema-contracts pre-derive<br/>schema/contract 영향, stale contract,<br/>S8 policy propagation debt 확인"]
   Visible["$record-visible-increment<br/>보이는 변화 기록; not_validation_evidence=true"]
   GapAnalysis["repo_skill_gap_analysis<br/>adapter/skill gap 또는 skill-creator 후보"]
   Profile["$profile-cycle-efficiency<br/>python3 -m orchestrate_task_cycle efficiency<br/>cycle_efficiency/* typed analysis pipeline<br/>중복 로그, metadata-only 반복, command surface budget 감지"]
-  ScopeFinalize["$plan-validation-scope finalize<br/>실제 changed files로 profile 확정<br/>계획 profile보다 낮출 수 없음"]
+  ScopeFinalize["$plan-validation-scope finalize<br/>실제 changed files + current decision_artifact_ref +<br/>verification_source_separation_gate 재검증<br/>누락/stale/subject 변경/coupling은 block<br/>계획 profile보다 낮출 수 없음"]
   IndexPre["python3 -m manage_task_state_index index scan<br/>pre-validation task/run/validation evidence scan"]
   Slice["$optimize-task-slice<br/>state_transition, batch, evidence_supply, verifier_completion,<br/>scenario_supply, command_provenance_repair,<br/>feature/freshness/frozen-input repair, consolidation 등 advisory"]
   DeriveNext["$derive-improvement-task<br/>다음 task.md 또는 task_pack/terminal blocker 도출"]
@@ -264,12 +266,14 @@ flowchart TD
   Terminal["terminal_blocker / user_escalation<br/>sealed family와 missing input 기록"]
   DeriveIndex["python3 -m manage_task_state_index index scan<br/>then index audit"]
 
-  LoopInputs["run + quality review + output-delta artifacts<br/>failure autopsy, runner validation, gate states,<br/>long-run history, scenario/argv/blocker/stochastic,<br/>Part P/Q freshness, feature, lineage, provenance fields,<br/>S7-S10 movement/propagation/compat/chronic fields"]
+  LoopInputs["run + quality review + output-delta artifacts<br/>failure autopsy, runner validation, gate states,<br/>long-run history, scenario/argv/blocker/stochastic,<br/>Part P/Q freshness, feature, lineage, provenance fields,<br/>S7-S10 movement/propagation/compat/chronic fields,<br/>scoped progress + actual changed-file/content evidence"]
   ProgressDetect["python3 -m orchestrate_task_cycle progress-loop<br/>progress/cli.py → AnalysisContext + AnalysisPipeline<br/>evidence → aggregation → roots → gates → findings → result"]
   Loopback["$audit-cycle-loopback<br/>python3 -m audit_cycle_loopback evaluate<br/>commands.py → package facade/cache → cli.py → evaluator.py<br/>api.py는 별도 stable explicit export facade"]
-  LoopGate["anti_loop_progress_gate<br/>effective_allowed_dispositions, allowed_task_kinds,<br/>adapter_wiring_defect, adapter_mandate,<br/>failure surface, source separation, root-cause gates,<br/>acceptance/verifier/axis/count-key/scenario gates,<br/>gate compatibility skip, chronic blocker debt,<br/>feature regression, frozen input, self-resolvable input,<br/>reason-code rank, structure global invariant metrics"]
+  LoopGate["anti_loop_progress_gate<br/>effective_allowed_dispositions, allowed_task_kinds,<br/>adapter_wiring_defect, adapter_mandate,<br/>failure surface, source+invariant+function separation,<br/>scoped retained change + task/root/global reset permissions,<br/>acceptance/verifier/axis/count-key/scenario gates,<br/>gate compatibility skip, chronic blocker debt,<br/>feature regression, frozen input, self-resolvable input,<br/>reason-code rank, structure global invariant metrics"]
   LongRunDebt{"active long_run_branch<br/>pending final output?"}
   LongRunRoute["derive constraint<br/>monitor/harvest/finalize same run_id<br/>or terminal/user escalation"]
+  ScopedDebt{"scoped progress surface가<br/>root/global reset을 block?"}
+  ScopedRoute["preserve bounded task close only<br/>retain root/global stall and route evidence repair"]
   VerifierDebt{"required verifier<br/>not_evaluated?"}
   VerifierRoute["derive constraint<br/>verifier hook/metric correction/descope/<br/>terminal blocker/user escalation"]
   EvidenceDebt{"scenario/argv/blocker/stochastic<br/>repair required?"}
@@ -293,7 +297,9 @@ flowchart TD
   ExplicitDoctor -- no --> NormalDerive
   LoopInputs --> ProgressDetect --> Loopback --> LoopGate --> LongRunDebt
   LongRunDebt -- yes --> LongRunRoute --> NormalDerive
-  LongRunDebt -- no --> VerifierDebt
+  LongRunDebt -- no --> ScopedDebt
+  ScopedDebt -- yes --> ScopedRoute --> NormalDerive
+  ScopedDebt -- no or absent --> VerifierDebt
   VerifierDebt -- yes --> VerifierRoute --> NormalDerive
   VerifierDebt -- no --> EvidenceDebt
   EvidenceDebt -- yes --> EvidenceRoute --> NormalDerive
@@ -323,7 +329,7 @@ flowchart TD
 flowchart TD
   Task([active task.md])
   Acceptance["$normalize-acceptance-and-demo<br/>python3 -m normalize_acceptance_and_demo identity<br/>acceptance_identity.py → normalized packet<br/>verifier/movement/scenario/freshness/hook contract"]
-  ValScope["$plan-validation-scope<br/>python3 -m plan_validation_scope plan<br/>validation_scope.py → current_only/affected_chain/full_chain<br/>incompatible gate → skipped/not_evaluated"]
+  ValScope["$plan-validation-scope<br/>python3 -m plan_validation_scope plan<br/>validation_scope.py → current_only/affected_chain/full_chain<br/>current decision identity + source/invariant/function 분리<br/>결함은 warn + affected_chain floor"]
   EnvNeed{"Python/dependency constrained?"}
   FindEnv["$find-local-python-envs<br/>python3 -m find_local_python_envs inventory<br/>local env inventory + ranked run commands"]
   DepMissing{"필수 dependency/cache 없음?"}
@@ -345,7 +351,8 @@ flowchart TD
   Log["$record-agent-work-log<br/>python3 -m record_agent_work_log write<br/>write.py → integrity/append.py<br/>content-bound .agent_log + index.jsonl"]
   Running{"long-running authorized?"}
   Monitor["$monitor-running-execution<br/>python3 -m orchestrate_task_cycle monitor<br/>step=run long_run_* event<br/>completed_pending_validation != success"]
-  Quality["$review-cycle-output-quality<br/>single reviewer, output quality/delta/no-overclaim<br/>goal-axis completeness + landed_feature_inventory<br/>feature_presence_evidence body anchor"]
+  Quality["$review-cycle-output-quality<br/>single reviewer, output quality/delta/no-overclaim<br/>goal-axis completeness + landed_feature_inventory<br/>feature_presence_evidence body anchor<br/>hook result id+digest + final-decision consumption gate"]
+  ScopeFinalize["$plan-validation-scope finalize<br/>actual changed files + current decision_artifact_ref +<br/>verification_source_separation_gate<br/>missing/stale/subject change/coupling은 block"]
   Completion["$validate-task-completion<br/>python3 -m validate_task_completion collect-evidence<br/>completion gate가 evidence bundle 소비"]
   Gates["gates: env, execution, repo audit, OOM if relevant,<br/>task_miss, issue, advice, schema, acceptance,<br/>required verifier/hook pass, target metric movement,<br/>goal axes, scenario, command, blocker, stochastic feasibility,<br/>policy propagation debt, gate compatibility skip,<br/>evidence freshness, landed feature inheritance,<br/>adapter hook provenance, frozen input lineage,<br/>structure global invariant, behavior-change live evidence, ID"]
   Verdict{"validation_verdict<br/>complete / partial / failed"}
@@ -364,8 +371,9 @@ flowchart TD
   Failure -- yes --> Autopsy --> Log
   Failure -- no --> Log
   Log --> Running
-  Running -- yes --> Monitor --> Completion
-  Running -- no --> Quality --> Completion
+  Running -- yes --> Monitor --> ScopeFinalize
+  Running -- no --> Quality --> ScopeFinalize
+  ScopeFinalize --> Completion
   Completion --> Gates --> Verdict --> Progress --> Candidate
 ```
 
@@ -451,7 +459,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-  Inputs["inputs<br/>registry, artifact paths, changed files,<br/>runner validation, output delta,<br/>failure autopsies, gate states,<br/>scenario/command/blocker/stochastic fields,<br/>long-run event history, Part P/Q evidence,<br/>S7-S10 hook/debt fields"]
+  Inputs["inputs<br/>registry, artifact paths, changed files,<br/>runner validation, output delta,<br/>failure autopsies, gate states,<br/>scenario/command/blocker/stochastic fields,<br/>long-run event history, Part P/Q evidence,<br/>S7-S10 hook/debt fields,<br/>scoped progress via --gate-state-json"]
 
   LoopbackCLI["python3 -m audit_cycle_loopback evaluate<br/>static package command"]
   LoopbackDispatch["__main__.py → commands.py<br/>static CommandSpec registry + dispatch"]
@@ -463,7 +471,9 @@ flowchart TD
   QualityLayer["quality.py facade<br/>quality_policy + quality_values + quality_gates<br/>metric aliases/axes/thresholds stay repo-local"]
   GenericOnly["generic contracts only<br/>domain metric gates remain not_evaluated<br/>no global metric fallback"]
   EvalStages["ordered stage families<br/>setup_* → failure_* → progress_*<br/>→ decision_* → finalize_*"]
-  LoopGates["gates + acceptance + verification + blockers<br/>coverage/substance, verifier status, target movement,<br/>scenario/argv/blocker/stochastic, compatibility skip,<br/>feature/frozen-input/Q1, failure/source/chain stalls"]
+  ScopedSelect["setup_external_gates<br/>scoped declarations 추출 + conflict fail-close<br/>actual changed-file/content evidence 전달"]
+  ScopedAssess["shared assess_scoped_progress<br/>retained_change_classification 재계산<br/>task/root/global reset permission 분리"]
+  LoopGates["gates + acceptance + verification + blockers<br/>coverage/substance, verifier status, target movement,<br/>source + invariant owner + decisive function separation,<br/>scenario/argv/blocker/stochastic, compatibility skip,<br/>feature/frozen-input/Q1, failure/source/chain stalls"]
   RootCause["root_cause.py + root_cause_runtime.py<br/>hypotheses, repo-owned actionability,<br/>reason_to_attempt, exhaustion and untried repair"]
   LoopRegistry["registry.py + family_registry.py + finalized_state.py<br/>durable_projection.py + registry_identity.py<br/>prepared mutation candidate; orchestrator가 최종화"]
   LoopPacket["packet.py + assembly.py + outcome.py<br/>anti_loop_progress_gate packet<br/>effective dispositions + allowed task kinds"]
@@ -491,7 +501,7 @@ flowchart TD
   LoopbackEval --> AdapterPolicy
   AdapterPolicy -- yes --> AdapterLayer --> QualityLayer --> EvalStages
   AdapterPolicy -- no --> GenericOnly --> EvalStages
-  EvalStages --> LoopGates --> LoopPacket
+  EvalStages --> ScopedSelect --> ScopedAssess --> LoopGates --> LoopPacket
   LoopbackEval --> RootCause --> LoopRegistry --> LoopPacket
   LoopPacket --> Derive
 
@@ -620,7 +630,8 @@ flowchart TD
 +----------------------------+     +---------------------------------------------+
 | $plan-validation-scope     | --> | python3 -m plan_validation_scope plan      |
 | changed surfaces classify  |     | current_only / affected_chain / full_chain |
-|                             |     | incompatible gate -> skipped/not_evaluated |
+| current decision binding   |     | source/invariant/function separation       |
+|                             |     | defect -> warn + affected_chain floor      |
 +----------------------------+     +---------------------------------------------+
         |
         v
@@ -658,8 +669,9 @@ flowchart TD
 +----------------------------+       +-------------------------------------------+
 | $monitor-running-execution |       | $review-cycle-output-quality              |
 | step=run long_run_* event  |       | single read-only quality reviewer          |
-| PID/log/heartbeat/artifacts|       +-------------------------------------------+
-| running/pending != success |
+| PID/log/heartbeat/artifacts|       | hook result id+digest가 final decision에  |
+| running/pending != success |       | 실제 소비됐을 때만 positive axis         |
+|                             |       +-------------------------------------------+
 +----------------------------+                         |
         |                                              v
         |                                +---------------------------------------+
@@ -674,6 +686,8 @@ flowchart TD
         |                                | goal-axis/residual/global invariant    |
         |                                | Part P/Q feature/freshness/lineage     |
         |                                | self-resolvable input/provenance route |
+        |                                | scoped retained change 재계산          |
+        |                                | task/root/global stall reset 분리      |
         |                                +---------------------------------------+
         |                                              |
         |                                              v
@@ -691,8 +705,10 @@ flowchart TD
                                |
                                v
 +----------------------------+     +---------------------------------------------+
-| validation scope finalize  | --> | actual changed files, profile floor         |
-| + task-state index scan    |     | manage_task_state_index index scan          |
+| validation scope finalize  | --> | actual changed files + current decision ref |
+| + task-state index scan    |     | source/invariant/function separation gate   |
+|                             |     | missing/stale/subject change/coupled=block |
+|                             |     | profile floor + task-state index scan       |
 +----------------------------+     +---------------------------------------------+
         |
         v
@@ -899,6 +915,7 @@ External advice side path:
 | advice reconciliation         |        | chain stalls, sealed families,        |
 +-------------------------------+        | verifier debt, count-key hygiene,     |
                                          | goal-axis, residual cost, global keys |
+                                         | scoped task/root/global reset debt,   |
                                          | feature/freshness/frozen-input debt,  |
                                          | hook provenance + primary reason rank |
           |                              | no producer self-report truth         |

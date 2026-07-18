@@ -10,6 +10,7 @@ from ..runtime_dependencies import (
 )
 
 from ..evaluation_frame import _EvaluationFrame
+from ..packet_progress_fields import _scoped_progress_assessment
 
 
 def _evaluate_progress_semantics(frame: _EvaluationFrame) -> None:
@@ -18,14 +19,22 @@ def _evaluate_progress_semantics(frame: _EvaluationFrame) -> None:
         coverage_reconciliation_blocks, disagreement, effective_count_key,
         evidence_provenance_provided, insufficient_reason, measurement_progress_allowed,
         mutation_kind, output_delta, prev_high, provider_request_count, quality,
-        quality_delta_policy, registry_rows, validator_gate,
+        quality_delta_policy, registry_rows, scoped_progress_input, validator_gate,
     ) = frame.require(
         'artifact_decision_evaluated', 'budget_evaluations', 'changed_vs_previous',
         'coverage_gate', 'coverage_reconciliation_blocks', 'disagreement',
         'effective_count_key', 'evidence_provenance_provided', 'insufficient_reason',
         'measurement_progress_allowed', 'mutation_kind', 'output_delta', 'prev_high',
         'provider_request_count', 'quality', 'quality_delta_policy', 'registry_rows',
-        'validator_gate',
+        'scoped_progress_input', 'validator_gate',
+    )
+    scoped_assessment = _scoped_progress_assessment(
+        scoped_progress_input if isinstance(scoped_progress_input, dict) else {}
+    )
+    scoped_reset_allowed = bool(
+        not scoped_assessment["present"]
+        or scoped_assessment["root_reset_allowed"]
+        or scoped_assessment["global_reset_allowed"]
     )
     if not artifact_decision_evaluated:
         semantic_progress = False
@@ -42,7 +51,10 @@ def _evaluate_progress_semantics(frame: _EvaluationFrame) -> None:
         disposition = "conservative_hold"
         hard_stop = True
     else:
-        semantic_progress = bool_value(coverage_gate.get("quality_delta_pass"))
+        semantic_progress = bool_value(coverage_gate.get("quality_delta_pass")) and bool(
+            not scoped_assessment["present"]
+            or scoped_assessment["global_reset_allowed"]
+        )
         evidence_class = "computed"
         allowed_high_water_keys = set(coverage_gate.get("improved_fields") or []) if evidence_provenance_provided else None
         high_water = (
@@ -73,18 +85,26 @@ def _evaluate_progress_semantics(frame: _EvaluationFrame) -> None:
             disposition = "prefer_provider_or_semantic"
             hard_stop = False
 
+    if (
+        scoped_assessment["present"]
+        and scoped_assessment["root_reset_allowed"]
+        and artifact_decision_evaluated
+        and not insufficient_reason
+    ):
+        count = 0
+
     outcome_changed = terminal_outcome_changed(output_delta, changed_vs_previous, semantic_progress)
     delta_class = observed_delta_class(output_delta, changed_vs_previous, semantic_progress)
     forward_mutation_vacuous = artifact_decision_evaluated and mutation_kind == "forward_mutation" and not outcome_changed
     if forward_mutation_vacuous:
         hard_stop = True
-    if artifact_decision_evaluated and mutation_kind == "forward_mutation" and outcome_changed and not disagreement and not coverage_reconciliation_blocks:
+    if artifact_decision_evaluated and mutation_kind == "forward_mutation" and outcome_changed and not disagreement and not coverage_reconciliation_blocks and scoped_reset_allowed:
         changed_vs_previous = True
         count = 0
         hard_stop = False
         if disposition in {"conservative_hold", "provider_or_semantic_transition_or_terminal"}:
             disposition = "forward_mutation_goal_productive_candidate"
-    if artifact_decision_evaluated and measurement_progress_allowed:
+    if artifact_decision_evaluated and measurement_progress_allowed and scoped_reset_allowed:
         hard_stop = False
         if disposition in {"conservative_hold", "provider_or_semantic_transition_or_terminal"}:
             disposition = "measurement_progress_goal_productive_candidate"

@@ -8,6 +8,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "orchestrate-task-cycle" / "scripts"))
 sys.path.insert(0, str(ROOT / "plan-validation-scope" / "scripts"))
 from plan_validation_scope import changed_surface, validation_scope  # noqa: E402
 
@@ -34,6 +35,40 @@ def build(
         reused_prerequisites=[],
         escalation_reasons=[],
     )
+
+
+def decision_ref(*, freshness: str = "current", revision_id: str = "revision_A") -> dict[str, Any]:
+    return {
+        "decision_subject_id": "subject_A",
+        "subject_class_id": "class_A",
+        "revision_id": revision_id,
+        "subject_digest": "a" * 64,
+        "lineage_id": "lineage_A",
+        "freshness_status": freshness,
+        "body_fingerprint": {"applicability": "applicable", "value": "b" * 64},
+        "production_lane": {"applicability": "not_applicable", "value": None},
+        "cohort": {"applicability": "applicable", "value": ["cohort_A"]},
+        "producer_run": {"applicability": "not_applicable", "value": None},
+    }
+
+
+def separation_gate(*, invariant_status: str = "pass") -> dict[str, Any]:
+    independent = invariant_status == "pass"
+    return {
+        "independent_source_separation_status": "pass",
+        "independent_invariant_separation_status": invariant_status,
+        "verification_axes": [
+            {
+                "axis_id": "axis_A",
+                "coupling_status": "disjoint",
+                "producer_function_id": "producer_function_A",
+                "verifier_function_id": "verifier_function_B",
+                "producer_invariant_owner_id": "producer_owner_A",
+                "verifier_invariant_owner_id": "verifier_owner_B",
+                "invariant_separation_status": "independent" if independent else "coupled",
+            }
+        ],
+    }
 
 
 def test_changed_surface_classifies_skill_contract_and_task_state() -> None:
@@ -160,3 +195,105 @@ def test_finalize_rejects_placeholder_current_task_id(tmp_path: Path) -> None:
             reused_prerequisites=[],
             escalation_reasons=[],
         )
+
+
+def test_stale_decision_subject_warns_in_plan_and_blocks_finalize(tmp_path: Path) -> None:
+    payload = {"decision_artifact_ref": decision_ref(freshness="stale")}
+    plan = build(tmp_path, mode="plan", values=["src/unit.py"], payload=payload)
+    finalized = build(
+        tmp_path,
+        mode="finalize",
+        values=["src/unit.py"],
+        payload=payload,
+        plan=plan,
+        commands=["python -m pytest -q"],
+    )
+
+    assert plan["status"] == "warn"
+    assert plan["validation_profile"] == "affected_chain"
+    assert finalized["status"] == "block"
+    assert finalized["finalized"] is False
+    assert any(
+        row["code"] == "decision_artifact_binding_not_evaluated"
+        for row in finalized["findings"]
+    )
+
+
+def test_finalize_requires_current_identity_when_plan_declared_it(tmp_path: Path) -> None:
+    plan = build(
+        tmp_path,
+        mode="plan",
+        values=["docs/unit.md"],
+        payload={"decision_artifact_ref": decision_ref()},
+    )
+    finalized = build(
+        tmp_path,
+        mode="finalize",
+        values=["docs/unit.md"],
+        plan=plan,
+        commands=["python -m pytest -q"],
+    )
+
+    assert finalized["status"] == "block"
+    assert any(
+        row["code"] == "decision_artifact_ref_missing_at_finalize"
+        for row in finalized["findings"]
+    )
+
+
+def test_source_disjoint_but_invariant_coupled_verification_cannot_finalize(
+    tmp_path: Path,
+) -> None:
+    payload = {
+        "decision_artifact_ref": decision_ref(),
+        "verification_source_separation_gate": separation_gate(
+            invariant_status="coupled"
+        ),
+    }
+    plan = build(tmp_path, mode="plan", values=["src/unit.py"], payload=payload)
+    finalized = build(
+        tmp_path,
+        mode="finalize",
+        values=["src/unit.py"],
+        payload=payload,
+        plan=plan,
+        commands=["python -m pytest -q"],
+    )
+
+    assert finalized["status"] == "block"
+    assert any(
+        row["code"] == "verification_separation_not_evaluated"
+        for row in finalized["findings"]
+    )
+
+
+def test_current_subject_and_independent_verification_finalize_normally(
+    tmp_path: Path,
+) -> None:
+    planned_payload = {
+        "decision_artifact_ref": decision_ref(),
+        "verification_source_separation_gate": separation_gate(),
+    }
+    plan = build(
+        tmp_path,
+        mode="plan",
+        values=["docs/unit.md"],
+        payload=planned_payload,
+    )
+    current_payload = {
+        **planned_payload,
+        "decision_artifact_ref": decision_ref(revision_id="revision_B"),
+    }
+    finalized = build(
+        tmp_path,
+        mode="finalize",
+        values=["docs/unit.md"],
+        payload=current_payload,
+        plan=plan,
+        commands=["python -m pytest -q"],
+    )
+
+    assert finalized["status"] == "ok"
+    assert finalized["finalized"] is True
+    assert finalized["decision_artifact_ref"]["revision_id"] == "revision_B"
+    assert finalized["validation_profile"] == "current_only"

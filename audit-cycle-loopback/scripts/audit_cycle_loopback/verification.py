@@ -161,10 +161,21 @@ def _verification_axis_row(
     axis_kind = (metadata.get("axis_kinds") or {}).get(normalized, "unspecified")
     producer_owner = _axis_scalar(metadata, "producer_invariant_owner_id", normalized)
     verifier_owner = _axis_scalar(metadata, "verifier_invariant_owner_id", normalized)
+    producer_function = _axis_scalar(metadata, "producer_function_id", normalized)
+    verifier_function = _axis_scalar(metadata, "verifier_function_id", normalized)
     declared_status = _axis_scalar(metadata, "invariant_separation_status", normalized).lower()
-    if producer_owner and producer_owner == verifier_owner:
+    if (
+        (producer_owner and producer_owner == verifier_owner)
+        or (producer_function and producer_function == verifier_function)
+    ):
         invariant_status = "coupled"
-    elif producer_owner and verifier_owner and declared_status == "independent":
+    elif (
+        producer_owner
+        and verifier_owner
+        and producer_function
+        and verifier_function
+        and declared_status == "independent"
+    ):
         invariant_status = "independent"
     elif declared_status == "coupled":
         invariant_status = "coupled"
@@ -195,8 +206,8 @@ def _verification_axis_row(
         "producer_input_ids": metadata.get("producer_input_ids") or [],
         "input_fingerprints": metadata.get("input_fingerprints") or {},
         "coupling_status": coupling_status,
-        "producer_function_id": _axis_scalar(metadata, "producer_function_id", normalized),
-        "verifier_function_id": _axis_scalar(metadata, "verifier_function_id", normalized),
+        "producer_function_id": producer_function,
+        "verifier_function_id": verifier_function,
         "producer_input_fingerprint": _axis_scalar(metadata, "producer_input_fingerprint", normalized),
         "verifier_input_fingerprint": _axis_scalar(metadata, "verifier_input_fingerprint", normalized),
         "producer_invariant_owner_id": producer_owner,

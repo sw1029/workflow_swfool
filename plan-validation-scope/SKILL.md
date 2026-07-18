@@ -15,7 +15,7 @@ Use the `changed-surface` module command to classify changed files. Use `plan` b
 
 ```bash
 SKILLS_ROOT="${CODEX_HOME:-$HOME/.codex}/skills"
-PYTHONPATH="$SKILLS_ROOT/plan-validation-scope/scripts" \
+PYTHONPATH="$SKILLS_ROOT/plan-validation-scope/scripts:$SKILLS_ROOT/orchestrate-task-cycle/scripts" \
   python3 -m plan_validation_scope <changed-surface|plan|finalize> [arguments]
 ```
 

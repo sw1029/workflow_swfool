@@ -11,6 +11,7 @@ from typing import Any
 
 
 from .changed_surface import classify_files, git_changed_files, load_payload, values_from_payload
+from .validation_contracts import evaluate_validation_contracts
 
 
 PROFILE_RANK = {"current_only": 0, "affected_chain": 1, "full_chain": 2}
@@ -140,10 +141,31 @@ def build_manifest(
 
     status = "ok"
     findings: list[dict[str, str]] = []
+    contract_evaluation = evaluate_validation_contracts(
+        mode=mode,
+        payload=payload,
+        plan=plan,
+    )
+    findings.extend(contract_evaluation.findings)
+    rationale.extend(contract_evaluation.rationale)
+    if contract_evaluation.requires_affected_chain:
+        selected = max_profile(selected, "affected_chain")
+    if any(row["severity"] == "block" for row in findings):
+        status = "block"
+    elif any(row["severity"] == "warn" for row in findings):
+        status = "warn"
+
+    if mode == "plan":
+        profile_floor = selected
+    elif isinstance(plan, dict):
+        plan_profile = str(plan.get("validation_profile") or "")
+        profile_changed = selected != plan_profile
+
     if not files_known:
         severity = "block" if mode == "finalize" else "warn"
         findings.append({"severity": severity, "code": "changed_surface_unknown", "message": "Changed-file input was not supplied."})
-        status = severity
+        if status != "block":
+            status = severity
     if mode == "finalize" and not required_commands:
         findings.append(
             {
@@ -155,7 +177,7 @@ def build_manifest(
         status = "block"
 
     step = "validation_scope_plan" if mode == "plan" else "validation_scope_finalize"
-    return {
+    manifest = {
         "format_version": 1,
         "step": step,
         "status": status,
@@ -176,6 +198,8 @@ def build_manifest(
         "findings": findings,
         "evidence_paths": ["stdout:validation_scope"],
     }
+    manifest.update(contract_evaluation.manifest_fields)
+    return manifest
 
 
 def main(argv: list[str] | None = None) -> int:
