@@ -10,10 +10,15 @@ from typing import Any
 
 from .coherence import _coherence_value
 from .contracts import PACK_COHERENCE_VERSION
+from . import mutation_journal
 from .ordering import item_order, sorted_items
 from .rendering import write_render
-from .storage import canonical_pack_sha256, guard_content_addressed_consumer, rel_path
-from .packet_io import write_json
+from .storage import (
+    canonical_pack_sha256,
+    guard_content_addressed_consumer,
+    now_iso,
+    rel_path,
+)
 from .validation import validate_pack
 
 
@@ -130,8 +135,6 @@ def finalize_existing_mutation(
         json.dump(output, sys.stdout, ensure_ascii=False, indent=2, sort_keys=True)
         sys.stdout.write("\n")
         return 0
-    guard_content_addressed_consumer(path, canonical_pack_sha256(data))
-    write_json(path, data)
     mutation_receipt = {
         "schema_version": PACK_COHERENCE_VERSION,
         "canonical_pack_ref": rel_path(root, path),
@@ -147,6 +150,19 @@ def finalize_existing_mutation(
         "legacy_normalized": bool(coherence.get("legacy_normalized"))
         or action == "normalize_initial_selection_provenance",
     }
+    data["updated_at"] = now_iso()
+    guard_content_addressed_consumer(path, canonical_pack_sha256(data))
+    durable_receipt = mutation_journal.commit_pack_mutation(
+        root,
+        action=action,
+        plan=plan,
+        target_path=path,
+        after_data=data,
+        before_pack_sha256=coherence.get("before_pack_sha256"),
+        coherence_receipt=mutation_receipt,
+    )
+    mutation_receipt["durable_receipt_ref"] = durable_receipt.get("receipt_ref")
+    mutation_receipt["durable_receipt_sha256"] = durable_receipt.get("receipt_sha256")
     render_output_path = None
     if args.render:
         render_output_path = write_render(root, path, data, args.language)
@@ -164,6 +180,7 @@ def finalize_existing_mutation(
         "after_order": item_order(data),
         "pack_coherence": coherence,
         "pack_mutation_receipt": mutation_receipt,
+        "durable_mutation_receipt": durable_receipt,
         "pack_transition_verdict": {
             "status": "pass",
             "evidence_ref": rel_path(root, path),

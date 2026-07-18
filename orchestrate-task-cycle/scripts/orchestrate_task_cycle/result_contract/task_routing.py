@@ -162,9 +162,14 @@ CURRENT_LANE_TASK_KINDS = {
     "terminal_blocker",
 }
 DECISION_FRESHNESS_TASK_KINDS = {
+    "consumer_refresh",
+    "deliverable_refresh",
     "fresh_current_lane_measurement",
     "fresh_measurement",
+    "fresh_producer_execution",
     "measurement_rerun",
+    "producer_execution",
+    "producer_refresh",
     "rerun_with_current_contract",
     "no_impact_proof",
     "upstream_contract_no_impact_proof",
@@ -189,6 +194,35 @@ PRODUCER_SUPPLY_TASK_KINDS = {
     "terminal_blocked",
     "terminal_blocker",
 }
+EXECUTION_PRODUCING_TASK_KINDS = {
+    "fresh_producer_execution",
+    "producer_execution",
+    "producer_run",
+    "implementation_execution",
+    "instrumentation_exercise",
+    "live_run",
+    "live_run_supply",
+    "fresh_current_lane_run",
+    "current_lane_rerun",
+    "long_run_launch",
+}
+PRODUCER_RECONCILIATION_TASK_KINDS = {
+    "producer_input_reconciliation",
+    "producer_revision_reconciliation",
+    "producer_receipt_reconciliation",
+    "producer_authority_reconciliation",
+    "producer_safety_reconciliation",
+}
+_TERMINAL_TASK_KINDS = {
+    "user_escalation",
+    "terminal_blocked",
+    "terminal_blocker",
+}
+EXECUTION_STARVATION_TASK_KINDS = (
+    PRODUCER_SUPPLY_TASK_KINDS
+    | EXECUTION_PRODUCING_TASK_KINDS
+    | PRODUCER_RECONCILIATION_TASK_KINDS
+) - _TERMINAL_TASK_KINDS
 PORTFOLIO_QUOTA_TASK_KINDS = {
     "producer_supply",
     "producer_repair",
@@ -344,4 +378,3 @@ def selected_disposition(result: dict[str, Any], selected_source: str, progress_
     if progress_kind == "goal_productive":
         return "goal_productive"
     return progress_kind
-

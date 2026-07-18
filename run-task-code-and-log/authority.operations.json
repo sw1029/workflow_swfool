@@ -1,0 +1,12 @@
+{
+  "manifest_kind": "authority_operations",
+  "operations": [
+    {"authority_applicability":"required","authorization_mechanism":"grant","data_classes":["repository_code"],"decision_class":"D3","effect_classes":["edit_local"],"mutation_class":"local_mutation","operation_id":"edit_local","operation_version":"1","required_capabilities":["execution.local.edit"],"reversibility":"conditionally_reversible","risk_floor":"R1","source_rank_floor":"S1","subject_kinds":["task"]},
+    {"authority_applicability":"required","authorization_mechanism":"grant","data_classes":["runtime_state"],"decision_class":"D3","effect_classes":["run_long"],"mutation_class":"local_mutation","operation_id":"run_long","operation_version":"1","required_capabilities":["execution.local.long_run"],"reversibility":"conditionally_reversible","risk_floor":"R2","source_rank_floor":"S2","subject_kinds":["task"]},
+    {"authority_applicability":"required","authorization_mechanism":"grant","data_classes":["external_data"],"decision_class":"D3","effect_classes":["call_provider"],"mutation_class":"external_mutation","operation_id":"call_provider","operation_version":"1","required_capabilities":["execution.external.provider"],"reversibility":"conditionally_reversible","risk_floor":"R3","source_rank_floor":"S3","subject_kinds":["task"]},
+    {"authority_applicability":"required","authorization_mechanism":"grant","data_classes":["repository_state"],"decision_class":"D3","effect_classes":["destructive_change"],"mutation_class":"destructive","operation_id":"destructive_change","operation_version":"1","required_capabilities":["execution.destructive.apply"],"reversibility":"irreversible","risk_floor":"R3","source_rank_floor":"S3","subject_kinds":["task"]}
+  ],
+  "schema_version": 2,
+  "skill_id": "run-task-code-and-log",
+  "skill_version": "2.0.0"
+}

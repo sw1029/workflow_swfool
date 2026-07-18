@@ -91,6 +91,7 @@ def _check_evaluate_part_02(facts: CompletionFacts) -> None:
     explicit_descope = facts.explicit_descope
     findings = facts.findings
     independent_source_status = facts.independent_source_status
+    independent_invariant_status = facts.independent_invariant_status
     independently_verified_downgraded_fields = facts.independently_verified_downgraded_fields
     independently_verified_fields = facts.independently_verified_fields
     marginal_repair_override = facts.marginal_repair_override
@@ -128,6 +129,14 @@ def _check_evaluate_part_02(facts: CompletionFacts) -> None:
             "validate_independent_verification_source_not_disjoint",
             "`validate` cannot complete from independently_verified evidence unless verification inputs are disjoint from verified artifacts; self-grounded axes remain a separate structural provenance class.",
             {"independent_source_separation_status": independent_source_status},
+        )
+    if independently_verified_fields and independent_invariant_status in {"coupled", "unknown", "blocked"} and validation_verdict in {"complete", "passed", "pass"} and not explicit_descope:
+        add(
+            findings,
+            "block" if mode == "block" else "warn",
+            "validate_independent_verification_invariant_not_separated",
+            "Completion cannot consume independently verified fields whose decisive invariant owner is coupled or unknown.",
+            {"independent_invariant_separation_status": independent_invariant_status},
         )
     if self_grounded_mislabeled_independent and (
         validation_verdict in {"complete", "passed", "pass"} or progress_verdict == "advanced"
@@ -307,4 +316,3 @@ def check_evaluate(facts: CompletionFacts) -> None:
     _check_evaluate_part_06(facts)
     _check_evaluate_part_07(facts)
     _check_evaluate_part_08(facts)
-

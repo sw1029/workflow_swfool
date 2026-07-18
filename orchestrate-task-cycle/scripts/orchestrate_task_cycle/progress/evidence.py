@@ -174,6 +174,14 @@ def evidence_item_from_value(
         "source": source,
         "confidence": confidence,
         "progress_verdict": progress,
+        "attempt_identity": first_value(
+            value,
+            (
+                "attempt_identity",
+                "attempt_id",
+                "anti_loop_progress_gate.attempt_identity",
+            ),
+        ),
         "progress_kind": kind,
         "progress_target": first_value(value, ("progress_target", "target_progress", "selected_progress_target")),
         "selected_task_source": first_value(value, ("selected_task_source", "derive.selected_task_source")),

@@ -1,0 +1,38 @@
+{
+  "schema_version": 2,
+  "manifest_kind": "authority_operations",
+  "skill_id": "manage-evidence-cache",
+  "skill_version": "2.0.0",
+  "operations": [
+    {
+      "operation_id": "query_evidence_cache",
+      "operation_version": "1",
+      "authorization_mechanism": "none",
+      "mutation_class": "observe",
+      "required_capabilities": ["evidence.cache.read"],
+      "source_rank_floor": "S0",
+      "risk_floor": "R0",
+      "decision_class": "D3",
+      "effect_classes": ["classify_reuse"],
+      "data_classes": ["workflow_evidence_metadata"],
+      "reversibility": "reversible",
+      "subject_kinds": ["evidence_cache"],
+      "authority_applicability": "none"
+    },
+    {
+      "operation_id": "append_evidence_cache_record",
+      "operation_version": "1",
+      "authorization_mechanism": "none",
+      "mutation_class": "local_mutation",
+      "required_capabilities": ["evidence.cache.write"],
+      "source_rank_floor": "S0",
+      "risk_floor": "R1",
+      "decision_class": "D3",
+      "effect_classes": ["append_derived_record"],
+      "data_classes": ["workflow_evidence_metadata"],
+      "reversibility": "conditionally_reversible",
+      "subject_kinds": ["evidence_cache"],
+      "authority_applicability": "none"
+    }
+  ]
+}

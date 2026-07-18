@@ -29,32 +29,46 @@ def check_common(state: ValidationState) -> None:
     findings = state.findings
     missing = state.missing
     findings: list[dict[str, Any]] = []
-    derive_mode = str(first_present(result, ["derive_mode", "mode", "derive.mode", "result.derive_mode"]) or "").strip().lower()
+    derive_mode = (
+        str(
+            first_present(
+                result, ["derive_mode", "mode", "derive.mode", "result.derive_mode"]
+            )
+            or ""
+        )
+        .strip()
+        .lower()
+    )
     if target == "derive" and derive_mode == "initial_init":
         required_fields = [
-            "next_task_id",
-            "selected_task_source",
-            "progress_kind",
-            "semantic_signature",
-            "evidence_paths",
+            field for field in COMMON_FIELDS[target] if field != "completed_task_id"
         ]
     else:
         required_fields = COMMON_FIELDS[target]
     missing = [
         field
         for field in required_fields
-        if not has_value(result, field) and not reasoned_na_allows_explicit_empty(target, field, result)
+        if not has_value(result, field)
+        and not reasoned_na_allows_explicit_empty(target, field, result)
     ]
     severity = "block" if mode == "block" or target == "report" else "warn"
     for field in missing:
-        add(findings, severity, "missing_required_field", f"`{target}` result is missing `{field}`.", {"field": field})
-    
+        add(
+            findings,
+            severity,
+            "missing_required_field",
+            f"`{target}` result is missing `{field}`.",
+            {"field": field},
+        )
+
     validate_decision_identity_and_compatibility(target, result, mode, findings)
     validate_metric_applicability_consumption(target, result, mode, findings)
     validate_verification_axes(target, result, mode, findings)
     validate_task_pack_expectation_comparison(target, result, mode, findings)
     validate_state_projection(target, result, mode, findings)
-    validate_advice_consumption_and_forward_tests(target, result, mode, findings)
+    validate_advice_consumption_and_forward_tests(
+        target, result, mode, findings, contract_context
+    )
     validate_verdict_axes(target, result, mode, findings)
     for item in validate_finalization_contract(target, result, contract_context):
         add(
@@ -72,7 +86,7 @@ def check_common(state: ValidationState) -> None:
             str(item["message"]),
             item.get("evidence"),
         )
-    
+
     state.findings = findings
     state.missing = missing
     state.severity = severity

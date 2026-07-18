@@ -1,4 +1,4 @@
 interface:
   display_name: "Manage External Advice"
   short_description: "Normalize non-GT advice inputs"
-  default_prompt: "Use $manage-external-advice to intake, normalize, audit, inject, and retire external advice Markdown without treating it as goal truth, including stale metrics and re-advised dead root-cause checks."
+  default_prompt: "Use $manage-external-advice to digest-deduplicate and structure-first normalize canonical non-GT advice clauses, keep table/prose echoes as owner references, surface incomplete raw-direct fallback, and evidence-retire directives without treating lifecycle or self-attestation as clause verification."

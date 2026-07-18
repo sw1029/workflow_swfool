@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "agent_roles": [
+    "goal_value",
+    "architecture_contract",
+    "miss_validation"
+  ],
+  "candidate_limit_per_agent": 5,
+  "selection_outcomes": [
+    "selected",
+    "terminal_wait",
+    "terminal_blocked",
+    "user_escalation"
+  ],
+  "pack_dispositions": [
+    "create_pack",
+    "replace_pack",
+    "promote_next_item",
+    "normalize_initial_selection_provenance",
+    "insert_items",
+    "reorder_items",
+    "skip_items",
+    "supersede_pack",
+    "derive_standalone",
+    "terminal_wait",
+    "terminal_blocked",
+    "user_escalation"
+  ],
+  "legacy_pack_disposition_aliases": {
+    "exclude_items": "skip_items",
+    "insert_item": "insert_items"
+  }
+}

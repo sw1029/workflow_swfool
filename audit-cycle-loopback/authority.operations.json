@@ -1,0 +1,23 @@
+{
+  "schema_version": 2,
+  "manifest_kind": "authority_operations",
+  "skill_id": "audit-cycle-loopback",
+  "skill_version": "2.0.0",
+  "operations": [
+    {
+      "operation_id": "publish_loopback_candidate",
+      "operation_version": "1",
+      "authorization_mechanism": "none",
+      "mutation_class": "local_mutation",
+      "required_capabilities": ["loopback.candidate.publish"],
+      "source_rank_floor": "S0",
+      "risk_floor": "R1",
+      "decision_class": "D3",
+      "effect_classes": ["publish_non_authoritative_candidate"],
+      "data_classes": ["loopback_candidate"],
+      "reversibility": "reversible",
+      "subject_kinds": ["loopback_candidate"],
+      "authority_applicability": "none"
+    }
+  ]
+}

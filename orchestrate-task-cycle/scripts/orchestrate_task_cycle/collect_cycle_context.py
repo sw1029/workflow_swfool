@@ -13,6 +13,8 @@ from typing import Any
 from record_agent_work_log.integrity import inspect_agent_log_store
 
 from .result_contract.session_audit import collect_session_audit_directory
+from .selection_publication import publication_status
+from .task_pack.context_projection import collect_task_pack_projection
 
 
 GT_FILES = [
@@ -248,30 +250,7 @@ def collect_task(root: Path, max_files: int) -> dict[str, Any]:
     for path in misses:
         status = classify_text_status(path)
         miss_counts[status] = miss_counts.get(status, 0) + 1
-    pack_counts: dict[str, int] = {}
-    active_pack: dict[str, Any] | None = None
-    for path in packs:
-        data = read_json_file(path)
-        status = str(data.get("status") if isinstance(data, dict) else "unknown")
-        pack_counts[status] = pack_counts.get(status, 0) + 1
-        if status == "active" and active_pack is None and isinstance(data, dict):
-            items = data.get("items") if isinstance(data.get("items"), list) else []
-            next_item = None
-            for item in sorted((item for item in items if isinstance(item, dict)), key=lambda item: item.get("order", 0)):
-                if item.get("status") in {"planned", "inserted", "reordered"}:
-                    next_item = item
-                    break
-            active_pack = {
-                "path": rel_path(root, path),
-                "render_path": rel_path(root, path.with_suffix(".md")) if path.with_suffix(".md").is_file() else None,
-                "pack_id": data.get("pack_id"),
-                "status": status,
-                "goal": data.get("goal"),
-                "current_item_id": data.get("current_item_id"),
-                "next_item": next_item,
-                "planned_item_count": sum(1 for item in items if isinstance(item, dict) and item.get("status") in {"planned", "inserted", "reordered"}),
-                "terminal_blocker": data.get("terminal_blocker"),
-            }
+    pack_projection = collect_task_pack_projection(root, packs, max_files)
     return {
         "directory": file_info(root, task_dir),
         "index_jsonl": file_info(root, task_dir / "index.jsonl"),
@@ -280,9 +259,7 @@ def collect_task(root: Path, max_files: int) -> dict[str, Any]:
         "candidate_task": {"count": len(candidates), "files": limited_files(root, candidates, max_files)},
         "task_pack": {
             "count": len(packs),
-            "status_counts": pack_counts,
-            "active_count": pack_counts.get("active", 0),
-            "active_pack": active_pack,
+            **pack_projection,
             "files": limited_files(root, packs, max_files),
             "renders": limited_files(root, pack_renders, max_files),
         },
@@ -449,6 +426,7 @@ def collect(root: Path, include_git: bool, max_files: int) -> dict[str, Any]:
         "task_md": file_info(root, root / "task.md"),
         "agent_goal": collect_agent_goal(root, max_files),
         "cycle_state": cycle_state,
+        "selection_publication": publication_status(root),
         "task_state": collect_task(root, max_files),
         "issue": collect_issue(root, max_files),
         "agent_log": collect_agent_log(root, max_files),

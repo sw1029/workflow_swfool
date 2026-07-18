@@ -68,8 +68,8 @@ def build_satisfiability_row(
     criterion_id = criterion.get("criterion_id")
     predicate_id = criterion.get("predicate_id")
     row: dict[str, Any] = {
-        "criterion_id": criterion_id if isinstance(criterion_id, str) and criterion_id.strip() else "not_evaluated",
-        "predicate_id": predicate_id if isinstance(predicate_id, str) and predicate_id.strip() else "not_evaluated",
+        "criterion_id": criterion_id.strip() if isinstance(criterion_id, str) and criterion_id.strip() else "not_evaluated",
+        "predicate_id": predicate_id.strip() if isinstance(predicate_id, str) and predicate_id.strip() else "not_evaluated",
         "producer_directive_id": "not_evaluated",
         "affected_output_classes": [],
         "evaluation_status": "not_evaluated",
@@ -120,6 +120,8 @@ def build_satisfiability_row(
     if not isinstance(required_freshness, str) or not required_freshness.strip():
         missing.append("required_freshness_class")
         required_freshness = "not_evaluated"
+    else:
+        required_freshness = required_freshness.strip()
     producer_execution_allowed = directive.get("producer_execution_allowed")
     if required_freshness == "fresh_producer_execution" and type(producer_execution_allowed) is not bool:
         missing.append("producer_execution_allowed")
@@ -194,10 +196,17 @@ def recompute_contract_satisfiability(packet: dict[str, Any]) -> None:
     else:
         for criterion in criteria:
             criterion_id = criterion.get("criterion_id")
+            normalized_criterion_id = (
+                criterion_id.strip()
+                if isinstance(criterion_id, str) and criterion_id.strip()
+                else None
+            )
             matches = [
                 directive
                 for directive in directives
-                if isinstance(directive.get("criterion_ids"), list) and criterion_id in directive["criterion_ids"]
+                if normalized_criterion_id is not None
+                and normalized_criterion_id
+                in (normalized_string_list(directive.get("criterion_ids")) or [])
             ]
             rows.append(build_satisfiability_row(criterion, matches[0] if len(matches) == 1 else None, evidence_refs))
 

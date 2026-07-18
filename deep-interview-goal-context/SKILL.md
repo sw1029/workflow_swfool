@@ -5,6 +5,8 @@ description: Conduct a stateful critical deep-interview workflow to populate `.a
 
 # Deep Interview Goal Context
 
+Use `authority.operations.json` and the shared [authority v2 contract](../manage-agent-authority/references/authority-v2-contract.md). Drafting the interview concept graph is a reversible authority-free projection; final goal-truth publication is a separate exact grant-controlled effect and still requires independent goal-owner ratification.
+
 ## Overview
 
 Use this skill to run a persistent interview that fills the goal architecture, theory, schema-contract, and agent-authority goal files only after the base goal files already exist and contain real content:
@@ -19,6 +21,8 @@ Final architecture, theory, schema-contract, and agent-authority goal content mu
 This is a stateful deep-interview workflow. Do not run an unbounded conversation loop in one turn. On each skill invocation, load `.interview`, determine the next state, present one pending question or record the user's answer, and then advance the stored state.
 
 The process should treat the user's raw prompt as intent evidence, not as a complete specification. Split the prompt into confirmed facts, assumptions, open questions, and risks before drafting architecture, theory, schema-contract, or agent-authority content.
+
+Read [goal-concept-graph.md](references/goal-concept-graph.md) whenever the interview must classify core ideas, bounded design freedom, runtime-adaptive choices, concept relationships, or downstream decision ownership. Keep the canonical graph inside the existing goal-theory and goal-architecture artifacts; do not add a fifth final goal file.
 
 If the user invokes only this skill, provides no raw prompt, or provides a weak prompt such as "continue", "start interview", or a vague request to fill architecture/theory/schema-contract/agent-authority context, do not stop for lack of prompt detail after the hard gate passes. First inspect `.interview/questions.md`. If unanswered generated questions already exist and final confirmation is not complete, ask exactly one unanswered question from the active batch. If no prior questions exist, start with bootstrap interview questions from [bootstrap-questions.md](references/bootstrap-questions.md), store them in `.interview/questions.md`, and ask only the first unanswered question.
 
@@ -45,6 +49,7 @@ If the gate fails, stop architecture/theory/schema-contract/agent-authority inte
    - Record whether the raw prompt is `present`, `absent`, or `weak` in `.interview/state.md`.
    - Follow the state files described in [interview-state.md](references/interview-state.md).
    - Track `active_batch`, `current_question_id`, and `last_asked_question_id` in `.interview/state.md` when asking one question at a time.
+   - Detect legacy interview/final files that lack concept class, mutability, decision owner, relation, or exact authority-decision evidence. Preserve their content, record `legacy_authority_migration: unclassified|not_required|complete`, and create only blocking follow-up questions. Do not infer a historical user decision or retroactive delegation.
    - Run `$manage-task-state-index` `scan` when `.agent_goal/` or `.interview/` exists. Use `goal-*` and `int-*` IDs when available; do not block interviewing if they are absent.
 
 2. If the newest user message answers pending questions, record it first.
@@ -73,6 +78,7 @@ If the gate fails, stop architecture/theory/schema-contract/agent-authority inte
    - Store selected questions as a new batch in `.interview/questions.md`; do not ask every generated question.
    - After storing a new batch, ask only the first unanswered question from that batch.
    - Use [question-agent-prompts.md](references/question-agent-prompts.md) and [summary-agent-prompt.md](references/summary-agent-prompt.md).
+   - In theory and authority stages, require coverage of the goal concept graph: core/guardrail/variable classes, relation mutability, allowed variation, deterministic choice rules, decision owner, and exact concept revision/digest. Do not turn proposed graph rows into confirmed GT before the normal confirmation gates.
 
 5. Draft into `.interview/drafts/`, not directly into `.agent_goal`.
    - Use only base goal files, existing retained context, repository evidence, and recorded interview answers.
@@ -82,12 +88,14 @@ If the gate fails, stop architecture/theory/schema-contract/agent-authority inte
    - Use `$manage-agent-authority` in `draft_for_interview` mode to draft `.interview/drafts/agent_authority.md` from its embedded [agent-authority-template.md](../manage-agent-authority/references/agent-authority-template.md).
    - The schema-contract draft must include minimum schema fields, application intent, mandatory application rules, target modules/scripts guidance, versioning expectations, and requirements that `$manage-schema-contracts` must satisfy when managing `.schema/` or `.contract/`.
    - The agent-authority draft must document the default-current-agent baseline and any supported project-specific policy for API/external calls, direction freedom, strictness, implementation priority, output/artifact confirmation, quality verification, conservative implementation, escalation, and override precedence.
+   - Put the canonical draft concept-node/relation tables and graph digest in `goal_theory.md`; put the concept-to-component/consumer realization map in `goal_architecture.md`; let schema and authority drafts reference only exact concept IDs and digests. Authority records decision rights and operation requirements, not concept truth.
    - Treat these draft files as temporary review inputs only. They are not final goal architecture/theory/schema-contract/agent-authority files.
    - Mark inferred content as inferred and keep unsupported content out of the drafts.
 
 6. Run the interview-evidence consistency loop.
    - After the active batch is fully answered or skipped and all four drafts exist, spawn exactly three independent evidence-consistency agents before any final `.agent_goal` write.
    - The agents must compare the drafts and proposed final write content against the existing `.interview` state, questions, answers, prior audit records, base goal files, and repository evidence.
+   - Require reviewers to recompute or independently check concept/relation digests, identify unsupported core/locked classifications, and reject authority rows that widen a graph envelope or conflate grant, goal ratification, risk acceptance, external-input supply, and design selection.
    - Store their outputs in `.interview/evidence_review.md`; use [evidence-consistency-agent-prompts.md](references/evidence-consistency-agent-prompts.md).
    - If any agent reports `NEEDS_REVISION`, `NEEDS_MORE_INTERVIEW`, `safe_to_write: no`, hallucination, unsupported claim, or convention violation, do not ask for final confirmation and do not write `.agent_goal` files.
    - Convert unresolved evidence gaps into targeted follow-up questions in `.interview/questions.md`, set `.interview/state.md` to `evidence_review_needs_revision` or `audit_needs_more_interview`, set `.interview/confirmation.md` to `evidence_review_confirmed: no` and `audit_confirmed: no`, and return to single-question continuation.
@@ -199,6 +207,7 @@ Run this gate after user final confirmation and final critical review, but befor
 - Do not claim interview evidence consistency unless all three evidence-consistency agents confirm in the latest cycle.
 - Do not write final `.agent_goal` architecture/theory/schema-contract/agent-authority files unless the latest evidence-consistency cycle is confirmed.
 - Do not write final `.agent_goal` architecture/theory/schema-contract/agent-authority files unless `agent_write_confirmed: yes` is recorded immediately before the write.
+- Do not treat an implementation default, legacy prose omission, or later approval as retroactive evidence that a concept, relation, delegation, or authority lease was previously user-approved.
 - Do not bypass `$manage-agent-authority` when drafting, validating, or final-writing `.interview/drafts/agent_authority.md` or `.agent_goal/agent_authority.md`.
 - Do not partially write only one, two, or three final goal artifacts after a failed agent write-confirmation. Hold all four files and ask or record the needed follow-up.
 - Do not claim completion if final content exists only in `.interview/drafts/`; successful completion requires all four final files under `.agent_goal/`.

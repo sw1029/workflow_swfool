@@ -1,5 +1,16 @@
 # Interview State Files
 
+## Table of Contents
+
+- [Directory Layout](#directory-layout)
+- [`state.md`](#state-md)
+- [`questions.md`](#questions-md)
+- [`answers.md`](#answers-md)
+- [`evidence_review.md`](#evidence-review-md)
+- [`audit.md`](#audit-md)
+- [`confirmation.md`](#confirmation-md)
+- [`final_review.md`](#final-review-md)
+
 Use `.interview/` as the durable state directory for this skill. It is separate from `.agent_goal/`; `.interview` records the elicitation process, while `.agent_goal` stores the final reusable goal context.
 
 ## Directory Layout
@@ -34,6 +45,8 @@ Do not treat `.interview/drafts/goal_architecture.md`, `.interview/drafts/goal_t
 
 Create missing files only after the `.agent_goal/final_goal.md` and `.agent_goal/conventions.md` hard gate passes.
 
+<a id="state-md"></a>
+
 ## `state.md`
 
 Track the current phase:
@@ -47,12 +60,16 @@ Track the current phase:
 - current_question_id: <q-id or "none">
 - last_asked_question_id: <q-id or "none">
 - single_question_mode: yes | no
+- goal_concept_graph_status: absent | draft | confirmed | unclassified_legacy
+- legacy_authority_migration: not_required | unclassified | complete
 - source_goal_files:
   - `.agent_goal/final_goal.md`
   - `.agent_goal/conventions.md`
 - notes:
   - <short operational notes>
 ```
+
+<a id="questions-md"></a>
 
 ## `questions.md`
 
@@ -78,7 +95,11 @@ batch_source: bootstrap | initial-summary | audit-follow-up | final-review-follo
 
 When asking the user during continuation mode, present exactly one pending question from the active batch. If `batch_status` is missing in an older file, derive it from the question statuses: a batch is complete when every question in that batch is `answered` or `skipped`.
 
+For legacy state that predates the goal concept graph or operation-level authority contract, add only the missing state fields with `unclassified_legacy` / `unclassified`. Preserve existing answers and confirmations. Create a follow-up question only when a current final write or downstream decision depends on the missing classification. Never translate old silence, existing implementation, or a later approval into a historical user decision.
+
 If `.interview/state.md` has no `active_batch`, use the first batch with a `pending` question. Keep asking one question from that batch across invocations until the batch is complete. Only after the batch is complete should the main workflow draft and audit, then either create a new follow-up batch or ask for final confirmation.
+
+<a id="answers-md"></a>
 
 ## `answers.md`
 
@@ -99,6 +120,8 @@ Record user answers by question id. Preserve meaning faithfully, but redact sens
 ```
 
 When an answer follows a one-question prompt, map it to `.interview/state.md` `last_asked_question_id` unless the user explicitly references another id.
+
+<a id="evidence-review-md"></a>
 
 ## `evidence_review.md`
 
@@ -128,6 +151,8 @@ Append each three-agent evidence-consistency cycle after a completed question ba
 - convention_or_policy_violations:
 - required_draft_edits:
 - follow_up_questions:
+- concept_graph_digest_valid: yes | no | not_evaluated
+- authority_concept_rights_consistent: yes | no | not_evaluated
 
 ### Reviewer 2
 ...
@@ -143,6 +168,8 @@ Append each three-agent evidence-consistency cycle after a completed question ba
 ```
 
 Only a latest cycle with `all_confirmed: yes` allows the workflow to request final confirmation or write final `.agent_goal` files.
+
+<a id="audit-md"></a>
 
 ## `audit.md`
 
@@ -175,6 +202,8 @@ Append each three-agent audit cycle.
 - next_phase: awaiting_user_final_confirm | audit_needs_more_interview
 ```
 
+<a id="confirmation-md"></a>
+
 ## `confirmation.md`
 
 Track user-facing confirmation separately from agent audit.
@@ -202,6 +231,8 @@ Track user-facing confirmation separately from agent audit.
 ```
 
 Only `final_confirmed: yes` allows the final 3-6 agent review to start. It does not by itself authorize writing. Final writing also requires `evidence_review_confirmed: yes` and `agent_write_confirmed: yes`, with `agent_write_confirmed` decided after final review and immediately before the write.
+
+<a id="final-review-md"></a>
 
 ## `final_review.md`
 

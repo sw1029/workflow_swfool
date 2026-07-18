@@ -11,6 +11,8 @@ Use this skill to inspect any repository for likely OOM failure paths. Prefer st
 
 Report concrete risks, not vague memory advice. Each finding should name the allocation mechanism, scaling input, likely memory domain, evidence, and mitigation direction.
 
+`authority.operations.json` declares this recommendation-only inspection under the shared [authority v2 contract](../manage-agent-authority/references/authority-v2-contract.md). It grants no profiling run, model load, repository edit, or durable publication; route each such effect through its owning manifested operation.
+
 When task-state artifacts exist, use `$manage-task-state-index` as a nonblocking traceability add-on. Lack of ID context must not prevent a normal OOM audit.
 
 ## Agent Routing Policy

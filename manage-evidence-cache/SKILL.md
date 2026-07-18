@@ -9,6 +9,8 @@ description: "Fingerprint and classify reusable task-cycle evidence. Use when Co
 
 Use this skill to avoid duplicate expensive checks while preserving validation integrity. The cache suggests whether prior evidence might be reused; the owning validator decides whether reuse is acceptable.
 
+`authority.operations.json` declares cache query and the bounded append-only derived-record projection under the shared [authority v2 contract](../manage-agent-authority/references/authority-v2-contract.md). The projection is authority-free only because it cannot grant authority, establish validation, select a task, or overwrite evidence; every underlying run or validator effect keeps its own operation boundary.
+
 Use `PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/scripts" python3 -m orchestrate_task_cycle evidence-cache`.
 
 ## Workflow

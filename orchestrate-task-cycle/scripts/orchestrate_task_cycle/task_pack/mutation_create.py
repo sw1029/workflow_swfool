@@ -10,12 +10,11 @@ from typing import Any
 
 
 from .contracts import PACK_COHERENCE_VERSION, PACK_ID_PATTERN
+from . import mutation_journal
 from .creation import apply_initial_selection_to_new_pack
 from .ordering import (
     item_order,
-)
-from .packet_io import (
-    write_json,
+    refresh_current_item,
 )
 from .provenance import (
     mutation_entry,
@@ -56,8 +55,7 @@ def apply_create(args: argparse.Namespace, root: Path, plan: dict[str, Any]) -> 
     pack_data.setdefault("updated_at", now_iso())
     pack_data.setdefault("mutation_log", [])
     pack_data.setdefault("terminal_blocker", None)
-    if not pack_data.get("current_item_id") and isinstance(pack_data.get("items"), list) and pack_data["items"]:
-        pack_data["current_item_id"] = sorted(pack_data["items"], key=lambda item: item.get("order", 0))[0].get("item_id")
+    refresh_current_item(pack_data)
     create_entry = mutation_entry("create", plan, [], item_order(pack_data))
     if isinstance(initial_selection, dict):
         create_entry["timestamp"] = str(pack_data.get("created_at") or create_entry["timestamp"])
@@ -104,11 +102,7 @@ def apply_create(args: argparse.Namespace, root: Path, plan: dict[str, Any]) -> 
         json.dump(output, sys.stdout, ensure_ascii=False, indent=2, sort_keys=True)
         sys.stdout.write("\n")
         return 0
-    guard_content_addressed_consumer(path, canonical_pack_sha256(pack_data))
-    write_json(path, pack_data)
-    render_output_path = None
-    if args.render:
-        render_output_path = write_render(root, path, pack_data, args.language)
+    pack_data["updated_at"] = now_iso()
     create_hash = canonical_pack_sha256(pack_data)
     create_receipt = {
         "schema_version": PACK_COHERENCE_VERSION,
@@ -124,6 +118,21 @@ def apply_create(args: argparse.Namespace, root: Path, plan: dict[str, Any]) -> 
         "mutation_kind": "create",
         "legacy_normalized": False,
     }
+    guard_content_addressed_consumer(path, create_hash)
+    durable_receipt = mutation_journal.commit_pack_mutation(
+        root,
+        action="create",
+        plan=plan,
+        target_path=path,
+        after_data=pack_data,
+        before_pack_sha256=None,
+        coherence_receipt=create_receipt,
+    )
+    create_receipt["durable_receipt_ref"] = durable_receipt.get("receipt_ref")
+    create_receipt["durable_receipt_sha256"] = durable_receipt.get("receipt_sha256")
+    render_output_path = None
+    if args.render:
+        render_output_path = write_render(root, path, pack_data, args.language)
     output = {
         "status": "ok",
         "action": "create",
@@ -144,8 +153,8 @@ def apply_create(args: argparse.Namespace, root: Path, plan: dict[str, Any]) -> 
         "creation_snapshot": durable_creation,
         "initial_selection_applied": initial_selection_applied,
         "pack_transition_verdict": {"status": "pass", "evidence_ref": rel_path(root, path)},
+        "durable_mutation_receipt": durable_receipt,
     }
     json.dump(output, sys.stdout, ensure_ascii=False, indent=2, sort_keys=True)
     sys.stdout.write("\n")
     return 0
-

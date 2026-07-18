@@ -327,7 +327,7 @@ def _check_artifact_facts_part_06(facts: CompletionFacts) -> None:
             ],
         )
     )
-    harvest_validated = non_empty(
+    harvest_validated = boolish(
         first_present(
             result,
             [
@@ -353,4 +353,3 @@ def check_artifact_facts(facts: CompletionFacts) -> None:
     _check_artifact_facts_part_04(facts)
     _check_artifact_facts_part_05(facts)
     _check_artifact_facts_part_06(facts)
-

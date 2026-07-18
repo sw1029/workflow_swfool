@@ -1,5 +1,13 @@
 # Agent Prompts
 
+## Contents
+
+- [Goal alignment inspection request](#goal-alignment-inspection-request)
+- [Task miss analysis agent](#task-miss-analysis-agent)
+- [Issue goal-fit agent](#issue-goal-fit-agent)
+- [Three improvement agents](#three-improvement-agents)
+- [Synthesis agent](#synthesis-agent)
+
 ## Goal Alignment Inspection Request
 
 Use this request with `$inspect-repo-with-agents`:
@@ -80,6 +88,8 @@ Report:
 
 Use exactly one issue agent before the three improvement agents. Use the prompt from `$manage-implementation-issues` when available.
 
+If issue-fit execution is unavailable, record `issue_fit.status: unavailable`, a bounded reason, and evidence IDs in the frozen evidence manifest. Continue evaluating non-issue candidates. Treat only candidates with `issue_derived: true` as unselectable; do not degrade unrelated repository-, goal-, miss-, or validation-derived candidates.
+
 ```text
 Analyze `.issue/` local records, GitHub issue mirrors, and issue-related task index links before improvement candidates are generated.
 
@@ -101,11 +111,17 @@ Do not edit files. Do not open, close, or modify issues.
 
 ## Three Improvement Agents
 
-Run these three in parallel with the same evidence package, including the critical goal/convention alignment report and the issue goal-fit report.
+Freeze one `shared_evidence_manifest` before fanout. Bind cycle/task/attempt and input-state fingerprint. Legacy artifact identity remains valid unchanged. For the explicit form, bind subject/class/revision/full digest/lineage/freshness and all four applicability objects for body, lane, cohort, and producer run. The adapter packet carries the exact same reference; the post-use seal echoes exact subject fields and only applicable dimension values. Freeze active advice in `active_advice_clause_set` with the exact sorted actionable clause IDs, packet digest, per-clause source digests, and clause-set digest. If none is active, use the closed `not_applicable` form with an opaque reason and evidence IDs. Hash the canonical body. Missing or mismatched applicable values stop fanout; a declared `not_applicable` dimension is a normal bypass. If a registered adapter lacks a passing context or consumed-value seal, stop before fanout. An evidenced empty adapter registry may use explicit adapter `not_applicable`.
+
+Run exactly three read-only agents in parallel. Give every agent the identical manifest digest and no sibling output. Use the canonical roles `goal_value`, `architecture_contract`, and `miss_validation`, and assign a unique opaque `agent_receipt_id` to each execution.
 
 Spawn each improvement-analysis agent at Tier 3 with `profile_id: derive_inspector`, `model_ref: model_ref:balanced`, and `reasoning_effort: high`.
 
-### Agent 1: Goal Fit
+Every agent must return a structured receipt containing its role and receipt ID, the identical input digest, `read_only: true`, `status: complete`, an output ref/hash, and an output with `candidates`, `rejection_inventory`, `advice_clause_set_sha256`, and `advice_clause_assessments`. Return zero through five candidates. When zero are viable, enumerate reviewed options with unique option ID, rejection reason code, and evidence IDs instead of fabricating candidates. The advice assessment list must cover all and only the frozen actionable clause IDs in sorted order. Each row binds the clause ID, this lens's agent/receipt IDs, `incorporated|deferred|tested|rejected`, evidence IDs, related candidate IDs, and a canonical assessment digest. Empty advice uses the exact empty list; prose about the advice container is not clause consumption.
+
+Each candidate must include `candidate_id`, exact-subject fingerprint, first-failing invariant, one canonical owner, task kind, expected blocker transition, `actionability: actionable|blocked_external|blocked_authority|unverified`, `issue_derived`, evidence IDs, validation IDs, and a `pack_disposition` from [the canonical derive selection contract](../../orchestrate-task-cycle/references/derive-selection-contract.json).
+
+### Agent 1: Goal Fit (`goal_value`)
 
 ```text
 Analyze improvement candidates through the lens of final goal, success criteria, and user value.
@@ -113,7 +129,7 @@ Analyze improvement candidates through the lens of final goal, success criteria,
 Agent routing:
 - Use Tier 3 `profile_id: derive_inspector`, `model_ref: model_ref:balanced`, and `reasoning_effort: high`.
 
-Return 3-5 candidates. For each:
+Return 0-5 viable candidates using the common structured receipt. For each:
 - title
 - problem addressed
 - goal link
@@ -131,7 +147,7 @@ Return 3-5 candidates. For each:
 - validation
 - risks
 - goal/convention blocker handled or avoided
-- task_pack_disposition: standalone | create_pack | replace_pack | promote_pack_item | insert_pack_item | reorder_pack | terminal_block_pack | not_applicable
+- pack_disposition: use the canonical derive selection contract; do not invent aliases
 - positive_input_delta: new input kind introduced plus non-empty supplied artifact path or `produced_domain_delta=true`, or why no delta is needed
 - scope_fidelity: affected measurable directive IDs, original target preservation, narrowed/descope status, and residual item needed
 - acceptance_verifier: required verifier status for measurable targets, especially `not_evaluated` verifier debt that must remain open or become the task
@@ -149,7 +165,7 @@ Return 3-5 candidates. For each:
 - should_be_next_task: yes/no with reason
 ```
 
-### Agent 2: Architecture And Theory Fit
+### Agent 2: Architecture And Theory Fit (`architecture_contract`)
 
 ```text
 Analyze improvement candidates through architecture, technical logic, maintainability, and design fit.
@@ -157,7 +173,7 @@ Analyze improvement candidates through architecture, technical logic, maintainab
 Agent routing:
 - Use Tier 3 `profile_id: derive_inspector`, `model_ref: model_ref:balanced`, and `reasoning_effort: high`.
 
-Return 3-5 candidates. For each:
+Return 0-5 viable candidates using the common structured receipt. For each:
 - title
 - architecture/theory link
 - issue-fit implication
@@ -177,7 +193,7 @@ Return 3-5 candidates. For each:
 - validation_profile: current_only | affected_chain | full_chain
 - prerequisite surfaces that justify `affected_chain` or `full_chain`, if any
 - validation
-- task_pack_disposition: standalone | create_pack | replace_pack | promote_pack_item | insert_pack_item | reorder_pack | terminal_block_pack | not_applicable
+- pack_disposition: use the canonical derive selection contract; do not invent aliases
 - blocker_signature, semantic_signature, sealed-family, goal-distance, and input-delta implications
 - count-key implications: effective root/dominant-parameter key or terminal-outcome fallback when raw generated labels changed
 - structure_high_water_key_scope: whether any structure proposal moves adapter-owned global invariants or only a selected local scope
@@ -187,7 +203,7 @@ Return 3-5 candidates. For each:
 - should_be_next_task: yes/no with reason
 ```
 
-### Agent 3: Miss And Candidate Fit
+### Agent 3: Miss And Candidate Fit (`miss_validation`)
 
 ```text
 Analyze improvement candidates through `.task/task_miss/`, `.task/candidate_task/`, validation gaps, and residual risk.
@@ -195,7 +211,7 @@ Analyze improvement candidates through `.task/task_miss/`, `.task/candidate_task
 Agent routing:
 - Use Tier 3 `profile_id: derive_inspector`, `model_ref: model_ref:balanced`, and `reasoning_effort: high`.
 
-Return 3-5 candidates. For each:
+Return 0-5 viable candidates using the common structured receipt. For each:
 - title
 - source miss or candidate
 - source issue or issue-fit finding
@@ -213,7 +229,7 @@ Return 3-5 candidates. For each:
 - blocker_state_transition
 - validation_profile: current_only | affected_chain | full_chain
 - batchability with related no-live or micro-contract candidates
-- task_pack_disposition: standalone | create_pack | replace_pack | promote_pack_item | insert_pack_item | reorder_pack | terminal_block_pack | not_applicable
+- pack_disposition: use the canonical derive selection contract; do not invent aliases
 - whether active pack order should change and why
 - acceptance_verifier risk: required verifier missing, failed, or `not_evaluated`
 - required gate-hook risk: acceptance-referenced gate hooks absent, fail-quiet, or `not_evaluated`
@@ -246,13 +262,14 @@ Inputs:
 - task_miss analysis
 - candidate_task analysis
 - three improvement-agent reports
+- the frozen shared-evidence digest and exactly three validated execution receipts
 - current task.md if present
 - mode: replacement | initial_init
 - previous task.md execution-environment section if present
 - environment discovery result from $find-local-python-envs when needed
 
 Tasks:
-1. Select exactly one improvement as the next `task.md`, or emit terminal blocker state when no viable task remains.
+1. Build the exact deduplicated union of validated lens candidate IDs. Select only an actionable member of that union, or emit `terminal_wait`, `terminal_blocked`, or `user_escalation` when no actionable member remains.
 2. Explain why it outranks alternatives.
 3. Produce final `task.md` content using the template, with `## Execution Environment` immediately after `# Task`.
 4. List unselected candidates that should be saved under `.task/candidate_task/`.
@@ -260,15 +277,20 @@ Tasks:
 6. Include issue IDs, GitHub URLs, or `.issue/` paths that the selected task tracks or explicitly ignores.
 7. Include `.schema` and `.contract` update requirements when the selected task affects schemas, module/script contracts, or causal compatibility.
 8. Include the effective authority policy in the generated `## Execution Environment` and explain any API/external-call, direction-freedom, conservative-implementation, validation-priority, or escalation constraint that affects the selected task.
-9. Include `External Advice` in the generated `## Execution Environment`: list used `adv-*` IDs/paths or `none`, and explain whether each active advice item is incorporated, deferred, rejected, or not applicable.
-10. If an active task pack exists, choose one disposition: `replace_pack`, `promote_next_item`, `insert_item`, `reorder_items`, `supersede_pack`, `derive_standalone`, or `terminal_blocked`.
+9. Include `External Advice` in the generated `## Execution Environment`: list used `adv-*` IDs/paths or `none`, and explain whether each active advice item is incorporated, deferred, rejected, or not applicable. Reconcile every frozen actionable clause against all three lens-assessment digests and emit exact clause rows with final disposition, evidence IDs, selected candidate IDs, and canonical row/set digests.
+10. Choose exactly one canonical disposition from [derive-selection-contract.json](../../orchestrate-task-cycle/references/derive-selection-contract.json). Never emit legacy aliases in a new receipt.
 11. If writing or updating a task pack, produce canonical JSON content plus the user-language Markdown render requirement. New sequences contain 2-5 newly derived items. A replacement over five total items may add at most five new items and must identify every excess item as exact planning-contract carry-forward in predecessor-relative order. Do not relabel an old ID as new or omit a nonterminal predecessor item; carry it exactly or declare an evidence-hash-bound retirement. Use the helper-owned replacement transaction rather than separate supersede/create writes.
 12. Include `progress_kind: goal_productive|governance_only` and the selected or terminal `semantic_signature` in the derive result.
 13. If mode is `initial_init`, state that no `past_task` archive is required because no previous task.md exists.
 
 Selection constraints:
+- Emit three lens receipts with three distinct opaque `agent_id` values and unique receipt IDs. Emit one synthesis receipt with a fourth distinct opaque agent ID that echoes the frozen input digest, consumes all and only the three unique lens receipt IDs, binds the exact candidate-union IDs/digest, and records `selected_candidate_id`, `selection_outcome`, and canonical `pack_disposition`. It must also echo the exact advice clause-set digest, consume the three assessment digests per clause, and bind the reconciliation-set digest. Persist three closed lens receipt projections containing each exact output plus identity/status/input/ref/digest fields and the canonical synthesis-output projection as four distinct compact canonical JSON files under `.task/cycle/<cycle-id>/agent_receipts/`; only a `durable_runtime_artifact_bound` receipt rebuilt after reopening those safe regular non-symlink files may produce `wired` rows.
+- Do not claim advice `verified` from synthesis alone. Verification requires fresh happy and negative forward producer artifacts bound to the current clause-set/synthesis-output digests plus distinct verifier receipts and invariant owners. Persist each exact producer output and complete outer forward receipt in the same cycle-local store and validate them using the workspace root. Require negative expected/observed decision state to differ from happy state. Verifier input/invariant IDs must be disjoint from producer preconditions/evidence. The artifact store proves exact durable bytes and distinct declared IDs, not cryptographic process identity; therefore still perform actual agent delegation. Reused identities, coupled evidence, a no-op negative path, self-hashed booleans, stale inputs, missing files, arbitrary refs, path escape, or symlinks leave the clause at `wired` or `pending`.
+- Do not use majority vote. Deduplicate by exact subject, first-failing invariant, canonical owner, task kind, and blocker transition; rank evidence and actionability. GT, authority, safety, and schema violations are vetoes.
+- Keep `selected`, `terminal_wait`, `terminal_blocked`, and `user_escalation` disjoint. `terminal_wait` requires watched evidence, the fixed executable wake-rule ID, policy-label predicates/delta, locked premise-input contract, the frozen analysis digest, and a separately hash-bound safe `selection-tick` baseline packet whose watched-input digest drives re-entry; never use the analysis digest as that tick baseline. Treat exact-premise and effective-authority rows as sticky; an identical premise plus only nonmaterial drift is `no_op`. If this fanout was opened by `selection_required`, name the activated predecessor `A`, the exact trigger `B`, and the input-stable rebased packet `C`. Persist the three lens projections and canonical synthesis-output projection, reopen those four artifacts into `derive_selection_synthesis`, bind it to `B` in a preliminary decision, and bind persisted `B` plus that decision in a selection-decision receipt. Validate the entire chain before acknowledging `B`; require `B` to descend from `A`, `C` to descend unchanged from `B`, and `last_selection_receipt` to equal the closed eight-field acknowledgement binding's receipt ID. Then emit a direct full final derive result that embeds `C` and the receipt-reopened analysis. A raw exact-file digest is not semantic freshness or canonical-owner proof; an arbitrary ID/hash pair, preliminary decision, receipt, partial projection, or `{ "result": ... }` wrapper is not a valid terminal source. `terminal_blocked` requires justified hard-stop evidence; user escalation requires a bounded requested input or authority. Never combine their fields.
+- Do not publish a selection, terminal seal, escalation, or pack mutation from fewer than three valid lens receipts. A fanout limitation is an incomplete analysis, not a degraded substitute for independent evidence.
 - Keep `progress_target` in `advanced|safety_only|no_progress|regressed` and expected progress kind in `goal_productive|governance_only`. Put labels such as `workflow_capability`, `artifact_truth_only`, or artifact-truth verification in open `item_kind`, preserve the source target in `scope_fidelity`, and do not propose enum expansion or a shadow expected-progress field.
-- Before recommending archive/publication, require a finding-free dry-run over the exact deterministic task/pack inputs. Replacement must reuse those bytes, recover any pending helper journal, and state that helper atomicity excludes `task.md`, archive, index, and Git.
+- Before recommending archive/publication, require a finding-free dry-run over the exact deterministic task/pack inputs. Replacement must reuse those bytes and recover any pending helper journal. The task-pack helper is atomic only for its pack-owned targets; publish the selected `task.md` plus archive/index/pack projections through the orchestrator's `selection-publication` exact-before/after journal, and require its committed receipt before consumption. Git remains outside both publication transactions and cannot substitute for either receipt.
 - Do not select a task that conflicts with `.agent_goal/final_goal.md` or `.agent_goal/conventions.md` unless the selected task explicitly resolves that conflict.
 - Do not select a task that conflicts with the `$manage-agent-authority` result unless the selected task explicitly resolves that conflict. If the authority file is absent, do not infer permission beyond `default_current_agent_permissions`.
 - Do not select a task that treats `.agent_advice` as GT or authority. If active advice is incompatible with GT, authority, current user direction, or repo facts, reject or defer it explicitly.
@@ -320,7 +342,7 @@ Selection constraints:
 - If `positive_input_delta_required` is true, name the newly introduced input kind and the supplied artifact path or `produced_domain_delta=true`. If no supplied delta exists, terminal-block or select a task that obtains the missing input.
 - If a candidate derives from a measurable directive, preserve the original target in `scope_fidelity`; if narrowed, require explicit descope plus an open residual item. Do not call a pilot/plan/slice complete against a weaker target.
 - Before terminal-blocking or sealing, verify no authority-permitted productive alternative path remains unattempted.
-- If zero viable standalone candidates and zero viable pack items remain, emit `selected_task_source: terminal_blocked` with `terminal_blocker` instead of inventing work.
+- If zero actionable standalone candidates and pack items remain, use `terminal_wait` with a named policy-label wake predicate plus the fixed executable wake rule, `user_escalation` for a bounded missing input/authority request, or `terminal_blocked` only for a justified hard stop with exhausted alternatives. For a rebased wait, settle and activate only after the four runtime artifacts, durable synthesis, preliminary decision, selection-decision receipt, `C`, and direct full final derive result are durable and the authority subject binds predecessor `A`; an unactivated prepare/completion is not current. Do not invent work or combine outcome fields.
 
 Execution environment rules:
 - Reuse the previous task.md environment only when it is explicit and still applies.

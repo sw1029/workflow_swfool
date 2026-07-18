@@ -24,6 +24,7 @@ from .acceptance import (
     oracle_metric_validity_gate,
     verifier_evaluation_status,
 )
+from .cycle_reachability import cycle_reachability_gate
 
 from .adapters import (
     apply_gate_artifact_compatibility,
@@ -377,7 +378,7 @@ __all__ = (
     'apply_evidence_provenance_filter', 'apply_gate_artifact_compatibility', 'apply_quality_policy_compatibility', 'apply_root_cause_ledger',
     'attempt_revision_value', 'blocker_mutation_kind', 'bool_value', 'bounded_durable_projection',
     'budget_evaluation', 'budget_value', 'build_base_packet', 'call_adapter',
-    'canonical_json_sha256', 'canonicalize', 'chain_stall_forced_retarget_gate', 'classify_task_correction',
+    'canonical_json_sha256', 'canonicalize', 'chain_stall_forced_retarget_gate', 'classify_task_correction', 'cycle_reachability_gate',
     'clean_provenance_path_ref', 'collapse_root_family', 'collect_result_bools', 'collect_values_by_key',
     'compact_coverage_gate', 'compact_registry', 'compact_root_cause_ledger', 'compute_quality',
     'consolidation_streak', 'constant_registry_path', 'consumer_context_conformance_gate', 'consumer_receipt_binding_sha256',

@@ -1,0 +1,53 @@
+{
+  "schema_version": 2,
+  "manifest_kind": "authority_operations",
+  "skill_id": "manage-agent-goal",
+  "skill_version": "2.0.0",
+  "operations": [
+    {
+      "operation_id": "read_agent_goal",
+      "operation_version": "1",
+      "authorization_mechanism": "none",
+      "mutation_class": "observe",
+      "required_capabilities": ["goal.agent.read"],
+      "source_rank_floor": "S0",
+      "risk_floor": "R0",
+      "decision_class": "D3",
+      "effect_classes": ["read_goal"],
+      "data_classes": ["goal_truth"],
+      "reversibility": "reversible",
+      "subject_kinds": ["agent_goal"],
+      "authority_applicability": "none"
+    },
+    {
+      "operation_id": "update_final_goal",
+      "operation_version": "1",
+      "authorization_mechanism": "grant",
+      "mutation_class": "local_mutation",
+      "required_capabilities": ["goal.final.update"],
+      "source_rank_floor": "S3",
+      "risk_floor": "R3",
+      "decision_class": "D0",
+      "effect_classes": ["update_goal_truth"],
+      "data_classes": ["goal_truth"],
+      "reversibility": "conditionally_reversible",
+      "subject_kinds": ["final_goal"],
+      "authority_applicability": "required"
+    },
+    {
+      "operation_id": "update_goal_conventions",
+      "operation_version": "1",
+      "authorization_mechanism": "grant",
+      "mutation_class": "local_mutation",
+      "required_capabilities": ["goal.conventions.update"],
+      "source_rank_floor": "S3",
+      "risk_floor": "R3",
+      "decision_class": "D0",
+      "effect_classes": ["update_goal_constraints"],
+      "data_classes": ["goal_truth"],
+      "reversibility": "conditionally_reversible",
+      "subject_kinds": ["goal_conventions"],
+      "authority_applicability": "required"
+    }
+  ]
+}

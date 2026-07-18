@@ -1,0 +1,10 @@
+{
+  "manifest_kind": "authority_operations",
+  "operations": [
+    {"authority_applicability":"none","authorization_mechanism":"none","data_classes":["task_proposal"],"decision_class":"D2","effect_classes":["propose_task"],"mutation_class":"observe","operation_id":"propose_task","operation_version":"1","required_capabilities":["task.proposal.derive"],"reversibility":"reversible","risk_floor":"R0","source_rank_floor":"S0","subject_kinds":["task_scope"]},
+    {"authority_applicability":"required","authorization_mechanism":"grant","data_classes":["task_state"],"decision_class":"D2","effect_classes":["publish_task"],"mutation_class":"local_mutation","operation_id":"publish_task","operation_version":"1","required_capabilities":["task.scope.publish"],"reversibility":"conditionally_reversible","risk_floor":"R2","source_rank_floor":"S2","subject_kinds":["task"]}
+  ],
+  "schema_version": 2,
+  "skill_id": "derive-improvement-task",
+  "skill_version": "2.0.0"
+}

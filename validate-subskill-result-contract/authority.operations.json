@@ -1,0 +1,23 @@
+{
+  "schema_version": 2,
+  "manifest_kind": "authority_operations",
+  "skill_id": "validate-subskill-result-contract",
+  "skill_version": "2.0.0",
+  "operations": [
+    {
+      "operation_id": "validate_subskill_result",
+      "operation_version": "1",
+      "authorization_mechanism": "none",
+      "mutation_class": "observe",
+      "required_capabilities": ["subskill.result.validate"],
+      "source_rank_floor": "S0",
+      "risk_floor": "R0",
+      "decision_class": "D3",
+      "effect_classes": ["validate_result_contract"],
+      "data_classes": ["workflow_result"],
+      "reversibility": "reversible",
+      "subject_kinds": ["subskill_result"],
+      "authority_applicability": "none"
+    }
+  ]
+}

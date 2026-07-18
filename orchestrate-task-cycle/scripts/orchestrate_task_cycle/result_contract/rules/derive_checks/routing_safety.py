@@ -136,7 +136,9 @@ def _check_routing_safety_part_02(facts: DeriveFacts) -> None:
     ).lower()
     portfolio_quota_restrictive = portfolio_quota_mode in {"restrict", "restricted", "block", "blocking"}
     facts.axis_starved_by_missing_producer = axis_starved_by_missing_producer
-    facts.decision_metadata_revision = decision_metadata_revision
+    facts.decision_metadata_revision = bool(
+        facts.decision_metadata_revision or decision_metadata_revision
+    )
     facts.portfolio_quota_exceeded = portfolio_quota_exceeded
     facts.portfolio_quota_mode = portfolio_quota_mode
     facts.portfolio_quota_restrictive = portfolio_quota_restrictive
@@ -306,4 +308,3 @@ def check_routing_safety(facts: DeriveFacts) -> None:
     _check_routing_safety_part_03(facts)
     _check_routing_safety_part_04(facts)
     _check_routing_safety_part_05(facts)
-

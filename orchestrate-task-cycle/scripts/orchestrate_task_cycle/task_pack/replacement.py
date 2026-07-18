@@ -186,6 +186,11 @@ def replacement_postcondition(root: Path, prepare: dict[str, Any]) -> dict[str, 
     retired_findings, _retired_ids = validate_retired_items_contract(
         root,
         replacement_contract.get("retired_items", []) if isinstance(replacement_contract, dict) else None,
+        predecessor_pack_sha256=(
+            str(replacement_contract.get("predecessor_pack_canonical_sha256") or "")
+            if isinstance(replacement_contract, dict)
+            else None
+        ),
     )
     if retired_findings:
         raise SystemExit("Replacement retired-item evidence no longer validates.")
@@ -283,4 +288,3 @@ def validate_replacement_receipt(
     except SystemExit as exc:
         add("replacement_postcondition_invalid", str(exc))
     return {"status": "block" if findings else "ok", "findings": findings, "receipt": verified}
-

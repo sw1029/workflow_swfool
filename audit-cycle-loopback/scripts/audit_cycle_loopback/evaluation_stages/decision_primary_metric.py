@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from ..runtime_dependencies import (
+    bind_adapter_invocation_result,
     normalize_gate_key,
     normalize_primary_metric_gate,
     normalize_provenance_label,
     rel_path,
     verification_source_separation_gate,
 )
+from ..metric_observation import finalize_metric_observation
 
 from ..evaluation_frame import _EvaluationFrame
 
@@ -67,6 +69,20 @@ def _evaluate_decision_primary_metric(frame: _EvaluationFrame) -> None:
         primary_metric_gate,
         pass_fields=("primary_metric_high_water_moved", "primary_metric_stalled"),
         computed_from_decision_artifact=True,
+    )
+    primary_metric_gate = finalize_metric_observation(primary_metric_gate)
+    primary_metric_contract_valid = isinstance(primary_metric_value, dict)
+    primary_metric_accepted = bool(
+        primary_metric_contract_valid
+        and not primary_metric_error
+        and str(primary_metric_gate.get("evaluation_status") or "").strip().lower()
+        in {"pass", "fail"}
+    )
+    bind_adapter_invocation_result(
+        "primary_metric",
+        return_contract_valid=primary_metric_contract_valid,
+        semantic_accepted=primary_metric_accepted,
+        value_consumed_by_decision=primary_metric_accepted,
     )
     if primary_metric_error:
         primary_metric_gate["adapter_error"] = primary_metric_error

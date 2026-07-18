@@ -20,6 +20,7 @@ class ValidationState:
     explicit_report_key_divergence: bool = False
     auto_report_key_divergences: list[dict[str, Any]] = field(default_factory=list)
     conformance_by_id: Any = None
+    consumer_expectations: Any = None
     conformance_rows: Any = None
     consumer_id: Any = None
     consumer_mismatches: Any = None
@@ -30,7 +31,9 @@ class ValidationState:
     expected_cycle_id: Any = None
     expected_input_fingerprints: Any = None
     expected_input_state_fingerprint: Any = None
+    expected_decision_identity_echo: Any = None
     expected_verification_input_ids: Any = None
+    explicit_decision_identity: bool = False
     invalid_consumers: Any = None
     malformed_conformance_aliases: Any = None
     required_consumer_ids: Any = None

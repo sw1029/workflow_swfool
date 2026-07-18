@@ -11,13 +11,14 @@ from ..evaluation_frame import _EvaluationFrame
 
 def _evaluate_failure_consumer(frame: _EvaluationFrame) -> None:
     (
-        adapter_load_gate, args, artifact_echo_valid, attempt_identity, bind_artifact_gate,
+        adapter_load_gate, adapter_revision_sha256, args, artifact_echo_valid,
+        attempt_identity, bind_artifact_gate,
         consumer_conformance_gate, consumer_id, coverage_gate, decision_artifact_ref,
         independent_coverage_fields, independent_substance_fields, input_state_fingerprint,
         invocation_completed, quality_hook_receipt, rows, self_consumer_probe_pending,
         self_consumer_probe_row, substance_gate,
     ) = frame.require(
-        'adapter_load_gate', 'args', 'artifact_echo_valid', 'attempt_identity',
+        'adapter_load_gate', 'adapter_revision_sha256', 'args', 'artifact_echo_valid', 'attempt_identity',
         'bind_artifact_gate', 'consumer_conformance_gate', 'consumer_id', 'coverage_gate',
         'decision_artifact_ref', 'independent_coverage_fields', 'independent_substance_fields',
         'input_state_fingerprint', 'invocation_completed', 'quality_hook_receipt', 'rows',
@@ -82,6 +83,8 @@ def _evaluate_failure_consumer(frame: _EvaluationFrame) -> None:
             expected_cycle_id=args.cycle_id,
             expected_input_state_fingerprint=input_state_fingerprint,
             expected_attempt_identity=attempt_identity,
+            expected_task_id=args.task_id,
+            expected_adapter_revision_sha256=adapter_revision_sha256,
         )
         adapter_load_gate["consumer_context_conformance"] = consumer_conformance_gate
     frame.update({

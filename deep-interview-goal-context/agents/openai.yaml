@@ -1,4 +1,4 @@
 interface:
   display_name: "Deep Interview Goal Context"
-  short_description: "Interview for goal and authority GT"
-  default_prompt: "Use $deep-interview-goal-context to continue .interview one question at a time, use $manage-agent-authority for agent-authority drafts/final writes, then write final goal files only to .agent_goal after confirmation passes."
+  short_description: "Interview for a typed goal concept graph"
+  default_prompt: "Use $deep-interview-goal-context to continue .interview one question at a time, distinguish core goal truth from bounded design and variable ideas, and keep any later authority grant separate from goal-owner ratification."

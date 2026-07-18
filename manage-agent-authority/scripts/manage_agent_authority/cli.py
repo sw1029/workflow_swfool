@@ -21,7 +21,13 @@ def _receipt(argv: list[str] | None) -> int:
     return main(argv)
 
 
-COMMANDS = (CommandSpec("receipt", _receipt),)
+def _authority(argv: list[str] | None) -> int:
+    from .authority_cli import main
+
+    return main(argv)
+
+
+COMMANDS = (CommandSpec("authority", _authority), CommandSpec("receipt", _receipt))
 
 
 def main(argv: Sequence[str] | None = None) -> int:

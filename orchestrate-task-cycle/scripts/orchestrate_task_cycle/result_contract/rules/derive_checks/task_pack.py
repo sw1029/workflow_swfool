@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .shared import (
+    LEGACY_PACK_DISPOSITION_ALIASES,
     PACK_DISPOSITIONS,
     PACK_MUTATION_DISPOSITIONS,
     _workspace_root,
@@ -68,6 +69,23 @@ def _validate_mutation_contract(
                 str(coherence_finding.get("message") or "Pack coherence validation failed."),
                 coherence_finding.get("evidence"),
             )
+        if isinstance(mutation_receipt, dict) and (
+            mutation_receipt.get("durable_receipt_ref")
+            or mutation_receipt.get("durable_receipt_sha256")
+        ):
+            try:
+                task_pack_queue.task_pack_mutation_journal.validate_receipt_binding(
+                    _workspace_root(context),
+                    mutation_plan,
+                    mutation_receipt,
+                )
+            except SystemExit as exc:
+                add(
+                    findings,
+                    "block" if mode == "block" else "warn",
+                    "derive_pack_durable_mutation_receipt_invalid",
+                    str(exc),
+                )
         if explicit_legacy_contract:
             add(
                 findings,
@@ -95,7 +113,7 @@ def _check_promotion_receipt(
             add(findings, "block", "initial_selection_receipt_missing", "Initial pack promotion requires a bounded initial-selection receipt.")
         else:
             required_receipt = (
-                "pack_ref", "pack_creation_sha256", "initial_item_id", "initial_order",
+                "pack_ref", "pack_creation_snapshot_sha256", "initial_item_id", "initial_order",
                 "task_snapshot_sha256", "authority_receipt_ref", "selection_reason", "created_at",
             )
             missing_receipt = [field for field in required_receipt if not non_empty(receipt.get(field))]
@@ -217,7 +235,7 @@ def _check_pack_selection(facts: DeriveFacts) -> tuple[str, str]:
     if status in {"deferred", "pending", "blocked", "failed"} and not has_value(result, "derive_pending_reason") and not has_value(result, "blockers"):
         add(findings, "block" if mode == "block" else "warn", "derive_pending_reason_missing", "Deferred or blocked derivation requires a pending/blocker reason.")
     selected_source = str(value_for(result, "selected_task_source") or "").lower()
-    pack_disposition = str(
+    raw_pack_disposition = str(
         first_present(
             result,
             [
@@ -230,6 +248,15 @@ def _check_pack_selection(facts: DeriveFacts) -> tuple[str, str]:
         )
         or ""
     ).lower()
+    pack_disposition = LEGACY_PACK_DISPOSITION_ALIASES.get(raw_pack_disposition, raw_pack_disposition)
+    if raw_pack_disposition in LEGACY_PACK_DISPOSITION_ALIASES:
+        add(
+            findings,
+            "warn",
+            "pack_disposition_legacy_alias",
+            "Legacy pack disposition was normalized; new derive receipts must use the canonical value.",
+            {"supplied": raw_pack_disposition, "canonical": pack_disposition},
+        )
     pack_scope = task_pack_in_scope(result) or bool(pack_disposition)
     if active_task_pack_present(result) and selected_source != "task_pack" and not has_value(result, "task_pack_status"):
         add(findings, "block" if mode == "block" else "warn", "task_pack_status_missing", "Active task pack in scope requires `task_pack_status` in derive result.")
@@ -249,14 +276,17 @@ def _check_pack_selection(facts: DeriveFacts) -> tuple[str, str]:
             "`pack_disposition` is not an allowed task-pack transaction.",
             {"pack_disposition": pack_disposition, "allowed": sorted(PACK_DISPOSITIONS)},
         )
-    if selected_source and selected_source not in {"task_pack", "candidate_task", "standalone", "terminal_blocked"}:
-        add(findings, "warn", "selected_task_source_invalid", "`selected_task_source` should be task_pack, candidate_task, standalone, or terminal_blocked.", {"selected_task_source": selected_source})
+    if selected_source and selected_source not in {"task_pack", "candidate_task", "standalone", "terminal_wait", "terminal_blocked", "user_escalation"}:
+        add(findings, "warn", "selected_task_source_invalid", "`selected_task_source` is outside the canonical derive source enum.", {"selected_task_source": selected_source})
     if selected_source == "task_pack":
         require_context_field("task_pack_status", "task_pack_status_missing", "`selected_task_source: task_pack` requires `task_pack_status`.")
         require_context_field("task_pack_path", "task_pack_path_missing", "`selected_task_source: task_pack` requires `task_pack_path`.")
         require_context_field("task_pack_item_id", "task_pack_item_id_missing", "`selected_task_source: task_pack` requires `task_pack_item_id` or `promoted_item_id`.")
         require_context_field("pack_disposition", "pack_disposition_missing", "`selected_task_source: task_pack` requires `pack_disposition`.")
-    if pack_disposition in PACK_MUTATION_DISPOSITIONS | {"promote_next_item"}:
+    pack_body_in_scope = task_pack_in_scope(result) or active_task_pack_present(result)
+    if pack_disposition in PACK_MUTATION_DISPOSITIONS | {"promote_next_item"} and (
+        pack_disposition != "terminal_blocked" or pack_body_in_scope
+    ):
         _check_pack_mutation(facts, pack_disposition)
     if pack_disposition in {"skip_items", "exclude_items"}:
         require_context_field("skipped_item_ids", "skipped_item_ids_missing", "Skipping/excluding pack items requires `skipped_item_ids` or `exclude_item_ids`.")
@@ -318,7 +348,7 @@ def _check_successor_selection(facts: DeriveFacts, status: str, selected_source:
         and not selected_source
         and not next_task_id
     )
-    if selected_source != "terminal_blocked" and not next_task_id and not bounded_complete_global_wait:
+    if selected_source not in {"terminal_wait", "terminal_blocked", "user_escalation"} and not next_task_id and not bounded_complete_global_wait:
         add(findings, "block" if mode == "block" else "warn", "next_task_id_missing", "Non-terminal derive result requires `next_task_id`.")
     if (
         completed_task_id
@@ -350,7 +380,11 @@ def _check_successor_selection(facts: DeriveFacts, status: str, selected_source:
     ).lower()
     if progress_kind and progress_kind not in {"goal_productive", "governance_only"}:
         add(findings, "warn", "progress_kind_invalid", "`derive` progress_kind should be `goal_productive` or `governance_only`.", {"progress_kind": progress_kind})
-    if progress_kind == "governance_only" and selected_source != "terminal_blocked":
+    if (
+        progress_kind == "governance_only"
+        and str(result.get("selection_outcome") or "").lower() == "selected"
+        and selected_source in {"task_pack", "candidate_task", "standalone"}
+    ):
         add(
             findings,
             "warn",

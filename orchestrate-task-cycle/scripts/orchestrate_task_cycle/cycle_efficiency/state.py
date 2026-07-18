@@ -11,11 +11,16 @@ class ScopeState:
     scoped_events: list[dict[str, Any]]
     decision_events: list[dict[str, Any]]
     latest_execution_scope: dict[str, str]
+    execution_scope_applicability: str
+    execution_scope_exclusion_reason_id: str | None
+    execution_scope_status: str
     execution_scope_known: bool
     execution_scope_evidence_required: list[str]
+    required_input_binding: dict[str, str] | None
     execution_starvation_status: str
     execution_starvation: bool | None
     recent_run_ids: list[str]
+    recent_run_receipts: list[dict[str, Any]]
     execution_starvation_window: int | None
     execution_starvation_window_status: str
     goal_axis_projection: dict[str, Any]

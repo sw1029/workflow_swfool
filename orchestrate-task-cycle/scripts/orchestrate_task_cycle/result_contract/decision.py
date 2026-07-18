@@ -2,25 +2,44 @@ from __future__ import annotations
 
 from typing import Any
 
-from .common import add, boolish, first_present, list_values, non_empty
+from .common import add, boolish, first_present, non_empty
+from .decision_gate_compatibility import validate_gate_compatibility
 from .receipts import (
     _declared_values,
     _full_sha256,
-    _normalized_verdict_status,
     _positive_decision_claim,
 )
+from .decision_claims import semantic_claim
 from .decision_verification import (  # noqa: F401 - compatibility re-exports
     COUPLING_STATUSES,
     EVIDENCE_PROVENANCE_STATUSES,
+    INVARIANT_SEPARATION_STATUSES,
     validate_verification_axes,
 )
+from .decision_identity_dimensions import (
+    canonical_value,
+    explicit_identity_object,
+    normalized_legacy_identity,
+    parse_decision_identity,
+)
+from .legacy_revision_bridge import (
+    legacy_revision_bridge_finding,
+    terminal_consumption_claim,
+)
 
-DECISION_TARGETS = {"qualitative_review", "loopback_audit", "derive", "validate", "report"}
+DECISION_TARGETS = {
+    "qualitative_review",
+    "loopback_audit",
+    "derive",
+    "validate",
+    "report",
+}
 
 __all__ = (
     "COUPLING_STATUSES",
     "DECISION_TARGETS",
     "EVIDENCE_PROVENANCE_STATUSES",
+    "INVARIANT_SEPARATION_STATUSES",
     "validate_decision_identity_and_compatibility",
     "validate_verification_axes",
 )
@@ -34,6 +53,18 @@ def _validate_identity_binding(
     findings: list[dict[str, Any]],
 ) -> None:
     if isinstance(identity, dict):
+        exact_identity = explicit_identity_object(identity)
+        projection = parse_decision_identity(exact_identity or identity)
+        if exact_identity is not None and projection.explicit:
+            _validate_explicit_identity_binding(
+                exact_identity,
+                projection,
+                result,
+                positive_claim,
+                severity,
+                findings,
+            )
+            return
         required = (
             "artifact_id",
             "artifact_class",
@@ -43,8 +74,14 @@ def _validate_identity_binding(
         )
         missing = [field for field in required if not non_empty(identity.get(field))]
         scope_verified = boolish(identity.get("scope_verified"))
-        advisory = boolish(identity.get("advisory_discovery")) or not scope_verified or bool(missing)
-        if identity.get("artifact_sha256") and not _full_sha256(identity.get("artifact_sha256")):
+        advisory = (
+            boolish(identity.get("advisory_discovery"))
+            or not scope_verified
+            or bool(missing)
+        )
+        if identity.get("artifact_sha256") and not _full_sha256(
+            identity.get("artifact_sha256")
+        ):
             missing.append("artifact_sha256(valid_sha256)")
             advisory = True
         if missing:
@@ -63,48 +100,7 @@ def _validate_identity_binding(
                 "An advisory or scope-unverified artifact cannot control completion, progress, hard stop, terminal state, or pack consumption.",
             )
 
-        direct_read_scope = {
-            str(item).strip().lower()
-            for item in list_values(
-                first_present(
-                    result,
-                    [
-                        "direct_read_scope",
-                        "quality_review.direct_read_scope",
-                        "qualitative_review.direct_read_scope",
-                        "result.direct_read_scope",
-                    ],
-                )
-            )
-            if str(item).strip()
-        }
-        semantic_axis_values = [
-            *_declared_values(
-                result,
-                (
-                    "artifact_semantic_verdict",
-                    "verdict_axes.artifact_semantic_verdict",
-                    "result.artifact_semantic_verdict",
-                    "result.verdict_axes.artifact_semantic_verdict",
-                ),
-            ),
-            *_declared_values(
-                result,
-                (
-                    "goal_readiness_verdict",
-                    "verdict_axes.goal_readiness_verdict",
-                    "result.goal_readiness_verdict",
-                    "result.verdict_axes.goal_readiness_verdict",
-                ),
-            ),
-        ]
-        semantic_claim = bool(
-            "artifact_body" in direct_read_scope
-            or any(_normalized_verdict_status(value) == "pass" for value in semantic_axis_values)
-            or boolish(first_present(result, ["semantic_progress", "authoritative_semantic_progress"]))
-            or str(first_present(result, ["progress_kind", "effective_progress_kind"]) or "").strip().lower()
-            == "goal_productive"
-        )
+        semantic_claimed = semantic_claim(result)
         body_values = []
         if "body_projection_fingerprint" in identity:
             body_values.append(identity.get("body_projection_fingerprint"))
@@ -119,7 +115,9 @@ def _validate_identity_binding(
                 ),
             )
         )
-        body_fingerprint = next((value for value in body_values if non_empty(value)), None)
+        body_fingerprint = next(
+            (value for value in body_values if non_empty(value)), None
+        )
         cohort_values = []
         for field in ("verification_input_ids", "input_fingerprints"):
             if field in identity:
@@ -139,9 +137,9 @@ def _validate_identity_binding(
         )
         cohort_declared = any(non_empty(value) for value in cohort_values)
         semantic_binding_missing: list[str] = []
-        if semantic_claim and not _full_sha256(body_fingerprint):
+        if semantic_claimed and not _full_sha256(body_fingerprint):
             semantic_binding_missing.append("body_projection_fingerprint")
-        if semantic_claim and not cohort_declared:
+        if semantic_claimed and not cohort_declared:
             semantic_binding_missing.append("source_cohort")
         if semantic_binding_missing:
             add(
@@ -153,14 +151,126 @@ def _validate_identity_binding(
             )
 
 
+def _validate_explicit_identity_binding(
+    identity: dict[str, Any],
+    projection: Any,
+    result: dict[str, Any],
+    positive_claim: bool,
+    severity: str,
+    findings: list[dict[str, Any]],
+) -> None:
+    if projection.issues:
+        add(
+            findings,
+            severity,
+            "decision_identity_applicability_invalid",
+            "Explicit decision identity requires exact subject/revision/digest fields and four valid applicability objects.",
+            {"fields": list(projection.issues)},
+        )
+    freshness = projection.subject_values.get("freshness_status")
+    if positive_claim and freshness != "current":
+        add(
+            findings,
+            severity,
+            "decision_identity_not_current",
+            "A stale, conflicted, or unverified decision subject cannot support a positive decision.",
+            {"freshness_status": freshness},
+        )
+
+    subject_aliases = {
+        "decision_subject_id": ("artifact_id", "current_artifact_id"),
+        "subject_class_id": ("artifact_class",),
+        "subject_digest": ("artifact_sha256",),
+        "revision_id": ("artifact_revision_id", "subject_revision_id"),
+    }
+    conflicts: list[str] = []
+    for subject_field, aliases in subject_aliases.items():
+        expected = projection.subject_values.get(subject_field)
+        for alias in aliases:
+            if (
+                alias in identity
+                and non_empty(identity.get(alias))
+                and identity.get(alias) != expected
+            ):
+                conflicts.append(alias)
+    if conflicts:
+        add(
+            findings,
+            severity,
+            "decision_subject_alias_mismatch",
+            "Legacy artifact aliases must identify the same exact subject, revision, and digest as the explicit decision identity.",
+            {"fields": sorted(set(conflicts))},
+        )
+
+    dimension_paths = {
+        "body_fingerprint": (
+            "body_projection_fingerprint",
+            "actual_artifact_truth.body_projection_fingerprint",
+            "quality_review.body_projection_fingerprint",
+            "result.body_projection_fingerprint",
+        ),
+        "production_lane": (
+            "production_lane_identity",
+            "actual_artifact_truth.production_lane_identity",
+            "result.production_lane_identity",
+        ),
+        "cohort": (
+            "cohort_identity",
+            "verification_input_ids",
+            "input_fingerprints",
+            "result.cohort_identity",
+        ),
+        "producer_run": (
+            "producer_run_id",
+            "measurement_run_id",
+            "result.producer_run_id",
+        ),
+    }
+    mismatch: list[str] = []
+    forbidden_echo: list[str] = []
+    for dimension, paths in dimension_paths.items():
+        declared = _declared_values(result, paths)
+        status = projection.dimension_statuses.get(dimension)
+        expected = projection.dimension_values.get(dimension)
+        if status == "applicable":
+            if any(
+                canonical_value(value) != canonical_value(expected)
+                for value in declared
+            ):
+                mismatch.append(dimension)
+        elif status == "not_applicable" and declared:
+            forbidden_echo.append(dimension)
+    claim_severity = severity if positive_claim or semantic_claim(result) else "warn"
+    if mismatch:
+        add(
+            findings,
+            claim_severity,
+            "decision_applicable_dimension_mismatch",
+            "An applicable decision dimension does not match the exact current subject binding.",
+            {"dimensions": sorted(mismatch)},
+        )
+    if forbidden_echo:
+        add(
+            findings,
+            claim_severity,
+            "decision_nonapplicable_dimension_echoed",
+            "A not-applicable dimension must be bypassed rather than echoed into a consuming decision.",
+            {"dimensions": sorted(forbidden_echo)},
+        )
+
+
 def _validate_explicit_identity_conflict(
     identity: object,
     result: dict[str, Any],
     severity: str,
     findings: list[dict[str, Any]],
 ) -> None:
-    explicit_identity = first_present(result, ["explicit_artifact_ref", "caller_artifact_ref"])
-    default_identity = first_present(result, ["default_artifact_ref", "discovered_default_artifact_ref"])
+    explicit_identity = first_present(
+        result, ["explicit_artifact_ref", "caller_artifact_ref"]
+    )
+    default_identity = first_present(
+        result, ["default_artifact_ref", "discovered_default_artifact_ref"]
+    )
     if isinstance(explicit_identity, dict) and isinstance(default_identity, dict):
         conflict = any(
             explicit_identity.get(field)
@@ -169,111 +279,16 @@ def _validate_explicit_identity_conflict(
             for field in ("artifact_id", "artifact_sha256", "production_lane_identity")
         )
         if conflict:
-            selected_id = identity.get("artifact_id") if isinstance(identity, dict) else None
-            if selected_id != explicit_identity.get("artifact_id") or not _full_sha256(explicit_identity.get("artifact_sha256")):
+            selected_id = normalized_legacy_identity(identity).get("artifact_id")
+            if selected_id != explicit_identity.get("artifact_id") or not _full_sha256(
+                explicit_identity.get("artifact_sha256")
+            ):
                 add(
                     findings,
                     severity,
                     "explicit_artifact_conflict_not_resolved",
                     "Exact caller artifact must win over a conflicting default discovery, and its hash must verify.",
                 )
-
-
-def _validate_gate_compatibility(
-    contract_version: int | None,
-    positive_claim: bool,
-    identity: object,
-    result: dict[str, Any],
-    severity: str,
-    findings: list[dict[str, Any]],
-) -> None:
-    rows = first_present(
-        result,
-        [
-            "gate_compatibility_results",
-            "gate_compatibility.rows",
-            "decision_gate_compatibility",
-            "result.gate_compatibility_results",
-        ],
-    )
-    if isinstance(rows, dict):
-        compatibility_rows = rows.get("rows") if isinstance(rows.get("rows"), list) else []
-    else:
-        compatibility_rows = rows if isinstance(rows, list) else []
-    compatibility_declared = any(
-        key in result
-        for key in ("gate_compatibility_results", "decision_gate_compatibility")
-    ) or isinstance(result.get("gate_compatibility"), dict)
-    required_gate_scope_declared = "required_gate_ids" in result or isinstance(result.get("gate_compatibility"), dict) and "required_gate_ids" in result["gate_compatibility"]
-    consumed_gate_scope_declared = any(
-        key in result
-        for key in ("decision_consumed_gate_ids", "consumed_gate_ids", "decision_gate_ids")
-    )
-    if contract_version == 1 and positive_claim:
-        missing_surfaces = []
-        if not compatibility_declared:
-            missing_surfaces.append("gate_compatibility_results")
-        if not required_gate_scope_declared:
-            missing_surfaces.append("required_gate_ids")
-        if not consumed_gate_scope_declared:
-            missing_surfaces.append("decision_consumed_gate_ids")
-        if missing_surfaces:
-            add(
-                findings,
-                severity,
-                "decision_gate_compatibility_scope_missing",
-                "Current decision contract requires explicit applicable, required, and consumed gate scopes, including explicit empty lists.",
-                {"missing_fields": missing_surfaces},
-            )
-    required_gate_ids = {
-        str(item)
-        for item in list_values(first_present(result, ["required_gate_ids", "gate_compatibility.required_gate_ids"]))
-    }
-    consumed_gate_ids: set[str] = set()
-    for field in ("decision_consumed_gate_ids", "consumed_gate_ids", "decision_gate_ids", "residual_gate_ids", "hard_stop_gate_ids"):
-        consumed_gate_ids.update(str(item) for item in list_values(first_present(result, [field, f"decision.{field}"])))
-    by_id: dict[str, dict[str, Any]] = {}
-    for row in compatibility_rows:
-        if not isinstance(row, dict) or not non_empty(row.get("gate_id")):
-            add(findings, severity, "gate_compatibility_row_invalid", "Gate compatibility rows require a gate_id.")
-            continue
-        gate_id = str(row.get("gate_id"))
-        by_id[gate_id] = row
-        status = str(row.get("gate_compatibility_status") or "").strip().lower()
-        if status not in {"compatible", "incompatible", "not_evaluated"}:
-            add(findings, severity, "gate_compatibility_status_invalid", "Gate compatibility status is invalid.", {"gate_id": gate_id})
-        if status != "compatible" and gate_id in consumed_gate_ids:
-            add(
-                findings,
-                severity,
-                "noncompatible_gate_consumed",
-                "An incompatible or unevaluated gate cannot contribute to the decision set.",
-                {"gate_id": gate_id, "status": status},
-            )
-        if isinstance(identity, dict):
-            for field in ("artifact_id", "artifact_sha256"):
-                if row.get(field) and row.get(field) != identity.get(field):
-                    add(
-                        findings,
-                        severity,
-                        "gate_compatibility_artifact_identity_mismatch",
-                        "Gate compatibility evidence is bound to a different artifact identity.",
-                        {"gate_id": gate_id, "field": field},
-                    )
-    missing_required = sorted(
-        gate_id
-        for gate_id in required_gate_ids
-        if gate_id not in by_id
-        or str(by_id[gate_id].get("gate_compatibility_status") or "").strip().lower() != "compatible"
-    )
-    if missing_required and positive_claim:
-        add(
-            findings,
-            severity,
-            "required_gate_compatibility_not_evaluated",
-            "A required decision gate is not proven compatible with the exact artifact.",
-            {"gate_ids": missing_required},
-        )
 
 
 def validate_decision_identity_and_compatibility(
@@ -294,15 +309,16 @@ def validate_decision_identity_and_compatibility(
         ],
     )
     try:
-        contract_version = int(raw_contract_version) if raw_contract_version is not None else None
+        contract_version = (
+            int(raw_contract_version) if raw_contract_version is not None else None
+        )
     except (TypeError, ValueError):
         contract_version = None
     positive_claim = _positive_decision_claim(target, result)
+    terminal_claim = terminal_consumption_claim(result)
     severity = (
         "block"
-        if mode == "block"
-        or target in {"validate", "report"}
-        or positive_claim
+        if mode == "block" or target in {"validate", "report"} or positive_claim
         else "warn"
     )
     contract_required = positive_claim
@@ -315,9 +331,12 @@ def validate_decision_identity_and_compatibility(
         )
         return
     if raw_contract_version is not None and contract_version not in {0, 1}:
-        add(findings, severity, "decision_contract_version_invalid", "Decision contract version must be 1 or explicit legacy version 0.")
-        return
-    if contract_version == 0:
+        add(
+            findings,
+            severity,
+            "decision_contract_version_invalid",
+            "Decision contract version must be 1 or explicit legacy version 0.",
+        )
         return
     identity = first_present(
         result,
@@ -330,6 +349,28 @@ def validate_decision_identity_and_compatibility(
             "result.decision_input_identity",
         ],
     )
+    exact_identity = explicit_identity_object(identity)
+    identity_projection = parse_decision_identity(exact_identity or identity)
+    bridge_finding = legacy_revision_bridge_finding(
+        result,
+        identity,
+        required=bool(
+            contract_version in {0, 1}
+            and (positive_claim or terminal_claim)
+            and (contract_version == 0 or not identity_projection.explicit)
+        ),
+    )
+    if bridge_finding is not None:
+        bridge_code, bridge_issues = bridge_finding
+        add(
+            findings,
+            "block",
+            bridge_code,
+            "Legacy v0/v1 identity cannot control semantic progress, completion, terminal state, hard stop, or pack consumption without a current revision-bound bridge receipt.",
+            {"fields": bridge_issues},
+        )
+    if contract_version == 0:
+        return
     if contract_version == 1 and not isinstance(identity, dict):
         add(
             findings,
@@ -339,7 +380,7 @@ def validate_decision_identity_and_compatibility(
         )
     _validate_identity_binding(identity, result, positive_claim, severity, findings)
     _validate_explicit_identity_conflict(identity, result, severity, findings)
-    _validate_gate_compatibility(
+    validate_gate_compatibility(
         contract_version,
         positive_claim,
         identity,

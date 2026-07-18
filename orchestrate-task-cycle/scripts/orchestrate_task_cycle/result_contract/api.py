@@ -16,6 +16,23 @@ from .advice import (
     _forward_test_rows,
     validate_advice_consumption_and_forward_tests,
 )
+from .advice_receipts import (
+    advice_consumer_receipt_binding_sha256,
+    advice_forward_agent_output_sha256,
+    advice_forward_path_receipt_binding_sha256,
+    advice_forward_verification_receipt_sha256,
+    build_derive_advice_consumption_rows,
+    expected_advice_decision_identity_echo,
+)
+from .derive_advice import (  # noqa: E402
+    advice_lens_receipt_projection,
+    advice_assessment_sha256,
+    advice_clause_set_sha256,
+    advice_reconciliation_row_sha256,
+    advice_reconciliation_set_sha256,
+    advice_synthesis_output_projection,
+    advice_synthesis_output_sha256,
+)
 from .base import RuleContext, RuleRegistry  # noqa: E402
 from .common import (  # noqa: E402
     ADVICE_REQUIRED_TARGETS,
@@ -57,6 +74,9 @@ from .expectations import (  # noqa: E402
 )
 from .metric_consumption import validate_metric_applicability_consumption  # noqa: E402
 from .lifecycle import validate_lifecycle_extensions  # noqa: E402
+from .legacy_revision_bridge import (  # noqa: E402
+    legacy_revision_bridge_sha256,
+)
 from .policy import (  # noqa: E402
     PENDING_LONG_RUN_STATUSES,
     has_explicit_empty,
@@ -120,10 +140,16 @@ def validate(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Validate a subskill result contract for orchestrate-task-cycle.")
+    parser = argparse.ArgumentParser(
+        description="Validate a subskill result contract for orchestrate-task-cycle."
+    )
     parser.add_argument("--target", required=True, choices=sorted(TARGETS))
-    parser.add_argument("--result", default="-", help="Result JSON path, JSON string, or '-' for stdin.")
-    parser.add_argument("--context", help="Optional cycle/long-run context JSON path or JSON string.")
+    parser.add_argument(
+        "--result", default="-", help="Result JSON path, JSON string, or '-' for stdin."
+    )
+    parser.add_argument(
+        "--context", help="Optional cycle/long-run context JSON path or JSON string."
+    )
     parser.add_argument("--mode", choices=("warn", "block"), default="warn")
     args = parser.parse_args(argv)
 

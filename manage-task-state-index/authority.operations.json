@@ -1,0 +1,23 @@
+{
+  "schema_version": 2,
+  "manifest_kind": "authority_operations",
+  "skill_id": "manage-task-state-index",
+  "skill_version": "2.0.0",
+  "operations": [
+    {
+      "operation_id": "mutate_task_state_index",
+      "operation_version": "1",
+      "authorization_mechanism": "grant",
+      "mutation_class": "local_mutation",
+      "required_capabilities": ["task.index.mutate"],
+      "source_rank_floor": "S2",
+      "risk_floor": "R2",
+      "decision_class": "D2",
+      "effect_classes": ["append_or_project_task_lifecycle"],
+      "data_classes": ["task_state_index"],
+      "reversibility": "conditionally_reversible",
+      "subject_kinds": ["task_index"],
+      "authority_applicability": "required"
+    }
+  ]
+}

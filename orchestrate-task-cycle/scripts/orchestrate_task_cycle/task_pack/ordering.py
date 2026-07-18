@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .state_machine import READY_STATUSES, earliest_ready_item, refresh_lifecycle
+
 def sorted_items(data: dict[str, Any]) -> list[dict[str, Any]]:
     return sorted((item for item in data.get("items", []) if isinstance(item, dict)), key=lambda item: item.get("order", 0))
 
@@ -25,14 +27,7 @@ def active_in_flight_items(data: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def refresh_current_item(data: dict[str, Any]) -> None:
-    remaining = [item for item in planned_items(data) if item.get("status") in {"planned", "inserted", "reordered"}]
-    data["current_item_id"] = remaining[0].get("item_id") if remaining else None
-    in_flight = any(
-        isinstance(item, dict) and item.get("status") in {"promoted", "in_progress"}
-        for item in data.get("items", [])
-    )
-    if not remaining and not in_flight and data.get("status") == "active":
-        data["status"] = "completed"
+    refresh_lifecycle(data)
 
 
 def evidence_paths_from(plan: dict[str, Any]) -> list[str]:
@@ -44,13 +39,11 @@ def evidence_paths_from(plan: dict[str, Any]) -> list[str]:
     return []
 def next_item(data: dict[str, Any]) -> dict[str, Any] | None:
     current = data.get("current_item_id")
-    items = sorted_items(data)
-    if current:
-        for item in items:
-            if item.get("item_id") == current and item.get("status") in {"planned", "inserted", "reordered", "blocked"}:
-                return item
-    for item in items:
-        if item.get("status") in {"planned", "inserted", "reordered"}:
-            return item
-    return None
-
+    ready = earliest_ready_item(data)
+    if ready is None:
+        return None
+    if current and ready.get("item_id") != current:
+        return None
+    if ready.get("status") not in READY_STATUSES:
+        return None
+    return ready

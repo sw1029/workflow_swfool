@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..runtime_dependencies import (
+    bind_adapter_invocation_result,
     call_adapter,
     extract_check_ids,
     extract_frontier_observations,
@@ -77,6 +78,30 @@ def _evaluate_failure_metrics(frame: _EvaluationFrame) -> None:
         candidate_metric_keys=[*quality_delta_policy["keys"], *sorted(numeric_vector(current_substance))],
     )
     evidence_provenance, evidence_provenance_provided = normalize_evidence_provenance(evidence_provenance_value)
+    provenance_status = (
+        str(
+            evidence_provenance_value.get("evaluation_status")
+            or evidence_provenance_value.get("status")
+            or ""
+        ).strip().lower()
+        if isinstance(evidence_provenance_value, dict)
+        else ""
+    )
+    provenance_contract_valid = isinstance(evidence_provenance_value, (dict, list))
+    provenance_accepted = bool(
+        provenance_contract_valid
+        and evidence_provenance_provided
+        and evidence_provenance
+        and not evidence_provenance_error
+        and provenance_status
+        not in {"fail", "failed", "fail_quiet", "not_evaluated", "unavailable"}
+    )
+    bind_adapter_invocation_result(
+        "evidence_provenance",
+        return_contract_valid=provenance_contract_valid,
+        semantic_accepted=provenance_accepted,
+        value_consumed_by_decision=provenance_accepted,
+    )
     frame.update({
         "current_check_ids": current_check_ids,
         "current_frontiers": current_frontiers,

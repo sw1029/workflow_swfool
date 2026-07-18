@@ -27,6 +27,18 @@ def _collect_terminal_findings(state: dict[str, Any]) -> dict[str, Any]:
         findings.append(disagreement)
         row["authoritative_semantic_progress"] = False
         row["hard_stop_required"] = True
+    existing_residuals = (row.get("terminal_self_resolution_gate") or {}).get(
+        "residual_classification"
+    )
+    if not existing_residuals and bool_value(
+        row.get("untried_actionable_root_cause_exists")
+    ):
+        existing_residuals = [
+            {
+                "residual_id": "untried_actionable_root_cause",
+                "classification": "local_deterministic_repair_possible",
+            }
+        ]
     final_terminal_self_resolution = terminal_self_resolution_gate(
         runner_validation,
         output_delta,
@@ -35,9 +47,7 @@ def _collect_terminal_findings(state: dict[str, Any]) -> dict[str, Any]:
             "recommended_disposition": row.get("recommended_disposition"),
             "terminal_requested": str(row.get("recommended_disposition") or "").strip().lower()
             in {"terminal_blocked", "user_escalation", "goal_terminal"},
-            "residual_classification": (
-                row.get("terminal_self_resolution_gate") or {}
-            ).get("residual_classification"),
+            "residual_classification": existing_residuals,
         },
     )
     row["terminal_self_resolution_gate"] = final_terminal_self_resolution
@@ -48,10 +58,13 @@ def _collect_terminal_findings(state: dict[str, Any]) -> dict[str, Any]:
         final_terminal_self_resolution.get("goal_terminal_prohibited")
     )
     if row["goal_terminal_prohibited"]:
-        row["effective_allowed_dispositions"] = ["goal_productive"]
-        row["recommended_disposition"] = "goal_productive"
+        allowed = final_terminal_self_resolution.get("allowed_resolution_dispositions")
+        if not isinstance(allowed, list) or not allowed:
+            allowed = ["classification_repair"]
+        row["effective_allowed_dispositions"] = allowed
+        row["recommended_disposition"] = allowed[0]
         row["authoritative_semantic_progress"] = False
-        row["hard_stop_required"] = True
+        row["hard_stop_required"] = False
         findings.append(
             {
                 "severity": "block",

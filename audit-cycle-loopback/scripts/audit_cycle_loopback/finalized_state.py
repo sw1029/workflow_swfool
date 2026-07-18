@@ -19,22 +19,14 @@ def load_verified_finalized_loopback_state(
         return {}, "invalid", f"{type(exc).__name__}:{exc}"
     if not isinstance(verified, dict) or verified.get("valid") is not True:
         return {}, "invalid", "finalized_state_not_verified"
-    durable_state = verified.get("durable_state_candidate")
-    projections: dict[str, Any] = {}
-    if isinstance(durable_state, dict) and durable_state.get("mode") == "complete_projection":
-        raw = durable_state.get("projections")
-        if isinstance(raw, dict):
-            projections = dict(raw)
-    elif isinstance(durable_state, dict) and durable_state.get("mode") == "typed_operations":
-        for operation in durable_state.get("operations") or []:
-            if not isinstance(operation, dict):
-                continue
-            target_id = str(operation.get("target_id") or "")
-            payload = operation.get("payload")
-            if target_id and isinstance(payload, dict):
-                projections[target_id] = payload
-    else:
+    target_state = verified.get("post_write_projection")
+    if not isinstance(target_state, dict):
         return {}, "invalid", "finalized_durable_state_mode_invalid"
+    projections = {
+        target_ref: row["payload"]
+        for target_ref, row in target_state.items()
+        if isinstance(row, dict) and isinstance(row.get("payload"), dict)
+    }
     return {
         "verified_state": verified,
         "projections": projections,

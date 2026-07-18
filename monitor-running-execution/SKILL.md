@@ -9,6 +9,8 @@ description: "Monitor long-running task executions recorded by `$run-task-code-a
 
 Use this skill to keep long-running execution state explicit while preserving the rule that `running` is not `success`.
 
+Recording monitor state and terminating a process are separate operations in `authority.operations.json`. Apply the shared [authority v2 contract](../manage-agent-authority/references/authority-v2-contract.md); termination requires its own exact destructive-operation grant and risk acceptance, not merely launch authority or a process ID.
+
 Use `PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/scripts" python3 -m orchestrate_task_cycle monitor` for deterministic checks.
 
 ## Workflow
@@ -16,7 +18,7 @@ Use `PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/scrip
 1. Read the run result or ledger event that reported `running`.
 2. Verify that PID/session/job ID, log path, monitor command, stop command, startup/heartbeat evidence, and remaining validation are present.
 3. For task-cycle long-running branches, also verify `run_id`, `owner_task_id`, `launch_cycle_id`, `output_dir`, expected completion signal/artifacts, and residual/harvest validation linkage when available.
-4. When the long run was launched because `unreachable_within_cycle=true`, verify that required scale, throughput evidence, cycle cap, residual original acceptance, and harvest validation plan remain linked. A launch or heartbeat does not consume the original domain acceptance.
+4. When the long run was launched because `unreachable_within_cycle=true`, copy without projection loss the exact `cycle_reachability_gate`, `residual_acceptance`, `harvest_validation_plan`, and any later harvest receipt/recomputed gate. Verify that the plan still matches `run_id`, `cycle_reachability_sha256`, `acceptance_scale_id`, `throughput_evidence_id`, `residual_acceptance_id`, and its validation-predicate IDs. A launch or heartbeat does not consume the original domain acceptance.
 5. When the launch packet includes Part M fields, verify that launch-manifest anchors, target scale, `harvest_contract_preflight`, `harvest_risk_accepted`, terminal disposition policy, and reharvest linkage remain attached to the monitor or harvest handoff. Do not replace launch-time anchors with the current task, current lane, or monitor task context.
 6. Check process, tmux session, log heartbeat, and expected completion artifacts only when safe and local.
 7. Append a monitor event to the cycle ledger as `step: run` with `event_kind: long_run_monitor`; do not create a noncanonical `monitor` phase.
@@ -32,3 +34,4 @@ Use `PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/scrip
 - Do not treat `completed_pending_validation` as success; it only means harvest validation should consume the terminal artifacts.
 - Do not mark a cycle-unreachable target complete from long-run launch, startup, or heartbeat evidence. Preserve harvest validation, throughput/scale evidence, or explicit descope/terminal/escalation.
 - Do not let a monitor task switch silently invalidate or redefine terminal harvest expectations. Preserve launch-manifest anchors and any explicit `harvest_risk_accepted` decision.
+- Append the reachability, residual, plan, receipt, and recomputed-gate objects at the top-level ledger event as well as `monitor_result`; scalar summaries are not a lossless substitute.

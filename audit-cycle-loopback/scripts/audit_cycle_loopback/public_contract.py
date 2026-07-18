@@ -104,6 +104,7 @@ PUBLIC_NAMES = (
     "coverage_gate_vector",
     "coverage_quality_delta_gate",
     "coverage_quality_delta_reconciliation_gate",
+    "cycle_reachability_gate",
     "cumulative_goal_distance_gate",
     "cumulative_goal_distance_scope_key",
     "dataclass",

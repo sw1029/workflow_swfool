@@ -1,0 +1,23 @@
+{
+  "schema_version": 2,
+  "manifest_kind": "authority_operations",
+  "skill_id": "repo-change-commit",
+  "skill_version": "2.0.0",
+  "operations": [
+    {
+      "operation_id": "finalize_git_state",
+      "operation_version": "1",
+      "authorization_mechanism": "grant",
+      "mutation_class": "local_mutation",
+      "required_capabilities": ["repository.git.finalize"],
+      "source_rank_floor": "S2",
+      "risk_floor": "R2",
+      "decision_class": "D3",
+      "effect_classes": ["create_local_commit"],
+      "data_classes": ["repository_state"],
+      "reversibility": "conditionally_reversible",
+      "subject_kinds": ["repository"],
+      "authority_applicability": "required"
+    }
+  ]
+}

@@ -5,18 +5,24 @@ from ..runtime_dependencies import (
     consumer_receipt_binding_sha256,
     string_list,
 )
+from ..decision_identity_binding import (
+    decision_identity_echo,
+    explicit_identity,
+    explicit_identity_mismatches,
+)
 
 from ..evaluation_frame import _EvaluationFrame
 
 
 def _prepare_consumer_probe(frame: _EvaluationFrame) -> None:
     (
-        adapter_load_gate, adapter_registered, args, artifact_echo_valid, attempt_identity,
+        adapter_load_gate, adapter_registered, adapter_revision_sha256, args,
+        artifact_echo_valid, attempt_identity,
         consumer_conformance_gate, consumer_id, decision_artifact_ref, domain_adapter,
         input_state_fingerprint, invocation_completed, quality, quality_hook_receipt, rows,
         self_consumer_probe_pending, self_consumer_probe_row, self_consumer_required,
     ) = frame.require(
-        'adapter_load_gate', 'adapter_registered', 'args', 'artifact_echo_valid',
+        'adapter_load_gate', 'adapter_registered', 'adapter_revision_sha256', 'args', 'artifact_echo_valid',
         'attempt_identity', 'consumer_conformance_gate', 'consumer_id',
         'decision_artifact_ref', 'domain_adapter', 'input_state_fingerprint',
         'invocation_completed', 'quality', 'quality_hook_receipt', 'rows',
@@ -35,27 +41,35 @@ def _prepare_consumer_probe(frame: _EvaluationFrame) -> None:
         observed_verification_ids = sorted(
             str(item) for item in string_list(quality.get("verification_input_ids"))
         )
-        artifact_echo_valid = bool(
-            decision_artifact_ref.get("scope_verified")
-            and str(quality.get("artifact_id") or "") == str(decision_artifact_ref.get("artifact_id") or "")
-            and str(quality.get("artifact_sha256") or quality.get("output_sha256") or "").lower()
-            == str(decision_artifact_ref.get("artifact_sha256") or "").lower()
-            and str(quality.get("production_lane_identity") or "")
-            == str(decision_artifact_ref.get("production_lane_identity") or "")
-            and (
-                not decision_artifact_ref.get("body_projection_fingerprint")
-                or quality.get("body_projection_fingerprint")
-                == decision_artifact_ref.get("body_projection_fingerprint")
+        expected_explicit_identity = explicit_identity(decision_artifact_ref)
+        observed_identity_echo = decision_identity_echo(quality)
+        if expected_explicit_identity is not None:
+            artifact_echo_valid = bool(
+                decision_artifact_ref.get("scope_verified")
+                and not explicit_identity_mismatches(quality, decision_artifact_ref)
             )
-            and (
-                decision_artifact_ref.get("verification_input_ids") is None
-                or observed_verification_ids == expected_verification_ids
+        else:
+            artifact_echo_valid = bool(
+                decision_artifact_ref.get("scope_verified")
+                and str(quality.get("artifact_id") or "") == str(decision_artifact_ref.get("artifact_id") or "")
+                and str(quality.get("artifact_sha256") or quality.get("output_sha256") or "").lower()
+                == str(decision_artifact_ref.get("artifact_sha256") or "").lower()
+                and str(quality.get("production_lane_identity") or "")
+                == str(decision_artifact_ref.get("production_lane_identity") or "")
+                and (
+                    not decision_artifact_ref.get("body_projection_fingerprint")
+                    or quality.get("body_projection_fingerprint")
+                    == decision_artifact_ref.get("body_projection_fingerprint")
+                )
+                and (
+                    decision_artifact_ref.get("verification_input_ids") is None
+                    or observed_verification_ids == expected_verification_ids
+                )
+                and (
+                    decision_artifact_ref.get("input_fingerprints") is None
+                    or quality.get("input_fingerprints") == decision_artifact_ref.get("input_fingerprints")
+                )
             )
-            and (
-                decision_artifact_ref.get("input_fingerprints") is None
-                or quality.get("input_fingerprints") == decision_artifact_ref.get("input_fingerprints")
-            )
-        )
         invocation_completed = bool(quality_hook_receipt.get("invocation_completed"))
         if self_consumer_probe_pending:
             probe_row = {
@@ -72,14 +86,17 @@ def _prepare_consumer_probe(frame: _EvaluationFrame) -> None:
                 "artifact_identity_echo_valid": artifact_echo_valid,
                 "artifact_identity_echo_status": "pass" if artifact_echo_valid else "not_evaluated",
                 "cycle_id": args.cycle_id,
+                "task_id": args.task_id,
                 "input_state_fingerprint": input_state_fingerprint,
                 "attempt_identity": attempt_identity,
+                "adapter_revision_sha256": adapter_revision_sha256,
                 "artifact_id": quality.get("artifact_id"),
                 "artifact_sha256": quality.get("artifact_sha256") or quality.get("output_sha256"),
                 "production_lane_identity": quality.get("production_lane_identity"),
                 "body_projection_fingerprint": quality.get("body_projection_fingerprint"),
                 "verification_input_ids": observed_verification_ids,
                 "input_fingerprints": quality.get("input_fingerprints"),
+                "decision_identity_echo": observed_identity_echo,
                 "evidence_provenance": "self_grounded",
                 "value_consumed_by_decision": False,
                 "decision_consumption_status": "not_evaluated",
@@ -104,6 +121,8 @@ def _prepare_consumer_probe(frame: _EvaluationFrame) -> None:
                 expected_cycle_id=args.cycle_id,
                 expected_input_state_fingerprint=input_state_fingerprint,
                 expected_attempt_identity=attempt_identity,
+                expected_task_id=args.task_id,
+                expected_adapter_revision_sha256=adapter_revision_sha256,
             )
     adapter_load_gate["consumer_context_conformance"] = consumer_conformance_gate
     frame.update({

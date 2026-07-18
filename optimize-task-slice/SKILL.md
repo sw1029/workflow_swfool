@@ -5,6 +5,8 @@ description: "Classify next-task granularity before `$derive-improvement-task`. 
 
 # Optimize Task Slice
 
+`authority.operations.json` declares this advisory classification as read-only under the shared [authority v2 contract](../manage-agent-authority/references/authority-v2-contract.md). It cannot publish or reorder task state; those effects remain with derive/task-pack owners.
+
 ## Overview
 
 Use this skill as an advisory pre-derive classifier. It helps prevent repeated tiny no-live tasks while leaving final task selection to `$derive-improvement-task`.

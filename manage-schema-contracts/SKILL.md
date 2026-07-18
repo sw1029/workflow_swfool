@@ -11,6 +11,10 @@ Use this skill to keep repository interface knowledge explicit under `.schema/`.
 
 When `.agent_goal/goal_schema_contract.md` exists, it is the governing goal-level requirement for schema/contract management. `.schema/` and `.contract/` records should be created, updated, or audited to satisfy that document's minimum fields, application intent, mandatory rules, target module/script guidance, versioning expectations, and required causal relationships.
 
+When `.agent_goal/goal_theory.md` exposes a goal concept graph, bind contract rules to exact `concept_id`, `concept_digest`, and graph revision. Schema records constrain a concept's realization; they do not reclassify concept truth or grant authority. Use the [goal concept graph contract](../deep-interview-goal-context/references/goal-concept-graph.md) for the shared fields.
+
+When this skill writes or versions `.schema/` or `.contract/` state, apply the shared [authority v2 contract](../manage-agent-authority/references/authority-v2-contract.md) and this skill's `authority.operations.json`. Contract inspection is read-only. Contract publication must bind the exact prospective artifact subject/digest and operation manifest, then use one covering `allowed` decision and reservation. Reverify immediately before commit, consume only from the committed artifact result, release only on verified no-effect, and quarantine unknown effect. Schema ownership, a concept binding, policy-propagation evidence, or a task direction never substitutes for operation permission, goal ratification, risk acceptance, input supply, or design selection.
+
 The goal is not to document every implementation detail. Capture the contract elements future agents need to avoid breaking module compatibility when deriving tasks or changing code.
 
 When called from `$orchestrate-task-cycle`, perform deterministic contract management directly where possible and use `configured-tiered-routing-v3` for delegation. Before delegation, classify `final_direction_ownership: true|false`; omission blocks routing. If delegated analysis is needed, request Tier 3 `model_ref:balanced`/high, or Tier 4 `model_ref:balanced`/xhigh when the review controls compatibility, blockers, or irreversible version decisions. Promote to Tier 5 `model_ref:direction`/xhigh only when one agent owns a final architecture-direction change, `final_direction_ownership` is true, the structured `architecture_direction_change` signal is true, and `signal_evidence.architecture_direction_change` is a structured reference to the controlling architecture evidence; recommendation-only schema review remains capped at Tier 4. Keep runtime model bindings in caller configuration or a repository adapter. Record routing applicability, requested model reference, model-configuration status, and enforcement; `reference_only` or prompt-only/inherited-unverified routing cannot prove enforced or actual-model execution. Do not use delegated `ultra`.
@@ -47,6 +51,7 @@ If a hook is absent, fail quiet and keep existing schema-contract rules, except 
    - Read `.contract/` files when present; reconcile them with `.schema/` instead of silently ignoring or duplicating them.
    - Read relevant `.agent_advice/active/*.md` or a `$manage-external-advice` packet when the caller supplied advice or the advice names contract surfaces; record it as non-GT evidence.
    - Read relevant source modules, scripts, tests, schemas, manifests, CLIs, data loaders, serializers, and task/goal files affected by the current work.
+   - Read the goal-theory concept graph and architecture realization map when a contract claims to preserve, realize, validate, supersede, or vary a goal concept.
    - If `.schema/` is missing, create it only when the task involves shared interfaces, `.agent_goal/goal_schema_contract.md` requires tracking, or the caller explicitly requests schema/contract tracking.
 
 2. Identify contract surfaces.
@@ -61,6 +66,7 @@ If a hook is absent, fail quiet and keep existing schema-contract rules, except 
    - For each contract, identify target modules/scripts, owners or producing code paths, consuming code paths, validation commands, and known compatibility assumptions.
    - Compare each record against `.agent_goal/goal_schema_contract.md` minimum fields and mandatory application rules. Mark missing required data as `not_applicable` or `needs_review` with a reason; do not omit it silently.
    - Distinguish stable public contracts from internal implementation details.
+   - Record exact concept/relation IDs and digests for graph-backed invariants, allowed variation, compatibility, validation, and supersession. Mark stale or missing bindings `needs_review`; never silently retarget a contract to a new concept revision.
 
 3. Manage versions.
    - Use semantic versioning when the project already does; otherwise use `vYYYYMMDD-N` as the local contract version.
@@ -115,3 +121,4 @@ If a hook is absent, fail quiet and keep existing schema-contract rules, except 
 - Do not treat a missing Part P/Q adapter hook or missing `code_convention_contract` as a hidden pass. Record `adapter_hook_debt` and `unenforced` only when a consumer attempted to use that hook or contract; otherwise fail quiet and keep existing schema behavior.
 - Do not mark a policy, acceptance meaning, cap, or pass-condition change fully propagated while S8 reports any `reflects_policy=false` consumer site. Missing propagation evidence is `propagation=unverified` warning/debt, not fail-close.
 - Do not mark advice-consumption clauses `verified` from contract presence alone. Require recurrence-free evidence, explicit retirement, or current evidence that the targeted bypass no longer applies. Keep `unconsumed_advice_regression` separate from `adapter_hook_debt`.
+- Do not use a schema/contract record as goal ratification or authority evidence. A graph binding proves only which confirmed concept revision the contract realizes; operation permission still comes from `$manage-agent-authority`.

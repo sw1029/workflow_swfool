@@ -4,7 +4,6 @@ from typing import Any
 
 from ..result_contract.integrity import actual_report_body_divergences
 from .constants import (
-    DURABLE_OPERATION_TYPES,
     DURABLE_STATE_MODES,
     FINALIZATION_SCHEMA_VERSION,
     FINAL_CANDIDATE_KIND,
@@ -15,7 +14,11 @@ from .constants import (
     VERDICT_AXIS_STATUSES,
 )
 from .event_model import truthy_delta
-from .support import canonical_json_bytes, canonical_sha256, validate_cycle_id, validate_event_id
+from .operation_contract import (
+    validate_no_change_candidate,
+    validate_typed_operations_candidate,
+)
+from .support import canonical_json_bytes, validate_cycle_id, validate_event_id
 
 
 def _candidate_expected_revision(candidate: dict[str, Any]) -> int | None:
@@ -104,63 +107,11 @@ def validate_durable_payload_privacy(value: Any, prefix: str) -> None:
         raise ValueError(f"durable state payload contains a path-like string at {prefix}")
 
 
-def _validate_durable_operations(durable_state: dict[str, Any]) -> None:
-    operations = durable_state.get("operations")
-    if not isinstance(operations, list) or not operations:
-        raise ValueError("typed_operations durable state requires a non-empty operations list")
-    versioned_contract = "contract_version" in durable_state or "producer" in durable_state
-    if versioned_contract:
-        contract_version = durable_state.get("contract_version")
-        if isinstance(contract_version, bool) or contract_version != 1:
-            raise ValueError("versioned durable state candidate contract_version must be 1")
-        producer = str(durable_state.get("producer") or "").strip()
-        if not producer:
-            raise ValueError("versioned durable state candidate requires an opaque producer")
-        validate_event_id(producer)
-    seen_targets: set[str] = set()
-    for index, operation in enumerate(operations):
-        if not isinstance(operation, dict):
-            raise ValueError(f"durable state operation {index} must be a JSON object")
-        operation_type = str(operation.get("operation_type") or "").strip()
-        target_id = str(operation.get("target_id") or "").strip()
-        if not operation_type or not target_id or not isinstance(operation.get("payload"), dict):
-            raise ValueError(f"durable state operation {index} requires operation_type, target_id, and object payload")
-        validate_event_id(operation_type)
-        validate_event_id(target_id)
-        if operation_type not in DURABLE_OPERATION_TYPES:
-            raise ValueError(f"durable state operation {index} has an unsupported operation_type")
-        if target_id in seen_targets:
-            raise ValueError(f"durable state operation target_id is duplicated: {target_id}")
-        seen_targets.add(target_id)
-        validate_durable_payload_privacy(operation["payload"], f"durable_state_candidate.operations[{index}].payload")
-        payload_sha256 = operation.get("payload_sha256")
-        if versioned_contract and payload_sha256 is None:
-            raise ValueError(f"versioned durable state operation {index} requires payload_sha256")
-        if payload_sha256 is not None:
-            normalized_sha256 = str(payload_sha256).strip().lower()
-            if (
-                not SHA256_PATTERN.fullmatch(normalized_sha256)
-                or normalized_sha256 != canonical_sha256(operation["payload"])
-            ):
-                raise ValueError(f"durable state operation {index} payload_sha256 mismatch")
-    candidate_sha256 = durable_state.get("candidate_sha256")
-    if versioned_contract and candidate_sha256 is None:
-        raise ValueError("versioned durable state candidate requires candidate_sha256")
-    if candidate_sha256 is not None:
-        normalized_sha256 = str(candidate_sha256).strip().lower()
-        candidate_body = dict(durable_state)
-        candidate_body.pop("candidate_sha256", None)
-        if (
-            not SHA256_PATTERN.fullmatch(normalized_sha256)
-            or normalized_sha256 != canonical_sha256(candidate_body)
-        ):
-            raise ValueError("durable state candidate_sha256 mismatch")
-
-
 def validate_durable_state_candidate(
     durable_state: Any,
     semantic_status: str,
     goal_status: str,
+    attempt_identity: str,
 ) -> dict[str, Any]:
     if not isinstance(durable_state, dict):
         raise ValueError("final candidate requires a durable_state_candidate JSON object")
@@ -168,11 +119,18 @@ def validate_durable_state_candidate(
     if durable_state_mode not in DURABLE_STATE_MODES:
         raise ValueError("durable_state_candidate mode must be complete_projection or typed_operations")
     if durable_state_mode == "complete_projection":
-        if not isinstance(durable_state.get("projections"), dict):
-            raise ValueError("complete_projection durable state requires a projections object")
-        validate_durable_payload_privacy(durable_state["projections"], "durable_state_candidate.projections")
+        validate_no_change_candidate(
+            durable_state, attempt_identity=attempt_identity
+        )
     else:
-        _validate_durable_operations(durable_state)
+        validate_typed_operations_candidate(
+            durable_state, attempt_identity=attempt_identity
+        )
+        for index, operation in enumerate(durable_state["operations"]):
+            validate_durable_payload_privacy(
+                operation["payload"],
+                f"durable_state_candidate.operations[{index}].payload",
+            )
     positive_markers = _positive_progress_markers(durable_state)
     if positive_markers["semantic"] and (semantic_status != "pass" or goal_status != "pass"):
         raise ValueError(
@@ -306,7 +264,10 @@ def normalize_final_candidate(cycle_id: str, candidate: dict[str, Any]) -> dict[
     semantic_status = normalized["artifact_semantic_verdict"]["status"]
     goal_status = normalized["goal_readiness_verdict"]["status"]
     normalized["durable_state_candidate"] = validate_durable_state_candidate(
-        normalized.get("durable_state_candidate"), semantic_status, goal_status
+        normalized.get("durable_state_candidate"),
+        semantic_status,
+        goal_status,
+        normalized["attempt_id"],
     )
     try:
         canonical_json_bytes(normalized)

@@ -16,15 +16,19 @@ from .contracts import (
     ROOT_CAUSE_LEDGER_REL_PATH,
 )
 
+
 def now_iso() -> str:
     return dt.datetime.now().astimezone().isoformat(timespec="seconds")
+
 
 def stamp() -> str:
     return dt.datetime.now().strftime("%Y%m%d-%H%M%S")
 
+
 def slugify(value: str, fallback: str = "advice") -> str:
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", value.lower()).strip("-")
     return (slug or fallback)[:48]
+
 
 def rel_path(root: Path, path: Path) -> str:
     try:
@@ -32,8 +36,10 @@ def rel_path(root: Path, path: Path) -> str:
     except ValueError:
         return path.as_posix()
 
+
 def sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
 
 def sha256_file(path: Path) -> str | None:
     if not path.is_file():
@@ -43,6 +49,7 @@ def sha256_file(path: Path) -> str | None:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
@@ -60,6 +67,7 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
                 rows.append(value)
     return rows
 
+
 def bool_value(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -68,6 +76,7 @@ def bool_value(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"true", "yes", "1", "present"}
     return False
+
 
 def normalize_root_cause_slug(value: Any) -> str:
     raw = str(value or "").strip().lower()
@@ -81,9 +90,15 @@ def normalize_root_cause_slug(value: Any) -> str:
     raw = re.sub(r"-{2,}", "-", raw).strip("-_.:/|")
     return raw or "unknown_root_cause"
 
+
 def extract_root_cause_claims(text: str) -> list[str]:
-    claims = {normalize_root_cause_slug(match.group(1)) for match in ROOT_CAUSE_CLAIM_RE.finditer(text)}
-    for match in re.finditer(r"root_cause_claims\s*:\s*(\[[^\]\n]*\])", text, re.IGNORECASE):
+    claims = {
+        normalize_root_cause_slug(match.group(1))
+        for match in ROOT_CAUSE_CLAIM_RE.finditer(text)
+    }
+    for match in re.finditer(
+        r"root_cause_claims\s*:\s*(\[[^\]\n]*\])", text, re.IGNORECASE
+    ):
         try:
             loaded = json.loads(match.group(1))
         except json.JSONDecodeError:
@@ -92,16 +107,23 @@ def extract_root_cause_claims(text: str) -> list[str]:
             claims.update(normalize_root_cause_slug(item) for item in loaded)
     return sorted(claim for claim in claims if claim != "unknown_root_cause")
 
-def dead_root_cause_rows(root: Path, raw_path: str | None = None) -> list[dict[str, Any]]:
+
+def dead_root_cause_rows(
+    root: Path, raw_path: str | None = None
+) -> list[dict[str, Any]]:
     path = Path(raw_path or ROOT_CAUSE_LEDGER_REL_PATH)
     if not path.is_absolute():
         path = root / path
     dead: list[dict[str, Any]] = []
     for row in read_jsonl(path):
-        if bool_value(row.get("repair_attempted")) and not bool_value(row.get("terminal_outcome_changed")):
+        if bool_value(row.get("repair_attempted")) and not bool_value(
+            row.get("terminal_outcome_changed")
+        ):
             dead.append(
                 {
-                    "hypothesized_root_cause": normalize_root_cause_slug(row.get("hypothesized_root_cause")),
+                    "hypothesized_root_cause": normalize_root_cause_slug(
+                        row.get("hypothesized_root_cause")
+                    ),
                     "family_key": row.get("family_key"),
                     "root_key": row.get("root_key"),
                     "root_family_key": row.get("root_family_key"),
@@ -110,6 +132,7 @@ def dead_root_cause_rows(root: Path, raw_path: str | None = None) -> list[dict[s
                 }
             )
     return dead
+
 
 def load_json_value(root: Path, raw: str | None) -> Any:
     if not raw:
@@ -127,11 +150,21 @@ def load_json_value(root: Path, raw: str | None) -> Any:
     except json.JSONDecodeError:
         return None
 
+
 def first_fingerprint_value(value: Any) -> str | None:
     if isinstance(value, dict):
-        for key in ("current_output_fingerprint", "output_fingerprint", "artifact_fingerprint", "fingerprint"):
+        for key in (
+            "current_output_fingerprint",
+            "output_fingerprint",
+            "artifact_fingerprint",
+            "fingerprint",
+        ):
             raw = value.get(key)
-            if raw is not None and str(raw).strip() and str(raw).strip().lower() != "unknown":
+            if (
+                raw is not None
+                and str(raw).strip()
+                and str(raw).strip().lower() != "unknown"
+            ):
                 return str(raw).strip()
         for child in value.values():
             found = first_fingerprint_value(child)
@@ -144,15 +177,23 @@ def first_fingerprint_value(value: Any) -> str | None:
                 return found
     return None
 
+
 def current_fingerprint_from_args(root: Path, args: argparse.Namespace) -> str | None:
     direct = str(getattr(args, "current_output_fingerprint", "") or "").strip()
     if direct and direct.lower() != "unknown":
         return direct
-    return first_fingerprint_value(load_json_value(root, getattr(args, "current_output_fingerprint_json", None)))
+    return first_fingerprint_value(
+        load_json_value(root, getattr(args, "current_output_fingerprint_json", None))
+    )
+
 
 def extract_fingerprint_claims(text: str) -> list[str]:
-    claims = sorted(set(match.group(1).strip() for match in FINGERPRINT_CLAIM_RE.finditer(text)))
-    for match in re.finditer(r"declared_output_fingerprints\s*:\s*(\[[^\]\n]*\])", text, re.IGNORECASE):
+    claims = sorted(
+        set(match.group(1).strip() for match in FINGERPRINT_CLAIM_RE.finditer(text))
+    )
+    for match in re.finditer(
+        r"declared_output_fingerprints\s*:\s*(\[[^\]\n]*\])", text, re.IGNORECASE
+    ):
         try:
             loaded = json.loads(match.group(1))
         except json.JSONDecodeError:
@@ -160,6 +201,7 @@ def extract_fingerprint_claims(text: str) -> list[str]:
         if isinstance(loaded, list):
             claims.extend(str(item).strip() for item in loaded if str(item).strip())
     return sorted(set(claims))
+
 
 def read_title_from_text(text: str, fallback: str) -> str:
     for line in text.splitlines():

@@ -68,6 +68,8 @@ NON_ACTIVE_STATUSES = {
     "applied",
     "archived",
     "closed",
+    "complete",
+    "completed",
     "deleted",
     "deprecated",
     "obsolete",

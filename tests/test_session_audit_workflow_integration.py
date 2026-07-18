@@ -9,6 +9,9 @@ from audit_session_governance import session_audit as audit_producer
 from orchestrate_task_cycle import collect_cycle_context as cycle_context
 from orchestrate_task_cycle import render_subskill_packet as renderer
 from orchestrate_task_cycle.result_contract import api as contracts
+from orchestrate_task_cycle.result_contract.legacy_revision_bridge import (
+    legacy_revision_bridge_sha256,
+)
 from validate_task_completion import collect_completion_evidence as completion_evidence
 
 
@@ -51,12 +54,36 @@ def packet(
 
 
 def validate_payload(*, complete: bool = True) -> dict[str, Any]:
+    identity = {
+        "artifact_id": "artifact-session-A",
+        "artifact_class": "session-audit",
+        "artifact_sha256": "a" * 64,
+        "production_lane_identity": "lane-session-A",
+        "discovery_basis": "explicit_artifact_ref",
+        "scope_verified": True,
+    }
+    bridge = {
+        "bridge_contract_version": 1,
+        "bridge_status": "revision_bound",
+        "artifact_id": identity["artifact_id"],
+        "artifact_class": identity["artifact_class"],
+        "artifact_sha256": identity["artifact_sha256"],
+        "revision_id": "revision-session-A",
+        "subject_digest": identity["artifact_sha256"],
+        "lineage_id": "lineage-session-A",
+        "freshness_status": "current",
+        "evidence_ref": "session-bridge-evidence-A",
+        "evidence_sha256": "e" * 64,
+    }
+    bridge["receipt_sha256"] = legacy_revision_bridge_sha256(bridge)
     return {
         "step": "validate",
         "task_id": "task-1",
         "validation_verdict": "pass" if complete else "partial",
         "progress_verdict": "advanced" if complete else "partial",
         "decision_contract_version": 0,
+        "decision_artifact_ref": identity,
+        "legacy_revision_bridge_receipt": bridge,
         "verdict_contract_version": 0,
         "blockers": [],
         "evidence_paths": ["validation.json"],

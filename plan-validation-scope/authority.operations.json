@@ -1,0 +1,23 @@
+{
+  "schema_version": 2,
+  "manifest_kind": "authority_operations",
+  "skill_id": "plan-validation-scope",
+  "skill_version": "2.0.0",
+  "operations": [
+    {
+      "operation_id": "publish_validation_scope",
+      "operation_version": "1",
+      "authorization_mechanism": "grant",
+      "mutation_class": "local_mutation",
+      "required_capabilities": ["validation.scope.publish"],
+      "source_rank_floor": "S1",
+      "risk_floor": "R1",
+      "decision_class": "D3",
+      "effect_classes": ["publish_validation_plan"],
+      "data_classes": ["validation_scope"],
+      "reversibility": "reversible",
+      "subject_kinds": ["validation_scope"],
+      "authority_applicability": "required"
+    }
+  ]
+}

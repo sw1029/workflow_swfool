@@ -135,11 +135,19 @@ def list_values(value: Any) -> list[str]:
 def load_json_value(root: Path, raw: str | None) -> Any:
     if not raw:
         return None
+    if raw.lstrip().startswith(("{", "[")):
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return None
     path = Path(raw)
     if not path.is_absolute():
         path = root / path
-    if path.is_file():
-        return _io_utils.read_json(path)
+    try:
+        if path.is_file():
+            return _io_utils.read_json(path)
+    except OSError:
+        return None
     try:
         return json.loads(raw)
     except json.JSONDecodeError:

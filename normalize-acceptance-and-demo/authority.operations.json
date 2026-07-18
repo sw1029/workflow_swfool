@@ -1,0 +1,23 @@
+{
+  "schema_version": 2,
+  "manifest_kind": "authority_operations",
+  "skill_id": "normalize-acceptance-and-demo",
+  "skill_version": "2.0.0",
+  "operations": [
+    {
+      "operation_id": "publish_acceptance_packet",
+      "operation_version": "1",
+      "authorization_mechanism": "grant",
+      "mutation_class": "local_mutation",
+      "required_capabilities": ["acceptance.packet.publish"],
+      "source_rank_floor": "S1",
+      "risk_floor": "R1",
+      "decision_class": "D3",
+      "effect_classes": ["publish_task_bound_acceptance"],
+      "data_classes": ["task_acceptance"],
+      "reversibility": "reversible",
+      "subject_kinds": ["task_acceptance"],
+      "authority_applicability": "required"
+    }
+  ]
+}

@@ -34,9 +34,16 @@ During `repo_skill_adapter_scan`, inspect only compact metadata:
 - existence of optional `scripts/render_adapter_packet.py`;
 - basic active/inactive/invalid status.
 
+Use the deterministic scanner when callable adapters are registered:
+
+```bash
+python3 -m orchestrate_task_cycle repo-adapter scan \
+  --root . --cycle-id <cycle-id> --output <cycle-packet-path>
+```
+
 Do not load adapter body text, examples, long references, fixtures, or domain maps during the initial scan. Load them only when a phase packet says the detail is relevant.
 
-Record the scan as `repo_skill_adapter_packet` with adapter ID/path/status, metadata summary, renderer availability, non-GT warning, and validation status when known.
+Record the scan as `repo_skill_adapter_packet`. Require and hash the callable wrapper for a callable v2 registration. Preserve and hash a legacy delegate or deterministic renderer only when the repository declares one; neither migration compatibility nor a renderer is a universal adapter requirement. Validate every phase-consumer and phase-hook value as a unique string list whose members exist in the corresponding closed registry. Bind the present components plus both phase maps as one `adapter_revision_sha256`. Do not record source bodies, credentials, prompts, or corpus metadata.
 
 ## Adapter Consumption
 
@@ -120,6 +127,16 @@ These hooks are optional and fail quiet when absent unless a measurable acceptan
 
 If a repository also registers a loopback domain adapter, pass its declared path/status to `$audit-cycle-loopback`. A registered adapter that does not load is an `adapter_wiring_defect` or adapter load correction task, not evidence that no adapter exists. Keep this distinction in `repo_skill_gap_packet` so `$derive-improvement-task` does not schedule duplicate adapter creation.
 
+Resolve the registered adapter for each consumer before invocation:
+
+```bash
+python3 -m orchestrate_task_cycle repo-adapter handoff \
+  --root . --scan-json <scan-packet> \
+  --phase loopback_audit --consumer-id audit-cycle-loopback
+```
+
+Pass the scan packet to loopback with `--adapter-scan-json`; loopback must load the returned explicit wrapper path. Pass the corresponding derive adapter decision context to derive. Never rediscover `.task/domain_adapter.py` implicitly after a tracked wrapper was registered.
+
 Keep adapter-loaded references one level deep inside the adapter skill. Detailed domain maps, validation policies, command profiles, and examples belong in `references/`. Deterministic packet renderers, lint checks, or fixture-safe checks belong in `scripts/`.
 
 ## Creation Or Update Routing
@@ -141,7 +158,9 @@ Use `$skill-creator` rules for adapter tasks:
 
 ## Adapter Validation
 
-Adapter registration, repository-root import, or a passing adapter unit test does not prove wiring. The project contract lists only opaque `required_consumer_ids`; each actual consumer loader must probe from its own working directory, module-loading mechanism, and environment and return a row with `consumer_context_id`, `adapter_loaded`, `required_hook_callable`, `hook_signature_compatible`, `return_contract_valid`, and `probe_evidence_id`. Store these rows in the existing consumer packet as `consumer_context_conformance`.
+Adapter registration, repository-root import, or a passing adapter unit test does not prove wiring. Keep static validation, load preflight, and post-use decision receipts separate. Propagate the ready scan's phase consumer set and available-hook registry without rediscovery; availability alone is not decision demand. Bind load preflight to the adapter and consumer revisions plus the complete active required-hook set, defined by decision use or an independent `acceptance_required` declaration. Count a hook as consumed only after the consumer validates its return contract, accepts the semantic result, and records actual decision use. Optional uninvoked or `fail_quiet`/`not_evaluated` hooks do not create a global wiring defect; acceptance-required failures block the dependent decision. Bind post-use receipts to cycle, task, attempt, artifact, body, lane, input-state, adapter revision, and consumed hook-result hashes.
+
+Preserve legacy single-hook receipts only when no explicit manifest/consumer/decision required set exists. Otherwise the external consumer receipt must echo the current `task_id`, exact adapter and consumer revisions, registered validator signature, expected `hook_id`, `required_hook_ids`, and `required_gate_ids`; it also carries closed per-invocation rows for hook ID, ordered invocation index, input/output digests, callable-signature digest, execution status, return-contract validity, semantic status, and decision-use status. Only completed, contract-valid, semantically accepted, decision-used required hook I/O may enter `consumed_hook_ids`, and consumed hooks must equal the required hook set, while disjoint `consumed_gate_ids` and `excluded_gate_ids` exactly cover the required gate set. Version, validator, hook-I/O rows, all five arrays, and `result_contract_status` belong to the canonical receipt hash basis. An excluded required gate, including an artifact-incompatible gate, is `not_evaluated` and cannot disappear from the required set to manufacture pass. A stale task/revision replay, rehashed boolean-only row, missing or extra member, duplicate ID, overlap, contract conflict, or coverage change without a new digest also remains `not_evaluated`.
 
 `consumer_context_ready` is not an adapter self-hook. Hook-name strings, metric labels, filenames, and packet claims are not probe evidence. If an acceptance-required consumer row is missing or fails, that consumer's dependent hook is `not_evaluated`, not pass.
 

@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .contracts import OPEN_RESIDUAL_STATUSES
+from .contracts import OPEN_RESIDUAL_STATUSES, RETIREMENT_BASES, SHA256_PATTERN
 from .ordering import item_order, refresh_current_item, sorted_items
 from .packet_io import require_file_digest, verify_evidence_files, write_content_addressed_file
 from .provenance import mutation_entry
@@ -174,6 +174,8 @@ def item_planning_contract_sha256(item: dict[str, Any]) -> str:
 def validate_retired_items_contract(
     root: Path,
     retired_items: Any,
+    *,
+    predecessor_pack_sha256: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     findings: list[dict[str, Any]] = []
     if not isinstance(retired_items, list) or not all(isinstance(value, dict) for value in retired_items):
@@ -191,14 +193,29 @@ def validate_retired_items_contract(
     for retired in retired_items:
         item_id = str(retired.get("item_id") or "")
         reason = str(retired.get("reason") or "").strip()
-        evidence = retired.get("evidence")
-        if not item_id or not reason or len(reason) > 500 or not isinstance(evidence, list) or not evidence:
+        basis = str(retired.get("retirement_basis") or "")
+        predecessor_digest = str(retired.get("predecessor_pack_sha256") or "").removeprefix("sha256:")
+        evidence = retired.get("decision_evidence")
+        if (
+            not item_id
+            or not reason
+            or len(reason) > 500
+            or basis not in RETIREMENT_BASES
+            or not SHA256_PATTERN.fullmatch(predecessor_digest)
+            or (predecessor_pack_sha256 is not None and predecessor_digest != predecessor_pack_sha256)
+            or not isinstance(evidence, list)
+            or not evidence
+        ):
             findings.append(
                 {
                     "severity": "block",
                     "code": "replacement_retired_item_incomplete",
-                    "message": "Each retired predecessor item requires item_id, a bounded reason, and non-empty hash-bound evidence.",
-                    "evidence": {"item_id": item_id or None},
+                    "message": "Each retired item requires a typed basis, exact predecessor hash, bounded reason, and hash-bound decision evidence.",
+                    "evidence": {
+                        "item_id": item_id or None,
+                        "retirement_basis": basis or None,
+                        "predecessor_pack_sha256": predecessor_digest or None,
+                    },
                 }
             )
             continue
@@ -237,12 +254,7 @@ def validate_retired_items_contract(
     return findings, retired_ids
 
 
-def validate_carry_forward_contract(
-    root: Path,
-    predecessor_path: Path,
-    predecessor: dict[str, Any],
-    successor: dict[str, Any],
-) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+def validate_carry_forward_contract(root: Path, predecessor_path: Path, predecessor: dict[str, Any], successor: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     findings: list[dict[str, Any]] = []
     bindings: list[dict[str, str]] = []
 
@@ -274,7 +286,11 @@ def validate_carry_forward_contract(
         carried_ids = []
     new_ids = [str(value) for value in new_ids]
     carried_ids = [str(value) for value in carried_ids]
-    retired_findings, retired_ids = validate_retired_items_contract(root, retired_items)
+    retired_findings, retired_ids = validate_retired_items_contract(
+        root,
+        retired_items,
+        predecessor_pack_sha256=canonical_pack_sha256(predecessor),
+    )
     findings.extend(retired_findings)
     if len(set(new_ids)) != len(new_ids) or len(set(carried_ids)) != len(carried_ids) or set(new_ids) & set(carried_ids):
         add("replacement_item_partition_invalid", "New and carried-forward item IDs must be unique and disjoint.")
@@ -376,4 +392,3 @@ def validate_carry_forward_contract(
                 {"item_id": item_id, "predecessor_sha256": old_digest, "successor_sha256": new_digest},
             )
     return findings, bindings
-

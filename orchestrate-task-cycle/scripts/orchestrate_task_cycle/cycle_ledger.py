@@ -57,6 +57,23 @@ from .ledger.finalization import (
     load_current_finalized_state,
     verify_finalization_receipt,
 )
+from .ledger.pending_finalization import (
+    FinalizationConflictError,
+    load_pending_finalization_conflicts,
+    pending_finalizations_dir,
+    pending_resolutions_dir,
+    resolve_pending_finalization_conflict,
+)
+from .ledger.operation_contract import (
+    build_durable_operation,
+    build_no_durable_state_change_candidate,
+    build_typed_operations_candidate,
+)
+from .ledger.no_change_contract import (
+    absent_target_state_digest,
+    build_no_change_evidence,
+    build_unchanged_target_observation,
+)
 from .ledger.initialization import init_cycle as _init_cycle
 from .ledger.reporting import render_markdown, summarize
 from .ledger.repository import (
@@ -116,6 +133,7 @@ __all__ = [
     "FINALIZATION_SCHEMA_VERSION",
     "FINALIZATION_SNAPSHOT_KIND",
     "FINAL_CANDIDATE_KIND",
+    "FinalizationConflictError",
     "LEDGER_FORMAT_VERSION",
     "MIN_FIELDS",
     "SENSITIVE_DURABLE_KEYS",
@@ -128,6 +146,12 @@ __all__ = [
     "VERDICT_AXES",
     "VERDICT_AXIS_STATUSES",
     "annotate_artifact_refs",
+    "absent_target_state_digest",
+    "build_durable_operation",
+    "build_no_change_evidence",
+    "build_no_durable_state_change_candidate",
+    "build_typed_operations_candidate",
+    "build_unchanged_target_observation",
     "append_event",
     "artifact_path",
     "atomic_write_text",
@@ -156,6 +180,7 @@ __all__ = [
     "ledger_lock_path",
     "ledger_path",
     "load_current_finalized_state",
+    "load_pending_finalization_conflicts",
     "load_json_value",
     "main",
     "make_event_id",
@@ -164,12 +189,15 @@ __all__ = [
     "normalize_stage_status",
     "now_iso",
     "prior_artifact_refs",
+    "pending_finalizations_dir",
+    "pending_resolutions_dir",
     "read_all_cycle_events",
     "read_events",
     "read_events_unlocked",
     "read_initialization_metadata",
     "rel_path",
     "render_markdown",
+    "resolve_pending_finalization_conflict",
     "request_fingerprint",
     "summarize",
     "terminal_event_reference",
@@ -354,6 +382,24 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Receipt or current-pointer JSON object, file path, or '-' for stdin.",
     )
+    pending_p = sub.add_parser(
+        "pending-finalizations",
+        help="List unresolved immutable finalization conflict records.",
+    )
+    pending_p.add_argument("--cycle-id", required=True)
+
+    resolve_p = sub.add_parser(
+        "resolve-pending-finalization",
+        help="Resolve one pending conflict as merged or evidence-bound retired.",
+    )
+    resolve_p.add_argument("--cycle-id", required=True)
+    resolve_p.add_argument("--pending-conflict-id", required=True)
+    resolve_p.add_argument("--disposition", choices=("merged", "retired"), required=True)
+    resolve_p.add_argument("--resolution-evidence-id", required=True)
+    resolve_p.add_argument("--resolution-evidence-digest", required=True)
+    resolve_p.add_argument("--resolution-evidence-ref", required=True)
+    resolve_p.add_argument("--resolution-rationale-id", required=True)
+    resolve_p.add_argument("--committed-finalization-token")
     return parser
 
 
@@ -385,11 +431,30 @@ def main(argv: list[str] | None = None) -> int:
         result = write_current(args.root, args.cycle_id)
     elif args.command == "finalize":
         result = finalize_candidate(args.root, args.cycle_id, load_json_value(args.candidate_json))
-    else:
+    elif args.command == "verify-finalization":
         receipt_value = load_json_value(args.receipt_json)
         if receipt_value.get("kind") == FINALIZATION_POINTER_KIND and isinstance(receipt_value.get("receipt"), dict):
             receipt_value = receipt_value["receipt"]
         result = verify_finalization_receipt(args.root, args.cycle_id, receipt_value)
+    elif args.command == "pending-finalizations":
+        pending = load_pending_finalization_conflicts(args.root, args.cycle_id)
+        result = {
+            "cycle_id": args.cycle_id,
+            "state_commit_status": "recovery_required" if pending else "clear",
+            "pending_finalization_conflicts": pending,
+        }
+    else:
+        result = resolve_pending_finalization_conflict(
+            args.root,
+            args.cycle_id,
+            args.pending_conflict_id,
+            disposition=args.disposition,
+            resolution_evidence_id=args.resolution_evidence_id,
+            resolution_evidence_digest=args.resolution_evidence_digest,
+            resolution_evidence_ref=args.resolution_evidence_ref,
+            resolution_rationale_id=args.resolution_rationale_id,
+            committed_finalization_token=args.committed_finalization_token,
+        )
 
     json.dump(result, sys.stdout, ensure_ascii=False, indent=2, sort_keys=True)
     sys.stdout.write("\n")

@@ -41,6 +41,95 @@ def test_scan_keeps_stable_id_for_ordinary_same_path_edit(tmp_path: Path) -> Non
     assert not any(issue["code"] == "duplicate_active_path" for issue in audit["issues"])
 
 
+def test_audit_treats_completed_aliases_as_non_active_history(tmp_path: Path) -> None:
+    artifact = tmp_path / ".task" / "task_pack" / "pack-P.json"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text('{"pack_id":"pack-P","status":"completed","items":[]}\n', encoding="utf-8")
+    digest = task_state_index.sha256_file(artifact)
+    for item_id in ("pack-old", "pack-current"):
+        task_state_index.append_event(
+            tmp_path,
+            {
+                "event": "upsert",
+                "id": item_id,
+                "type": "task_pack",
+                "status": "completed",
+                "path": ".task/task_pack/pack-P.json",
+                "title": "pack-P",
+                "updated_at": "2026-01-01T00:00:00+00:00",
+                "content_sha256": digest,
+            },
+        )
+
+    audit = task_state_index.audit_index(tmp_path)
+
+    assert not any(issue["code"] == "duplicate_active_path" for issue in audit["issues"])
+
+
+def test_audit_does_not_compare_superseded_identity_to_mutable_path_body(tmp_path: Path) -> None:
+    artifact = tmp_path / ".task" / "task_pack" / "pack-P.json"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text('{"pack_id":"pack-P","status":"active","items":[]}\n', encoding="utf-8")
+    task_state_index.append_event(
+        tmp_path,
+        {
+            "event": "upsert",
+            "id": "pack-history",
+            "type": "task_pack",
+            "status": "superseded",
+            "path": ".task/task_pack/pack-P.json",
+            "title": "pack-P history",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "content_sha256": "0" * 64,
+        },
+    )
+
+    audit = task_state_index.audit_index(tmp_path)
+
+    assert not any(
+        issue["code"] == "digest_mismatch" and "pack-history" in issue.get("ids", [])
+        for issue in audit["issues"]
+    )
+
+
+def test_scan_retires_legacy_active_task_pack_render_identity(tmp_path: Path) -> None:
+    pack_json = tmp_path / ".task" / "task_pack" / "pack-P.json"
+    pack_md = pack_json.with_suffix(".md")
+    pack_json.parent.mkdir(parents=True)
+    pack_json.write_text('{"pack_id":"pack-P","status":"completed","items":[]}\n', encoding="utf-8")
+    pack_md.write_text("# pack-P render\n", encoding="utf-8")
+    task_state_index.append_event(
+        tmp_path,
+        {
+            "event": "upsert",
+            "id": "pack-render-alias",
+            "type": "task_pack",
+            "status": "active",
+            "path": ".task/task_pack/pack-P.md",
+            "title": "pack-P render",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "content_sha256": task_state_index.sha256_file(pack_md),
+        },
+    )
+
+    planned = task_state_index.scan_artifacts(tmp_path, dry_run=True)
+    state_before = task_state_index.merge_state(task_state_index.load_events(tmp_path))
+    applied = task_state_index.scan_artifacts(tmp_path)
+    state_after = task_state_index.merge_state(task_state_index.load_events(tmp_path))
+    replay = task_state_index.scan_artifacts(tmp_path, dry_run=True)
+
+    assert state_before["pack-render-alias"]["status"] == "active"
+    assert any(
+        item.get("correction_reason") == "supersede_noncanonical_task_pack_render"
+        for item in planned["pending_artifacts"]
+    )
+    assert applied["mutation_performed"] is True
+    assert state_after["pack-render-alias"]["status"] == "superseded"
+    assert state_after["pack-render-alias"]["fields"]["canonical_pack_path"] == ".task/task_pack/pack-P.json"
+    assert replay["would_change"] is False
+    assert pack_json.is_file() and pack_md.is_file()
+
+
 def test_scan_semantic_noop_preserves_markdown_bytes_timestamp_and_mtime(tmp_path: Path) -> None:
     task = tmp_path / "task.md"
     task.write_text("# Stable task\n", encoding="utf-8")

@@ -10,6 +10,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .result_contract.cycle_reachability import assess_launch_contract
+
 
 def now_iso() -> str:
     return dt.datetime.now().astimezone().isoformat(timespec="seconds")
@@ -58,7 +60,9 @@ def log_info(path_value: str | None) -> dict[str, Any]:
         "path": path_value,
         "exists": True,
         "size_bytes": stat.st_size,
-        "modified_at": dt.datetime.fromtimestamp(stat.st_mtime).astimezone().isoformat(timespec="seconds"),
+        "modified_at": dt.datetime.fromtimestamp(stat.st_mtime)
+        .astimezone()
+        .isoformat(timespec="seconds"),
         "tail": tail,
     }
 
@@ -106,66 +110,176 @@ def list_value(value: Any) -> list[str]:
     return []
 
 
-def monitor(data: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
-    pid_raw = args.pid if args.pid is not None else first_value(data, "pid", "run.pid", "pid_or_session")
+def _monitor_inputs(data: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    pid_raw = (
+        args.pid
+        if args.pid is not None
+        else first_value(data, "pid", "run.pid", "pid_or_session")
+    )
     pid: int | None = None
     try:
         pid = int(pid_raw) if pid_raw is not None and str(pid_raw).isdigit() else None
     except (TypeError, ValueError):
         pid = None
     log_path = args.log_path or first_value(data, "log_path", "run.log_path")
-    command_argv = args.command_arg or first_value(data, "command_argv", "run.command_argv")
-    workdir = args.workdir or first_value(data, "workdir", "cwd", "run.workdir", "run.cwd")
-    monitor_command = args.monitor_command or first_value(data, "monitor_command", "run.monitor_command")
-    stop_command = args.stop_command or first_value(data, "stop_command", "run.stop_command")
-    heartbeat = args.heartbeat or first_value(data, "startup_or_heartbeat_evidence", "heartbeat", "startup_evidence")
-    remaining = args.remaining_validation or first_value(data, "remaining_validation", "run.remaining_validation")
+    command_argv = args.command_arg or first_value(
+        data, "command_argv", "run.command_argv"
+    )
+    workdir = args.workdir or first_value(
+        data, "workdir", "cwd", "run.workdir", "run.cwd"
+    )
+    monitor_command = args.monitor_command or first_value(
+        data, "monitor_command", "run.monitor_command"
+    )
+    stop_command = args.stop_command or first_value(
+        data, "stop_command", "run.stop_command"
+    )
+    heartbeat = args.heartbeat or first_value(
+        data, "startup_or_heartbeat_evidence", "heartbeat", "startup_evidence"
+    )
+    remaining = args.remaining_validation or first_value(
+        data, "remaining_validation", "run.remaining_validation"
+    )
     run_id = args.run_id or first_value(data, "run_id", "run.run_id")
-    owner_task_id = args.task_id or first_value(data, "owner_task_id", "task_id", "run.owner_task_id")
-    launch_cycle_id = args.launch_cycle_id or first_value(data, "launch_cycle_id", "cycle_id", "run.launch_cycle_id")
+    owner_task_id = args.task_id or first_value(
+        data, "owner_task_id", "task_id", "run.owner_task_id"
+    )
+    launch_cycle_id = args.launch_cycle_id or first_value(
+        data, "launch_cycle_id", "cycle_id", "run.launch_cycle_id"
+    )
     output_dir = args.output_dir or first_value(data, "output_dir", "run.output_dir")
     expected_completion_signal = args.expected_completion_signal or first_value(
         data,
         "expected_completion_signal",
         "run.expected_completion_signal",
     )
-    tmux_session = args.tmux_session or first_value(data, "tmux_session", "run.tmux_session")
-    tmux_window = args.tmux_window or first_value(data, "tmux_window", "run.tmux_window")
+    tmux_session = args.tmux_session or first_value(
+        data, "tmux_session", "run.tmux_session"
+    )
+    tmux_window = args.tmux_window or first_value(
+        data, "tmux_window", "run.tmux_window"
+    )
     tmux_pane = args.tmux_pane or first_value(data, "tmux_pane", "run.tmux_pane")
     expected_completion_paths = list_value(
         args.expected_completion_path
-        or first_value(data, "expected_completion_artifacts", "expected_completion_paths", "run.expected_completion_artifacts")
+        or first_value(
+            data,
+            "expected_completion_artifacts",
+            "expected_completion_paths",
+            "run.expected_completion_artifacts",
+        )
     )
+    return {
+        "pid_raw": pid_raw,
+        "pid": pid,
+        "log_path": log_path,
+        "command_argv": command_argv,
+        "workdir": workdir,
+        "monitor_command": monitor_command,
+        "stop_command": stop_command,
+        "heartbeat": heartbeat,
+        "remaining": remaining,
+        "run_id": run_id,
+        "owner_task_id": owner_task_id,
+        "launch_cycle_id": launch_cycle_id,
+        "output_dir": output_dir,
+        "expected_completion_signal": expected_completion_signal,
+        "tmux_session": tmux_session,
+        "tmux_window": tmux_window,
+        "tmux_pane": tmux_pane,
+        "expected_completion_paths": expected_completion_paths,
+        "long_run": args.long_run_branch
+        or bool(first_value(data, "long_run_branch", "run.long_run_branch")),
+        "long_run_role": args.long_run_role
+        or first_value(data, "long_run_role", "run.long_run_role")
+        or "monitor",
+    }
+
+
+def _reachability_transport(data: dict[str, Any], run_id: object) -> dict[str, Any]:
+    aliases = {
+        "cycle_reachability_gate": (
+            "cycle_reachability_gate",
+            "run.cycle_reachability_gate",
+            "monitor_result.cycle_reachability_gate",
+        ),
+        "residual_acceptance": (
+            "residual_acceptance",
+            "run.residual_acceptance",
+            "monitor_result.residual_acceptance",
+        ),
+        "harvest_validation_plan": (
+            "harvest_validation_plan",
+            "run.harvest_validation_plan",
+            "monitor_result.harvest_validation_plan",
+        ),
+        "harvest_validation_receipt": (
+            "harvest_validation_receipt",
+            "run.harvest_validation_receipt",
+            "monitor_result.harvest_validation_receipt",
+        ),
+        "recomputed_cycle_reachability_gate": (
+            "recomputed_cycle_reachability_gate",
+            "run.recomputed_cycle_reachability_gate",
+            "monitor_result.recomputed_cycle_reachability_gate",
+        ),
+    }
+    return {
+        "run_id": run_id,
+        "unreachable_within_cycle": first_value(
+            data,
+            "unreachable_within_cycle",
+            "run.unreachable_within_cycle",
+            "monitor_result.unreachable_within_cycle",
+        ),
+        **{field: first_value(data, *paths) for field, paths in aliases.items()},
+    }
+
+
+def _missing_monitor_fields(
+    inputs: dict[str, Any], transport: dict[str, Any]
+) -> list[str]:
     missing = [
         name
         for name, value in (
-            ("pid_or_session", pid_raw or tmux_session),
-            ("log_path", log_path),
-            ("startup_or_heartbeat_evidence", heartbeat),
-            ("monitor_command", monitor_command),
-            ("stop_command", stop_command),
-            ("remaining_validation", remaining),
+            ("pid_or_session", inputs["pid_raw"] or inputs["tmux_session"]),
+            ("log_path", inputs["log_path"]),
+            ("startup_or_heartbeat_evidence", inputs["heartbeat"]),
+            ("monitor_command", inputs["monitor_command"]),
+            ("stop_command", inputs["stop_command"]),
+            ("remaining_validation", inputs["remaining"]),
         )
         if value in (None, "", [])
     ]
-    long_run = args.long_run_branch or bool(first_value(data, "long_run_branch", "run.long_run_branch"))
-    if long_run:
+    if inputs["long_run"]:
         for name, value in (
-            ("run_id", run_id),
-            ("owner_task_id", owner_task_id),
-            ("launch_cycle_id", launch_cycle_id),
-            ("command_argv", command_argv),
-            ("workdir", workdir),
-            ("output_dir", output_dir),
-            ("expected_completion_signal", expected_completion_signal),
-            ("expected_completion_artifacts", expected_completion_paths),
+            ("run_id", inputs["run_id"]),
+            ("owner_task_id", inputs["owner_task_id"]),
+            ("launch_cycle_id", inputs["launch_cycle_id"]),
+            ("command_argv", inputs["command_argv"]),
+            ("workdir", inputs["workdir"]),
+            ("output_dir", inputs["output_dir"]),
+            ("expected_completion_signal", inputs["expected_completion_signal"]),
+            ("expected_completion_artifacts", inputs["expected_completion_paths"]),
         ):
             if value in (None, "", []):
                 missing.append(name)
-    alive = pid_alive(pid)
-    tmux_alive = tmux_session_alive(str(tmux_session) if tmux_session else None)
-    completion_artifacts = [{"path": path, "exists": path_exists(path)} for path in expected_completion_paths]
-    completion_seen = bool(completion_artifacts and all(item["exists"] for item in completion_artifacts))
+    reachability_assessment = assess_launch_contract(transport)
+    if reachability_assessment.applicable:
+        missing.extend(
+            f"cycle_reachability:{issue}" for issue in reachability_assessment.issues
+        )
+    return missing
+
+
+def _monitor_status(
+    *,
+    alive: bool | None,
+    tmux_alive: bool | None,
+    completion_seen: bool,
+    long_run: bool,
+    missing: list[str],
+) -> str:
     if completion_seen:
         status = "completed_pending_validation"
     elif alive is True or tmux_alive is True:
@@ -176,34 +290,59 @@ def monitor(data: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
         status = "missing_details"
     if missing:
         status = "missing_details"
+    return status
+
+
+def monitor(data: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    inputs = _monitor_inputs(data, args)
+    transport = _reachability_transport(data, inputs["run_id"])
+    missing = _missing_monitor_fields(inputs, transport)
+    alive = pid_alive(inputs["pid"])
+    tmux_session = inputs["tmux_session"]
+    tmux_alive = tmux_session_alive(str(tmux_session) if tmux_session else None)
+    completion_artifacts = [
+        {"path": path, "exists": path_exists(path)}
+        for path in inputs["expected_completion_paths"]
+    ]
+    completion_seen = bool(
+        completion_artifacts and all(item["exists"] for item in completion_artifacts)
+    )
+    status = _monitor_status(
+        alive=alive,
+        tmux_alive=tmux_alive,
+        completion_seen=completion_seen,
+        long_run=inputs["long_run"],
+        missing=missing,
+    )
     return {
         "checked_at": now_iso(),
         "status": status,
         "execution_status": status,
         "event_kind": args.event_kind,
-        "long_run_branch": long_run,
-        "long_run_role": args.long_run_role or first_value(data, "long_run_role", "run.long_run_role") or "monitor",
-        "run_id": run_id,
-        "owner_task_id": owner_task_id,
-        "launch_cycle_id": launch_cycle_id,
-        "command_argv": command_argv,
-        "workdir": workdir,
-        "pid": pid,
+        "long_run_branch": inputs["long_run"],
+        "long_run_role": inputs["long_run_role"],
+        "run_id": inputs["run_id"],
+        "owner_task_id": inputs["owner_task_id"],
+        "launch_cycle_id": inputs["launch_cycle_id"],
+        "command_argv": inputs["command_argv"],
+        "workdir": inputs["workdir"],
+        "pid": inputs["pid"],
         "pid_alive": alive,
         "tmux_session": tmux_session,
-        "tmux_window": tmux_window,
-        "tmux_pane": tmux_pane,
+        "tmux_window": inputs["tmux_window"],
+        "tmux_pane": inputs["tmux_pane"],
         "tmux_session_alive": tmux_alive,
-        "output_dir": output_dir,
-        "log": log_info(str(log_path) if log_path else None),
-        "log_path": log_path,
-        "monitor_command": monitor_command,
-        "stop_command": stop_command,
-        "startup_or_heartbeat_evidence": heartbeat,
-        "remaining_validation": remaining,
-        "expected_completion_signal": expected_completion_signal,
-        "expected_completion_artifacts": expected_completion_paths,
+        "output_dir": inputs["output_dir"],
+        "log": log_info(str(inputs["log_path"]) if inputs["log_path"] else None),
+        "log_path": inputs["log_path"],
+        "monitor_command": inputs["monitor_command"],
+        "stop_command": inputs["stop_command"],
+        "startup_or_heartbeat_evidence": inputs["heartbeat"],
+        "remaining_validation": inputs["remaining"],
+        "expected_completion_signal": inputs["expected_completion_signal"],
+        "expected_completion_artifacts": inputs["expected_completion_paths"],
         "completion_artifacts": completion_artifacts,
+        **{key: value for key, value in transport.items() if key != "run_id"},
         "missing_fields": missing,
     }
 
@@ -215,15 +354,21 @@ def append_ledger(root: Path, cycle_id: str, event: dict[str, Any]) -> dict[str,
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Inspect long-running execution state without converting it to success.")
-    parser.add_argument("--run-json", help="Run result JSON path, JSON string, or '-' for stdin.")
+    parser = argparse.ArgumentParser(
+        description="Inspect long-running execution state without converting it to success."
+    )
+    parser.add_argument(
+        "--run-json", help="Run result JSON path, JSON string, or '-' for stdin."
+    )
     parser.add_argument("--root", default=".")
     parser.add_argument("--cycle-id")
     parser.add_argument("--task-id")
     parser.add_argument("--run-id")
     parser.add_argument("--launch-cycle-id")
     parser.add_argument("--long-run-branch", action="store_true")
-    parser.add_argument("--long-run-role", choices=("launch", "monitor", "harvest", "finalize"))
+    parser.add_argument(
+        "--long-run-role", choices=("launch", "monitor", "harvest", "finalize")
+    )
     parser.add_argument("--event-kind", default="long_run_monitor")
     parser.add_argument("--pid")
     parser.add_argument("--tmux-session")
@@ -260,18 +405,36 @@ def main(argv: list[str] | None = None) -> int:
             "workdir": output.get("workdir"),
             "output_dir": output.get("output_dir"),
             "log_path": output.get("log_path"),
-            "startup_or_heartbeat_evidence": output.get("startup_or_heartbeat_evidence"),
+            "startup_or_heartbeat_evidence": output.get(
+                "startup_or_heartbeat_evidence"
+            ),
             "monitor_command": output.get("monitor_command"),
             "stop_command": output.get("stop_command"),
             "remaining_validation": output.get("remaining_validation"),
             "expected_completion_signal": output.get("expected_completion_signal"),
-            "expected_completion_artifacts": output.get("expected_completion_artifacts"),
+            "expected_completion_artifacts": output.get(
+                "expected_completion_artifacts"
+            ),
+            "cycle_reachability_gate": output.get("cycle_reachability_gate"),
+            "unreachable_within_cycle": output.get("unreachable_within_cycle"),
+            "residual_acceptance": output.get("residual_acceptance"),
+            "harvest_validation_plan": output.get("harvest_validation_plan"),
+            "harvest_validation_receipt": output.get("harvest_validation_receipt"),
+            "recomputed_cycle_reachability_gate": output.get(
+                "recomputed_cycle_reachability_gate"
+            ),
             "reason": "long-running execution monitor event recorded without success promotion",
-            "artifacts": [item["path"] for item in output.get("completion_artifacts", []) if item.get("exists")],
+            "artifacts": [
+                item["path"]
+                for item in output.get("completion_artifacts", [])
+                if item.get("exists")
+            ],
             "blockers": output.get("missing_fields") or [],
             "monitor_result": output,
         }
-        output["ledger_append"] = append_ledger(Path(args.root).resolve(), args.cycle_id, event)
+        output["ledger_append"] = append_ledger(
+            Path(args.root).resolve(), args.cycle_id, event
+        )
     json.dump(output, sys.stdout, ensure_ascii=False, indent=2, sort_keys=True)
     sys.stdout.write("\n")
     return 0 if output["status"] != "missing_details" else 2

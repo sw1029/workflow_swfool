@@ -5,14 +5,24 @@ import ast
 from pathlib import Path
 
 from orchestrate_task_cycle.result_contract import api as result_contract
-from orchestrate_task_cycle.result_contract.base import RuleContext, RuleRegistry, TargetContractRule
+from orchestrate_task_cycle.result_contract.base import (
+    RuleContext,
+    RuleRegistry,
+    TargetContractRule,
+)
 from orchestrate_task_cycle.result_contract.registry import default_rule_registry
-from orchestrate_task_cycle.result_contract.rules.completion_checks import ORDERED_CHECKS as COMPLETION_CHECKS
-from orchestrate_task_cycle.result_contract.rules.derive_checks import ORDERED_CHECKS as DERIVE_CHECKS
+from orchestrate_task_cycle.result_contract.rules.completion_checks import (
+    ORDERED_CHECKS as COMPLETION_CHECKS,
+)
+from orchestrate_task_cycle.result_contract.rules.derive_checks import (
+    ORDERED_CHECKS as DERIVE_CHECKS,
+)
 
 
 SKILLS_ROOT = Path(__file__).resolve().parents[2]
-PACKAGE_ROOT = SKILLS_ROOT / "orchestrate-task-cycle" / "scripts" / "orchestrate_task_cycle"
+PACKAGE_ROOT = (
+    SKILLS_ROOT / "orchestrate-task-cycle" / "scripts" / "orchestrate_task_cycle"
+)
 
 
 def _logical_lines(path: Path) -> int:
@@ -62,14 +72,22 @@ def test_default_registry_has_one_owner_per_target() -> None:
 
 def test_large_target_rules_use_bounded_ordered_check_modules() -> None:
     assert [check.__name__ for check in DERIVE_CHECKS] == [
+        "check_analysis_contract",
+        "check_terminal_contract",
+        "check_authority_terminal",
+        "check_finalization_recovery",
         "check_anti_loop",
+        "check_prerequisite_chain",
         "check_task_pack",
         "check_execution_scope",
         "check_routing_contracts",
+        "check_decision_freshness",
         "check_routing_safety",
+        "check_cycle_reachability",
         "check_routing_outcomes",
         "check_progress_evidence",
         "check_progress_policy",
+        "check_scoped_progress",
         "check_provider_setup",
         "check_provider_outcomes",
     ]
@@ -77,10 +95,13 @@ def test_large_target_rules_use_bounded_ordered_check_modules() -> None:
         "check_preflight",
         "check_acceptance_facts",
         "check_artifact_facts",
+        "check_cycle_reachability",
+        "check_decision_freshness",
         "check_operation_facts",
         "check_evaluate",
         "check_scenarios",
         "check_change_evidence",
+        "check_scoped_progress",
         "check_closure",
     ]
 
@@ -93,24 +114,80 @@ def test_large_target_rules_use_bounded_ordered_check_modules() -> None:
     bounded_files.extend(
         (
             PACKAGE_ROOT / "result_contract" / "api.py",
+            PACKAGE_ROOT / "authority_boundary.py",
+            PACKAGE_ROOT / "authority_artifacts.py",
+            PACKAGE_ROOT / "authority_packet.py",
+            PACKAGE_ROOT / "result_contract" / "acceptance_satisfiability.py",
+            PACKAGE_ROOT / "result_contract" / "cycle_reachability.py",
+            PACKAGE_ROOT / "result_contract" / "consumer_receipt_contract.py",
             PACKAGE_ROOT / "result_contract" / "advice.py",
+            PACKAGE_ROOT / "result_contract" / "advice_receipts.py",
+            PACKAGE_ROOT / "result_contract" / "derive_advice.py",
             PACKAGE_ROOT / "result_contract" / "decision.py",
+            PACKAGE_ROOT / "result_contract" / "decision_freshness_lineage.py",
+            PACKAGE_ROOT / "result_contract" / "decision_identity_dimensions.py",
             PACKAGE_ROOT / "result_contract" / "decision_verification.py",
             PACKAGE_ROOT / "result_contract" / "engine.py",
             PACKAGE_ROOT / "result_contract" / "expectations.py",
             PACKAGE_ROOT / "result_contract" / "metric_consumption.py",
             PACKAGE_ROOT / "result_contract" / "policy.py",
             PACKAGE_ROOT / "result_contract" / "receipts.py",
+            PACKAGE_ROOT / "result_contract" / "retained_change.py",
+            PACKAGE_ROOT / "result_contract" / "scenario_receipts.py",
+            PACKAGE_ROOT / "result_contract" / "scoped_progress.py",
+            PACKAGE_ROOT / "result_contract" / "scoped_progress_evidence.py",
+            PACKAGE_ROOT / "result_contract" / "scoped_progress_validation.py",
             PACKAGE_ROOT / "result_contract" / "verdicts.py",
             PACKAGE_ROOT / "result_contract" / "rules" / "derive.py",
+            PACKAGE_ROOT / "result_contract" / "rules" / "authority.py",
             PACKAGE_ROOT / "result_contract" / "rules" / "completion.py",
+            PACKAGE_ROOT / "ledger" / "finalization.py",
+            PACKAGE_ROOT / "ledger" / "finalization_publication.py",
+            PACKAGE_ROOT / "prerequisite_chain_contract.py",
         )
     )
 
     assert all(_logical_lines(path) < 500 for path in bounded_files)
     assert all(_largest_function(path) <= 140 for path in bounded_files)
-    assert all("import *" not in path.read_text(encoding="utf-8") for path in bounded_files)
-    assert all("globals()" not in path.read_text(encoding="utf-8") for path in bounded_files)
+    assert all(
+        "import *" not in path.read_text(encoding="utf-8") for path in bounded_files
+    )
+    assert all(
+        "globals()" not in path.read_text(encoding="utf-8") for path in bounded_files
+    )
+
+
+def test_ledger_finalization_split_is_bounded_and_acyclic() -> None:
+    verification_path = PACKAGE_ROOT / "ledger" / "finalization.py"
+    publication_path = PACKAGE_ROOT / "ledger" / "finalization_publication.py"
+    verification_tree = ast.parse(verification_path.read_text(encoding="utf-8"))
+    publication_tree = ast.parse(publication_path.read_text(encoding="utf-8"))
+    verification_functions = {
+        node.name
+        for node in verification_tree.body
+        if isinstance(node, ast.FunctionDef)
+    }
+    publication_functions = {
+        node.name for node in publication_tree.body if isinstance(node, ast.FunctionDef)
+    }
+    publication_imports = {
+        (node.level, node.module)
+        for node in publication_tree.body
+        if isinstance(node, ast.ImportFrom)
+    }
+
+    assert {
+        "finalize_candidate",
+        "verify_finalization_receipt",
+        "load_current_finalized_state",
+    } <= verification_functions
+    assert "_prepared_candidate" not in verification_functions
+    assert {"_prepared_candidate", "publish_candidate"} <= publication_functions
+    assert (1, "finalization") not in publication_imports
+    assert _logical_lines(verification_path) < 500
+    assert _logical_lines(publication_path) < 500
+    assert _largest_function(verification_path) <= 140
+    assert _largest_function(publication_path) <= 140
 
 
 def test_rule_registry_supports_focused_extension() -> None:
@@ -134,12 +211,19 @@ def test_validator_accepts_an_injected_registry() -> None:
         targets = frozenset({"run"})
 
         def check(self, context: RuleContext) -> None:
-            context.findings.append({"severity": "warn", "code": "injected", "message": "injected"})
+            context.findings.append(
+                {"severity": "warn", "code": "injected", "message": "injected"}
+            )
 
     validator = result_contract.ResultContractValidator(RuleRegistry([EmptyRule()]))
     output = validator.validate(
         "run",
-        {"step": "run", "task_id": "task-1", "execution_status": "success", "evidence_paths": ["run.json"]},
+        {
+            "step": "run",
+            "task_id": "task-1",
+            "execution_status": "success",
+            "evidence_paths": ["run.json"],
+        },
     )
 
     assert any(item.get("code") == "injected" for item in output["findings"])
@@ -170,7 +254,9 @@ def test_report_rule_preserves_optional_task_pack_contract() -> None:
     assert "report_task_pack_item_id_missing" not in codes
 
 
-def test_positive_review_blocks_conflicting_projection_alias_and_body_report_divergence() -> None:
+def test_positive_review_blocks_conflicting_projection_alias_and_body_report_divergence() -> (
+    None
+):
     axes = {
         axis: {"status": "pass", "evidence_ref": f"evidence_{axis}"}
         for axis in result_contract.VERDICT_AXES
@@ -229,9 +315,13 @@ def test_duplicate_consumer_receipts_fail_closed_in_either_order() -> None:
         "evidence_provenance": "independently_verified",
         "probe_evidence_ref": "packet_P",
     }
-    valid["probe_evidence_sha256"] = result_contract._consumer_receipt_binding_sha256(valid)
+    valid["probe_evidence_sha256"] = result_contract._consumer_receipt_binding_sha256(
+        valid
+    )
     invalid = {**valid, "value_consumed_by_decision": False}
-    invalid["probe_evidence_sha256"] = result_contract._consumer_receipt_binding_sha256(invalid)
+    invalid["probe_evidence_sha256"] = result_contract._consumer_receipt_binding_sha256(
+        invalid
+    )
 
     for rows in ([valid, invalid], [invalid, valid]):
         packet = {

@@ -9,6 +9,8 @@ description: Create standardized agent work records under a repository or worksp
 
 Use this skill to turn task notes into a durable `.agent_log` record with four required fields: task intent, work performed, result, and shortcomings. Prefer a single normalization subagent when the user requests agent-assisted logging; otherwise normalize locally.
 
+The factual `publish_agent_work_log` projection is declared in `authority.operations.json` with no independent grant requirement. It remains bounded by the active session ceiling and shared [authority v2 contract](../manage-agent-authority/references/authority-v2-contract.md), and cannot authorize or prove the work it records.
+
 The main agent owns the final record. The subagent, when used, only rewrites and structures the provided facts; it must not invent work, inspect unrelated files, or write files.
 
 When a task-state index exists, link the new `.agent_log` entry through `$manage-task-state-index`. If no ID context exists, write the log normally.

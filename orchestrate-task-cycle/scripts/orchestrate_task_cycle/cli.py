@@ -1,4 +1,5 @@
 """Static module command dispatcher for the orchestration skill."""
+
 from __future__ import annotations
 
 import argparse
@@ -20,101 +21,163 @@ class CommandSpec:
 
 def _ledger(argv: Sequence[str]) -> int:
     from .cycle_ledger import main
+
     return main(list(argv))
 
 
 def _transition(argv: Sequence[str]) -> int:
     from .validate_cycle_transition import main
+
     return main(list(argv))
 
 
 def _packet(argv: Sequence[str]) -> int:
     from .render_subskill_packet import main
+
     return main(list(argv))
 
 
 def _context(argv: Sequence[str]) -> int:
     from .collect_cycle_context import main
+
     return main(list(argv))
 
 
 def _report(argv: Sequence[str]) -> int:
     from .assemble_cycle_report import main
+
     return main(list(argv))
 
 
 def _dashboard(argv: Sequence[str]) -> int:
     from .render_cycle_dashboard import main
+
     return main(list(argv))
 
 
 def _result_contract(argv: Sequence[str]) -> int:
     from .result_contract.api import main
+
     return main(list(argv))
 
 
 def _task_pack(argv: Sequence[str]) -> int:
     from .task_pack.cli import main
+
     return main(list(argv))
 
 
 def _progress_loop(argv: Sequence[str]) -> int:
     from .progress.cli import main
+
     return main(list(argv))
 
 
 def _gt_conflict(argv: Sequence[str]) -> int:
     from .detect_gt_constraint_conflict import main
+
     return main(list(argv))
 
 
 def _evidence_cache(argv: Sequence[str]) -> int:
     from .evidence_cache import main
+
     return main(list(argv))
 
 
 def _mode_profile(argv: Sequence[str]) -> int:
     from .mode_profile import main
+
     return main(list(argv))
 
 
 def _model_effort(argv: Sequence[str]) -> int:
     from .model_effort_router import main
+
     return main(list(argv))
 
 
 def _monitor(argv: Sequence[str]) -> int:
     from .monitor_running_execution import main
+
     return main(list(argv))
 
 
 def _output_delta(argv: Sequence[str]) -> int:
     from .output_delta_contract import main
+
     return main(list(argv))
 
 
 def _efficiency(argv: Sequence[str]) -> int:
     from .profile_cycle_efficiency import main
+
     return main(list(argv))
 
 
 def _visible_increment(argv: Sequence[str]) -> int:
     from .visible_increment import main
+
     return main(list(argv))
 
 
 def _code_structure(argv: Sequence[str]) -> int:
     from .code_structure_audit import main
+
     return main(list(argv))
 
 
 def _changed_surface(argv: Sequence[str]) -> int:
     from .changed_surface import main
+
     return main(list(argv))
 
 
 def _validation_scope(argv: Sequence[str]) -> int:
     from .validation_scope import main
+
+    return main(list(argv))
+
+
+def _selection_tick(argv: Sequence[str]) -> int:
+    from .selection_tick import main
+
+    return main(list(argv))
+
+
+def _selection_decision_receipt(argv: Sequence[str]) -> int:
+    from .selection_decision_receipt_cli import main
+
+    return main(list(argv))
+
+
+def _selection_publication(argv: Sequence[str]) -> int:
+    from .selection_publication_cli import main
+
+    return main(list(argv))
+
+
+def _terminal_wait_baseline(argv: Sequence[str]) -> int:
+    from .terminal_wait_baseline_cli import main
+
+    return main(list(argv))
+
+
+def _exact_subject_premise(argv: Sequence[str]) -> int:
+    from .exact_subject_premise_cli import main
+
+    return main(list(argv))
+
+
+def _repo_adapter(argv: Sequence[str]) -> int:
+    from .repo_skill_adapter import main
+
+    return main(list(argv))
+
+
+def _authority_packet(argv: Sequence[str]) -> int:
+    from .authority_packet import main
+
     return main(list(argv))
 
 
@@ -137,8 +200,51 @@ COMMANDS = (
     CommandSpec("efficiency", "profile cycle efficiency", _efficiency),
     CommandSpec("visible-increment", "record a visible increment", _visible_increment),
     CommandSpec("code-structure", "audit code structure", _code_structure),
-    CommandSpec("changed-surface", "classify the orchestration changed surface", _changed_surface),
-    CommandSpec("validation-scope", "select the orchestration validation scope", _validation_scope),
+    CommandSpec(
+        "changed-surface",
+        "classify the orchestration changed surface",
+        _changed_surface,
+    ),
+    CommandSpec(
+        "validation-scope",
+        "select the orchestration validation scope",
+        _validation_scope,
+    ),
+    CommandSpec(
+        "selection-tick",
+        "compare terminal-wait selection inputs without starting a cycle",
+        _selection_tick,
+    ),
+    CommandSpec(
+        "selection-decision-receipt",
+        "render or validate one persisted selection acknowledgement",
+        _selection_decision_receipt,
+    ),
+    CommandSpec(
+        "selection-publication",
+        "publish one selected task with forward recovery",
+        _selection_publication,
+    ),
+    CommandSpec(
+        "terminal-wait-baseline",
+        "publish and resolve an authority-settled selection baseline",
+        _terminal_wait_baseline,
+    ),
+    CommandSpec(
+        "exact-subject-premise",
+        "validate a premise against locally bound evidence artifacts",
+        _exact_subject_premise,
+    ),
+    CommandSpec(
+        "repo-adapter",
+        "scan and hand off repository-owned workflow adapters",
+        _repo_adapter,
+    ),
+    CommandSpec(
+        "authority-packet",
+        "construct and verify an authority owner projection",
+        _authority_packet,
+    ),
 )
 COMMANDS_BY_NAME = {spec.name: spec for spec in COMMANDS}
 if len(COMMANDS_BY_NAME) != len(COMMANDS):

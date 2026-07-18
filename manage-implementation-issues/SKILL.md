@@ -9,6 +9,8 @@ description: Manage implementation issues that arise during task cycles by creat
 
 Use this skill to keep implementation issues explicit during repository task cycles. Prefer a GitHub issue with a dedicated branch/worktree when the workspace is a Git worktree and GitHub issue tooling is available; otherwise create durable local issue documents under `.issue/`.
 
+Use `authority.operations.json` and the shared [authority v2 contract](../manage-agent-authority/references/authority-v2-contract.md). Local issue lifecycle mutation and external issue-service mutation are different operations; external service availability, issue necessity, and local issue authority never substitute for an exact external-operation grant.
+
 This skill manages issue state and traceability. It must not implement code fixes. Code changes belong to `$task-md-agent-governance`; execution or resolution evidence belongs to `$run-task-code-and-log`; commits belong to `$repo-change-commit`.
 
 Use the closed result `issue_status` vocabulary `created | updated | open | tracked | partial | blocked | failed | reopened | resolved | closed | skipped | not_applicable`. Do not invent completion-like aliases.

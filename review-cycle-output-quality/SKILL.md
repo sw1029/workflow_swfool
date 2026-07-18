@@ -5,6 +5,8 @@ description: "Run one read-only qualitative reviewer agent over task-cycle outpu
 
 # Review Cycle Output Quality
 
+`authority.operations.json` declares qualitative review as read-only under the shared [authority v2 contract](../manage-agent-authority/references/authority-v2-contract.md). Reviewer delegation adds no write, completion, goal-truth, task-selection, or authority capability; durable publication remains with the owning workflow writer.
+
 ## Overview
 
 Use this skill to add one direct qualitative output-review pass to a task cycle. It is a workflow evidence skill, not a goal-truth source, not a human-review substitute, and not an implementation escape hatch.
@@ -64,7 +66,8 @@ Ask the reviewer to cover only dimensions relevant to the produced artifact:
 - `degenerate_surface_language`: whether adapter-designated content fields contain malformed, unstable, placeholder, repeated-generic, or contextless values under repository-owned rules. The adapter owns applicability and language-specific semantics.
 - `coverage_sufficiency`: whether the adapter-designated coverage axis satisfies the current task/rung; a partial envelope should cap progress only when the repository-owned rung contract requires broader coverage.
 - `goal_axis_completeness`: when the caller or repository adapter supplies `goal_axis_map`, verify that every active measurable goal has at least one mapped `quality_vector` axis. Do not invent axes; report `pass_with_unobserved_axes=true` for goals whose mapped axis set is empty.
-- `verification_source_separation`: report axis ID, verification/producer input IDs, verified artifact IDs, fingerprints, coupling, and provenance. Preserve same-artifact structural recomputation as `self_grounded`; do not extend it to source-independent semantic evidence.
+- `verification_source_separation`: report axis ID/scope/kind, verification/producer input IDs, verified artifact IDs, fingerprints, coupling, producer/verifier invariant-owner IDs, invariant-separation status, and provenance. Preserve same-artifact recomputation as `self_grounded` only for an explicit root-local structural axis; do not extend it to global or semantic evidence.
+  Treat coupling as decisive-invariant ownership as well as path/input overlap. If producer and reviewer reuse the same merge, ranking, disposition, acceptance, or equivalent decisive owner, downgrade that axis to `producer_attested` even when their files or wrapper functions differ. Disjoint inputs plus different bounded invariant-owner IDs under `invariant_separation_status=independent` retain the independent-review path.
 - `instrumentation_exercise`: when artifacts claim newly supplied diagnostics or instrumentation, report whether a fresh run id after the supply item recorded non-empty scalar fields, or whether the evidence is only `derived_from_existing_artifacts`.
 - `acceptance_encoding`: when reviewing directive-derived reports, preserve visible `acceptance.quantifiers` and `evidence_kind`; do not treat report-only evidence as satisfying a live-run criterion.
 - `verifier_surface_hardening`: when the reviewed artifact is another verifier, guard, consistency check, or report over the same target artifact without a fresh run id, report it as guard/report-only hardening rather than primary-output progress.
@@ -179,8 +182,18 @@ Return a JSON-compatible summary and, when durable evidence is required, write a
   },
   "verification_source_separation_gate": {
     "independent_source_separation_status": "pass|missing|overlap|blocked|not_evaluated",
+    "independent_invariant_separation_status": "pass|coupled|unknown|not_evaluated",
     "verification_input_paths": [],
     "verified_artifact_paths": [],
+    "verification_axes": [
+      {
+        "axis_id": "axis_A",
+        "axis_scope": "root_local|global",
+        "producer_invariant_owner_id": "owner_P",
+        "verifier_invariant_owner_id": "owner_V",
+        "invariant_separation_status": "independent|coupled|unknown"
+      }
+    ],
     "self_grounded_axes": [],
     "independently_verified_downgraded_fields": []
   },
@@ -244,6 +257,8 @@ Return a JSON-compatible summary and, when durable evidence is required, write a
 
 Use `review_status` as the owning skill result status. When the orchestration ledger records this stage, use canonical lifecycle statuses such as `complete`, `partial`, `blocked`, `skipped`, or `not_applicable` and preserve the raw result status separately if needed.
 
+Keep review applicability, reviewer availability, and review conclusion independent. Delegation unavailability makes only review-backed axes `not_evaluated`/partial and must carry its reason; it does not reverse deterministic bounded task acceptance owned by completion validation. When a reviewer is available and the exact artifact plus every required axis is observed, the existing complete/acceptable path is unchanged.
+
 Treat `requested_model_ref` as the stable policy identity. When `model_configuration_status=reference_only`, keep `requested_model=model_ref:balanced`, omit the binding receipt, and restrict `routing_enforcement` to `prompt_only|inherited_unverified`. Use `routing_enforcement=enforced` only when caller or repository configuration resolves the runtime model and the content-bound binding receipt revalidates.
 
 Preserve `degenerate_surface_language`, `placeholder_event_found`, `surface_entity_suspected`, `relation_semantics_ready`, and `kg_core_blocker` as compatibility schema labels only. Populate or interpret them only through caller- or adapter-supplied field-class and blocker mappings; do not embed graph, event, entity, relation, language, or assurance semantics in this global skill. Keep `not_gold` as an existing no-overclaim compatibility flag, not as an independently verified quality claim.
@@ -268,7 +283,7 @@ Preserve `degenerate_surface_language`, `placeholder_event_found`, `surface_enti
 - When `vacuous_corrective_gate.surface_corrective_noop=true`, report `surface_corrective_noop: true`, cite the affected lanes, and do not count those attempted rows as semantic or produced output delta.
 - When `goal_axis_map` is supplied and any active measurable goal has zero mapped axes, set `goal_axis_completeness_gate.evaluation_status=fail`, set `pass_with_unobserved_axes=true`, cite the unobserved goals, and cap review-backed progress for those goals. Recommend adapter axis supply, explicit residual scope, terminal blocker, or user escalation; do not let the review's overall pass wording consume the affected target.
 - When `goal_axis_map` is absent, set `goal_axis_completeness_gate.evaluation_status=not_evaluated` or omit the gate. Missing optional axis mapping is fail-quiet unless acceptance/caller packets require it.
-- When reviewing an artifact that claims independent verification, emit `verification_axes`. Use `independently_verified` only for disjoint inputs; use `self_grounded` for same-artifact structural recomputation, and leave source-semantic axes `not_evaluated` without independent input.
+- When reviewing an artifact that claims independent verification, emit `verification_axes`. Use `independently_verified` only for disjoint inputs and distinct decisive-invariant owners. Use `self_grounded` only for an explicit root-local structural recomputation, and leave global/source-semantic axes `not_evaluated` without independent input.
 - When supplied instrumentation has not been exercised by a fresh run id with non-empty scalar fields, set `instrumentation_exercise_required=true` and do not treat the corresponding measurement/report as progress. Existing artifact reinterpretation is `derived_from_existing_artifacts`, not exercise.
 - When an artifact satisfies a `live_run` criterion only through a derived artifact, code contract, or report, set `acceptance_diluted=true` and cap review-backed progress for that criterion.
 - When the reviewed change is guard/verifier/report-only hardening over the same target artifact and no fresh run id exists, set `verifier_surface_hardening=true`; do not describe it as primary-output progress.
@@ -290,6 +305,8 @@ Static decision-boundary fixtures:
 - Negative: `task_T` has a compatible bounded diff, but the reviewer opens no `artifact_revision_R`. Expected verdict: task-change review may pass while artifact semantics remain `not_evaluated`. Forbidden overclaim: treating compatibility as body truth.
 - Negative: `body_fp_A` and `report_projection_A` disagree for the same exact revision and cohort. Expected verdict: artifact semantics are `conflicted` and promotion is blocked. Forbidden overclaim: choosing the report or body solely because it is favorable.
 - Happy path: the reviewer opens `artifact_revision_R`, binds `body_fp_A`, `lane_L`, and `source_cohort_C`, observes every adapter-required axis, and the body/report projections agree. Expected verdict: artifact-body review may pass for the observed axes. Forbidden overclaim: inferring task completion, global readiness, or unobserved-universe coverage.
+- Invariant-separation negative: producer and reviewer read different paths but call the same decisive ranking/disposition invariant. Expected verdict: affected axes are coupled and cannot be independently verified. Invariant-separation happy path: disjoint inputs and a separately owned decisive invariant agree on the exact artifact. Expected verdict: the observed axes may retain independent provenance.
+- Availability negative: delegation is unavailable while deterministic bounded acceptance passes. Expected verdict: review-backed semantic axes remain `not_evaluated`, while the acceptance result is preserved by its owner. Availability happy path: one available reviewer reads the exact current artifact and returns the ordinary axis-complete conclusion.
 
 - If the reviewer cannot open required artifacts, return `review_status: blocked` or `partial` with missing paths and a direction recommendation to repair artifact persistence or run logging.
 - If the run is `running`, review only startup/heartbeat/output artifacts that exist and mark final-output-dependent findings as pending.

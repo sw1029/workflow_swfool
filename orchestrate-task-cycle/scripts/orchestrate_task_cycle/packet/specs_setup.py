@@ -25,13 +25,15 @@ def build_repo_skill_adapter_scan(ctx: PacketBuildContext) -> dict[str, Any]:
             "cycle_id",
             "adapter_scan_status",
             "adapter_count including explicit zero",
-            "repo_skill_adapter_packet with IDs, paths, statuses, renderer availability, and non-GT warning",
+            "repo_skill_adapter_packet with manifest/callable-wrapper/legacy-delegate/renderer paths and hashes",
+            "adapter revision plus phase-consumer and phase-hook maps",
             "blockers including explicit []",
             "evidence_paths",
         ],
         "forbidden_bypasses": [
             "loading long adapter bodies during metadata scan",
             "treating adapters as GT or authority",
+            "reporting a registered-but-unloaded adapter as absent",
         ],
     }
 
@@ -175,6 +177,7 @@ def build_repo_skill_adapter_validate(ctx: PacketBuildContext) -> dict[str, Any]
         "required_inputs": [
             "governance changed_files",
             "repo_skill_adapter_packet",
+            "static adapter revision and consumer load-preflight receipts",
             "changed `.codex/skills/` paths or explicit no-change evidence",
             "$skill-creator quick_validate.py when available",
             "adapter-local representative checks when scripts changed",

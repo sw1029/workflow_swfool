@@ -71,7 +71,10 @@ def _finalize_replay_state(frame: _EvaluationFrame) -> None:
                 "name": "terminal_self_resolution",
                 **terminal_self_resolution,
                 "constrains_disposition": True,
-                "allowed_dispositions": ["goal_productive"],
+                "allowed_dispositions": terminal_self_resolution.get(
+                    "allowed_resolution_dispositions"
+                )
+                or ["classification_repair"],
             }
         )
     frame.update({

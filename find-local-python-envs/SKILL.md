@@ -11,6 +11,8 @@ Use this skill to find local Python environments that can execute code with requ
 
 The main output is a ranked list of runnable environment candidates with evidence, missing dependencies, and exact execution commands.
 
+`authority.operations.json` declares the read-only inventory operation under the shared [authority v2 contract](../manage-agent-authority/references/authority-v2-contract.md). It grants no write capability; any durable task-index or work-log update remains a separate operation owned by the corresponding writer skill.
+
 When a task-state index exists, record environment evidence through `$manage-task-state-index` as an optional traceability add-on. If no ID context exists, perform the normal environment discovery unchanged.
 
 ## Workflow

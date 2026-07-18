@@ -4,6 +4,10 @@ from __future__ import annotations
 import argparse
 
 from .consumption import command_mark_consumed
+from .legacy_retirement import (
+    command_activate_legacy_retirement,
+    command_retire_legacy,
+)
 from .mutation_apply import command_apply_mutation
 from .presentation import (
     command_capabilities,
@@ -33,6 +37,7 @@ def main(argv: list[str] | None = None) -> int:
 
     recover_p = sub.add_parser("recover-replacement", help="Forward-complete prepared task-pack replacement transactions.")
     recover_p.set_defaults(func=command_recover_replacement)
+
 
     render_p = sub.add_parser("render")
     render_p.add_argument("--pack", help="Workspace-relative pack JSON path. Defaults to all packs.")
@@ -120,6 +125,26 @@ def main(argv: list[str] | None = None) -> int:
     mutate_p.add_argument("--dry-run", action="store_true", help="Validate and render the proposed in-memory state without writing the canonical pack.")
     mutate_p.set_defaults(func=command_apply_mutation)
 
+    retire_p = sub.add_parser(
+        "retire-legacy",
+        help=(
+            "Prepare and commit one immutable per-pack legacy retirement overlay; "
+            "the overlay remains operationally inactive until authority settlement."
+        ),
+    )
+    retire_p.add_argument("--plan", required=True, help="Closed retirement plan JSON path or inline JSON.")
+    retire_p.add_argument("--dry-run", action="store_true")
+    retire_p.set_defaults(func=command_retire_legacy)
+
+    activate_p = sub.add_parser(
+        "activate-legacy-retirement",
+        help="Activate a committed retirement only after exact authority consumption.",
+    )
+    activate_p.add_argument("--completion-ref", required=True)
+    activate_p.add_argument("--completion-sha256", required=True)
+    activate_p.add_argument("--use-receipt-ref", required=True)
+    activate_p.add_argument("--use-receipt-sha256", required=True)
+    activate_p.set_defaults(func=command_activate_legacy_retirement)
+
     args = parser.parse_args(argv)
     return args.func(args)
-

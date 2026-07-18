@@ -1,6 +1,7 @@
 """Target-specific result-contract rules."""
 
 from .acceptance import AcceptanceRule
+from .authority import AuthorityRule
 from .code_structure import CodeStructureAuditRule
 from .commit import CommitRule
 from .completion import CompletionValidationRule
@@ -20,6 +21,7 @@ from .visible_increment import VisibleIncrementRule
 
 __all__ = [
     "AcceptanceRule",
+    "AuthorityRule",
     "CodeStructureAuditRule",
     "CommitRule",
     "CompletionValidationRule",

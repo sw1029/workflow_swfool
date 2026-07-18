@@ -1,12 +1,18 @@
 # Operation Authority Receipt Contract
 
-Use this contract only for a bounded operation whose authority has already been resolved. A receipt is non-GT evidence; it cannot expand current permissions or rewrite historical facts.
+Use this compatibility contract only for a bounded operation whose authority was already resolved. Use [authority-v2-contract.md](authority-v2-contract.md) for new generic grants and leases. A receipt is non-GT evidence; it cannot expand active permissions or rewrite historical facts.
+
+## Schema versions
+
+- Validate schema v1 against the exact mutable `policy_ref` and `source_evidence_ref` digests recorded at issue time. Preserve this behavior for compatibility; do not silently reinterpret v1.
+- Issue schema v2 with immutable `policy_snapshot_ref`/`policy_snapshot_sha256` and `source_snapshot_ref`/`source_snapshot_sha256`. Keep original source refs/digests as provenance, but validate authority against the immutable snapshots.
+- Never convert an old v1 receipt to v2 unless the exact historical policy/source bytes are available as immutable contemporaneous evidence.
 
 ## Receipt body
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "receipt_id": "authr-R",
   "receipt_kind": "operation_authority",
   "operation": "task_pack.normalize_initial_selection",
@@ -26,11 +32,15 @@ Use this contract only for a bounded operation whose authority has already been 
   },
   "authority_basis": {
     "policy_ref": ".agent_goal/agent_authority.md",
-    "policy_sha256": "64 lowercase hex",
+    "policy_sha256": "digest at issue",
+    "policy_snapshot_ref": ".task/authorization/policy_snapshots/policy-D.md",
+    "policy_snapshot_sha256": "64 lowercase hex",
     "source_kind": "explicit_current_user_instruction",
     "source_id": "instruction-I",
     "source_evidence_ref": ".task/authorization/instruction-I.md",
-    "source_evidence_sha256": "64 lowercase hex",
+    "source_evidence_sha256": "digest at issue",
+    "source_snapshot_ref": ".task/authorization/source_snapshots/source_approval-D.md",
+    "source_snapshot_sha256": "64 lowercase hex",
     "integrity_status": "verified"
   },
   "historical_effect": {
@@ -53,24 +63,32 @@ Use this contract only for a bounded operation whose authority has already been 
 
 ## Temporal modes
 
-- `contemporaneous_selection_authority`: require authority evidence effective no later than selection.
-- `current_ratification`: allow the bounded operation now; require historical verdict `partial`, historical status `unverifiable_before_ratification`, and `retroactive_claim_allowed=false`.
-- `retrospective_evidence_assessment`: assess immutable historical evidence only; do not create a new permission.
+- `contemporaneous_selection_authority`: require immutable authority evidence effective no later than selection.
+- `current_ratification`: permit only prospective bounded continuation; require historical verdict `partial`, status `unverifiable_before_ratification`, and `retroactive_claim_allowed=false`.
+- `retrospective_evidence_assessment`: assess immutable historical evidence only; never create permission.
 
 ## Validation
 
-- Require schema version 1, `receipt_kind=operation_authority`, `decision=allowed`, a supported operation, RFC3339 times, and a complete subject.
-- Require workspace-relative regular policy/source files and exact SHA-256 bindings.
+- Require `receipt_kind=operation_authority`, `decision=allowed`, a supported operation, RFC3339 times, and a complete exact subject.
+- Require workspace-relative regular evidence files and full SHA-256 bindings.
 - Require the caller's expected subject to equal the receipt subject exactly.
-- Pass `--selected-at <RFC3339>` for complete temporal validation. Without it, the standalone validator returns `temporality_binding_status=consumer_required`; the consuming helper must then bind and check the original selection time before mutation.
+- Pass `--selected-at <RFC3339>` for full temporal validation. Without it, return `temporality_binding_status=consumer_required` and require the mutation helper to check selection time.
 - Allow current ratification only from `explicit_current_user_instruction`.
-- Require a non-empty opaque `source_id` and one closed source kind: `explicit_current_user_instruction`, `effective_authority_policy`, or `contemporaneous_authority_record`.
-- Allow `retrospective_evidence_assessment` only for normalization from an immutable contemporaneous authority record that verifies a historical pass; never use it to create permission.
-- Reject advice, task completion, run, validation, issue results, and unknown source kinds as authority sources.
-- Permit only the operation's allowlisted effects. For task-pack normalization, permit provenance append only.
-- Reject sensitive or body-bearing keys such as `raw_prompt`, `prompt_body`, `quote`, `bounded_quote`, `instruction_text`, `user_message`, `transcript_body`, `transcript_path`, `source_text`, `credential`, `token`, and `secret` anywhere in the receipt.
-- Keep opaque IDs, workspace-relative references, digests, enums, timestamps, and bounded reason codes only.
+- Accept only `explicit_current_user_instruction`, `effective_authority_policy`, or `contemporaneous_authority_record` as closed source kinds.
+- Allow retrospective normalization only from a verified immutable contemporaneous record.
+- Reject advice, task completion, run/validation/issue results, silence, and unknown sources.
+- Permit only the operation allowlist. Keep normalization provenance-only.
+- Reject body-bearing or sensitive keys including raw prompts, quotes, transcript bodies/paths, source text, corpus metadata, credentials, tokens, and secrets.
 
 ## Use
 
-Issue after the authority decision, then pass both receipt path and SHA-256 to the consuming helper. Validate again at mutation time. Store policy and one-shot receipts separately; do not add receipts to the authority-policy template.
+Issue v2 prospectively:
+
+```bash
+PYTHONPATH="<skills-root>/manage-agent-authority/scripts" \
+  python3 -m manage_agent_authority receipt issue \
+  --root . --plan receipt-plan.json \
+  --output .task/authority_receipts/authr-R.json
+```
+
+Validate by receipt ref and digest at mutation time. Pass both receipt path and SHA-256 to the consumer. Keep policy, snapshots, and one-shot receipts separate.

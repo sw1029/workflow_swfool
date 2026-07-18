@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
+import hashlib
+import json
 import os
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -17,6 +20,219 @@ AdapterLoader = Callable[[Path, str], Any | None]
 AdapterCandidates = Callable[[Path, str | None], list[Path]]
 AdapterGetter = Callable[[], Any | None]
 AdapterBinder = Callable[[Any | None, str | None], None]
+_MISSING_MODULE = object()
+
+
+def _object_sha256(value: Any) -> str:
+    raw = (
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        + "\n"
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _scan_value(root: Path, raw: str) -> dict[str, Any]:
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        candidate = Path(raw)
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        resolved = candidate.expanduser().resolve(strict=True)
+        resolved.relative_to(root)
+        if not resolved.is_file() or resolved.is_symlink():
+            raise ValueError("adapter scan packet is not a safe regular file")
+        value = json.loads(resolved.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("adapter scan packet is not an object")
+    return value
+
+
+_SCAN_COMPONENT_FIELDS = (
+    ("manifest_path", "manifest_sha256"),
+    ("implementation_path", "implementation_sha256"),
+    ("legacy_compatibility_path", "legacy_compatibility_sha256"),
+    ("renderer_path", "renderer_sha256"),
+    ("decision_identity_validator_path", "decision_identity_validator_sha256"),
+    ("authority_projection_path", "authority_projection_sha256"),
+)
+
+
+def _current_adapter_components(
+    root: Path, row: dict[str, Any]
+) -> dict[str, tuple[str, str]]:
+    current: dict[str, tuple[str, str]] = {}
+    for path_field, hash_field in _SCAN_COMPONENT_FIELDS:
+        if row.get(path_field) is None and row.get(hash_field) is None:
+            continue
+        candidate = Path(str(row.get(path_field) or ""))
+        candidate = candidate if candidate.is_absolute() else root / candidate
+        resolved = candidate.expanduser().resolve(strict=True)
+        resolved.relative_to(root)
+        digest = file_sha256(resolved)
+        if digest != row.get(hash_field):
+            raise ValueError(f"stale component: {path_field}")
+        current[path_field] = (resolved.as_posix(), digest)
+    return current
+
+
+def _adapter_revision_valid(
+    row: dict[str, Any], components: dict[str, tuple[str, str]]
+) -> bool:
+    basis = {
+        "adapter_id": row.get("adapter_id"),
+        "manifest_sha256": row.get("manifest_sha256"),
+        "implementation_sha256": row.get("implementation_sha256"),
+        "legacy_compatibility_sha256": row.get("legacy_compatibility_sha256"),
+        "renderer_sha256": row.get("renderer_sha256"),
+        "decision_identity_validator_sha256": row.get(
+            "decision_identity_validator_sha256"
+        ),
+        "phase_consumer_map": row.get("phase_consumer_map"),
+        "phase_hook_map": row.get("phase_hook_map"),
+    }
+    if row.get("authority_projection_path") is not None:
+        basis["authority_projection_sha256"] = row.get("authority_projection_sha256")
+    revision = str(row.get("adapter_revision_sha256") or "").lower()
+    try:
+        manifest = json.loads(
+            Path(components["manifest_path"][0]).read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError, json.JSONDecodeError, KeyError):
+        return False
+    manifest_matches = all(
+        manifest.get(manifest_field) == row.get(row_field)
+        for manifest_field, row_field in (
+            ("adapter_id", "adapter_id"),
+            ("status", "status"),
+            ("implementation_path", "implementation_path"),
+            ("legacy_compatibility_path", "legacy_compatibility_path"),
+            ("renderer_path", "renderer_path"),
+            ("decision_identity_validator_path", "decision_identity_validator_path"),
+            ("authority_projection_path", "authority_projection_path"),
+            ("phase_consumers", "phase_consumer_map"),
+            ("phase_hooks", "phase_hook_map"),
+        )
+    )
+    return bool(
+        row.get("static_validation", {}).get("status") == "pass"
+        and manifest_matches
+        and revision == _object_sha256(basis)
+        and len(revision) == 64
+        and all(character in "0123456789abcdef" for character in revision)
+    )
+
+
+def registered_adapter_from_scan(
+    root: Path,
+    raw: str | None,
+    *,
+    phase: str,
+    consumer_id: str,
+) -> dict[str, Any]:
+    """Resolve one hash-current registered adapter without importing it."""
+
+    if not raw:
+        return {
+            "status": "not_supplied",
+            "adapter_registered": False,
+            "implementation_path": None,
+            "adapter_revision_sha256": None,
+        }
+    try:
+        packet = _scan_value(root, raw)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return {
+            "status": "invalid_scan",
+            "adapter_registered": False,
+            "implementation_path": None,
+            "adapter_revision_sha256": None,
+            "error": f"adapter_scan_invalid:{type(exc).__name__}",
+        }
+    container = packet.get("repo_skill_adapter_packet")
+    rows = container.get("adapters") if isinstance(container, dict) else None
+    if not isinstance(rows, list):
+        return {
+            "status": "invalid_scan",
+            "adapter_registered": False,
+            "implementation_path": None,
+            "adapter_revision_sha256": None,
+            "error": "adapter_scan_rows_missing",
+        }
+    matches = [
+        row
+        for row in rows
+        if isinstance(row, dict)
+        and row.get("status") == "active"
+        and consumer_id in (row.get("phase_consumer_map") or {}).get(phase, [])
+    ]
+    if not matches:
+        return {
+            "status": "not_registered",
+            "adapter_registered": False,
+            "implementation_path": None,
+            "adapter_revision_sha256": None,
+        }
+    if len(matches) != 1:
+        return {
+            "status": "wiring_defect",
+            "adapter_registered": True,
+            "implementation_path": None,
+            "adapter_revision_sha256": None,
+            "error": "adapter_scan_ambiguous_registration",
+        }
+    row = matches[0]
+    try:
+        current_components = _current_adapter_components(root, row)
+        resolved = Path(current_components["implementation_path"][0])
+        current_sha256 = current_components["implementation_path"][1]
+    except (OSError, ValueError) as exc:
+        return {
+            "status": "wiring_defect",
+            "adapter_registered": True,
+            "implementation_path": row.get("implementation_path"),
+            "adapter_revision_sha256": row.get("adapter_revision_sha256"),
+            "error": f"registered_adapter_unavailable:{type(exc).__name__}",
+        }
+    revision = str(row.get("adapter_revision_sha256") or "").lower()
+    valid = bool(
+        _adapter_revision_valid(row, current_components)
+        and current_sha256 == row.get("implementation_sha256")
+    )
+    return {
+        "status": "ready" if valid else "wiring_defect",
+        "adapter_registered": True,
+        "implementation_path": resolved.as_posix(),
+        "implementation_sha256": current_sha256,
+        "legacy_compatibility_path": row.get("legacy_compatibility_path"),
+        "legacy_compatibility_sha256": row.get("legacy_compatibility_sha256"),
+        "renderer_path": row.get("renderer_path"),
+        "renderer_sha256": row.get("renderer_sha256"),
+        "decision_identity_validator_path": row.get("decision_identity_validator_path"),
+        "decision_identity_validator_sha256": row.get(
+            "decision_identity_validator_sha256"
+        ),
+        "authority_projection_path": row.get("authority_projection_path"),
+        "authority_projection_sha256": row.get("authority_projection_sha256"),
+        "manifest_path": row.get("manifest_path"),
+        "manifest_sha256": row.get("manifest_sha256"),
+        "adapter_revision_sha256": revision or None,
+        "phase": phase,
+        "consumer_id": consumer_id,
+        "required_consumer_ids": list(
+            (row.get("phase_consumer_map") or {}).get(phase, [])
+        ),
+        "available_hook_ids": list((row.get("phase_hook_map") or {}).get(phase, [])),
+        "error": None if valid else "registered_adapter_scan_stale",
+    }
 
 
 def load_python_module(path: Path, module_name: str) -> Any | None:
@@ -28,13 +244,20 @@ def load_python_module(path: Path, module_name: str) -> Any | None:
     if spec is None or spec.loader is None:
         return None
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    prior_module = sys.modules.get(module_name, _MISSING_MODULE)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        if prior_module is _MISSING_MODULE:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = prior_module
+        raise
     return module
 
 
-def domain_adapter_candidate_paths(
-    root: Path, explicit_path: str | None
-) -> list[Path]:
+def domain_adapter_candidate_paths(root: Path, explicit_path: str | None) -> list[Path]:
     candidates: list[Path] = []
     for raw in (
         explicit_path,
@@ -67,8 +290,7 @@ def load_domain_adapter(
         candidate.expanduser().resolve().as_posix() for candidate in candidates
     ]
     if cached is not None and (
-        not resolved_candidates
-        or cache.domain_adapter_path in resolved_candidates
+        not resolved_candidates or cache.domain_adapter_path in resolved_candidates
     ):
         return cached, None, None
 

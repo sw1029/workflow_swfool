@@ -1,0 +1,38 @@
+{
+  "schema_version": 2,
+  "manifest_kind": "authority_operations",
+  "skill_id": "maintain-cycle-ledger",
+  "skill_version": "2.0.0",
+  "operations": [
+    {
+      "operation_id": "append_cycle_evidence",
+      "operation_version": "1",
+      "authorization_mechanism": "grant",
+      "mutation_class": "local_mutation",
+      "required_capabilities": ["cycle.ledger.append"],
+      "source_rank_floor": "S1",
+      "risk_floor": "R1",
+      "decision_class": "D3",
+      "effect_classes": ["append_cycle_evidence"],
+      "data_classes": ["workflow_metadata"],
+      "reversibility": "conditionally_reversible",
+      "subject_kinds": ["task_cycle"],
+      "authority_applicability": "required"
+    },
+    {
+      "operation_id": "finalize_cycle_attempt",
+      "operation_version": "1",
+      "authorization_mechanism": "grant",
+      "mutation_class": "local_mutation",
+      "required_capabilities": ["cycle.attempt.finalize"],
+      "source_rank_floor": "S2",
+      "risk_floor": "R2",
+      "decision_class": "D2",
+      "effect_classes": ["publish_authoritative_attempt"],
+      "data_classes": ["task_cycle_state"],
+      "reversibility": "conditionally_reversible",
+      "subject_kinds": ["task_cycle"],
+      "authority_applicability": "required"
+    }
+  ]
+}

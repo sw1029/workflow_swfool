@@ -12,6 +12,7 @@ This reference defines optional long-range task packs for `$orchestrate-task-cyc
 - [Pack Transactions](#pack-transactions)
 - [Replacement Transaction](#replacement-transaction)
 - [Promotion](#promotion)
+- [Bounded Prerequisite Chains](#bounded-prerequisite-chains)
 - [Loop Breaker Fields](#loop-breaker-fields)
 - [Part G Workflow Gates](#part-g-workflow-gates)
 - [Part H Workflow Gates](#part-h-workflow-gates)
@@ -180,9 +181,13 @@ The JSON is authoritative. The Markdown render is for scanability and must use t
       "cycle_reachability_contract": {
         "acceptance_scale": null,
         "throughput_evidence": null,
+        "cycle_execution_cap": null,
+        "cycle_reachability_sha256": null,
         "unreachable_within_cycle": false,
         "long_run_launch_required": false,
-        "harvest_validation_required": false
+        "harvest_validation_required": false,
+        "residual_acceptance": null,
+        "harvest_validation_plan": null
       },
       "metric_basis_contract": {
         "basis_overclaim": false,
@@ -307,6 +312,10 @@ Allowed item statuses:
 - `terminal_blocked`
 - `superseded`
 
+Derive lifecycle state from item state; do not accept a caller-authored status as sufficient. `current_item_id` is the earliest canonical-order item in `planned|inserted|reordered` whose dependencies are all `consumed`, or `null` when none is ready. A nonterminal pack is `active` while a ready or in-flight item exists, `blocked` while only blocked or dependency-waiting residuals remain, and `completed` only when every item is `consumed|skipped`. Treat both `active` and `blocked` as the single live planning pack for store selection, replacement, and mutation; do not create a second pack merely because the first is waiting. A `terminal_blocked|superseded` pack cannot contain `promoted|in_progress`. Validate dependency references, uniqueness, self-reference, cycles, predecessor order, and satisfaction; a promoted, in-progress, or consumed dependent with an unconsumed dependency is an invalid bypass.
+
+Cycle context must preserve both declared and derived projections. `declared_status_counts` is compatibility/history only; selection uses `operational_status_counts` plus full pack validation. A declared-completed pack with an open or dependency-waiting residual is `selection_status: repair_required`, remains visible through `repair_required_packs`, and is not silently treated as absent or reactivated. Malformed packs and declared/derived mismatches take the same recovery route. More than one coherent operationally live pack is `multiple_live_packs`; never select the first file by lexical order. Only one coherent live pack yields `selection_status: ready` and `active_pack`.
+
 At most one item may be `promoted` or `in_progress`. While one exists, `next`
 returns `status: in_flight` and no executable `next_item`; the following queued
 item remains visible only as planning state until the in-flight item is
@@ -408,7 +417,7 @@ If the item result has `resolution_downgrade=true`, do not mark a high-resolutio
 
 If the item result has `report_key_divergence=true`, do not mark any pass/close/adoption/baseline/comparison item consumed from that report.
 
-If the item result has `independently_verified_fields`, require `verification_input_paths` to be disjoint from `verified_artifact_paths` unless the adapter marks the affected axis `self_grounded`. If `independent_source_separation_status` is `missing`, `overlap`, or `blocked`, or `independently_verified_downgraded_fields` is non-empty, consume the evidence as attested only or preserve residual verification-source repair.
+If the item result has `independently_verified_fields`, require disjoint verification/producer inputs and distinct bounded producer/verifier invariant-owner IDs. If source separation is missing/overlapping/blocked, invariant separation is coupled/unknown, or downgraded fields are non-empty, consume the evidence as attested only or preserve residual repair. `self_grounded` is limited to root-local structural consistency.
 
 If the item result or acceptance evidence has `envelope_thaw_item_required=true`, do not mark the item `consumed` without `envelope_thaw_item`, thaw condition/schedule, explicit residual descope, terminal blocker, or user escalation.
 
@@ -441,6 +450,33 @@ python3 -m orchestrate_task_cycle task-pack --root . apply-mutation --plan <deri
 Before publication, inspect the helper contract with `capabilities` and require `findings: []` from the create/replace dry-run for the exact in-memory candidate body. Use `validate --pack <workspace-relative-pack.json> --strict-findings` only to audit an already-existing pack artifact; create/replace requires the final successor JSON path to remain absent, so an existing canonical-path candidate is debt/input rather than a publishable successor at that ref. Historical findings in unrelated inactive packs are separate debt: they do not authorize publishing a candidate with findings, and global debt must not be misreported as a defect in a clean exact candidate.
 
 Bind every current mutation plan to the canonical JSON body with `pack_coherence.schema_version: 1`: exact pack ref, canonical before SHA-256, before item IDs/order/current item, proposed after IDs/order, and mutation kind. Require the complete mutation receipt at result-contract consumption. The helper rejects stale hashes, unknown IDs, mismatched after state, and any material no-op. `pack_coherence.schema_version: 0` normalizes only an old mutation precondition; it never repairs initial-selection authority provenance.
+
+Every create, promote, consume, normalize, insert, reorder, skip, supersede, and terminal-block apply writes an immutable prepare journal before the canonical pack, then an immutable completion receipt after verified publication. The journal binds the exact plan fingerprint, target ref, before file/canonical hashes, prepared after payload, after file/canonical hashes, and coherence receipt. If publication stops after the pack write but before receipt output, the next mutation command forward-recovers the exact prepared transaction before evaluating new work. If JSON and its receipt committed but a requested optional Markdown render did not, exact replay verifies that the pack still matches the receipt and rebuilds that deterministic projection before reporting success. It never renders a historical receipt over an advanced pack. Exact replay returns the validated durable receipt; conflicting target state, a changed plan, or tampered journal/receipt fails closed. Dry-run never creates or recovers transaction state. Physical deletion is not a task-pack mutation action.
+
+### Non-retroactive legacy closed-pack retirement
+
+Do not rewrite, normalize, delete, or silently ignore a historical pack merely because a newer validator rejects it. When an invalid pack is declared `completed|superseded|terminal_blocked`, is not bound by the current executable task, and every blocking finding belongs to the closed legacy eligibility contract, it may be removed from the operational selection domain through a per-pack retirement overlay. This is a present topology decision, not a historical repair. Use one `mutate_task_topology` authority request whose subject is the exact raw pack `{kind, ref, file digest, pack-id revision}` and whose scope binds the same `pack_id`; do not authorize a directory or aggregate manifest as one subject.
+
+The closed retirement plan binds the raw file and canonical hashes, root `task.md` hash with `Executable: false` and `Task Pack: none`, the orchestrator authority packet, a distinct pre-commit verification, an operation-specific consume key, fixed non-retroactive reason code, and deterministic timestamp. Run:
+
+```text
+python3 -m orchestrate_task_cycle task-pack --root . retire-legacy \
+  --plan <exact-per-pack-retirement-plan.json> --dry-run
+python3 -m orchestrate_task_cycle task-pack --root . retire-legacy \
+  --plan <same-exact-plan.json>
+```
+
+The apply command writes an immutable prepare first, reopens the current owner artifacts and pre-commit verification, then writes a content-bound raw snapshot, overlay, and completion receipt. It never edits the canonical pack. Its result is `pending_settlement`, not operational success. Pass the exact completion binding and the plan's same consume key to `$manage-agent-authority consume`; then activate only that settled result:
+
+```text
+python3 -m orchestrate_task_cycle task-pack --root . activate-legacy-retirement \
+  --completion-ref <completion-ref> --completion-sha256 <completion-sha256> \
+  --use-receipt-ref <owner-use-ref> --use-receipt-sha256 <owner-use-sha256>
+```
+
+Activation validates the owner use-receipt ID, reservation, execution result, idempotency key, complete state deltas, and current after-images before writing a deterministic activation record. Later store reads validate the immutable settled chain without freezing a reusable grant at its old version. A prepare without completion is `legacy_retirement_transaction_pending`; a completion without exactly one valid activation is `authority_settlement_pending`. Both remain operational blockers and are forward-replayed with the same plan/result/key rather than hidden or rolled back.
+
+An active overlay retains explicit non-claims: it does not prove pack or item completion, dependency satisfaction, provenance repair, historical authority, or a raw-pack modification. `task-pack status` reports the exact retired pack/activation count while `task-pack validate` reports `operational_status: retired_legacy` separately from unchanged `raw_status` and `raw_findings`. Default validation and active-pack selection use the operational projection; `--strict-findings` still returns nonzero for historical diagnostics. Any raw byte/canonical/finding-set drift, clean or current pack, unknown blocker, orphan/tampered/symlink artifact, swapped completion/use receipt, or duplicate activation fails closed. Direct mutation of an activated retired pack reports `pack_retired_legacy` semantics instead of treating it as missing. Selection ticks hash the retirement prepare/snapshot/overlay/completion/activation surfaces so a settlement transition is a material task-pack input change.
 
 For promotion, write the new `task.md` only after the prior task has an
 authoritative validation result, then record the transition with the same
@@ -475,7 +511,7 @@ The successor must contain `replacement_contract.schema_version: 1` with:
 
 - exact predecessor pack ref, file SHA-256, and canonical SHA-256;
 - a complete, disjoint partition of successor items into `new_item_ids` and `carried_forward_item_ids`;
-- a complete disposition for every nonterminal predecessor item: carry it unchanged, or list it under `retired_items` with a bounded reason and non-empty evidence entries containing exact workspace-relative `path` and `sha256` values. Retirement evidence must live outside the mutable `.task/task_pack/` transaction store and must still verify after publication;
+- a complete disposition for every nonterminal predecessor item: carry it unchanged, or list it under `retired_items` with `item_id`, bounded `reason`, `retirement_basis`, exact `predecessor_pack_sha256`, and non-empty `decision_evidence` entries containing workspace-relative `path` and `sha256`. `retirement_basis` is one of `already_satisfied|dependency_rederived|goal_contract_superseded|explicit_user_exclusion|stale_subject_replaced`. Decision evidence must live outside the mutable `.task/task_pack/` store and still verify after publication;
 - at most five newly derived items;
 - exact carried-forward planning contracts and predecessor-relative order;
 - dependency closure: a successor dependency that names a predecessor item must still resolve to a successor item, or that predecessor item must already be `consumed` with preserved completion evidence. Retiring an unfinished dependency target requires rederiving the dependent item with a new ID and counts against the new-item bound.
@@ -511,6 +547,7 @@ Every non-promotion mutation must produce a `pack_mutation_plan` with:
 - `pack_path` when mutating an existing pack
 - changed item IDs
 - `before_order` and `after_order` when order changes
+- `item_order` containing every existing item ID exactly once for `reorder_items`; it is the mutation input, while `before_order` and `after_order` are bound coherence evidence
 - `terminal_blocker` for `terminal_blocked`
 - `scope_fidelity` records for new or changed measurable items
 - required gate-hook, goal-axis, count-key hygiene, and residual value-per-cycle-cost records when the mutation changes a measurable item or loop-family decision
@@ -523,7 +560,7 @@ The mutation reason must cite one of: new blocker evidence, repeated blocker/sem
 When an active pack exists, `$derive-improvement-task` should consider the next `planned` item before creating unrelated one-off candidates. Promote the item into `task.md` only after:
 
 - the item still aligns with `.agent_goal` GT, authority policy, active advice disposition, schema contracts, and current blocker evidence;
-- dependencies are satisfied or explicitly represented in the new `task.md`;
+- every dependency item is already `consumed`; mentioning an unresolved dependency in `task.md` does not authorize promotion. A `blocked` item additionally requires `unblock_receipt.schema_version: 1` bound to its item ID, blocker signature, exact predecessor pack SHA-256, `decision: unblocked`, and non-empty hash-bound `decision_evidence`;
 - any `scope_fidelity` measurable target is copied into `task.md` acceptance or explicitly narrowed with residual scope;
 - any `acceptance_verifier_contract` required verifier is copied into `task.md` acceptance/validation, or the new task explicitly implements that verifier before consuming the target;
 - any acceptance-required gate hook is copied into `task.md` validation, supplied by an adapter/project-owned module, or converted into a hook-supply task before consuming the target;
@@ -547,7 +584,7 @@ When an active pack exists, `$derive-improvement-task` should consider the next 
 - any `decision_freshness_contract.decision_metadata_revision=true` or `stale_measurement_artifact=true` is converted into fresh measurement or explicit no-impact proof before consuming measurement/adoption/comparison work;
 - any `gating_axis_producer_contract.axis_starved_by_missing_producer=true` is converted into producer-supply work before another verifier/guard/report for the same axis;
 - any restrictive `portfolio_quota_contract.portfolio_quota_exceeded=true` is converted into producer, envelope, long-run, descope, terminal, or escalation work before another verifier-like item;
-- any `cycle_reachability_contract.unreachable_within_cycle=true` is converted into long-run launch with monitor/harvest, throughput improvement, descope, terminal, or escalation before another small cycle-bound run;
+- any `cycle_reachability_contract.unreachable_within_cycle=true` is converted before another small cycle-bound run: prelaunch uses a gate-digest-bound long-run launch with open residual/harvest plan, throughput improvement, descope, terminal, or escalation; an active pending run uses only the status-compatible monitor/harvest/finalize or safety route bound to its run and harvest-plan IDs;
 - any `metric_basis_contract.basis_overclaim=true` is converted into basis-compatible measurement, downgrade-aware residual scope, or contract revision before independent progress consumption;
 - any nonzero `surface_field_review_contract.surface_field_defect_matrix` is converted into producer/field repair, residual scope, terminal blocker, or escalation before review pass consumption;
 - any `guard_stacking_contract.verifier_surface_hardening=true` beyond the detection-only cap is converted into execution work, explicit descope with residual scope, terminal blocker, or escalation before another guard/report/verifier item;
@@ -575,6 +612,14 @@ Late-cycle derivation may insert, reorder, skip, or supersede pack items only wh
 - a task-state, schema, validation-set, or issue-lifecycle dependency must be repaired before the next planned item.
 - user-supplied direction explicitly excludes an item, in which case set the item to `skipped` or `superseded` and keep traceability.
 
+Treat mutation payload ownership as follows:
+
+- Insert accepts planning fields only. Reject caller-supplied `order`, lifecycle status, promotion/completion/result, timestamps, mutation history, provenance, source evidence, unblock receipt, or retirement basis; assign `status: inserted` and helper-owned provenance deterministically. An explicitly supplied `insert_before_item_id` must resolve to exactly one existing item; an unknown or empty explicit anchor is an error, never an implicit append. Insert only after the last closed or in-flight item so prerequisite insertion cannot move active/history positions.
+- Reorder requires one full `item_order` list naming every existing item exactly once. It freezes every closed or in-flight history prefix and may permute only the exact open residual suffix. `before_order` and `after_order` document the bound transition but do not replace `item_order`. The resulting order must remain dependency-topological.
+- Skip accepts only `planned|inserted|reordered|blocked`. Reject consumed, promoted/in-progress, terminal, or superseded history. Preserve already-skipped exact replay as a material no-op rather than rewriting its evidence.
+- Supersede and terminal-block reject any in-flight item. Consume or otherwise close the in-flight item first. A terminal-block transition marks every remaining open residual item `terminal_blocked`; a closed pack may not retain an executable `planned`, `inserted`, `reordered`, `blocked`, `promoted`, or `in_progress` item.
+- Exclude work semantically through `skipped`, `superseded`, or typed replacement retirement. Never physically delete a pack or item from derive; archive/GC requires a separate owning cleanup workflow, reference/ID audit, tombstone, and explicit destructive authority.
+
 Every insert, reorder, skip, supersede, or terminal-block mutation must append a `mutation_log` entry with:
 
 - `timestamp`
@@ -586,6 +631,23 @@ Every insert, reorder, skip, supersede, or terminal-block mutation must append a
 - `actor: $derive-improvement-task`
 
 Do not reorder merely to prefer a newer idea or sequential version number. Do not delete skipped/excluded items during derivation; deletion is a separate cleanup action that requires ID audit evidence and an owning workflow decision.
+
+## Bounded Prerequisite Chains
+
+Use the optional `bounded_prerequisite_chain` object only when several pack items resolve one prerequisite relation before direct producer or implementation work. Absence means the generic pack has no declared chain; it is not an implicit pass. When present, set `applicability` to `applicable` or `not_applicable`. An applicable record carries:
+
+- opaque `stable_root_id`, `item_owner_id`, and `prerequisite_relation_id` values;
+- `strict_local_reduction` and `semantic_high_water_moved` as `true`, `false`, or `not_evaluated`;
+- `chain_budget_status: within | exhausted | budget_unverified | not_evaluated`;
+- `mandatory_successor_kind: producer | implementation | regenerate_or_refresh_output | descope | terminal | none`;
+- optional positive `chain_position`/`chain_cap` plus comparable `residual_before`/`residual_after` or `unresolved_owner_count_before`/`unresolved_owner_count_after`;
+- for `strict_local_reduction: true`, a closed `reduction_observation_receipt` whose distinct before/after observation and revision IDs, basis ID, evidence digests, source revision/snapshot digests, observer, invariant owner, and canonical receipt hash bind the exact decreasing values. A decreasing caller-authored scalar without this receipt is trace data, not authorization to recurse.
+
+`strict_local_reduction: true` is an evidence claim: the shared task-pack/derive validator independently recalculates a decrease from that closed receipt and checks it against the exact row. Owner, task, fixture, timestamp, or version renames do not count. All applicable rows in one pack preserve the stable root, and rows for the same prerequisite relation use strictly increasing positions. Position reset is invalid even when item IDs change. `not_applicable` likewise requires a closed reason/evidence receipt; an empty label is not a bypass.
+
+At `chain_budget_status: exhausted` or `chain_position == chain_cap`, `mandatory_successor_kind` cannot be `none`. Derivation must classify its actual choice with `selected_successor_kind`; another `prerequisite` is forbidden, while both the category and concrete `selected_task_kind` must implement the mandatory producer, implementation, refresh, descope, or terminal transition. A label such as `producer` paired with a report-only task is invalid. If reduction or budget is `not_evaluated`, recursive narrowing is fail-closed unless semantic high-water movement is independently established within a still-bounded chain. A non-reducing item cannot be consumed as progress without `item_close_disposition: partial | blocked | descope | terminal`.
+
+These fields refine existing dependency, scope-fidelity, progress, and terminal contracts. They do not create a second queue or authorize project-specific inference. The pack helper validates persistence/coherence; the derive result contract separately validates that the selected next task obeys the cap and successor transition.
 
 ## Loop Breaker Fields
 
@@ -672,7 +734,7 @@ Task packs must also preserve the Part H in-place workflow revisions as generic 
 
 - Failure autopsy and stage resolution: failure-derived pack items should carry `last_successful_stage`, `failure_surface_stage`, `failure_surface_count_key`, and `effective_count_key` when supplied. Contradictory terminal classification or same-input mismatch is trace evidence only until repaired; it cannot close, seal, or reset the family.
 - Diagnostics supply: when loopback reports repeated `diagnostics_unavailable` for the same failure surface, insert or promote instrumentation supply unless the chosen repair records why the current evidence already observes success/failure.
-- Verification source separation: `independently_verified` evidence is consumable only when verification inputs are disjoint from verified artifacts, except adapter-declared `self_grounded` axes. Missing or overlapping source paths downgrade the affected fields to attested evidence.
+- Verification separation: `independently_verified` evidence is consumable only when inputs are disjoint and decisive invariant owners differ. Missing/overlapping inputs or missing/shared owners downgrade affected fields. Explicit root-local structural `self_grounded` remains separate provenance.
 - Frozen-envelope thaw: when acceptance is unreachable under a frozen envelope, reserve `envelope_thaw_item` with thaw condition/schedule, or route to constraint relaxation, explicit residual descope, terminal blocker, or user escalation.
 - Ledger fixed cost: when a pack mutation records repeated cycle artifacts, prefer `unchanged_ref(path+hash)` references for identical prior packets and keep full serialization for changed content only.
 
@@ -716,6 +778,6 @@ Task packs must preserve lane lineage and premise-supply contracts without addin
 - Decision freshness: decision-update items after upstream production-contract changes require a fresh measurement run id for the current lane. Relabeling stale artifacts is `decision_metadata_revision` and remains metadata/governance work.
 - Gating-axis producer supply: if a gating axis is starved because the producer path is missing or unexercised, producer-supply work outranks another verifier/guard/report item. Verifier-like work over that axis collapses under verifier-surface hardening until producer supply fires.
 - Portfolio quota: when an adapter-supplied quota restricts overrepresented verifier/guard/report/metadata work, the next item must be producer, envelope, long-run, descope-with-residual, terminal blocker, or user escalation until the ratio recovers. Missing quota hooks are warn-only.
-- Cycle reachability: when required scale is unreachable within a cycle, use a long-run launch item with monitor/harvest validation, a throughput-improvement item with measured C increase, explicit descope, terminal blocker, or user escalation. Do not keep promoting small smoke reruns as progress.
+- Cycle reachability: when required scale is unreachable within a cycle, a prelaunch item must bind the calculation digest and use long-run launch with an open residual/harvest plan, throughput improvement, explicit descope, terminal blocker, or user escalation. Once a matching pending run exists, use its lifecycle-compatible monitor/harvest/finalize route and bind the exact run and harvest-plan IDs. Do not keep promoting small smoke reruns or cross lifecycle phases as progress.
 - Metric basis: metrics whose claimed basis is not derivable from consumed inputs must carry `basis_overclaim` and downgraded actual basis fields. They cannot support independent high-water/progress consumption until basis-compatible evidence exists.
 - Surface field review: locator-backed qualitative review should cover every adapter-supplied producer-written surface string field class and record scalar defect counts by field class and defect class. Missing `surface_field_classes` fails quiet; nonzero counts preserve producer/field repair or residual scope.

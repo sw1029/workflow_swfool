@@ -8,6 +8,10 @@ from typing import Any
 from .constants import REGISTRY_REL_PATH
 from .io_utils import read_jsonl, read_text, rel_path
 from .values import number_value
+from ..ledger.operation_contract import (
+    build_durable_operation,
+    build_typed_operations_candidate,
+)
 
 
 def _legacy_symbol_registry(root: Path) -> dict[str, dict[str, Any]]:
@@ -68,7 +72,7 @@ def load_symbol_registry_state(
     durable = finalized.get("durable_state_candidate")
     if (
         not isinstance(durable, dict)
-        or durable.get("contract_version") != 1
+        or durable.get("contract_version") != 2
         or durable.get("mode") != "typed_operations"
         or durable.get("producer") != "progress_loop_detection"
     ):
@@ -79,13 +83,13 @@ def load_symbol_registry_state(
             "rows": {},
             "findings": [{"severity": "block", "code": "finalized_registry_contract_mismatch"}],
         }
-    operations = durable.get("operations") if isinstance(durable, dict) else None
-    matches = [
-        operation
-        for operation in operations or []
-        if isinstance(operation, dict) and operation.get("target_id") == "dedup_symbol_registry"
-    ]
-    if len(matches) != 1:
+    target_projection = finalized.get("post_write_projection")
+    projection = (
+        target_projection.get("dedup_symbol_registry")
+        if isinstance(target_projection, dict)
+        else None
+    )
+    if not isinstance(projection, dict):
         return {
             "status": "block",
             "receipt_verified": True,
@@ -95,12 +99,12 @@ def load_symbol_registry_state(
                 {
                     "severity": "block",
                     "code": "finalized_registry_projection_missing_or_ambiguous",
-                    "projection_count": len(matches),
+                    "projection_count": 0,
                 }
             ],
         }
-    payload = matches[0].get("payload")
-    if matches[0].get("operation_type") != "replace_projection":
+    payload = projection.get("payload")
+    if projection.get("operation_kind") != "replace_projection":
         return {
             "status": "block",
             "receipt_verified": True,
@@ -240,6 +244,9 @@ def prepare_feature_symbol_registry_update(
     """Build a complete typed projection without mutating durable state."""
     feature = current_item.get("feature_symbol")
     observed = current_item.get("observed_output")
+    attempt_identity = str(
+        current_item.get("attempt_identity") or current_item.get("attempt_id") or ""
+    ).strip()
     if not isinstance(feature, dict) or not isinstance(observed, dict) or not feature.get("symbol"):
         return {
             "write_enabled": False,
@@ -247,6 +254,14 @@ def prepare_feature_symbol_registry_update(
             "updated": False,
             "prepared": False,
             "reason": "missing_feature_symbol",
+        }
+    if not attempt_identity:
+        return {
+            "write_enabled": False,
+            "legacy_write_requested": True,
+            "updated": False,
+            "prepared": False,
+            "reason": "missing_attempt_identity",
         }
     registry = previous_registry if previous_registry is not None else load_symbol_registry(root)
     previous = registry.get(str(feature["symbol"])) or {}
@@ -285,19 +300,18 @@ def prepare_feature_symbol_registry_update(
     }
     projected[str(feature["symbol"])] = _durable_registry_row(record)
     payload = {"rows": [projected[key] for key in sorted(projected)]}
-    operation = {
-        "operation_type": "replace_projection",
-        "target_id": "dedup_symbol_registry",
-        "payload": payload,
-        "payload_sha256": _canonical_json_sha256(payload),
-    }
-    candidate = {
-        "contract_version": 1,
-        "mode": "typed_operations",
-        "producer": "progress_loop_detection",
-        "operations": [operation],
-    }
-    candidate["candidate_sha256"] = _canonical_json_sha256(candidate)
+    operation = build_durable_operation(
+        target_ref="dedup_symbol_registry",
+        operation_kind="replace_projection",
+        attempt_identity=attempt_identity,
+        payload_schema_id="dedup-symbol-registry-v1",
+        payload=payload,
+    )
+    candidate = build_typed_operations_candidate(
+        producer="progress_loop_detection",
+        attempt_identity=attempt_identity,
+        operations=[operation],
+    )
     return {
         "write_enabled": False,
         "legacy_write_requested": True,

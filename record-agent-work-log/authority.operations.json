@@ -1,0 +1,23 @@
+{
+  "schema_version": 2,
+  "manifest_kind": "authority_operations",
+  "skill_id": "record-agent-work-log",
+  "skill_version": "2.0.0",
+  "operations": [
+    {
+      "operation_id": "publish_agent_work_log",
+      "operation_version": "1",
+      "authorization_mechanism": "none",
+      "mutation_class": "local_mutation",
+      "required_capabilities": ["agent_log.publish"],
+      "source_rank_floor": "S0",
+      "risk_floor": "R1",
+      "decision_class": "D3",
+      "effect_classes": ["publish_factual_work_record"],
+      "data_classes": ["agent_work_log"],
+      "reversibility": "reversible",
+      "subject_kinds": ["agent_work_log"],
+      "authority_applicability": "none"
+    }
+  ]
+}

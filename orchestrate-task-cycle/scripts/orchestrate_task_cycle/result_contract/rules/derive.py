@@ -76,5 +76,7 @@ class DeriveRule(TargetContractRule):
 
     def check(self, context: RuleContext) -> None:
         from .derive_checks import run_checks
+        from .acceptance_satisfiability import validate_acceptance_satisfiability
 
+        validate_acceptance_satisfiability(context)
         run_checks(context)

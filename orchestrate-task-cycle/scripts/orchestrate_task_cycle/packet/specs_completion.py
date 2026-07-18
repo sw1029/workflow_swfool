@@ -67,6 +67,8 @@ def build_derive(ctx: PacketBuildContext) -> dict[str, Any]:
             "progress loop detection result with blocker_signature, semantic_signature, goal_distance_gate, and progress_kind/governance_only evidence",
             "task pack status/result and terminal blocker state when present",
             "active non-GT external advice packet when present",
+            "one frozen shared evidence manifest with exact artifact/body/lane/input identity",
+            "adapter_decision_context and hash-bound adapter_post_use_seal, or evidenced no_registered_adapter applicability",
         ],
         "selection_rules": [
             "consume/promote the next safe task-pack item only after current-task validation and issue handling",
@@ -111,7 +113,11 @@ def build_derive(ctx: PacketBuildContext) -> dict[str, Any]:
             "loop_breaker_disposition",
             "evidence_paths",
             "used_advice or advice disposition rationale when active advice is in scope",
-            "degraded_agents and unavailable agent/lens notes when the requested tiered role fanout is unavailable",
+            "derive_contract_version=2 and improvement_analysis_manifest schema_version=1",
+            "exactly three unique read-only lens receipts with identical shared-evidence digest and structured zero-to-five candidate outputs",
+            "zero-candidate rejection inventory, exact candidate union, and one synthesis receipt consuming all three lenses",
+            "selection_outcome: selected|terminal_wait|terminal_blocked|user_escalation with non-contradictory outcome fields",
+            "canonical pack_disposition from references/derive-selection-contract.json",
         ],
     }
 
@@ -208,7 +214,7 @@ def build_validate(ctx: PacketBuildContext) -> dict[str, Any]:
             "decision_contract_version=1, exact decision artifact identity, and explicit required/consumed compatibility gate scopes",
             "verification_axes and full consumer invocation receipts when required by acceptance",
             "validation report path",
-            "acceptance_scenario_gate, command_provenance_gate, blocker_actionability_gate, stochastic_feasibility_gate, and instrumentation_first_fire_gate when applicable",
+            "acceptance_scenario_gate with recomputed structured premise_receipts, command_provenance_gate, blocker_actionability_gate, stochastic_feasibility_gate, and instrumentation_first_fire_gate when applicable",
             "expectation_lineage_gate, comparison_parity_gate, adoption_axis_gate, resolution_downgrade_gate, and report_key_integrity_gate when applicable",
         ],
     }

@@ -11,7 +11,12 @@ DOMAIN_ADAPTER_ENV = "TASK_CYCLE_DOMAIN_ADAPTER_PATH"
 # ``None`` is intentional: repository adapter locations and decision budgets
 # must be supplied by the caller, environment, or repository configuration.
 DEFAULT_DOMAIN_ADAPTER_REL_PATH: str | None = None
-DISPOSITION_UNIVERSE = {"goal_productive", "consolidation", "terminal_blocked", "user_escalation"}
+DISPOSITION_UNIVERSE = {
+    "goal_productive",
+    "consolidation",
+    "terminal_blocked",
+    "user_escalation",
+}
 SAFETY_VALVES = {"terminal_blocked", "user_escalation"}
 CONSOLIDATION_STREAK_CAP_DEFAULT: int | None = None
 MEASUREMENT_STREAK_CAP_DEFAULT: int | None = None

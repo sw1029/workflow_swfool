@@ -1,0 +1,23 @@
+{
+  "schema_version": 2,
+  "manifest_kind": "authority_operations",
+  "skill_id": "inspect-oom-risk",
+  "skill_version": "2.0.0",
+  "operations": [
+    {
+      "operation_id": "audit_oom_risk",
+      "operation_version": "1",
+      "authorization_mechanism": "none",
+      "mutation_class": "observe",
+      "required_capabilities": ["repository.oom.inspect"],
+      "source_rank_floor": "S0",
+      "risk_floor": "R0",
+      "decision_class": "D3",
+      "effect_classes": ["inspect_memory_risk"],
+      "data_classes": ["repository_metadata"],
+      "reversibility": "reversible",
+      "subject_kinds": ["repository"],
+      "authority_applicability": "none"
+    }
+  ]
+}

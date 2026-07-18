@@ -17,14 +17,14 @@ def _evaluate_decision_verifier(frame: _EvaluationFrame) -> None:
         corrective_gate, coverage_gate, coverage_reconciliation_gate, current_root_key,
         dispatch_gate, disposition, domain_adapter, family_key, forced_retarget_gate,
         gate_inputs, hard_stop, metric_validity_gate, output_delta, paths, primary_metric_gate,
-        quality, reachability_gate, root, runner_validation, structure_gate, substance_gate,
+        quality, reachability_gate, cycle_reachability_gate, root, runner_validation, structure_gate, substance_gate,
         validator_gate,
     ) = frame.require(
         'adapter_gate', 'adapter_load_gate', 'advice_gate', 'chain_gate', 'changed_files',
         'corrective_gate', 'coverage_gate', 'coverage_reconciliation_gate', 'current_root_key',
         'dispatch_gate', 'disposition', 'domain_adapter', 'family_key', 'forced_retarget_gate',
         'gate_inputs', 'hard_stop', 'metric_validity_gate', 'output_delta', 'paths',
-        'primary_metric_gate', 'quality', 'reachability_gate', 'root', 'runner_validation',
+        'primary_metric_gate', 'quality', 'reachability_gate', 'cycle_reachability_gate', 'root', 'runner_validation',
         'structure_gate', 'substance_gate', 'validator_gate',
     )
     verifier_source_value, verifier_source_error = call_adapter(
@@ -54,6 +54,7 @@ def _evaluate_decision_verifier(frame: _EvaluationFrame) -> None:
             substance_gate,
             corrective_gate,
             reachability_gate,
+            cycle_reachability_gate,
             metric_validity_gate,
             advice_gate,
             structure_gate,

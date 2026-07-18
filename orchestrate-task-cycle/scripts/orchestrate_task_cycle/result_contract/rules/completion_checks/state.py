@@ -25,6 +25,7 @@ class CompletionFacts:
     generation_dependent_count_key: Any = None
     generation_key_novelty_claim: Any = None
     independent_source_status: Any = None
+    independent_invariant_status: Any = None
     independently_verified_downgraded_fields: Any = None
     independently_verified_fields: Any = None
     instrumentation_supply_required: Any = None
@@ -48,6 +49,8 @@ class CompletionFacts:
     axis_starved_by_missing_producer: Any = None
     current_lane_revalidated: Any = None
     decision_metadata_revision: Any = None
+    decision_lineage_declared: Any = None
+    decision_lineage_status: Any = None
     failed_gating_axis: Any = None
     fresh_measurement_present: Any = None
     harvest_validated: Any = None

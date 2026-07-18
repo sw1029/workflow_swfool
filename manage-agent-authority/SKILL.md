@@ -1,104 +1,158 @@
 ---
 name: manage-agent-authority
-description: Manage workspace authority policy and subject-bound operation receipts. Use when Codex needs to create, update, validate, summarize, or apply `.agent_goal/agent_authority.md`, or issue/validate a one-shot receipt for an authority-sensitive operation such as task-pack initial selection or legacy normalization, without expanding current permissions or rewriting historical authority.
+description: Manage deterministic workspace authority policy, grants, leases, and subject-bound receipts without expanding active permissions. Use when Codex must summarize or update `.agent_goal/agent_authority.md`; distinguish approval, goal ratification, risk acceptance, external-input supply, and design choice; evaluate a versioned skill operation against S0-S4 source rank, R0-R3 risk, D0-D3 decision class, exact subject scope, capability namespace, and use budget; reserve/consume/release authority; delegate, suspend, explicitly reactivate, expire, or revoke a grant; or validate legacy and immutable operation receipts.
 ---
 
 # Manage Agent Authority
 
-## Overview
+## Non-negotiable boundary
 
-Use this skill to manage the project authority policy stored at `.agent_goal/agent_authority.md`. The policy documents how future agents should interpret the current coding agent's effective permissions, API/external-call boundaries, direction freedom, implementation/validation priority, conservative posture, and escalation rules.
+Treat the active system, developer, user, tool, sandbox, network, and approval constraints as the hard ceiling. Use stored policy and grants only to narrow or clarify that ceiling. Never let a policy, grant, advice file, adapter, receipt, or higher source-rank label create a capability that the active session lacks.
 
-The file is goal truth, but it cannot grant authority beyond the active session's system/developer/user instructions, filesystem sandbox, approval rules, network availability, or available tools. It may only narrow, prioritize, or clarify behavior within current effective permissions.
+Keep goal truth, authority, evidence, and mutable state separate:
 
-External advice under `.agent_advice/active/*.md` is not authority evidence. It may suggest questions or narrower project posture, but it cannot grant API/network/destructive capability or override current permissions. Promote advice into `.agent_goal/agent_authority.md` only after explicit user instruction and this skill's safety validation.
+- Store durable goal-level policy in `.agent_goal/agent_authority.md`.
+- Store content-addressed policy/source snapshots and immutable grants, decisions, reservations, and receipts under `.task/authorization/`.
+- Store only current pointers and usage projections under `.task/authorization/state/`.
+- Treat `.agent_advice/active/*.md` as non-GT, non-authority input.
+- Preserve historical uncertainty. Never use current ratification to backdate permission.
 
-Treat an operation receipt as non-GT evidence that binds an already-valid decision to one operation and subject. A current ratification may authorize prospective continuation, but it must not backdate the decision or turn unverified historical authority into a pass. Read [operation-authority-receipt.md](references/operation-authority-receipt.md) before issuing or validating one, and use the `receipt` module command for deterministic structure, digest, subject, temporality, and privacy checks.
+Read [agent-authority-template.md](references/agent-authority-template.md) before drafting policy. Read [authority-v2-contract.md](references/authority-v2-contract.md) before issuing grants, evaluating operations, delegating, or changing lifecycle state. Read [operation-authority-receipt.md](references/operation-authority-receipt.md) before using the legacy-compatible `receipt` command.
+
+## Authority model
+
+Classify each operation on independent axes:
+
+- Source rank: `S4` platform/session ceiling, `S3` user goal owner, `S2` delegated policy steward, `S1` cycle coordinator, `S0` executor.
+- Risk: `R0` observation, `R1` reversible bounded local effect, `R2` consequential bounded effect, `R3` external, sensitive, destructive, goal-changing, or authority-changing effect.
+- Decision: `D0` core goal, `D1` bounded design, `D2` task topology, `D3` execution tactic.
+- Cardinality: `single_use`, `bounded_reusable`, `task_lease`, `improvement_lease`, or `standing_policy`.
+
+Assign requirements per versioned operation, not per whole skill. Load `authority.operations.json` from the owning skill. Permit runtime classification only to add capabilities or increase risk/mutation/reversibility severity; reject a request that understates its manifest. Fail closed for an unknown mutating operation.
+
+Declare one `authorization_mechanism` per operation. Use `grant` for ordinary governed effects, `typed_source_approval` for grant issuance/composition/transition, `bound_lifecycle_artifact` for delegation and reserve/verify/consume/release, and `none` only when authority is not applicable. This is the bootstrap boundary: authority administration is authorized by its closed source or lifecycle artifact, not by recursively requiring a grant that can only be issued by the same administration path.
+
+Do not merge grants implicitly. Require one active grant to cover the complete capability set, exact subject, exact operation, actor rank, risk, decision class, time window, lease scope, and available use budget. Use an explicit, source-bound composition receipt only when a deliberately approved set of grants must cover the request together.
+
+## Separate decision types
+
+Set exactly one `intent_type` and route it to its actual owner:
+
+- `grant_authority`: evaluate with this skill.
+- `ratify_goal_truth`: require goal-owner ratification; a grant is not ratification.
+- `accept_risk_or_cost`: require separate risk/cost acceptance; a grant is not consent.
+- `supply_external_input`: report availability independently; permission does not create missing data.
+- `select_design_option`: require design selection when the autonomy envelope does not already decide it.
+
+Return one closed decision: `allowed`, `approval_required`, `denied`, `waiting_external_input`, `capability_unavailable`, `blocked_by_goal_truth`, `classification_repair`, `conflict`, or `not_applicable`.
+
+Route unsupplyable external input to a local-data alternative, descope, or an explicit external-input limitation. Do not relabel it as a GT blocker or keep converting it into approval work.
+
+## Deterministic workflow
+
+1. Resolve the workspace and current ceiling.
+   - Read current instructions and tool/sandbox permissions first.
+   - Read `.agent_goal/final_goal.md`, `.agent_goal/conventions.md`, `.agent_goal/agent_authority.md`, and relevant goal theory/architecture when present.
+   - Load adapter classifications only as narrowing evidence.
+
+2. Classify the operation.
+   - Bind skill/operation IDs and versions, cycle/task/pack/attempt IDs, actor rank, exact subject `{kind, ref, digest, revision}`, namespaced capabilities, effect/data/mutation/reversibility, risk, decision class, requested cardinality/use budget, and idempotency key.
+   - Under schema v2, treat `subject.ref` as a workspace-relative existing regular file. Reject a missing, symlinked, or non-regular subject and require its current bytes to match `subject.digest` again before reserve, dispatch, and commit.
+   - Require `single_use` budget 1, an exact task ID for `task_lease`, and an exact pack/improvement ID for `improvement_lease`.
+   - Build a session ceiling and goal-autonomy envelope. Bind the envelope to exact concept/subject/operation IDs and evidence digest.
+   - Keep external-input, GT-alignment, risk-acceptance, and design-selection status explicit.
+   - Bind asserted available/missing external input, resolved risk acceptance, and resolved design selection to exact immutable `{ref, sha256}` evidence. Keep the evidence field `null` for unverified, unresolved, or not-required states.
+
+3. Snapshot mutable authority sources before issuing prospective authority.
 
 ```bash
 SKILLS_ROOT="${CODEX_HOME:-$HOME/.codex}/skills"
 PYTHONPATH="$SKILLS_ROOT/manage-agent-authority/scripts" \
-  python3 -m manage_agent_authority receipt <issue|validate> [arguments]
+  python3 -m manage_agent_authority authority snapshot-policy \
+  --root . --policy-ref .agent_goal/agent_authority.md --expected-version 0
+
+PYTHONPATH="$SKILLS_ROOT/manage-agent-authority/scripts" \
+  python3 -m manage_agent_authority authority snapshot-source \
+  --root . --source-ref .task/authorization/source-id.json
 ```
 
-Use [agent-authority-template.md](references/agent-authority-template.md) for both `.agent_goal/agent_authority.md` and `.interview/drafts/agent_authority.md`.
+`snapshot-source` accepts only a closed `authority_source_approval` JSON document for authority issuance. It must bind the source kind/rank, exact grant and lineage IDs, capabilities, subjects, operations, risk/decision/cardinality ceilings, use limit, validity window, and any delegated approval binding. Before using an S1/S2 source, resolve and rehash its exact higher-rank source-approval binding, require a finite strictly rank-increasing lineage to S3/S4, and prove that every scope and time window only narrows. It cannot encode goal ratification, risk acceptance, design selection, or external-input supply.
 
-## Domain Adapter Contract
+4. Register one closed grant or a valid subset delegation.
+   - Require immutable policy/source bindings.
+   - Require issuer rank above holder rank.
+   - For a child, preserve lineage and make capabilities, subjects, operations, risk ceiling, decision classes, expiry, task/improvement scope, and budget no broader than the parent.
 
-Prefer project-owned policy and escalation adapters over authority-local domain assumptions. The module or caller packet may expose:
+```bash
+PYTHONPATH="$SKILLS_ROOT/manage-agent-authority/scripts" \
+  python3 -m manage_agent_authority authority register-grant --root . --grant grant.json
+```
 
-- `policy_consumption_sites(policy_id, **context) -> list|dict`: optional S8 helper returning opaque judgment sites and `reflects_policy: bool` for an authorized authority or acceptance-policy change. If any site reports `reflects_policy=false`, record `policy_propagation_incomplete` debt and route a derive/update item for that site; do not declare the policy fully applied from producer-layer updates alone. If absent or malformed, fail quiet to existing authority validation and emit `propagation=unverified` when policy application is claimed.
-- `authority_axis_classify(required_input, granted_authorities, **context) -> dict`: optional S5 helper classifying escalation inputs as `already_granted`, `self_resolvable`, or `genuine_authority`, with opaque evidence refs. Only `genuine_authority` remains a user-escalation candidate. If absent or malformed, fail quiet, keep the existing escalation interpretation, and emit `authority_axis_unclassified`.
+5. Evaluate and persist the decision.
 
-Do not define policy-consumption sites, authority axes, self-resolution meanings, or domain-specific permission units in this skill. S8 propagation debt is visibility and backlog routing only; S5 classification narrows escalation inputs but does not grant new authority.
+```bash
+PYTHONPATH="$SKILLS_ROOT/manage-agent-authority/scripts" \
+  python3 -m manage_agent_authority authority evaluate --root . \
+  --request request.json --context evaluation-context.json \
+  --at 2026-01-01T00:00:00Z
+```
 
-## Workflow
+Use `effective_authority_fingerprint` for approval-wait wakeup and exact replay. It contains only operation-relevant projections and selected immutable grant/policy bindings. Do not substitute a hash of the mutable whole policy or goal context.
 
-1. Locate the workspace root.
-   - Default to the current working directory unless the caller names another root.
-   - Create `.agent_goal/` only when writing final authority policy is explicitly requested or when `$orchestrate-task-cycle` asks for an authority policy to be ensured.
-   - Use `.interview/drafts/agent_authority.md` only for `$deep-interview-goal-context` draft/review cycles.
+When the decision is `approval_required`, present the deterministic `approval_projection`: typed intent, exact operation/subject/capabilities/effect, bounded scope and budget, excluded effects, safe alternative, reason codes, and replay key. An approval of that projection does not authorize any excluded effect or broader reuse.
 
-2. Read existing context.
-   - Read `.agent_goal/final_goal.md` and `.agent_goal/conventions.md` when present.
-   - Read existing `.agent_goal/agent_authority.md` when present.
-   - Read relevant `.agent_advice/active/*.md` or a `$manage-external-advice` packet only when the authority operation depends on it; treat it as non-GT evidence and check it against current effective permissions.
-   - Read `.interview/drafts/agent_authority.md`, `.interview/questions.md`, and `.interview/answers.md` when operating in interview draft or finalization mode.
-   - Preserve useful user-authored authority decisions and mark unsupported or conflicting details as open questions.
+6. Reserve before dispatch.
+   - Bind the persisted allowed decision by path and SHA-256.
+   - Re-evaluate under a lock, verify the subject, operation manifest, selected grant and every lineage ancestor state/version, policy snapshot, expiry, scope, and available budget, then create a reservation and CAS-update usage across the lineage.
+   - Treat an exact idempotent replay as the same reservation. Reject a conflicting replay.
+   - Treat immutable event `state_changes` as a write-ahead recovery intent. Before every lifecycle/transition entry, scan all intents, complete each uniquely connected exact `before -> after` projection, accept an already-applied `after` or exact recorded descendant, and quarantine competing/unconnected state.
 
-3. Choose the operation.
-   - `summarize`: return a compact effective authority policy for another skill to pass to agents.
-   - `ensure_default`: create `.agent_goal/agent_authority.md` from the template with `default_current_agent_permissions` when no authority file exists and the caller needs durable policy.
-   - `draft_for_interview`: write or revise `.interview/drafts/agent_authority.md` using interview evidence, not final `.agent_goal`.
-   - `finalize_from_interview`: after `$deep-interview-goal-context` evidence review, audit, final review, and agent write-confirmation pass, write `.agent_goal/agent_authority.md` from the supported interview draft.
-   - `update`: update `.agent_goal/agent_authority.md` from explicit user instruction or current work evidence.
-   - `validate`: check that an authority file does not claim capabilities beyond current effective permissions or higher-priority instructions.
-   - `issue_operation_receipt`: after resolving authority, write one subject-bound receipt under `.task/authority_receipts/` with the `receipt issue` module command; use `current_ratification` for a present approval of an older operation.
-   - `validate_operation_receipt`: validate a receipt file, digest, subject, policy/source bindings, temporal mode, allowed effects, and privacy with `receipt validate`; pass `--selected-at` for a complete initial-selection time binding.
+7. Verify before commit, then consume or release.
+   - Run `authority verify --stage pre_commit` before committing effects.
+   - Bind an immutable execution-result artifact and run `authority consume` after a known effect.
+   - Run `authority release` only with evidence of `not_started` or `verified_no_effect`.
+   - Quarantine `unknown_effect`; do not restore its reserved budget automatically.
 
-4. Apply the template.
-   - Include these sections: `Authority Baseline`, `API And External Calls`, `Direction Freedom`, `Implementation And Validation Priority`, `Escalation And Approval`, `Precedence And Overrides`, and `Open Questions`.
-   - Use `default_current_agent_permissions` as the baseline unless the user explicitly supplies narrower project-specific policy.
-   - Record API/network/external service policy as `forbidden`, `ask_first`, `allowed_when_task_requires`, `read_only`, or `inherit_current_permissions`.
-   - Record direction freedom as `strict`, `bounded_variation`, `implementation_first`, `artifact_confirmation_first`, `quality_first`, `conservative`, or a clearly user-defined profile.
-   - Keep unsupported decisions under `Open Questions` instead of inventing policy.
+8. Transition grants explicitly.
+   - Use CAS-bound `suspended`, `reactivated`, `revoked`, or `expired` transitions with immutable typed source approval.
+   - Reactivation is the deliberate recovery path only from `suspended`: require a fresh exact event ID, the suspended state's expected version, and a still-effective source approval, and reject reactivation at or after the grant's expiry. A policy edit alone never reactivates a grant.
+   - Apply `expired` only at or after the grant's exact `expires_at`; a grant without an expiry cannot take that transition.
+   - Cascade revoke/expire to descendants. Suspension need not mutate every descendant projection, but an inactive ancestor makes every child unusable while that lineage remains invalid.
 
-5. Validate authority safety.
-   - Confirm the file does not grant network, API, destructive, credentialed, long-running, filesystem, or external-service authority that the active session lacks.
-   - Confirm the file states that current system/developer/user instructions and active tool/sandbox permissions have precedence.
-   - Confirm the newest explicit user instruction controls the current turn when it conflicts with stored goal authority, but do not let downstream workflow artifacts cite "latest user instruction" as a durable supersession unless they preserve a verifiable timestamp or log/transcript path plus the quoted instruction text.
-   - When an update claims a policy change is applied, use S8 `policy_consumption_sites` when supplied to verify all opaque judgment sites reflect the policy. Sites with `reflects_policy=false` are `policy_propagation_incomplete` debt and derive backlog, not a hard validation failure by themselves. Missing hook evidence is `propagation=unverified` warning evidence.
-   - When a workflow packet asks for user escalation, use S5 `authority_axis_classify` when supplied to remove `already_granted` inputs and route `self_resolvable` inputs away from user escalation. If the hook is absent, keep the existing escalation set with `authority_axis_unclassified`.
-   - Confirm secrets, credentials, private keys, tokens, sensitive transcripts, and large copyrighted excerpts are absent.
+## Policy operations
 
-6. Report outcome.
-   - Return the operation performed, final or draft path, effective authority summary, open questions, and any conflicts.
-   - When called by `$orchestrate-task-cycle`, return a compact Korean summary suitable for `기준 GT` and downstream subskill prompts.
-   - When called by `$deep-interview-goal-context`, return whether the draft or final write is safe to include in evidence review/final write gates.
-   - For operation receipts, return `valid|blocked`, the receipt path and SHA-256, temporality, historical effect, exact subject, and conflicts. Do not report current ratification as contemporaneous authority.
+Use these human-policy operations without conflating them with runtime leases:
 
-## Consumption Rules
+- `summarize`: return effective policy and open questions.
+- `ensure_default`: create the template only when a caller requires durable policy and no file exists.
+- `draft_for_interview`: write `.interview/drafts/agent_authority.md` from interview evidence.
+- `finalize_from_interview`: write final policy only after interview review, user confirmation, and agent write-confirmation gates.
+- `update`: preserve supported user decisions and make only explicitly authorized changes.
+- `validate`: reject capability expansion, unsupported sources, sensitive content, and precedence violations.
 
-- `$orchestrate-task-cycle` must call this skill to resolve the effective authority policy before task derivation, implementation delegation, validation, or final reporting.
-- `$derive-improvement-task` must treat the returned authority policy as planning evidence and include `Authority Policy` in generated `task.md`.
-- `$task-md-agent-governance` must pass the returned authority policy to every code-writing worker and implementation audit prompt.
-- `$deep-interview-goal-context` must use this skill's template for `.interview/drafts/agent_authority.md` and must use this skill for final `.agent_goal/agent_authority.md` writes after its review gates pass.
-- `$task-doctor` must obtain a validated operation receipt before normalizing an existing task pack's initial-selection provenance.
-- Task-pack helpers must consume the receipt file and digest, not a bare reference or inline authority claim.
-- `$orchestrate-task-cycle` must preserve a partial historical verdict when a current ratification only authorizes prospective continuation.
+## Domain adapter contract
+
+Accept optional project-owned hooks:
+
+- `authority_axis_classify(...)`: classify a candidate as `already_granted`, `self_resolvable`, or `genuine_authority` with opaque evidence. Treat malformed or absent output as `authority_axis_unclassified`.
+- `policy_consumption_sites(...)`: list opaque consumer sites and `reflects_policy`. Record false sites as `policy_propagation_incomplete` debt. Treat missing evidence as `propagation=unverified`.
+
+Never let an adapter grant authority, lower a manifest requirement, manufacture external input, or define a broader generic capability. Use it only to narrow escalation through domain semantics.
+
+## Legacy bridge
+
+Keep `python3 -m manage_agent_authority receipt issue|validate` compatible with schema v1. Preserve v1 validation against the exact current file binding; do not silently reinterpret old receipts. Issue schema-v2 receipts with immutable policy/source snapshots so later policy edits do not invalidate them. Treat an unprovable legacy decision as historical partial/unverified, not retroactively allowed.
+
+## Report contract
+
+Return the operation, typed intent, decision/reasons, exact subject, required and covering capabilities, source/risk/decision axes, cardinality and remaining budget, immutable artifact refs/digests, lifecycle state/version, effective scoped fingerprint, open questions, and conflicts. For orchestration, also return a compact Korean summary without embedding raw private or copyrighted source text.
 
 ## Guardrails
 
-- Do not use this file to bypass sandbox, approval, network, filesystem, tool, model, or higher-priority instruction limits.
-- Do not treat `.agent_advice` as authority or permission evidence. Advice can only narrow/clarify after explicit user-supported update and validation.
-- Do not infer permission for API calls, network access, external services, destructive operations, credential use, costly actions, long-running jobs, or broad direction changes from silence.
-- Do not declare an authority or acceptance-policy change fully propagated when S8 reports any consumer site with `reflects_policy=false`; record debt and follow-up instead. Missing propagation evidence is `propagation=unverified`, not fail-close.
-- Do not escalate inputs that S5 classifies as `already_granted` or `self_resolvable`; keep missing classifier evidence as `authority_axis_unclassified` rather than inventing authority axes.
-- Do not overwrite `.agent_goal/agent_authority.md` wholesale unless it is empty, placeholder-only, explicitly replaced by the user, or being created for the first time.
-- Do not write final authority policy from `.interview/drafts/agent_authority.md` unless `$deep-interview-goal-context` reports final user confirmation, evidence-consistency confirmation, final critical review confirmation, and `agent_write_confirmed: yes`.
-- Do not store secrets, credentials, private keys, tokens, sensitive raw transcripts, or large copyrighted excerpts in `.agent_goal/agent_authority.md` or `.interview/drafts/agent_authority.md`.
-- The newest explicit user message still overrides stored authority policy for the current turn. Durable task rewrites or reseals that rely on that override must cite a verifiable source; otherwise route a one-question user confirmation instead of silently weakening or re-forbidding an authority-allowed action.
-- Do not backdate an operation receipt, reclassify current ratification as contemporaneous authority, or use later completion/validation as earlier selection authority.
-- Do not issue a receipt from advice alone or reuse a one-shot receipt for a broader operation or different subject.
-- Reject unknown authority source classes; retrospective assessment may verify immutable contemporaneous evidence but cannot create permission.
-- Treat an exact repeated receipt as idempotent evidence; block conflicting replacement of an already-bound receipt.
+- Do not bypass active sandbox, approval, network, filesystem, model, tool, credential, cost, or higher-priority instruction limits.
+- Do not use advice, task completion, validation success, issue status, silence, or a tier label as authority evidence.
+- Do not use wildcard capabilities, wildcard subjects, implicit grant unions, self-delegation, circular delegation, rank escalation, retroactive receipts, or current mutable policy hashes for new receipts.
+- Do not let task authority imply action authority, improvement authority rewrite core GT, authority imply risk consent, or approval imply external-input availability.
+- Do not retry an unchanged approval wait as a new task. Replay the exact request and wake only when its scoped authority fingerprint or separate required input changes.
+- Do not release a reservation with unknown effects. Quarantine it for evidence-backed recovery.
+- Do not store secrets, credentials, tokens, raw private transcripts, or large copyrighted excerpts in authority artifacts.

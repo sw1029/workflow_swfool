@@ -177,7 +177,7 @@ def _collect_item_issues(
                     snapshot_digest = sha256_file(snapshot_path)
                     if fields.get("snapshot_digest") and snapshot_digest != fields.get("snapshot_digest"):
                         add_issue(issues, "medium", "immutable_snapshot_digest_mismatch", "Historical snapshot body differs from its immutable digest.", [item_id], [str(snapshot_value)])
-            elif path.is_file():
+            elif path.is_file() and status not in NON_ACTIVE_STATUSES:
                 digest = sha256_file(path)
                 if item.get("content_sha256") and digest and digest != item.get("content_sha256"):
                     add_issue(

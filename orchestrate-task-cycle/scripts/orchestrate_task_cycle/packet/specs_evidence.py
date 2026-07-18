@@ -118,7 +118,7 @@ def build_validation_set_build(ctx: PacketBuildContext) -> dict[str, Any]:
             "when built: validation_set_id, quality_tier, not_gold, item_count, label_count, oracle_count, source_class_distribution",
             "when built: oracle_manifest_path, split_manifest_path, leakage_report_path, validation_set_root_path",
             "when not_applicable/skipped: concrete reason and no fabricated manifest/root paths",
-            "scenario_coverage, scenario_uncovered, and acceptance_inversion_candidate when scenario-shaped acceptance is in scope",
+            "candidate scenario invocation supply and hashed evidence when scenario-shaped acceptance is in scope; do not claim completion coverage until run emits a full premise_receipts row",
             "evidence_paths",
             "used_advice or advice disposition rationale when active advice is in scope",
         ],

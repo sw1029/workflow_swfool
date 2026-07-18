@@ -1,0 +1,10 @@
+{
+  "manifest_kind": "authority_operations",
+  "operations": [
+    {"authority_applicability":"none","authorization_mechanism":"none","data_classes":["goal_architecture"],"decision_class":"D3","effect_classes":["summarize"],"mutation_class":"observe","operation_id":"summarize_architecture","operation_version":"1","required_capabilities":["goal.architecture.read"],"reversibility":"reversible","risk_floor":"R0","source_rank_floor":"S0","subject_kinds":["goal_architecture"]},
+    {"authority_applicability":"required","authorization_mechanism":"grant","data_classes":["goal_architecture"],"decision_class":"D1","effect_classes":["update_bounded_design"],"mutation_class":"local_mutation","operation_id":"update_bounded_design","operation_version":"1","required_capabilities":["goal.architecture.update"],"reversibility":"conditionally_reversible","risk_floor":"R3","source_rank_floor":"S3","subject_kinds":["goal_architecture"]}
+  ],
+  "schema_version": 2,
+  "skill_id": "manage-goal-architecture",
+  "skill_version": "2.0.0"
+}

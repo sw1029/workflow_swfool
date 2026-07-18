@@ -11,6 +11,8 @@ Use this skill before `$manage-agent-goal` when a raw user prompt must be conver
 
 This skill requires at least three independent critical-review subagents for every raw prompt conversion. If three independent reviews cannot be completed, do not write `.agent_goal` files; produce only a local draft and state that independent review could not be performed.
 
+`authority.operations.json` declares prompt shaping as a read-only draft operation under the shared [authority v2 contract](../manage-agent-authority/references/authority-v2-contract.md). It never authorizes persistence. When publication is requested, `$manage-agent-goal` owns the exact `update_final_goal` or `update_goal_conventions` operation and independently requires the applicable goal-owner decision.
+
 When task-state indexing is available, use `$manage-task-state-index` to track prompt-shaping and goal artifacts. If no ID context exists, keep the original prompt-shaping behavior.
 
 ## Workflow

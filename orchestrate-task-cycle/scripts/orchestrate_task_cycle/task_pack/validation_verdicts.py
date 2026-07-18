@@ -105,7 +105,7 @@ def validate_item_verdicts(
                 "Goal readiness cannot pass while a required lifecycle axis is failed, blocked, partial, not evaluated, or conflicted.",
                 {"item_id": item_id, "blocking_axes": sorted(readiness_blocking)},
             )
-    if item.get("positive_input_delta_required") is True and item.get("status") in {"consumed", "terminal_blocked"}:
+    if item.get("positive_input_delta_required") is True and item.get("status") == "consumed":
         gate = result.get("positive_input_delta_gate") if isinstance(result.get("positive_input_delta_gate"), dict) else {}
         has_supplied = bool(
             result.get("has_supplied_input_delta")
@@ -124,4 +124,3 @@ def validate_item_verdicts(
             )
 
     return result
-

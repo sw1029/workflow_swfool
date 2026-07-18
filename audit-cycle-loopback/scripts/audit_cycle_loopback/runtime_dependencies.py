@@ -18,14 +18,21 @@ from .acceptance import (
     oracle_metric_validity_gate,
 )
 
+from .cycle_reachability import cycle_reachability_gate as cycle_reachability_gate
+
 from .adapters import (
+    adapter_invocation_receipts as adapter_invocation_receipts,
+    adapter_file_sha256,
     apply_gate_artifact_compatibility,
+    bind_adapter_invocation_result,
     call_adapter,
     compute_quality,
     domain_adapter_candidate_paths,
     gate_artifact_compatibility_result,
     load_artifact_selection,
     load_domain_adapter,
+    registered_adapter_from_scan,
+    reset_adapter_invocation_receipts as reset_adapter_invocation_receipts,
 )
 
 from .advice import (
@@ -206,6 +213,7 @@ __all__ = (
     "advice_freshness_gate",
     "apply_evidence_provenance_filter",
     "apply_gate_artifact_compatibility",
+    "bind_adapter_invocation_result",
     "apply_quality_policy_compatibility",
     "argparse",
     "attempt_revision_value",
@@ -233,6 +241,7 @@ __all__ = (
     "detection_only_streak",
     "diagnostics_unavailable_gate",
     "domain_adapter_candidate_paths",
+    "adapter_file_sha256",
     "effective_allowed_dispositions",
     "evidence_provenance_gate",
     "exhausted_family_seal_record",
@@ -257,6 +266,7 @@ __all__ = (
     "load_artifact_selection",
     "load_changed_files",
     "load_domain_adapter",
+    "registered_adapter_from_scan",
     "load_json_value",
     "load_json_values",
     "load_registry",

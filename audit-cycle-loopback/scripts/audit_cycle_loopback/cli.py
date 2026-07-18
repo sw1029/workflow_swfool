@@ -17,6 +17,19 @@ from . import evaluator as _evaluator
 from . import io_utils as _io_utils
 from . import registry as _registry
 from . import values as _values
+from .recurrence_identity import evaluate_recurrence_identity
+
+
+def _operation_builders() -> tuple[Any | None, Any | None]:
+    """Load mutation builders only when a mutation candidate is requested."""
+    try:
+        from orchestrate_task_cycle.ledger.operation_contract import (
+            build_durable_operation,
+            build_typed_operations_candidate,
+        )
+    except ImportError:
+        return None, None
+    return build_durable_operation, build_typed_operations_candidate
 
 
 def _packet_progress_verdict(packet: dict[str, Any]) -> str:
@@ -83,20 +96,21 @@ def _build_handoff(packet: dict[str, Any], root: Path, output: Path | None) -> d
 def _build_durable_mutation_candidate(
     packet: dict[str, Any],
     registry_rows: list[dict[str, Any]],
-    should_write: bool,
-    root: Path,
-    registry_path: Path,
     *,
     legacy_write_requested: bool,
 ) -> dict[str, Any]:
-    candidate_row = next(
-        (
-            row
-            for row in reversed(registry_rows)
-            if str(row.get("attempt_identity") or "") == str(packet.get("attempt_identity") or "")
-        ),
-        None,
-    )
+    build_durable_operation, build_typed_operations_candidate = _operation_builders()
+    if build_durable_operation is None or build_typed_operations_candidate is None:
+        return {
+            "contract_version": 2,
+            "status": "unavailable",
+            "producer": "audit-cycle-loopback",
+            "attempt_identity": str(packet.get("attempt_identity") or ""),
+            "operations": [],
+            "authoritative_consumption_allowed": False,
+            "findings": ["typed_operation_builder_unavailable"],
+            "legacy_write_requested": legacy_write_requested,
+        }
     registry_payload = {
         "rows": [
             _registry.bounded_durable_projection(row)
@@ -112,62 +126,63 @@ def _build_durable_mutation_candidate(
         ]
     }
     seal_projection = packet.get("sealed_blocker_families_projection")
+    seal_projection_is_valid = bool(
+        isinstance(seal_projection, dict)
+        and seal_projection.get("schema_version") == "sealed-blocker-families-v1"
+        and isinstance(seal_projection.get("families"), list)
+    )
     seal_payload = {
         "state": _registry.bounded_durable_projection(seal_projection)
-        if isinstance(seal_projection, dict)
+        if seal_projection_is_valid
         else {"schema_version": "sealed-blocker-families-v1", "families": []}
     }
-    mutations: list[dict[str, Any]] = [
-        {
-            "operation_type": "replace_projection",
-            "target_id": "family_progress_registry",
-            "target_ref": _io_utils.rel_path(root, registry_path),
-            "payload": registry_payload,
-            "payload_sha256": _registry.canonical_json_sha256(registry_payload),
-            "candidate_row_sha256": (
-                _registry.canonical_json_sha256(_registry.bounded_durable_projection(candidate_row))
-                if isinstance(candidate_row, dict)
-                else None
-            ),
-        },
-        {
-            "operation_type": "replace_projection",
-            "target_id": "root_cause_ledger",
-            "target_ref": packet.get("root_cause_ledger_path"),
-            "payload": ledger_payload,
-            "payload_sha256": _registry.canonical_json_sha256(ledger_payload),
-        },
-        {
-            "operation_type": "replace_projection",
-            "target_id": "sealed_blocker_families",
-            "target_ref": packet.get("hypothesis_exhaustion_seal_path")
-            or ".task/sealed_blocker_families.json",
-            "payload": seal_payload,
-            "payload_sha256": _registry.canonical_json_sha256(seal_payload),
-        },
-    ]
-    state_changed = bool(
-        should_write
-        or packet.get("root_cause_ledger_update_candidate")
-        or packet.get("hypothesis_exhaustion_seal_candidate")
+    attempt_identity = str(packet.get("attempt_identity") or "")
+    prior_revisions = (
+        packet.get("target_revision_ids")
+        if isinstance(packet.get("target_revision_ids"), dict)
+        else {}
     )
-    candidate = {
-        "contract_version": 1,
-        "mode": "typed_operations",
-        "producer": "audit-cycle-loopback",
-        "status": "prepared_not_finalized" if state_changed else "no_change_candidate",
-        "finalization_owner": "orchestrate-task-cycle",
-        "finalization_receipt_required": True,
-        "legacy_write_requested": legacy_write_requested,
-        "attempt_identity": packet.get("attempt_identity"),
-        "attempt_revision_candidate": packet.get("attempt_revision_candidate"),
-        "supersedes_attempt_revision_candidate": packet.get(
-            "supersedes_attempt_revision_candidate"
-        ),
-        "operations": mutations,
-    }
-    candidate["candidate_sha256"] = _registry.canonical_json_sha256(candidate)
-    return candidate
+    mutations: list[dict[str, Any]] = []
+    for target_ref, schema_id, payload in (
+        ("family_progress_registry", "family-progress-registry-v1", registry_payload),
+        ("root_cause_ledger", "root-cause-ledger-v1", ledger_payload),
+        ("sealed_blocker_families", "sealed-blocker-families-v1", seal_payload),
+    ):
+        dependencies = [mutations[-1]["operation_id"]] if mutations else []
+        mutations.append(
+            build_durable_operation(
+                target_ref=target_ref,
+                operation_kind="replace_projection",
+                attempt_identity=attempt_identity,
+                payload_schema_id=schema_id,
+                payload=payload,
+                expected_revision_id=prior_revisions.get(target_ref),
+                depends_on_operation_ids=dependencies,
+            )
+        )
+    recurrence_identity = packet.get("recurrence_identity")
+    if (
+        isinstance(recurrence_identity, dict)
+        and recurrence_identity.get("durable_update_required") is True
+        and isinstance(recurrence_identity.get("projection"), dict)
+    ):
+        recurrence_payload = {"state": recurrence_identity["projection"]}
+        mutations.append(
+            build_durable_operation(
+                target_ref="recurrence_identity",
+                operation_kind="replace_projection",
+                attempt_identity=attempt_identity,
+                payload_schema_id="recurrence-identity-v1",
+                payload=recurrence_payload,
+                expected_revision_id=prior_revisions.get("recurrence_identity"),
+                depends_on_operation_ids=[mutations[-1]["operation_id"]],
+            )
+        )
+    return build_typed_operations_candidate(
+        producer="audit-cycle-loopback",
+        attempt_identity=attempt_identity,
+        operations=mutations,
+    )
 
 
 def _write_candidate_packet(path: Path, packet: dict[str, Any]) -> None:
@@ -193,6 +208,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--semantic-signature", default="unknown")
     parser.add_argument("--root-key", help="Suffix-normalized root key for measurement cap and loop comparison.")
     parser.add_argument("--domain-adapter", help=f"Path to a repository domain adapter module; defaults to ${DOMAIN_ADAPTER_ENV} when set.")
+    parser.add_argument("--adapter-scan-json", help="Path or JSON object from orchestrate-task-cycle repo-adapter scan; the registered loopback wrapper is handed off explicitly.")
     parser.add_argument("--provider-request-count", type=int, default=0)
     parser.add_argument("--artifact-path", action="append", default=[])
     parser.add_argument("--artifact-paths-json")
@@ -207,6 +223,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--substance-metrics-json", help="Path or JSON object with adapter-compatible substance_metrics/current_substance_vector values.")
     parser.add_argument("--corrective-resolution-json", help="Path or JSON with corrective lane attempted/resolved counts.")
     parser.add_argument("--facet-root-map-json", help="Path or JSON mapping facet labels to root families.")
+    parser.add_argument(
+        "--recurrence-identity-json",
+        help="Path or JSON object with caller-owned stable-root, facet, local-family, delta, and lineage recurrence state.",
+    )
     parser.add_argument("--acceptance-reachability-json", help="Path or JSON object with acceptance_min_output, frozen_envelope, and optional reachability_verdict.")
     parser.add_argument("--metric-validity-json", help="Path or JSON object/list from an oracle or metric validity self-check.")
     parser.add_argument("--root-cause-hypotheses-json", help="Path or JSON list/dict of root-cause hypotheses for the generic root-cause ledger.")
@@ -244,9 +264,17 @@ def main(argv: list[str] | None = None) -> int:
 
     packet, registry_rows, should_write = _evaluator.evaluate(args)
     root = Path(args.root).resolve()
-    registry_path = Path(args.registry_path)
-    if not registry_path.is_absolute():
-        registry_path = root / registry_path
+    recurrence_identity = evaluate_recurrence_identity(
+        _values.load_json_value(root, args.recurrence_identity_json)
+    )
+    packet["recurrence_identity"] = recurrence_identity
+    packet["recurrence_identity_status"] = recurrence_identity.get("status")
+    if recurrence_identity.get("status") == "block":
+        packet["scope_verified"] = False
+        packet["semantic_progress"] = False
+        packet["authoritative_semantic_progress"] = False
+        packet["recommended_disposition"] = "repair_recurrence_contract"
+        packet["effective_allowed_dispositions"] = ["repair_recurrence_contract"]
     packet["registry_updated"] = False
     packet["registry_update_candidate"] = bool(should_write)
     packet["registry_update_status"] = (
@@ -272,9 +300,6 @@ def main(argv: list[str] | None = None) -> int:
     packet["durable_mutation_candidate"] = _build_durable_mutation_candidate(
         packet,
         registry_rows,
-        should_write,
-        root,
-        registry_path,
         legacy_write_requested=bool(args.write_registry),
     )
     output: Path | None = None
@@ -286,4 +311,7 @@ def main(argv: list[str] | None = None) -> int:
     packet["anti_loop_handoff"] = _build_handoff(packet, root, output)
     json.dump(packet, sys.stdout, ensure_ascii=False, indent=2, sort_keys=True)
     sys.stdout.write("\n")
-    return 0 if packet.get("evidence_class") == "computed" else 2
+    return 0 if (
+        packet.get("evidence_class") == "computed"
+        and packet.get("recurrence_identity_status") != "block"
+    ) else 2

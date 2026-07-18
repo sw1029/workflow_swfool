@@ -25,5 +25,7 @@ class CompletionValidationRule(TargetContractRule):
 
     def check(self, context: RuleContext) -> None:
         from .completion_checks import run_checks
+        from .acceptance_satisfiability import validate_acceptance_satisfiability
 
+        validate_acceptance_satisfiability(context)
         run_checks(context)

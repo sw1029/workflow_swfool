@@ -5,6 +5,8 @@ from pathlib import Path
 
 from ..base import RuleContext, TargetContractRule
 from ..common import add, non_empty, value_for
+from ..scenario_receipts import assess_scenario_receipts
+from .acceptance_satisfiability import validate_acceptance_satisfiability
 
 
 SHA256 = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$")
@@ -34,6 +36,7 @@ class AcceptanceRule(TargetContractRule):
     targets = frozenset({"acceptance"})
 
     def check(self, context: RuleContext) -> None:
+        validate_acceptance_satisfiability(context)
         result = context.result
         findings = context.findings
         task_id = str(value_for(result, "task_id") or "").strip()
@@ -68,6 +71,15 @@ class AcceptanceRule(TargetContractRule):
             add(findings, "block", "normalized_acceptance_has_blockers", "Normalized acceptance cannot carry unresolved blockers.")
         elif acceptance_status in {"blocked", "needs_review"} and not blockers:
             add(findings, "block", "acceptance_status_without_blocker", "Blocked/needs_review acceptance requires at least one concrete blocker.")
+        scenario_receipts = assess_scenario_receipts(result)
+        for issue in scenario_receipts.contract_issues:
+            add(
+                findings,
+                "block" if acceptance_status == "normalized" else "warn",
+                "acceptance_scenario_contract_malformed",
+                "Scenario-shaped acceptance must preserve an opaque scenario ID, premise predicate, and expected terminal state before execution.",
+                issue.evidence(),
+            )
         if not acceptance_id:
             add(findings, "block", "acceptance_id_missing", "Acceptance normalization must emit a stable `acceptance_id`.")
         if not isinstance(provenance, dict):

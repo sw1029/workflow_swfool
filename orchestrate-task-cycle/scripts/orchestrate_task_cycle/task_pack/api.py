@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from . import replacement_engine as task_pack_replacement
+from . import mutation_journal as task_pack_mutation_journal
 from .cli import main
 from .coherence import (
     _coherence_field_declared,
@@ -55,6 +56,7 @@ from .contracts import (  # noqa: E402
     PROMOTION_ORIGINS,
     PROMOTION_TERMINAL_EXECUTION_STATUSES,
     PROMOTION_VALIDATION_VERDICTS,
+    RETIREMENT_BASES,
     SHA256_PATTERN,
     VALIDATION_PROFILES,
     VERDICT_AXES,
@@ -73,6 +75,15 @@ from .creation import (  # noqa: E402
 from .mutation_apply import (  # noqa: E402
     _command_apply_mutation_locked,
     command_apply_mutation,
+)
+from .legacy_retirement import (  # noqa: E402
+    active_retirement_for_pack,
+    command_activate_legacy_retirement,
+    command_retire_legacy,
+    require_pack_not_retired,
+    retirement_store_projection,
+    validate_activation_binding,
+    validate_completion_binding,
 )
 from .ordering import (  # noqa: E402
     active_in_flight_items,
@@ -164,6 +175,7 @@ from .storage import (  # noqa: E402
     pack_mutation_lock,
     pack_snapshot,
     parse_rfc3339,
+    preserve_content_addressed_evidence,
     rel_path,
     resolve_pack_path,
     sha256_bytes,
@@ -171,6 +183,7 @@ from .storage import (  # noqa: E402
     sha256_optional_file,
 )
 from .store import (  # noqa: E402
+    LIVE_PACK_STATUSES,
     active_pack,
     active_pack_candidates,
     status_from_findings,

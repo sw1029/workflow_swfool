@@ -1,5 +1,14 @@
 # Question Generator Agent Prompts
 
+## Table of Contents
+
+- [Stage 1: Perspective Questions](#stage-1-perspective-questions)
+- [Stage 2: Process Questions](#stage-2-process-questions)
+- [Stage 3: Theory Questions](#stage-3-theory-questions)
+- [Stage 4: Detailed Element Questions](#stage-4-detailed-element-questions)
+- [Stage 5: Constraint Questions](#stage-5-constraint-questions)
+- [Stage 6: Authority Questions](#stage-6-authority-questions)
+
 Run six stages in order when `.interview/questions.md` has no pending questions. If the raw prompt is absent or weak, first seed `.interview/questions.md` from `bootstrap-questions.md` and ask those questions before running the full staged generation. In each stage, spawn exactly three independent agents unless the user explicitly changes the count. Pass only the base goal files, existing architecture/theory/schema-contract/agent-authority content if any, and relevant `.interview` history.
 
 All question-generator agents must output questions only. They must not answer, infer, or draft `.agent_goal` content.
@@ -63,7 +72,7 @@ Output 5-10 questions using this schema:
 Prompt each of three independent agents. Assign different lenses such as algorithmic logic, domain assumptions, and validation/proof criteria:
 
 ```text
-Generate theory-oriented interview questions for the same context. Focus on technical logic, algorithms, models, assumptions, tradeoffs, validation theory, schema/contract reasoning, and domain concepts needed for `goal_theory.md` and related `goal_schema_contract.md` rules. Do not answer the questions. Tie each question to a specific gap.
+Generate theory-oriented interview questions for the same context. Focus on technical logic, algorithms, models, assumptions, tradeoffs, validation theory, schema/contract reasoning, and domain concepts needed for `goal_theory.md` and related `goal_schema_contract.md` rules. Also identify questions needed to classify concepts as `core_invariant`, `guardrail`, `bounded_design`, `implementation_variable`, `runtime_adaptive`, `experimental_hypothesis`, or `open_question`; determine which concept relationships remain locked when endpoints vary; and establish allowed variation, deterministic choice rules, evidence, revisions, and consumers. Do not answer the questions or pre-classify unsupported concepts. Tie each question to a specific gap.
 
 Output 5-10 questions using this schema:
 - question:
@@ -111,7 +120,7 @@ Output 5-10 questions using this schema:
 Prompt each of three independent agents. Assign different lenses such as API/external-service permissions, direction freedom and autonomy, and implementation/validation priority:
 
 ```text
-Generate agent-authority interview questions for the same context. Focus on the `$manage-agent-authority` template fields: default-current-agent permission baseline, API/network/external service policy, direction freedom profiles, strict versus bounded variation, implementation-first versus artifact/output-confirmation-first versus quality-first behavior, conservative implementation, destructive/long-running/costly action approvals, escalation, and precedence rules needed for `.agent_goal/agent_authority.md`. Do not answer the questions. Tie each question to a specific gap and do not imply that the authority file can grant permissions unavailable to the active session.
+Generate agent-authority interview questions for the same context. Focus on the `$manage-agent-authority` template fields and v2 contract: default-current-agent permission baseline; API/network/external service policy; action versus task versus recurring-improvement versus policy versus core-goal decisions; source rank, risk class, and decision class; one-use, bounded reusable, task/improvement lease, or standing-policy cardinality; expiry, budget, delegation, suspension, revocation, and exact subject binding; direction freedom and conservative implementation; costly or irreversible confirmation; escalation; and precedence. Ask which exact concept IDs and digests delegate bounded choices and which core concepts or locked relations require the user goal owner. Keep grant authority, goal ratification, risk/cost acceptance, external-input supply, and design selection as separate questions/events. Do not answer the questions, infer approval from silence or legacy prose, or imply that the authority file can grant permissions unavailable to the active session.
 
 Output 5-10 questions using this schema:
 - question:

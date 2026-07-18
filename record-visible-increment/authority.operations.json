@@ -1,0 +1,23 @@
+{
+  "schema_version": 2,
+  "manifest_kind": "authority_operations",
+  "skill_id": "record-visible-increment",
+  "skill_version": "2.0.0",
+  "operations": [
+    {
+      "operation_id": "publish_visible_increment",
+      "operation_version": "1",
+      "authorization_mechanism": "none",
+      "mutation_class": "local_mutation",
+      "required_capabilities": ["cycle.visible_increment.publish"],
+      "source_rank_floor": "S0",
+      "risk_floor": "R1",
+      "decision_class": "D3",
+      "effect_classes": ["publish_non_validation_delta"],
+      "data_classes": ["visible_increment"],
+      "reversibility": "reversible",
+      "subject_kinds": ["visible_increment"],
+      "authority_applicability": "none"
+    }
+  ]
+}

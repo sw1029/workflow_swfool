@@ -15,6 +15,14 @@ When the user provides or names an external advice Markdown document, use `$mana
 
 When creating or updating task packs, use the task-pack contract from `$orchestrate-task-cycle` [task-pack-workflow.md](../orchestrate-task-cycle/references/task-pack-workflow.md). The JSON queue under `.task/task_pack/` is canonical; the adjacent Markdown file is a user-language render. Keep one active `task.md`; task packs are planning state, not goal truth or completion evidence.
 
+## Authority Boundary
+
+The user's doctoring direction is a direction source, not blanket downstream permission. Use `authority.operations.json` and the shared [authority v2 contract](../manage-agent-authority/references/authority-v2-contract.md). Read-only diagnosis is authority-neutral. Before `mutate_task_scope` or `normalize_initial_selection`, freeze the exact prospective task/pack bytes, operation/version, subject revision/digest, effect and risk classification, then require a matching `allowed` decision and reservation. A grant for one task or pack cannot authorize another digest, a later rebuilt plan, implementation work, goal-truth changes, risk acceptance, external input, Git publication, or a destructive operation.
+
+Perform feasibility and dry-run checks before reservation. Reverify the decision, reservation, scoped authority fingerprint, manifest, selected grant state/version, policy snapshot, and exact subject immediately before the first lifecycle write. Consume only after the owning publication transaction commits. Release only when execution did not start or no effect is verified; quarantine when an effect may have occurred. Multiple covering grants are usable only through a separately approved exact composition receipt.
+
+Keep approval, goal ratification, risk/cost acceptance, external-input availability, and bounded design selection as separate typed decisions. If the exact request is awaiting approval or input, retain its identity and return one stable wait. On unchanged state, replay the wait without rewording the request, issuing another task/pack plan, consuming a use, or prompting again. Re-enter only from a declared relevant authority/input/subject change. Legacy receipts are historical diagnostics and never authorize a new mutation.
+
 ## Domain Adapter Contract
 
 Task doctoring normally consumes adapter-derived fields through task, pack, acceptance, loopback, or validation packets. When direct adapter access is available, it may consume:
@@ -78,6 +86,7 @@ When reviewing a terminal or escalation request, require the existing loopback r
    - Read `task.md` when present.
    - Read `.agent_goal/final_goal.md`, `.agent_goal/conventions.md`, `.agent_goal/goal_architecture.md`, `.agent_goal/goal_theory.md`, and `.agent_goal/goal_schema_contract.md` when present.
    - Read or render `.agent_advice/active/*.md` only when the user names advice or the doctoring instruction depends on advice; use `$manage-external-advice render-packet` for a compact packet.
+   - Treat the rendered advice packet as non-GT direction evidence, never as an executable task/pack plan. Require `execution_plan_eligible=false`. If `normalized_packet_use=warning_only_raw_review`, `fidelity_status=needs_review|degenerate`, `normalization_complete!=true`, or `raw_direct_reference_required=true`, inspect the named raw source and repair/re-intake the clause normalization or explicitly defer the affected clause before prepublication planning. Do not copy an incomplete normalized directive list into `task.md`, a task pack, ordering mutations, or authority subjects as though it were complete.
    - Check repository-local rule files when present, such as `AGENTS.md`, `CONVENTIONS.md`, `CONVENTION.md`, `RULES.md`, `README.md`, `.codex/`, `.task/`, `.issue/`, `.schema/`, and `.contract/`.
    - Read `.task/index.md`, `.task/candidate_task/`, `.task/task_pack/`, `.task/task_miss/`, `.issue/`, and recent `.agent_log/` summaries when they are relevant to the requested direction.
    - When `.task/task_pack/` is relevant, run or request `$orchestrate-task-cycle` with `python3 -m orchestrate_task_cycle task-pack --root . status --format json` and `validate` for the active or named pack.

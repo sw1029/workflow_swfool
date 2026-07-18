@@ -67,31 +67,55 @@ from .storage import (
     unique_advice_key,
 )
 
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Manage .agent_advice non-GT external advice artifacts.")
+    parser = argparse.ArgumentParser(
+        description="Manage .agent_advice non-GT external advice artifacts."
+    )
     parser.add_argument("--root", default=".", help="Workspace root.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     init = sub.add_parser("init", help="Create .agent_advice directories and indexes.")
     init.set_defaults(func=cmd_init)
 
-    intake = sub.add_parser("intake", help="Preserve raw advice and create a normalized active advice document.")
-    intake.add_argument("--source", required=True, help="Markdown source path, or '-' for stdin.")
+    intake = sub.add_parser(
+        "intake",
+        help="Preserve raw advice and create a normalized active advice document.",
+    )
+    intake.add_argument(
+        "--source", required=True, help="Markdown source path, or '-' for stdin."
+    )
     intake.add_argument("--title", help="Human label for the advice.")
-    intake.add_argument("--priority", choices=("low", "normal", "high"), default="normal")
+    intake.add_argument(
+        "--priority", choices=("low", "normal", "high"), default="normal"
+    )
     intake.set_defaults(func=cmd_intake)
 
     list_parser = sub.add_parser("list", help="List advice lifecycle entries.")
-    list_parser.add_argument("--status", choices=("active", "applied", "rejected", "deferred"))
+    list_parser.add_argument(
+        "--status", choices=("active", "applied", "rejected", "deferred")
+    )
     list_parser.set_defaults(func=cmd_list)
 
     packet = sub.add_parser("render-packet", help="Render active advice packet.")
     packet.add_argument("--format", choices=("markdown", "json"), default="markdown")
     packet.set_defaults(func=cmd_render_packet)
 
-    applied = sub.add_parser("mark-applied", help="Move active advice to applied and write a past_advice log.")
+    applied = sub.add_parser(
+        "mark-applied",
+        help="Move active advice to applied and write a past_advice log.",
+    )
     applied.add_argument("--advice-id", required=True)
-    applied.add_argument("--evidence", required=True, help="Path, ID, or concise evidence proving application/retirement.")
+    applied.add_argument(
+        "--evidence",
+        required=True,
+        help="Path, ID, or concise evidence proving application/retirement.",
+    )
+    applied.add_argument(
+        "--directive-dispositions-json",
+        required=True,
+        help="JSON text or path covering every directive with disposition, evidence_ref, and evidence_sha256.",
+    )
     applied.add_argument("--note", default="")
     applied.set_defaults(func=cmd_mark_applied)
 
@@ -100,17 +124,31 @@ def build_parser() -> argparse.ArgumentParser:
     reject.add_argument("--reason", required=True)
     reject.set_defaults(func=cmd_reject)
 
-    defer = sub.add_parser("defer", help="Move active advice to deferred with a blocker or prerequisite reason.")
+    defer = sub.add_parser(
+        "defer",
+        help="Move active advice to deferred with a blocker or prerequisite reason.",
+    )
     defer.add_argument("--advice-id", required=True)
     defer.add_argument("--reason", required=True)
     defer.set_defaults(func=cmd_defer)
 
     audit = sub.add_parser("audit", help="Audit advice registry consistency.")
-    audit.add_argument("--current-output-fingerprint", help="Current adapter/output fingerprint to compare against active advice claims.")
-    audit.add_argument("--current-output-fingerprint-json", help="Path or JSON packet containing current_output_fingerprint or equivalent.")
-    audit.add_argument("--root-cause-ledger-path", default=ROOT_CAUSE_LEDGER_REL_PATH, help="Root-cause ledger used to flag re-advised dead hypotheses.")
+    audit.add_argument(
+        "--current-output-fingerprint",
+        help="Current adapter/output fingerprint to compare against active advice claims.",
+    )
+    audit.add_argument(
+        "--current-output-fingerprint-json",
+        help="Path or JSON packet containing current_output_fingerprint or equivalent.",
+    )
+    audit.add_argument(
+        "--root-cause-ledger-path",
+        default=ROOT_CAUSE_LEDGER_REL_PATH,
+        help="Root-cause ledger used to flag re-advised dead hypotheses.",
+    )
     audit.set_defaults(func=cmd_audit)
     return parser
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()

@@ -14,6 +14,8 @@ Use this skill to keep the workspace's long-running goal and constraints in two 
 
 The files are workspace artifacts. Read them before planning or editing when they exist, and update them only with information supported by the user request or current work evidence.
 
+Use `authority.operations.json` with the shared [authority v2 contract](../manage-agent-authority/references/authority-v2-contract.md). Reading is authority-free. Updating `final_goal.md` and updating `conventions.md` are separate D0 grant-controlled operations bound to the exact prospective subject digest and revision. A write grant controls the effect but does not itself ratify goal truth: require the applicable explicit goal-owner decision and concept-graph/revision evidence independently, then reserve and reverify the exact write before publication.
+
 When `.agent_advice/active/*.md` exists or the user provides external advice, treat it as non-GT evidence only. It may help explain a proposed goal or convention change, but it must not be copied into `.agent_goal` unless the user explicitly asks to promote that specific content and this skill applies the normal goal-edit guardrails.
 
 If advice proposes durable workflow conventions such as "measurement/oracle cycles can be goal-productive despite zero primary-output delta" or "forward blocker mutations count as progress," add those lines to `.agent_goal/conventions.md` only when the user explicitly approves promoting that specific policy into goal truth.

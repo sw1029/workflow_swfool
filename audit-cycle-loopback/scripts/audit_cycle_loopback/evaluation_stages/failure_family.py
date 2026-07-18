@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..runtime_dependencies import (
+    bind_adapter_invocation_result,
     call_adapter,
     collapse_root_family,
     coverage_quality_delta_gate,
@@ -79,6 +80,29 @@ def _evaluate_failure_family(frame: _EvaluationFrame) -> None:
         if facet_map_error:
             facet_map_value = None
     facet_root_map = normalize_facet_root_map(facet_map_value)
+    facet_status = (
+        str(
+            facet_map_value.get("evaluation_status")
+            or facet_map_value.get("status")
+            or ""
+        ).strip().lower()
+        if isinstance(facet_map_value, dict)
+        else ""
+    )
+    facet_contract_valid = isinstance(facet_map_value, dict)
+    facet_accepted = bool(
+        facet_contract_valid
+        and facet_root_map
+        and not facet_map_error
+        and facet_status
+        not in {"fail", "failed", "fail_quiet", "not_evaluated", "unavailable"}
+    )
+    bind_adapter_invocation_result(
+        "facet_root_map",
+        return_contract_valid=facet_contract_valid,
+        semantic_accepted=facet_accepted,
+        value_consumed_by_decision=facet_accepted,
+    )
     preliminary_changed = bool(prev_fingerprint and quality.get("current_output_fingerprint") != prev_fingerprint)
     preliminary_semantic = bool(
         not insufficient_reason

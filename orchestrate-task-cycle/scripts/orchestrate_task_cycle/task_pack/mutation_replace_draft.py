@@ -15,7 +15,7 @@ from .creation import (
 from .ordering import item_order
 from .packet_io import load_json, non_empty
 from .provenance import mutation_entry
-from .receipts import persist_creation_snapshot
+from .receipts import pack_paths, persist_creation_snapshot
 from .rendering import bounded_render_path
 from .storage import parse_rfc3339, rel_path, resolve_pack_path
 from .store import active_pack_candidates, task_pack_store_findings
@@ -89,15 +89,25 @@ def _prepare_successor_body(args, root, plan, predecessor_path):
 
 def _prepare_replacement_draft(args, root, plan):
     store_findings = task_pack_store_findings(root)
-    if store_findings:
-        raise SystemExit(store_findings[0]["message"])
-    active = active_pack_candidates(root)
-    if len(active) != 1:
-        raise SystemExit("replace_pack requires exactly one active predecessor pack.")
     predecessor_path_value = plan.get("pack_path") or _coherence_value(
         plan, "canonical_pack_ref", "pack_path"
     )
     predecessor_path = resolve_pack_path(root, str(predecessor_path_value))
+    repairable_invalid_predecessor = bool(store_findings) and all(
+        finding.get("code") == "task_pack_state_invalid" for finding in store_findings
+    )
+    if store_findings and not repairable_invalid_predecessor:
+        raise SystemExit(store_findings[0]["message"])
+    if repairable_invalid_predecessor:
+        active = [
+            (path, body)
+            for path in pack_paths(root)
+            if (body := load_json(path)).get("status") in {"active", "blocked"}
+        ]
+    else:
+        active = active_pack_candidates(root)
+    if len(active) != 1:
+        raise SystemExit("replace_pack requires exactly one active predecessor pack.")
     if predecessor_path != active[0][0]:
         raise SystemExit("replace_pack predecessor is not the unique active pack.")
     predecessor = load_json(predecessor_path)

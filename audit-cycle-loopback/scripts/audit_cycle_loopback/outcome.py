@@ -5,6 +5,7 @@ from . import domain as _domain
 from . import families as _families
 from . import measurement as _measurement
 from . import values as _values
+from .authority_classification import classify_authority_axes
 
 
 def first_scalar_by_key(value: Any, keys: set[str]) -> str | None:
@@ -118,14 +119,42 @@ def terminal_self_resolution_gate(*values: Any) -> dict[str, Any]:
     self_resolvable = [row for row in normalized if row["classification"] in local_classes]
     unverified = [row for row in normalized if row["classification"] == "unverified"]
     classification_missing = terminal_requested and not normalized
+    authority_axes = classify_authority_axes(values, terminal_requested)
+    authority_prohibited = _values.bool_value(
+        authority_axes.get("authority_goal_terminal_prohibited")
+    )
+    offline_unverified = classification_missing or bool(unverified) or _values.bool_value(
+        authority_axes.get("authority_axis_unverified")
+    )
+    goal_terminal_prohibited = (
+        bool(self_resolvable) or offline_unverified or authority_prohibited
+    )
+    resolution_route = str(
+        authority_axes.get("recommended_resolution_route") or "classification_repair"
+    )
+    if self_resolvable:
+        resolution_route = "in_scope_engineering_task"
+    allowed_resolution_dispositions = {
+        "in_scope_engineering_task": ["goal_productive"],
+        "monitor_or_harvest": ["goal_productive"],
+        "user_confirmation": ["user_escalation"],
+        "external_input": ["terminal_blocked"],
+        "classification_repair": ["consolidation"],
+        "terminal_eligible": ["terminal_blocked"],
+    }.get(resolution_route, [])
     return {
         "residual_classification": normalized,
         "self_resolvable_residual_count": len(self_resolvable),
         "unverified_residual_count": len(unverified),
-        "offline_scope_unverified": classification_missing or bool(unverified),
+        "offline_scope_unverified": offline_unverified,
         "terminal_requested": terminal_requested,
-        "goal_terminal_prohibited": bool(self_resolvable) or classification_missing or bool(unverified),
-        "status": "block" if bool(self_resolvable) else ("not_evaluated" if classification_missing or unverified else "pass"),
+        "goal_terminal_prohibited": goal_terminal_prohibited,
+        "status": "block"
+        if bool(self_resolvable) or authority_prohibited
+        else ("not_evaluated" if offline_unverified else "pass"),
+        **authority_axes,
+        "recommended_resolution_route": resolution_route,
+        "allowed_resolution_dispositions": allowed_resolution_dispositions,
     }
 
 def terminal_outcome_key(output_delta: Any, changed_vs_previous: bool, semantic_progress: bool) -> str:

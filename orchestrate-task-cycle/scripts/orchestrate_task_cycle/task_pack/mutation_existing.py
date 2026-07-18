@@ -18,6 +18,7 @@ from .mutation_actions import (
     apply_terminal_block,
 )
 from .mutation_finalize import finalize_existing_mutation
+from .legacy_retirement import require_pack_not_retired
 from .ordering import item_order, refresh_current_item
 from .packet_io import load_json
 from .storage import rel_path, resolve_pack_path
@@ -30,6 +31,7 @@ def apply_existing(args: argparse.Namespace, root: Path, plan: dict[str, Any], a
     path = resolve_pack_path(root, str(pack_path_value)) if pack_path_value else active_pack(root)[0]
     if path is None:
         raise SystemExit("No active task pack found.")
+    require_pack_not_retired(root, path)
     data = load_json(path)
     before_order = item_order(data)
     if action == "normalize_initial_selection_provenance":
@@ -112,4 +114,3 @@ def apply_existing(args: argparse.Namespace, root: Path, plan: dict[str, Any], a
     if action != "normalize_initial_selection_provenance":
         refresh_current_item(data)
     return finalize_existing_mutation(args, root, path, data, plan, action, coherence, before_order)
-

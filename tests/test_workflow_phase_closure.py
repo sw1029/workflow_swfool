@@ -300,6 +300,17 @@ def test_initial_init_is_documented_as_a_separate_bootstrap_transaction() -> Non
 
 def finalized_transition_event(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     cycle_ledger.init_cycle(root, "cycle-T", "task-1", "transition finalization")
+    absent_digest = cycle_ledger.absent_target_state_digest("registry_projection")
+    observation = cycle_ledger.build_unchanged_target_observation(
+        observation_id="attempt-T-registry-observation",
+        attempt_identity="attempt-T",
+        target_ref="registry_projection",
+        state_status="absent",
+        before_revision_id="absent",
+        current_revision_id="absent",
+        before_state_digest=absent_digest,
+        current_state_digest=absent_digest,
+    )
     candidate: dict[str, Any] = {
         "schema_version": 1,
         "kind": "cycle_final_candidate",
@@ -310,7 +321,15 @@ def finalized_transition_event(root: Path) -> tuple[dict[str, Any], dict[str, An
         "expected_previous_attempt_id": None,
         "expected_previous_finalization_token": None,
         "verdict_contract_version": 1,
-        "durable_state_candidate": {"mode": "complete_projection", "projections": {}},
+        "durable_state_candidate": cycle_ledger.build_no_durable_state_change_candidate(
+            attempt_identity="attempt-T",
+            reason_id="validation-has-no-durable-axis-change",
+            evidence=cycle_ledger.build_no_change_evidence(
+                evidence_id="attempt-T-no-change-evidence",
+                attempt_identity="attempt-T",
+                target_observations=[observation],
+            ),
+        ),
     }
     for axis in result_contract.VERDICT_AXES:
         candidate[axis] = {"status": "pass", "evidence_ref": f"{axis}-E"}

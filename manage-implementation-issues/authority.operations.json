@@ -1,0 +1,38 @@
+{
+  "schema_version": 2,
+  "manifest_kind": "authority_operations",
+  "skill_id": "manage-implementation-issues",
+  "skill_version": "2.0.0",
+  "operations": [
+    {
+      "operation_id": "mutate_local_issue_lifecycle",
+      "operation_version": "1",
+      "authorization_mechanism": "grant",
+      "mutation_class": "local_mutation",
+      "required_capabilities": ["issue.local.mutate"],
+      "source_rank_floor": "S2",
+      "risk_floor": "R2",
+      "decision_class": "D2",
+      "effect_classes": ["create_update_or_close_local_issue"],
+      "data_classes": ["implementation_issue"],
+      "reversibility": "conditionally_reversible",
+      "subject_kinds": ["implementation_issue"],
+      "authority_applicability": "required"
+    },
+    {
+      "operation_id": "mutate_external_issue_lifecycle",
+      "operation_version": "1",
+      "authorization_mechanism": "grant",
+      "mutation_class": "external_mutation",
+      "required_capabilities": ["issue.external.mutate"],
+      "source_rank_floor": "S3",
+      "risk_floor": "R3",
+      "decision_class": "D2",
+      "effect_classes": ["create_update_or_close_external_issue"],
+      "data_classes": ["implementation_issue"],
+      "reversibility": "conditionally_reversible",
+      "subject_kinds": ["implementation_issue"],
+      "authority_applicability": "required"
+    }
+  ]
+}

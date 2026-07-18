@@ -13,12 +13,13 @@ def _evaluate_decision_disposition(frame: _EvaluationFrame) -> None:
         diagnostics_gate, disposition, failure_surface_gate, forced_retarget_gate, gate_inputs,
         hard_stop,
         input_contract_gate, metric_validity_gate, primary_metric_gate, reachability_gate,
+        cycle_reachability_gate,
     ) = frame.require(
         'adapter_gate', 'adapter_load_gate', 'c4_user_escalation_backstop_required',
         'chain_gate', 'diagnostics_gate', 'disposition', 'failure_surface_gate',
         'forced_retarget_gate', 'gate_inputs', 'hard_stop', 'input_contract_gate',
         'metric_validity_gate',
-        'primary_metric_gate', 'reachability_gate',
+        'primary_metric_gate', 'reachability_gate', 'cycle_reachability_gate',
     )
     if (
         bool_value(chain_gate.get("cumulative_goal_distance_stalled"))
@@ -34,6 +35,15 @@ def _evaluate_decision_disposition(frame: _EvaluationFrame) -> None:
             chain_gate.get("cumulative_goal_distance_stalled")
         ):
             disposition = "relaxation_or_escalation_required"
+    if bool_value(cycle_reachability_gate.get("unreachable_within_cycle")):
+        hard_stop = True
+        if disposition in {
+            "open",
+            "prefer_provider_or_semantic",
+            "measurement_progress_goal_productive_candidate",
+            "artifact_gate_not_evaluated",
+        }:
+            disposition = "cycle_reachability_route_required"
     if bool_value(reachability_gate.get("unverifiable_acceptance_contract")):
         hard_stop = True
         if disposition in {

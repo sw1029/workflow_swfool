@@ -2,188 +2,15 @@ from __future__ import annotations
 
 from .shared import (
     EXECUTION_SCOPE_RECOVERY_TASK_KINDS,
+    EXECUTION_STARVATION_TASK_KINDS,
     EXECUTION_STARVATION_STATUSES,
     _bounded_id_items,
     _bounded_opaque_id,
     _declared_values,
-    _nonnegative_int,
     add,
-    boolish,
-    first_present,
 )
+from .goal_stagnation_projection import check_goal_projection
 from .state import DeriveFacts
-
-
-def _goal_projection_summary(
-    goal_projection_value: object,
-) -> tuple[bool, str, list[object], int | None, int | None, int | None, int | None]:
-    projection_valid = isinstance(goal_projection_value, dict)
-    projection_status = ""
-    family_ids: list[object] = []
-    cycle_count = semantic_count = producer_count = no_movement_streak = None
-    if isinstance(goal_projection_value, dict):
-        projection_status_value = goal_projection_value.get("status")
-        projection_status_text = _bounded_opaque_id(projection_status_value)
-        projection_status = projection_status_text.lower() if projection_status_text else ""
-        goal_axis = _bounded_opaque_id(goal_projection_value.get("goal_axis"))
-        raw_family_ids = goal_projection_value.get("family_ids")
-        family_ids = raw_family_ids if isinstance(raw_family_ids, list) else []
-        family_ids_valid = bool(
-            isinstance(raw_family_ids, list)
-            and all(_bounded_opaque_id(item) is not None for item in raw_family_ids)
-            and len(raw_family_ids) == len(set(raw_family_ids))
-        )
-        cycle_count = goal_projection_value.get("cycle_count")
-        semantic_count = goal_projection_value.get("semantic_movement_cycle_count")
-        producer_count = goal_projection_value.get("producer_run_cycle_count")
-        no_movement_streak = goal_projection_value.get("no_semantic_movement_streak")
-        counts_valid = all(
-            _nonnegative_int(value)
-            for value in (cycle_count, semantic_count, producer_count, no_movement_streak)
-        )
-        projection_valid = bool(
-            projection_status in {"evaluated", "scope_unknown"}
-            and family_ids_valid
-            and goal_projection_value.get("family_change_resets_streak") is False
-            and counts_valid
-            and semantic_count <= producer_count <= cycle_count
-            and no_movement_streak <= cycle_count
-            and (
-                projection_status == "scope_unknown" and goal_projection_value.get("goal_axis") in (None, "")
-                or projection_status == "evaluated" and goal_axis is not None
-            )
-        )
-    return (
-        projection_valid,
-        projection_status,
-        family_ids,
-        cycle_count,
-        semantic_count,
-        producer_count,
-        no_movement_streak,
-    )
-
-
-def _duplicate_projection_malformed(goal_projection_values: list[object]) -> bool:
-    projection_signatures: set[tuple[object, ...]] = set()
-    malformed = False
-    for candidate in goal_projection_values:
-        if not isinstance(candidate, dict):
-            malformed = True
-            continue
-        candidate_status = _bounded_opaque_id(candidate.get("status"))
-        candidate_goal_axis = _bounded_opaque_id(candidate.get("goal_axis"))
-        candidate_family_items, candidate_families_valid = _bounded_id_items(candidate.get("family_ids"))
-        candidate_counts = tuple(
-            candidate.get(field)
-            for field in (
-                "cycle_count",
-                "semantic_movement_cycle_count",
-                "producer_run_cycle_count",
-                "no_semantic_movement_streak",
-            )
-        )
-        if (
-            candidate_status is None
-            or not candidate_families_valid
-            or not all(_nonnegative_int(value) for value in candidate_counts)
-            or candidate.get("family_change_resets_streak") is not False
-        ):
-            malformed = True
-            continue
-        projection_signatures.add(
-            (
-                candidate_status.lower(),
-                candidate_goal_axis,
-                tuple(sorted(candidate_family_items)),
-                *candidate_counts,
-                False,
-            )
-        )
-    return malformed or len(projection_signatures) != 1
-
-
-def _check_goal_projection(facts: DeriveFacts, goal_projection_values: list[object]) -> None:
-    result = facts.result
-    mode = facts.mode
-    findings = facts.findings
-    (
-        projection_valid,
-        projection_status,
-        family_ids,
-        cycle_count,
-        semantic_count,
-        producer_count,
-        no_movement_streak,
-    ) = _goal_projection_summary(goal_projection_values[0])
-    if _duplicate_projection_malformed(goal_projection_values):
-        add(
-            findings,
-            "block" if mode == "block" else "warn",
-            "derive_goal_axis_stagnation_projection_conflict",
-            "Duplicate goal-axis stagnation projections must be valid and converge before derive consumes movement claims.",
-        )
-        projection_valid = False
-    if not projection_valid:
-        add(
-            findings,
-            "block" if mode == "block" else "warn",
-            "derive_goal_axis_stagnation_projection_invalid",
-            "Derive cannot consume malformed or family-resetting goal-axis stagnation evidence; raw input is not retained.",
-        )
-    projection_implies_unjustified_reset = bool(
-        projection_valid
-        and cycle_count
-        and semantic_count == 0
-        and no_movement_streak != cycle_count
-    )
-    explicit_reset = boolish(
-        first_present(
-            result,
-            [
-                "goal_axis_stagnation_reset",
-                "goal_axis_streak_reset",
-                "reset_goal_axis_stagnation",
-                "goal_axis_stagnation_projection.reset_applied",
-                "cycle_efficiency_profile.goal_axis_stagnation_projection.reset_applied",
-            ],
-        )
-    )
-    semantic_progress_claimed = boolish(
-        first_present(
-            result,
-            [
-                "semantic_progress",
-                "output_delta.semantic_progress",
-                "output_delta_gate.semantic_progress",
-                "result.output_delta.semantic_progress",
-            ],
-        )
-    )
-    verified_current_movement = bool(
-        projection_valid
-        and projection_status == "evaluated"
-        and semantic_count is not None
-        and semantic_count > 0
-        and producer_count is not None
-        and producer_count >= semantic_count
-        and no_movement_streak == 0
-    )
-    if projection_implies_unjustified_reset or (
-        (explicit_reset or semantic_progress_claimed) and not verified_current_movement
-    ):
-        add(
-            findings,
-            "block" if mode == "block" else "warn",
-            "derive_goal_axis_stagnation_unjustified_reset",
-            "Family change, an explicit reset, or semantic-progress wording cannot reset goal-axis stagnation without verified current-axis producer movement.",
-            {
-                "family_change_observed": len(family_ids) > 1,
-                "explicit_reset_claimed": explicit_reset,
-                "semantic_progress_claimed": semantic_progress_claimed,
-                "verified_current_movement": verified_current_movement,
-            },
-        )
 
 
 def _starvation_status_surface(facts: DeriveFacts) -> tuple[set[str], bool, bool]:
@@ -208,7 +35,9 @@ def _starvation_status_surface(facts: DeriveFacts) -> tuple[set[str], bool, bool
         and text.lower() in EXECUTION_STARVATION_STATUSES
     ]
     normalized_starvation_statuses = set(normalized_starvation_status_items)
-    starvation_status_malformed = len(normalized_starvation_status_items) != len(starvation_status_values)
+    starvation_status_malformed = len(normalized_starvation_status_items) != len(
+        starvation_status_values
+    )
     starvation_status_conflict = len(normalized_starvation_statuses) > 1
     if starvation_status_malformed:
         add(
@@ -224,7 +53,11 @@ def _starvation_status_surface(facts: DeriveFacts) -> tuple[set[str], bool, bool
             "derive_execution_starvation_status_conflict",
             "Duplicate execution-starvation status surfaces must converge before derive consumes them.",
         )
-    return normalized_starvation_statuses, starvation_status_malformed, starvation_status_conflict
+    return (
+        normalized_starvation_statuses,
+        starvation_status_malformed,
+        starvation_status_conflict,
+    )
 
 
 def _scope_status_surface(facts: DeriveFacts) -> tuple[set[str], bool, bool]:
@@ -245,10 +78,13 @@ def _scope_status_surface(facts: DeriveFacts) -> tuple[set[str], bool, bool]:
         text.lower()
         for value in scope_status_values
         if (text := _bounded_opaque_id(value)) is not None
-        and text.lower() in {"evaluated", "scope_unknown"}
+        and text.lower()
+        in {"evaluated", "scope_unknown", "excluded_by_task", "not_applicable"}
     ]
     normalized_scope_statuses = set(normalized_scope_status_items)
-    scope_status_malformed = len(normalized_scope_status_items) != len(scope_status_values)
+    scope_status_malformed = len(normalized_scope_status_items) != len(
+        scope_status_values
+    )
     scope_status_conflict = len(normalized_scope_statuses) > 1
     if scope_status_malformed:
         add(
@@ -275,7 +111,10 @@ def _scope_starvation_conflict(
     mode = facts.mode
     findings = facts.findings
     scope_starvation_status_conflict = bool(
-        ("scope_unknown" in scope_statuses and starvation_statuses & {"present", "absent"})
+        (
+            "scope_unknown" in scope_statuses
+            and starvation_statuses & {"present", "absent"}
+        )
         or ("evaluated" in scope_statuses and "scope_unknown" in starvation_statuses)
     )
     if scope_starvation_status_conflict:
@@ -302,9 +141,13 @@ def _scope_evidence_surface(facts: DeriveFacts) -> set[str]:
             "result.cycle_efficiency_profile.scope_evidence_required",
         ),
     )
-    normalized_scope_evidence = [_bounded_id_items(value) for value in scope_evidence_values]
+    normalized_scope_evidence = [
+        _bounded_id_items(value) for value in scope_evidence_values
+    ]
     scope_evidence_malformed = any(not valid for _, valid in normalized_scope_evidence)
-    scope_evidence_sets = {tuple(sorted(items)) for items, valid in normalized_scope_evidence if valid}
+    scope_evidence_sets = {
+        tuple(sorted(items)) for items, valid in normalized_scope_evidence if valid
+    }
     scope_evidence_conflict = len(scope_evidence_sets) > 1
     scope_evidence_required = set(next(iter(scope_evidence_sets), ()))
     if scope_evidence_malformed or scope_evidence_conflict:
@@ -317,6 +160,69 @@ def _scope_evidence_surface(facts: DeriveFacts) -> set[str]:
     return scope_evidence_required
 
 
+def _applicability_surface(facts: DeriveFacts) -> tuple[set[str], bool]:
+    values = _declared_values(
+        facts.result,
+        (
+            "execution_scope_applicability",
+            "cycle_efficiency_profile.execution_scope_applicability",
+            "anti_loop_progress_gate.execution_scope_applicability",
+            "anti_loop_progress_gate.cycle_efficiency_profile.execution_scope_applicability",
+            "result.cycle_efficiency_profile.execution_scope_applicability",
+        ),
+    )
+    normalized_items = [
+        text.lower()
+        for value in values
+        if (text := _bounded_opaque_id(value)) is not None
+        and text.lower()
+        in {
+            "applicable",
+            "excluded_by_task",
+            "not_applicable",
+            "legacy_unspecified",
+            "scope_unknown",
+        }
+    ]
+    statuses = set(normalized_items)
+    malformed = len(normalized_items) != len(values) or len(statuses) > 1
+    if malformed:
+        add(
+            facts.findings,
+            "block" if facts.mode == "block" else "warn",
+            "derive_execution_scope_applicability_conflict",
+            "Execution-scope applicability must be bounded and converge across profile surfaces.",
+        )
+    return statuses, malformed
+
+
+def _disposition_reason_valid(facts: DeriveFacts, applicability: set[str]) -> bool:
+    if not applicability & {"excluded_by_task", "not_applicable"}:
+        return True
+    values = _declared_values(
+        facts.result,
+        (
+            "execution_scope_exclusion_reason_id",
+            "cycle_efficiency_profile.execution_scope_exclusion_reason_id",
+            "anti_loop_progress_gate.execution_scope_exclusion_reason_id",
+            "anti_loop_progress_gate.cycle_efficiency_profile.execution_scope_exclusion_reason_id",
+            "result.cycle_efficiency_profile.execution_scope_exclusion_reason_id",
+        ),
+    )
+    normalized = [text for value in values if (text := _bounded_opaque_id(value))]
+    valid = bool(
+        normalized and len(normalized) == len(values) and len(set(normalized)) == 1
+    )
+    if not valid:
+        add(
+            facts.findings,
+            "block" if facts.mode == "block" else "warn",
+            "derive_execution_scope_disposition_reason_invalid",
+            "Task exclusion and intrinsic non-applicability require one convergent bounded reason identifier.",
+        )
+    return valid
+
+
 def _check_scope_decision(
     facts: DeriveFacts,
     starvation_statuses: set[str],
@@ -327,6 +233,9 @@ def _check_scope_decision(
     scope_status_conflict: bool,
     scope_starvation_status_conflict: bool,
     scope_evidence_required: set[str],
+    applicability_statuses: set[str],
+    applicability_malformed: bool,
+    disposition_reason_valid: bool,
 ) -> None:
     mode = facts.mode
     findings = facts.findings
@@ -336,6 +245,9 @@ def _check_scope_decision(
         or scope_status_malformed
         or scope_status_conflict
         or scope_starvation_status_conflict
+        or applicability_malformed
+        or not disposition_reason_valid
+        or "scope_unknown" in applicability_statuses
         or "scope_unknown" in starvation_statuses
         or "scope_unknown" in scope_statuses
         or scope_evidence_required
@@ -360,7 +272,8 @@ def _check_scope_decision(
             "scope_unknown requires bounded scope-evidence fields before a recovery task can be selected.",
         )
     if execution_starvation_status == "scope_unknown" and (
-        facts.terminal_selected or facts.selected_kind not in EXECUTION_SCOPE_RECOVERY_TASK_KINDS
+        facts.terminal_selected
+        or facts.selected_kind not in EXECUTION_SCOPE_RECOVERY_TASK_KINDS
     ):
         add(
             findings,
@@ -369,16 +282,71 @@ def _check_scope_decision(
             "Execution scope_unknown permits only bounded scope-evidence recovery; terminal and ordinary continuation remain unavailable.",
             {
                 "terminal_selected": facts.terminal_selected,
-                "recovery_kind_selected": facts.selected_kind in EXECUTION_SCOPE_RECOVERY_TASK_KINDS,
+                "recovery_kind_selected": facts.selected_kind
+                in EXECUTION_SCOPE_RECOVERY_TASK_KINDS,
             },
         )
+    excluded = "excluded_by_task" in applicability_statuses
+    intrinsically_not_applicable = "not_applicable" in applicability_statuses
+    if (
+        (
+            excluded
+            and (
+                execution_starvation_status != "present"
+                or "excluded_by_task" not in scope_statuses
+            )
+        )
+        or (
+            execution_starvation_status == "not_applicable"
+            and (
+                not intrinsically_not_applicable
+                or "not_applicable" not in scope_statuses
+            )
+        )
+        or (
+            intrinsically_not_applicable
+            and (
+                execution_starvation_status != "not_applicable"
+                or "not_applicable" not in scope_statuses
+            )
+        )
+    ):
+        add(
+            findings,
+            "block" if mode == "block" else "warn",
+            "derive_execution_scope_exclusion_conflict",
+            "excluded_by_task is an active producer-scope conflict and must preserve present starvation; only intrinsic not_applicable may bypass producer routing.",
+        )
+    outcome = str(facts.result.get("selection_outcome") or "").strip().lower()
+    genuine_terminal = outcome in {"terminal_blocked", "user_escalation"}
+    if execution_starvation_status == "present" and not genuine_terminal:
+        if (
+            outcome != "selected"
+            or facts.selected_kind not in EXECUTION_STARVATION_TASK_KINDS
+        ):
+            add(
+                findings,
+                "block" if mode == "block" else "warn",
+                "derive_execution_starvation_unhandled",
+                "Present execution starvation permits execution-producing work, producer reconciliation, explicit residual descope, or a separately valid terminal/escalation outcome; another guard, report, or metadata successor is not ordinary progress.",
+                {
+                    "selection_outcome": outcome or None,
+                    "selected_task_kind": facts.selected_kind or None,
+                },
+            )
 
 
 def check_execution_scope(facts: DeriveFacts) -> None:
-    starvation_statuses, starvation_malformed, starvation_conflict = _starvation_status_surface(facts)
+    starvation_statuses, starvation_malformed, starvation_conflict = (
+        _starvation_status_surface(facts)
+    )
     scope_statuses, scope_malformed, scope_conflict = _scope_status_surface(facts)
-    cross_surface_conflict = _scope_starvation_conflict(facts, starvation_statuses, scope_statuses)
+    cross_surface_conflict = _scope_starvation_conflict(
+        facts, starvation_statuses, scope_statuses
+    )
     scope_evidence_required = _scope_evidence_surface(facts)
+    applicability_statuses, applicability_malformed = _applicability_surface(facts)
+    disposition_reason_valid = _disposition_reason_valid(facts, applicability_statuses)
     _check_scope_decision(
         facts,
         starvation_statuses,
@@ -389,6 +357,9 @@ def check_execution_scope(facts: DeriveFacts) -> None:
         scope_conflict,
         cross_surface_conflict,
         scope_evidence_required,
+        applicability_statuses,
+        applicability_malformed,
+        disposition_reason_valid,
     )
     goal_projection_values = _declared_values(
         facts.result,
@@ -401,4 +372,4 @@ def check_execution_scope(facts: DeriveFacts) -> None:
         ),
     )
     if goal_projection_values:
-        _check_goal_projection(facts, goal_projection_values)
+        check_goal_projection(facts, goal_projection_values)

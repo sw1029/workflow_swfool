@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ..runtime_dependencies import (
     apply_quality_policy_compatibility,
+    bind_adapter_invocation_result,
     bool_value,
     call_adapter,
     compute_quality,
@@ -35,6 +36,20 @@ def _prepare_quality_state(frame: _EvaluationFrame) -> None:
         applicability_preflight=True,
     )
     quality_delta_policy = normalize_quality_delta_policy(quality_delta_policy_value)
+    preflight_policy_accepted = bool(
+        isinstance(quality_delta_policy_value, (dict, list, tuple, set))
+        and quality_delta_policy.get("supplied")
+        and quality_delta_policy.get("applicability_supplied")
+        and not quality_delta_policy_error
+    )
+    bind_adapter_invocation_result(
+        "quality_delta_policy",
+        return_contract_valid=isinstance(
+            quality_delta_policy_value, (dict, list, tuple, set)
+        ),
+        semantic_accepted=preflight_policy_accepted,
+        value_consumed_by_decision=preflight_policy_accepted,
+    )
 
     quality, evidence_paths, insufficient_reason, quality_hook_receipt = (
         (
@@ -64,9 +79,31 @@ def _prepare_quality_state(frame: _EvaluationFrame) -> None:
             applicability_preflight=False,
         )
         legacy_policy = normalize_quality_delta_policy(legacy_policy_value)
+        legacy_policy_accepted = bool(
+            isinstance(legacy_policy_value, (dict, list, tuple, set))
+            and legacy_policy.get("supplied")
+            and not legacy_policy_error
+        )
+        bind_adapter_invocation_result(
+            "quality_delta_policy",
+            return_contract_valid=isinstance(
+                legacy_policy_value, (dict, list, tuple, set)
+            ),
+            semantic_accepted=legacy_policy_accepted,
+            value_consumed_by_decision=legacy_policy_accepted,
+        )
         if legacy_policy.get("supplied"):
             quality_delta_policy = legacy_policy
             quality_delta_policy_error = legacy_policy_error
+    quality_contract_valid = bool(quality_hook_receipt.get("return_contract_valid"))
+    quality_accepted = bool(quality_contract_valid and not insufficient_reason)
+    bind_adapter_invocation_result(
+        "quality_vector",
+        return_contract_valid=quality_contract_valid,
+        semantic_accepted=quality_accepted,
+        value_consumed_by_decision=quality_accepted,
+        acceptance_required=True,
+    )
     coverage_compatibility = {
         "gate_id": "coverage_quality_delta_gate",
         "artifact_id": decision_artifact_ref.get("artifact_id"),

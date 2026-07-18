@@ -74,6 +74,14 @@ def guard_content_addressed_consumer(path: Path, expected_canonical_sha256: str)
         transaction.guard_canonical_consumer(path, expected_canonical_sha256)
 
 
+def preserve_content_addressed_evidence() -> None:
+    """Retain helper evidence once a durable forward-recovery journal exists."""
+
+    transaction = getattr(_CONTENT_ADDRESSED_WRITE_STATE, "current", None)
+    if isinstance(transaction, ContentAddressedWriteTransaction):
+        transaction.commit()
+
+
 def now_iso() -> str:
     return dt.datetime.now().astimezone().isoformat(timespec="seconds")
 
@@ -236,4 +244,3 @@ def pack_snapshot(root: Path, path: Path, data: dict[str, Any]) -> dict[str, Any
         "item_order": item_ids,
         "current_item": data.get("current_item_id"),
     }
-

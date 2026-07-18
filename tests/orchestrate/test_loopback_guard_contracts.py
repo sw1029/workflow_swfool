@@ -52,15 +52,17 @@ def bind_exact_artifact(root: Path, args: argparse.Namespace) -> dict[str, Any]:
 
 
 def base_pack(items: list[dict[str, Any]]) -> dict[str, Any]:
-    return {
+    pack = {
         "schema_version": 1,
         "pack_id": "pack-test",
         "status": "active",
         "goal": "Test pack.",
-        "current_item_id": items[0]["item_id"] if items else None,
+        "current_item_id": None,
         "items": items,
         "mutation_log": [],
     }
+    task_pack_queue.refresh_current_item(pack)
+    return pack
 
 
 def base_item(item_id: str, status: str = "planned") -> dict[str, Any]:
@@ -712,9 +714,11 @@ def test_cumulative_chain_overrides_untried_veto_after_quality_stall() -> None:
                         "def quality_vector(**kwargs):",
                         "    ref = kwargs.get('decision_artifact_ref') or {}",
                         "    return {'quality_vector': {'quality_score': 0, 'current_output_fingerprint': 'fp-current', 'artifact_id': ref.get('artifact_id'), 'artifact_sha256': ref.get('artifact_sha256')}}",
-                    "def quality_delta_policy(**kwargs):",
-                    "    return {'keys': ['quality_score']}",
-                    "def substance_metrics(**kwargs):",
+                        "def quality_delta_policy(**kwargs):",
+                        "    return {'keys': ['quality_score']}",
+                        "def previous_accepted_fp(**kwargs):",
+                        "    return {'previous_accepted_fp': 'fp-prior', 'previous_quality_vector': {'quality_score': 0}}",
+                        "def substance_metrics(**kwargs):",
                     "    return {'event_count': 0}",
                     "def facet_root_map(**kwargs):",
                     "    return {'same_root': 'same_root'}",
@@ -827,9 +831,11 @@ def test_chain_stall_forces_actionable_ladder_task_kind() -> None:
                         "def quality_vector(**kwargs):",
                         "    ref = kwargs.get('decision_artifact_ref') or {}",
                         "    return {'quality_vector': {'quality_score': 0, 'current_output_fingerprint': 'fp-current', 'artifact_id': ref.get('artifact_id'), 'artifact_sha256': ref.get('artifact_sha256')}}",
-                    "def quality_delta_policy(**kwargs):",
-                    "    return {'keys': ['quality_score']}",
-                    "def substance_metrics(**kwargs):",
+                        "def quality_delta_policy(**kwargs):",
+                        "    return {'keys': ['quality_score']}",
+                        "def previous_accepted_fp(**kwargs):",
+                        "    return {'previous_accepted_fp': 'fp-prior', 'previous_quality_vector': {'quality_score': 0}}",
+                        "def substance_metrics(**kwargs):",
                     "    return {'event_count': 0}",
                     "def facet_root_map(**kwargs):",
                     "    return {'same_root': 'same_root'}",
@@ -932,9 +938,11 @@ def test_repo_owned_source_provenance_rejects_nonactionable_self_report() -> Non
                         "def quality_vector(**kwargs):",
                         "    ref = kwargs.get('decision_artifact_ref') or {}",
                         "    return {'quality_vector': {'quality_score': 0, 'current_output_fingerprint': 'fp-current', 'artifact_id': ref.get('artifact_id'), 'artifact_sha256': ref.get('artifact_sha256')}}",
-                    "def quality_delta_policy(**kwargs):",
-                    "    return {'keys': ['quality_score']}",
-                    "def substance_metrics(**kwargs):",
+                        "def quality_delta_policy(**kwargs):",
+                        "    return {'keys': ['quality_score']}",
+                        "def previous_accepted_fp(**kwargs):",
+                        "    return {'previous_accepted_fp': 'fp-prior', 'previous_quality_vector': {'quality_score': 0}}",
+                        "def substance_metrics(**kwargs):",
                     "    return {'event_count': 0}",
                     "def partial_progress_axes(**kwargs):",
                     "    return ['extraction_axis_observed']",
@@ -2144,7 +2152,12 @@ def test_verification_coupling_preserves_self_grounded_and_rejects_identity_over
     structural = anti_loop_gate_provider.verification_source_separation_gate(
         provenance_value={
             "self_grounded_axes": ["axis_A"],
-            "evidence_provenance": {"axis_A": {"axis_kind": "semantic"}},
+            "evidence_provenance": {
+                "axis_A": {
+                    "axis_kind": "structural",
+                    "axis_scope": "root_local",
+                }
+            },
         },
         verified_artifact_paths=["artifact_A.json"],
         independently_verified_fields=[],
@@ -2160,7 +2173,7 @@ def test_verification_coupling_preserves_self_grounded_and_rejects_identity_over
     assert overlap["verification_axes"][0]["evidence_provenance"] == "producer_attested"
     assert structural["independent_source_separation_status"] == "self_grounded"
     assert structural["verification_axes"][0]["evidence_provenance"] == "self_grounded"
-    assert structural["verification_axes"][0]["semantic_axis"] is True
+    assert structural["verification_axes"][0]["semantic_axis"] is False
 
 
 def test_registry_identity_is_content_bound_and_label_correction_is_not_a_new_attempt() -> None:

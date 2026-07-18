@@ -8,6 +8,8 @@ description: Capture and inspect repository-local Codex or Claude Code conversat
 Treat session logs as optional observations. Never make this sidecar a canonical
 workflow phase or positive completion/progress authority.
 
+Use `authority.operations.json` and the shared [authority v2 contract](../manage-agent-authority/references/authority-v2-contract.md). Sensitive session capture requires an exact grant; deterministic index reconstruction is a bounded derived projection with no independent grant. Neither operation may promote transcript content into authority or goal truth.
+
 ## Capture a safe projection
 
 Configure an optional Stop hook to pass its JSON object on stdin and invoke:

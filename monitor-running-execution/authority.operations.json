@@ -1,0 +1,38 @@
+{
+  "schema_version": 2,
+  "manifest_kind": "authority_operations",
+  "skill_id": "monitor-running-execution",
+  "skill_version": "2.0.0",
+  "operations": [
+    {
+      "operation_id": "record_execution_monitor_event",
+      "operation_version": "1",
+      "authorization_mechanism": "grant",
+      "mutation_class": "local_mutation",
+      "required_capabilities": ["execution.monitor.record"],
+      "source_rank_floor": "S1",
+      "risk_floor": "R1",
+      "decision_class": "D3",
+      "effect_classes": ["record_monitor_or_harvest_state"],
+      "data_classes": ["runtime_state"],
+      "reversibility": "reversible",
+      "subject_kinds": ["running_execution"],
+      "authority_applicability": "required"
+    },
+    {
+      "operation_id": "terminate_running_execution",
+      "operation_version": "1",
+      "authorization_mechanism": "grant",
+      "mutation_class": "destructive",
+      "required_capabilities": ["execution.process.terminate"],
+      "source_rank_floor": "S3",
+      "risk_floor": "R3",
+      "decision_class": "D3",
+      "effect_classes": ["terminate_process"],
+      "data_classes": ["runtime_state"],
+      "reversibility": "irreversible",
+      "subject_kinds": ["running_execution"],
+      "authority_applicability": "required"
+    }
+  ]
+}

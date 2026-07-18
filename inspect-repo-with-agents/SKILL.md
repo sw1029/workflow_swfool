@@ -11,6 +11,8 @@ Use this skill to inspect the current repository through 3-6 focused subagents s
 
 If subagents are unavailable, do not pretend that a multi-agent inspection happened. Perform the best local inspection possible and state the limitation.
 
+`authority.operations.json` declares the repository inspection as read-only under the shared [authority v2 contract](../manage-agent-authority/references/authority-v2-contract.md). Delegation does not add mutation authority, and any proposed fix or durable report must use the exact operation of its owning writer skill.
+
 When task-state artifacts exist, add ID traceability as a separate concern through `$manage-task-state-index`. ID work is additional and must not replace or consume one of the normal repository inspection agents.
 
 ## Agent Routing Policy

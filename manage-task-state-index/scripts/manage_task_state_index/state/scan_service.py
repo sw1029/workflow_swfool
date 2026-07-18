@@ -17,6 +17,7 @@ from .artifacts import (
 from .contracts import (
     INDEX_FORMAT_VERSION,
     INDEX_SCHEMA_VERSION,
+    NON_ACTIVE_STATUSES,
     TASK_SCAN_PRESERVED_NONEXECUTABLE_STATUSES,
 )
 from .events import (
@@ -69,6 +70,16 @@ class _ArtifactUpdate:
     item_id: str | None
     fields: dict[str, Any] | None
     retire_alias_ids: list[str]
+
+
+@dataclass(frozen=True)
+class _ProjectionCorrection:
+    item_id: str
+    path_value: str
+    title: str
+    digest: str | None
+    fields: dict[str, str]
+    reason: str
 
 
 def _artifact_anchor(root: Path, artifacts: list[Artifact]) -> list[tuple[str, str, str, str, str | None]]:
@@ -228,6 +239,95 @@ def _artifact_update(scan: _ScanState, artifact: Artifact) -> _ArtifactUpdate | 
     )
 
 
+def _legacy_pack_render_corrections(scan: _ScanState) -> list[_ProjectionCorrection]:
+    """Retire legacy task-pack identities that point at a Markdown render.
+
+    A task pack's canonical mutable state is its discovered JSON file.  Older
+    indexes occasionally classified the sibling Markdown projection as a
+    second active pack; leaving that identity active makes pack cardinality
+    and selection disagree with the task-pack owner.
+    """
+
+    canonical_paths = {
+        path_value
+        for item_type, path_value, _status, _title in scan.artifacts
+        if item_type == "task_pack" and path_value.endswith(".json")
+    }
+    corrections: list[_ProjectionCorrection] = []
+    for item_id, item in sorted(scan.state.items()):
+        path_value = str(item.get("path") or "")
+        if (
+            item.get("type") != "task_pack"
+            or str(item.get("status") or "") in NON_ACTIVE_STATUSES
+            or not path_value.endswith(".md")
+        ):
+            continue
+        canonical_path = str(Path(path_value).with_suffix(".json").as_posix())
+        if canonical_path not in canonical_paths:
+            continue
+        prior_fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
+        corrections.append(
+            _ProjectionCorrection(
+                item_id=item_id,
+                path_value=path_value,
+                title=str(item.get("title") or Path(path_value).stem),
+                digest=sha256_file(scan.root / path_value),
+                fields={
+                    **{str(key): str(value) for key, value in prior_fields.items()},
+                    "projection_role": "legacy_task_pack_render",
+                    "canonical_pack_path": canonical_path,
+                    "correction_reason": "render_is_not_canonical_task_pack_state",
+                },
+                reason="supersede_noncanonical_task_pack_render",
+            )
+        )
+    return corrections
+
+
+def _project_correction(scan: _ScanState, correction: _ProjectionCorrection) -> None:
+    scan.pending.append(
+        {
+            "type": "task_pack",
+            "path": correction.path_value,
+            "status": "superseded",
+            "title": correction.title,
+            "stable_id": correction.item_id,
+            "identity_status": "existing_projection_correction",
+            "content_sha256": correction.digest,
+            "correction_reason": correction.reason,
+        }
+    )
+    projected = copy.deepcopy(scan.projected_state[correction.item_id])
+    projected.update(
+        {
+            "status": "superseded",
+            "updated_at": scan.projected_timestamp,
+            "content_sha256": correction.digest,
+        }
+    )
+    projected.setdefault("fields", {}).update(correction.fields)
+    scan.projected_state[correction.item_id] = projected
+    scan.projected_markdown_forced = True
+
+
+def _apply_correction(scan: _ScanState, correction: _ProjectionCorrection) -> None:
+    result = upsert_item(
+        scan.root,
+        "task_pack",
+        correction.path_value,
+        "superseded",
+        title=correction.title,
+        item_id=correction.item_id,
+        fields=correction.fields,
+        note=correction.reason,
+        replace_existing=False,
+        _now_fn=scan.now_fn,
+    )
+    scan.added.append(result["event"])
+    scan.markdown_changed = scan.markdown_changed or bool(result.get("index_md_changed"))
+    scan.state = merge_state(load_events(scan.root))
+
+
 def _project_update(scan: _ScanState, update: _ArtifactUpdate) -> None:
     scan.pending.append({
         "type": update.item_type,
@@ -351,6 +451,11 @@ def scan_artifacts(
             "scan_evidence_status": "not_evaluated_no_artifacts",
         }
     scan = _prepare_scan(root, artifacts, dry_run=dry_run, now_fn=_now_fn)
+    for correction in _legacy_pack_render_corrections(scan):
+        if scan.dry_run:
+            _project_correction(scan, correction)
+        else:
+            _apply_correction(scan, correction)
     for artifact in scan.artifacts:
         update = _artifact_update(scan, artifact)
         if update is None:

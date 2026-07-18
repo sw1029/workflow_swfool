@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from .. import model_effort_router
 
 
 TARGETS = {
+    "authority",
     "repo_skill_adapter_scan",
     "acceptance",
     "validation_scope_plan",
@@ -68,14 +70,28 @@ CANONICAL_LEDGER_STEPS = (
     "closeout_commit",
 )
 
-MODEL_EFFORT_PROFILE_PATH = Path(__file__).resolve().parents[3] / "references" / "model-effort-profiles.json"
+MODEL_EFFORT_PROFILE_PATH = (
+    Path(__file__).resolve().parents[3] / "references" / "model-effort-profiles.json"
+)
+DERIVE_SELECTION_CONTRACT_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "references"
+    / "derive-selection-contract.json"
+)
 
 
 MODEL_EFFORT_ROUTER = model_effort_router
 MODEL_EFFORT_POLICY = MODEL_EFFORT_ROUTER.load_policy(MODEL_EFFORT_PROFILE_PATH)
+DERIVE_SELECTION_CONTRACT = json.loads(
+    DERIVE_SELECTION_CONTRACT_PATH.read_text(encoding="utf-8")
+)
 SUPPORTED_AGENT_MODELS = {str(item) for item in MODEL_EFFORT_POLICY["models"].values()}
-SUPPORTED_AGENT_EFFORTS = {str(item) for item in MODEL_EFFORT_POLICY["supported_efforts"]}
-ROUTING_ENFORCEMENT_VALUES = {str(item) for item in MODEL_EFFORT_POLICY["result_enforcement_values"]}
+SUPPORTED_AGENT_EFFORTS = {
+    str(item) for item in MODEL_EFFORT_POLICY["supported_efforts"]
+}
+ROUTING_ENFORCEMENT_VALUES = {
+    str(item) for item in MODEL_EFFORT_POLICY["result_enforcement_values"]
+}
 AGENT_ROUTING_TARGETS = {
     "governance",
     "validation_set_plan",
@@ -93,6 +109,22 @@ AGENT_ROUTING_TARGETS = {
 }
 
 COMMON_FIELDS = {
+    "authority": [
+        "step",
+        "schema_version",
+        "artifact_kind",
+        "packet_id",
+        "decision_binding",
+        "operation_binding",
+        "subject",
+        "scope",
+        "axes",
+        "reservation_binding",
+        "dispatch_preflight",
+        "effective_authority_fingerprint",
+        "evidence_ids",
+        "packet_sha256",
+    ],
     "repo_skill_adapter_scan": [
         "cycle_id",
         "adapter_scan_status",
@@ -130,7 +162,14 @@ COMMON_FIELDS = {
         "evidence_paths",
     ],
     "governance": ["task_id", "changed_files", "evidence_paths"],
-    "validation_set_plan": ["task_id", "validation_set_need", "task_family", "oracle_strategy", "split_strategy", "evidence_paths"],
+    "validation_set_plan": [
+        "task_id",
+        "validation_set_need",
+        "task_family",
+        "oracle_strategy",
+        "split_strategy",
+        "evidence_paths",
+    ],
     "code_structure_audit": [
         "task_id",
         "audit_status",
@@ -237,13 +276,44 @@ COMMON_FIELDS = {
         "findings",
         "evidence_paths",
     ],
-    "index_pre_validate": ["task_id", "index_status", "index_snapshot_id", "blockers", "evidence_paths"],
+    "index_pre_validate": [
+        "task_id",
+        "index_status",
+        "index_snapshot_id",
+        "blockers",
+        "evidence_paths",
+    ],
     "schema_pre_derive": ["task_id", "schema_status", "evidence_paths"],
-    "derive": ["completed_task_id", "selected_task_source", "loop_breaker_disposition", "progress_kind", "semantic_signature", "evidence_paths"],
+    "derive": [
+        "derive_contract_version",
+        "completed_task_id",
+        "selected_task_source",
+        "selection_outcome",
+        "pack_disposition",
+        "improvement_analysis_manifest",
+        "loop_breaker_disposition",
+        "progress_kind",
+        "semantic_signature",
+        "evidence_paths",
+    ],
     "schema_post_derive": ["schema_status", "evidence_paths"],
     "index": ["task_id", "index_status", "evidence_paths"],
-    "validate": ["task_id", "validation_verdict", "progress_verdict", "blockers", "evidence_paths"],
-    "issue": ["issue_packet_id", "task_id", "issue_status", "issue_ids", "issue_provenance", "blockers", "evidence_paths"],
+    "validate": [
+        "task_id",
+        "validation_verdict",
+        "progress_verdict",
+        "blockers",
+        "evidence_paths",
+    ],
+    "issue": [
+        "issue_packet_id",
+        "task_id",
+        "issue_status",
+        "issue_ids",
+        "issue_provenance",
+        "blockers",
+        "evidence_paths",
+    ],
     "commit": ["commit_role", "commit_status", "evidence_paths"],
     "dashboard": [
         "task_id",
@@ -271,10 +341,22 @@ COMMON_FIELDS = {
         "completion_status",
         "evidence_paths",
     ],
-    "closeout_commit": ["commit_role", "commit_status", "tracked_artifacts", "evidence_paths"],
+    "closeout_commit": [
+        "commit_role",
+        "commit_status",
+        "tracked_artifacts",
+        "evidence_paths",
+    ],
 }
 
-RUNNING_FIELDS = ["pid_or_session", "log_path", "startup_or_heartbeat_evidence", "monitor_command", "stop_command", "remaining_validation"]
+RUNNING_FIELDS = [
+    "pid_or_session",
+    "log_path",
+    "startup_or_heartbeat_evidence",
+    "monitor_command",
+    "stop_command",
+    "remaining_validation",
+]
 LONG_RUN_REQUIRED_FIELDS = [
     "run_id",
     "owner_task_id",
@@ -291,31 +373,49 @@ LONG_RUN_REQUIRED_FIELDS = [
     "expected_completion_artifacts",
 ]
 LONG_RUN_ROLES = {"launch", "monitor", "harvest", "finalize"}
-LONG_RUN_STATUSES = {"launching", "running", "completed_pending_validation", "stale", "not_running", "failed", "success"}
-ADVICE_REQUIRED_TARGETS = {"acceptance", "governance", "validation_set_plan", "qualitative_review", "validation_set_build", "derive", "validate"}
-PACK_DISPOSITIONS = {
-    "create_pack",
-    "replace_pack",
-    "promote_next_item",
-    "normalize_initial_selection_provenance",
-    "insert_items",
-    "insert_item",
-    "reorder_items",
-    "skip_items",
-    "exclude_items",
-    "supersede_pack",
-    "derive_standalone",
-    "terminal_blocked",
+LONG_RUN_STATUSES = {
+    "launching",
+    "running",
+    "completed_pending_validation",
+    "stale",
+    "not_running",
+    "failed",
+    "success",
 }
+ADVICE_REQUIRED_TARGETS = {
+    "acceptance",
+    "governance",
+    "validation_set_plan",
+    "qualitative_review",
+    "validation_set_build",
+    "derive",
+    "validate",
+}
+DERIVE_AGENT_ROLES = tuple(
+    str(item) for item in DERIVE_SELECTION_CONTRACT["agent_roles"]
+)
+DERIVE_SELECTION_OUTCOMES = frozenset(
+    str(item) for item in DERIVE_SELECTION_CONTRACT["selection_outcomes"]
+)
+CANONICAL_PACK_DISPOSITIONS = frozenset(
+    str(item) for item in DERIVE_SELECTION_CONTRACT["pack_dispositions"]
+)
+LEGACY_PACK_DISPOSITION_ALIASES = {
+    str(key): str(value)
+    for key, value in DERIVE_SELECTION_CONTRACT.get(
+        "legacy_pack_disposition_aliases", {}
+    ).items()
+}
+PACK_DISPOSITIONS = CANONICAL_PACK_DISPOSITIONS | frozenset(
+    LEGACY_PACK_DISPOSITION_ALIASES
+)
 PACK_MUTATION_DISPOSITIONS = {
     "create_pack",
     "replace_pack",
     "normalize_initial_selection_provenance",
     "insert_items",
-    "insert_item",
     "reorder_items",
     "skip_items",
-    "exclude_items",
     "supersede_pack",
     "terminal_blocked",
 }

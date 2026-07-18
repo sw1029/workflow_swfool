@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from .decision_identity_dimensions import (
+    parse_decision_identity,
+)
+from .decision_identity_binding import explicit_identity
+
 from .runtime_dependencies import (
     Any,
     bool_value,
@@ -82,14 +87,28 @@ def build_base_packet(ns: dict[str, Any]) -> dict[str, Any]:
     body_fingerprint = str(
         decision_artifact_ref.get("body_projection_fingerprint") or ""
     ).strip().lower()
-    exact_body_bound = bool(re.fullmatch(r"[0-9a-f]{64}", body_fingerprint))
-    exact_cohort_bound = bool(
-        string_list(decision_artifact_ref.get("verification_input_ids"))
-    ) or bool(
-        decision_artifact_ref.get("input_fingerprints")
-        if isinstance(decision_artifact_ref.get("input_fingerprints"), dict)
-        else None
-    )
+    exact_identity = explicit_identity(decision_artifact_ref)
+    identity_projection = parse_decision_identity(exact_identity or decision_artifact_ref)
+    if identity_projection.explicit:
+        exact_body_bound = bool(
+            not identity_projection.issues
+            and identity_projection.dimension_statuses.get("body_fingerprint")
+            in {"applicable", "not_applicable"}
+        )
+        exact_cohort_bound = bool(
+            not identity_projection.issues
+            and identity_projection.dimension_statuses.get("cohort")
+            in {"applicable", "not_applicable"}
+        )
+    else:
+        exact_body_bound = bool(re.fullmatch(r"[0-9a-f]{64}", body_fingerprint))
+        exact_cohort_bound = bool(
+            string_list(decision_artifact_ref.get("verification_input_ids"))
+        ) or bool(
+            decision_artifact_ref.get("input_fingerprints")
+            if isinstance(decision_artifact_ref.get("input_fingerprints"), dict)
+            else None
+        )
     authoritative_progress = bool(semantic_progress) and not any(
         (
             hard_stop,

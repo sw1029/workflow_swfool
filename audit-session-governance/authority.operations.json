@@ -1,0 +1,38 @@
+{
+  "schema_version": 2,
+  "manifest_kind": "authority_operations",
+  "skill_id": "audit-session-governance",
+  "skill_version": "2.0.0",
+  "operations": [
+    {
+      "operation_id": "capture_session_projection",
+      "operation_version": "1",
+      "authorization_mechanism": "grant",
+      "mutation_class": "local_mutation",
+      "required_capabilities": ["session.audit.capture"],
+      "source_rank_floor": "S3",
+      "risk_floor": "R3",
+      "decision_class": "D3",
+      "effect_classes": ["capture_privacy_safe_session_projection"],
+      "data_classes": ["session_audit"],
+      "reversibility": "conditionally_reversible",
+      "subject_kinds": ["session_audit"],
+      "authority_applicability": "required"
+    },
+    {
+      "operation_id": "rebuild_session_audit_index",
+      "operation_version": "1",
+      "authorization_mechanism": "none",
+      "mutation_class": "local_mutation",
+      "required_capabilities": ["session.audit.index.rebuild"],
+      "source_rank_floor": "S0",
+      "risk_floor": "R1",
+      "decision_class": "D3",
+      "effect_classes": ["rebuild_derived_session_index"],
+      "data_classes": ["session_audit"],
+      "reversibility": "reversible",
+      "subject_kinds": ["session_audit"],
+      "authority_applicability": "none"
+    }
+  ]
+}

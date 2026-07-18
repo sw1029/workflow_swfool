@@ -3,6 +3,7 @@ from __future__ import annotations
 from .base import RuleRegistry
 from .rules import (
     AcceptanceRule,
+    AuthorityRule,
     CodeStructureAuditRule,
     CommitRule,
     CompletionValidationRule,
@@ -26,6 +27,7 @@ def default_rule_registry() -> RuleRegistry:
 
     return RuleRegistry(
         [
+            AuthorityRule(),
             AcceptanceRule(),
             CodeStructureAuditRule(),
             RunRule(),

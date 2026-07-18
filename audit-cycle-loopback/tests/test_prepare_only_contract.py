@@ -32,13 +32,305 @@ def load_cycle_ledger() -> Any:
     return importlib.import_module("orchestrate_task_cycle.cycle_ledger")
 
 
+def evaluate_recurrence_identity(value: object) -> dict[str, Any]:
+    module = importlib.import_module("audit_cycle_loopback.recurrence_identity")
+    return module.evaluate_recurrence_identity(value)
+
+
+def primary_metric_scope_key(
+    metric_id: str = "axis_G",
+    metric_basis_id: str = "basis_A",
+    metric_dimension_id: str = "dimension_A",
+    comparison_semantics: str = "higher_is_better",
+) -> str:
+    material = "\0".join(
+        (
+            metric_id.strip().lower(),
+            metric_basis_id,
+            metric_dimension_id,
+            comparison_semantics,
+        )
+    )
+    return "primary_goal_axis:" + hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def finalized_scalar_metric_gate(
+    artifact_ref: dict[str, Any],
+    *,
+    value: float,
+    comparison_semantics: str = "higher_is_better",
+    metric_basis_id: str = "basis_A",
+) -> dict[str, Any]:
+    provider = load_provider()
+    separation = {
+        "independent_source_separation_status": "pass",
+        "verification_axes": [
+            {
+                "axis_id": "axis_G",
+                "evidence_provenance": "independently_verified",
+            }
+        ],
+    }
+    gate = provider.normalize_primary_metric_gate(
+        {
+            "goal_axis_id": "axis_G",
+            "metric_basis_id": metric_basis_id,
+            "metric_dimension_id": "dimension_A",
+            "comparison_semantics": comparison_semantics,
+            "value": value,
+            **artifact_ref,
+        },
+        rows=[],
+        cap=None,
+        epsilon=0.0,
+        provenance={"axis_g": "independently_verified"},
+        provenance_hook_provided=True,
+        source_separation_gate=separation,
+        expected_artifact_ref=artifact_ref,
+    )
+    gate.update(
+        gate_compatibility={
+            "gate_id": "primary_metric_gate",
+            "gate_compatibility_status": "compatible",
+            "compatibility_basis": "test-owner-contract",
+        },
+        gate_compatibility_status="compatible",
+        decision_contribution_allowed=True,
+    )
+    observation = importlib.import_module("audit_cycle_loopback.metric_observation")
+    return observation.finalize_metric_observation(gate)
+
+
+def recurrence_identity(**updates: object) -> dict[str, object]:
+    value: dict[str, object] = {
+        "applicability": "applicable",
+        "stable_root_id": "root-A",
+        "root_predicate_id": "predicate-A",
+        "root_scope_id": "scope-A",
+        "prior_stable_root_id": "root-A",
+        "prior_root_predicate_id": "predicate-A",
+        "prior_root_scope_id": "scope-A",
+        "facet_id": "facet-A",
+        "local_family_id": "family-A",
+        "root_recurrence_count": 3,
+        "prior_root_recurrence_count": 3,
+        "facet_recurrence_count": 1,
+        "local_family_attempt_count": 1,
+        "evaluation_debt_streak": 0,
+        "root_predicate_unchanged": True,
+        "binding_status": "pass",
+        "lineage_transition": {"kind": "none"},
+    }
+    value.update(updates)
+    module = importlib.import_module("audit_cycle_loopback.recurrence_identity")
+    if "root_identity_sha256" not in updates:
+        value["root_identity_sha256"] = module.canonical_root_identity_sha256(
+            value["stable_root_id"],
+            value["root_predicate_id"],
+            value["root_scope_id"],
+        )
+    if "prior_root_identity_sha256" not in updates:
+        value["prior_root_identity_sha256"] = module.canonical_root_identity_sha256(
+            value["prior_stable_root_id"],
+            value["prior_root_predicate_id"],
+            value["prior_root_scope_id"],
+        )
+    if "root_predicate_unchanged" not in updates:
+        value["root_predicate_unchanged"] = (
+            value["stable_root_id"],
+            value["root_predicate_id"],
+            value["root_scope_id"],
+        ) == (
+            value["prior_stable_root_id"],
+            value["prior_root_predicate_id"],
+            value["prior_root_scope_id"],
+        )
+    return value
+
+
+def material_delta(**updates: object) -> dict[str, object]:
+    value: dict[str, object] = {
+        "classification": "material",
+        "delta_id": "delta-A",
+        "rationale_id": "rationale-A",
+        "rationale_evidence_digest": "b" * 64,
+        "full_content_sha256": "a" * 64,
+        "typed_difference_ids": ["changed-premise-A"],
+        "violated_relation_effect": "affects_violated_relation",
+        "authority_premise_changed": False,
+        "external_state_changed": False,
+        "toolchain_premise_changed": False,
+    }
+    value.update(updates)
+    module = importlib.import_module("audit_cycle_loopback.recurrence_identity")
+    value["delta_receipt_sha256"] = module.canonical_material_delta_receipt_sha256(value)
+    return value
+
+
+def test_recurrence_identity_preserves_stable_root_across_facet_novelty() -> None:
+    observed = evaluate_recurrence_identity(
+        recurrence_identity(
+            facet_id="facet-renamed",
+            local_family_id="family-renamed",
+            root_recurrence_count=0,
+        )
+    )
+
+    assert observed["status"] == "block"
+    assert "recurrence_root_count_reset_without_material_delta" in {
+        finding["code"] for finding in observed["findings"]
+    }
+
+
+def test_recurrence_identity_requires_content_bound_material_delta() -> None:
+    observed = evaluate_recurrence_identity(
+        recurrence_identity(
+            root_recurrence_count=0,
+            supplied_input_delta=material_delta(),
+        )
+    )
+
+    assert observed["status"] == "pass"
+    assert observed["durable_update_required"] is True
+
+
+@pytest.mark.parametrize(
+    "missing_field",
+    [
+        "authority_premise_changed",
+        "external_state_changed",
+        "toolchain_premise_changed",
+    ],
+)
+def test_material_delta_requires_each_explicit_premise_flag(missing_field: str) -> None:
+    delta = material_delta()
+    delta.pop(missing_field)
+    module = importlib.import_module("audit_cycle_loopback.recurrence_identity")
+    delta["delta_receipt_sha256"] = module.canonical_material_delta_receipt_sha256(delta)
+
+    observed = evaluate_recurrence_identity(
+        recurrence_identity(root_recurrence_count=0, supplied_input_delta=delta)
+    )
+
+    assert observed["status"] == "block"
+    assert "recurrence_material_delta_binding_invalid" in {
+        finding["code"] for finding in observed["findings"]
+    }
+
+
+def test_material_delta_receipt_binds_rationale_and_full_projection() -> None:
+    delta = material_delta()
+    delta["rationale_id"] = "rationale-tampered"
+
+    observed = evaluate_recurrence_identity(
+        recurrence_identity(root_recurrence_count=0, supplied_input_delta=delta)
+    )
+
+    assert observed["status"] == "block"
+    assert "recurrence_material_delta_binding_invalid" in {
+        finding["code"] for finding in observed["findings"]
+    }
+
+
+def test_recurrence_identity_split_preserves_prior_attempt_lower_bound() -> None:
+    observed = evaluate_recurrence_identity(
+        recurrence_identity(
+            stable_root_id="root-B",
+            root_predicate_id="predicate-B",
+            root_recurrence_count=1,
+            root_predicate_unchanged=False,
+            lineage_transition={
+                "kind": "split",
+                "transition_id": "split-A",
+                "parent_root_ids": ["root-A"],
+                "child_root_ids": ["root-B", "root-C"],
+                "prior_attempt_lower_bound": 3,
+                "aggregate_recurrence_count": 2,
+            },
+        )
+    )
+
+    codes = {finding["code"] for finding in observed["findings"]}
+    assert "recurrence_lineage_attempts_lost" in codes
+    assert "recurrence_lineage_count_reset" in codes
+
+
+def test_recurrence_identity_correction_keeps_logical_attempt_revision() -> None:
+    observed = evaluate_recurrence_identity(
+        recurrence_identity(
+            root_predicate_id="predicate-corrected-A",
+            root_predicate_unchanged=False,
+            lineage_transition={
+                "kind": "correction",
+                "transition_id": "correction-A",
+                "parent_root_ids": ["root-A"],
+                "child_root_ids": ["root-A"],
+                "prior_attempt_lower_bound": 3,
+                "aggregate_recurrence_count": 3,
+                "logical_attempt_id": "attempt-A",
+                "attempt_revision": 2,
+                "supersedes_attempt_revision": 1,
+            },
+        )
+    )
+
+    assert observed["status"] == "pass"
+
+
+def test_recurrence_identity_change_requires_bound_lineage() -> None:
+    without_lineage = evaluate_recurrence_identity(
+        recurrence_identity(
+            stable_root_id="root-B",
+            root_predicate_id="predicate-B",
+            root_recurrence_count=0,
+            root_predicate_unchanged=False,
+        )
+    )
+    assert "recurrence_root_identity_changed_without_lineage" in {
+        finding["code"] for finding in without_lineage["findings"]
+    }
+
+    wrong_lineage = evaluate_recurrence_identity(
+        recurrence_identity(
+            stable_root_id="root-B",
+            root_predicate_id="predicate-B",
+            root_predicate_unchanged=False,
+            lineage_transition={
+                "kind": "reclassification",
+                "transition_id": "transition-B",
+                "parent_root_ids": ["root-X"],
+                "child_root_ids": ["root-Y"],
+                "prior_attempt_lower_bound": 3,
+                "aggregate_recurrence_count": 3,
+            },
+        )
+    )
+    assert "recurrence_root_lineage_binding_mismatch" in {
+        finding["code"] for finding in wrong_lineage["findings"]
+    }
+
+
+def test_recurrence_identity_not_evaluated_binding_accumulates_debt() -> None:
+    observed = evaluate_recurrence_identity(
+        recurrence_identity(
+            binding_status="not_evaluated",
+            prior_evaluation_debt_streak=2,
+            evaluation_debt_streak=2,
+        )
+    )
+
+    assert "recurrence_evaluation_debt_not_incremented" in {
+        finding["code"] for finding in observed["findings"]
+    }
+
+
 def test_provider_public_export_surface_remains_compatible() -> None:
     provider = load_provider()
     exports = provider.__all__
 
-    assert len(exports) == 266
+    assert len(exports) == 267
     assert hashlib.sha256("\n".join(exports).encode("utf-8")).hexdigest() == (
-        "fa8723502375d4b0c10e63f508539dfe00970bb5bcb231fe0ea300ddb027b14b"
+        "67e09d8d4610618a2b3b03b231d6a017105bb631b8c8e630e3730675f3646daf"
     )
 
 
@@ -129,7 +421,52 @@ def test_evaluator_runtime_modules_stay_bounded_and_use_explicit_state() -> None
                 assert node.end_lineno - node.lineno + 1 <= 140, (
                     path.name,
                     node.name,
-                )
+                    )
+
+
+def test_standalone_help_and_read_only_evaluation_need_no_orchestrator(
+    tmp_path: Path,
+) -> None:
+    environment = {
+        **os.environ,
+        "PYTHONPATH": str(SCRIPT_DIR),
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    help_result = subprocess.run(
+        [sys.executable, "-m", "audit_cycle_loopback", "--help"],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    evaluation = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "audit_cycle_loopback",
+            "evaluate",
+            "--root",
+            str(tmp_path),
+            "--cycle-id",
+            "cycle-standalone",
+            "--task-id",
+            "task-standalone",
+        ],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert help_result.returncode == 0
+    assert evaluation.returncode in {0, 2}, evaluation.stderr
+    packet = json.loads(evaluation.stdout)
+    assert packet["durable_mutation_candidate"]["status"] == "unavailable"
+    assert packet["durable_mutation_candidate"]["findings"] == [
+        "typed_operation_builder_unavailable"
+    ]
 
 
 def test_generic_material_delta_is_the_positive_observed_class() -> None:
@@ -202,12 +539,12 @@ def write_adapter(
                 "    return {'substance_metrics': {'axis_A': 1}}",
                 "",
                 "def evidence_provenance(**kwargs):",
-                f"    return {{'evidence_provenance': {{'metric_A': '{provenance_label}', 'axis_A': '{provenance_label}', 'axis_G': '{provenance_label}'}}, 'verification_input_paths': ['source_cohort_D.json'], 'verification_input_ids': ['source_cohort_D'], 'producer_input_ids': ['artifact_A'], 'verified_artifact_ids': ['artifact_A'], 'input_fingerprints': {{'producer_inputs': ['body_fp_A'], 'verification_inputs': ['input_delta_D']}}, 'producer_function_id': 'consumer_C', 'verifier_function_id': 'consumer_D'}}",
+                f"    return {{'evidence_provenance': {{'metric_A': '{provenance_label}', 'axis_A': '{provenance_label}', 'axis_G': '{provenance_label}'}}, 'verification_input_paths': ['source_cohort_D.json'], 'verification_input_ids': ['source_cohort_D'], 'producer_input_ids': ['artifact_A'], 'verified_artifact_ids': ['artifact_A'], 'input_fingerprints': {{'producer_inputs': ['body_fp_A'], 'verification_inputs': ['input_delta_D']}}, 'producer_function_id': 'consumer_C', 'verifier_function_id': 'consumer_D', 'producer_invariant_owner_id': 'invariant_owner_C', 'verifier_invariant_owner_id': 'invariant_owner_D', 'invariant_separation_status': 'independent'}}",
                 "",
                 "def primary_metric(decision_artifact_ref=None, quality_vector=None, **kwargs):",
                 "    ref = decision_artifact_ref or {}",
                 "    quality = quality_vector or {}",
-                f"    return {{'goal_axis_id': 'axis_G', 'value': {primary_metric_expression}, 'artifact_id': ref.get('artifact_id'), 'artifact_sha256': ref.get('artifact_sha256'), 'production_lane_identity': ref.get('production_lane_identity'), 'body_projection_fingerprint': ref.get('body_projection_fingerprint'), 'verification_input_ids': ref.get('verification_input_ids')}}",
+                f"    return {{'goal_axis_id': 'axis_G', 'metric_basis_id': 'basis_A', 'metric_dimension_id': 'dimension_A', 'comparison_semantics': 'higher_is_better', 'value': {primary_metric_expression}, 'artifact_id': ref.get('artifact_id'), 'artifact_sha256': ref.get('artifact_sha256'), 'production_lane_identity': ref.get('production_lane_identity'), 'body_projection_fingerprint': ref.get('body_projection_fingerprint'), 'verification_input_ids': ref.get('verification_input_ids')}}",
                 "",
                 "def facet_root_map(**kwargs):",
                 "    return {'axis_A': 'axis_A', 'family_A': 'axis_A', 'class_A': 'axis_A'}",
@@ -223,11 +560,163 @@ def write_adapter(
     )
 
 
+def write_explicit_adapter(path: Path, identity_echo: dict[str, object]) -> None:
+    path.write_text(
+        "\n".join(
+            [
+                f"IDENTITY_ECHO = {identity_echo!r}",
+                "",
+                "def quality_vector(**kwargs):",
+                "    return {'quality_vector': {'metric_A': 1, 'quality_signal_confidence': 'high', 'current_output_fingerprint': 'fingerprint_A', 'decision_identity_echo': IDENTITY_ECHO}}",
+                "",
+                "def quality_delta_policy(**kwargs):",
+                "    return {'keys': ['metric_A']}",
+                "",
+                "def substance_metrics(**kwargs):",
+                "    return {'substance_metrics': {'axis_A': 1}}",
+                "",
+                "def evidence_provenance(**kwargs):",
+                "    return {'evidence_provenance': {'metric_A': 'independently_verified', 'axis_A': 'independently_verified', 'axis_G': 'independently_verified'}, 'verification_input_paths': ['source_cohort_D.json'], 'verification_input_ids': ['source_cohort_D'], 'producer_input_ids': ['producer_A'], 'verified_artifact_ids': ['verifier_A'], 'input_fingerprints': {'producer_inputs': ['producer_fp_A'], 'verification_inputs': ['verifier_fp_D']}, 'producer_function_id': 'consumer_C', 'verifier_function_id': 'consumer_D', 'producer_invariant_owner_id': 'invariant_owner_C', 'verifier_invariant_owner_id': 'invariant_owner_D', 'invariant_separation_status': 'independent'}",
+                "",
+                "def primary_metric(**kwargs):",
+                "    return {'goal_axis_id': 'axis_G', 'metric_basis_id': 'basis_A', 'metric_dimension_id': 'dimension_A', 'comparison_semantics': 'higher_is_better', 'value': 1, 'decision_identity_echo': IDENTITY_ECHO}",
+                "",
+                "def facet_root_map(**kwargs):",
+                "    return {'axis_A': 'axis_A', 'family_A': 'axis_A', 'class_A': 'axis_A'}",
+                "",
+                "def gate_artifact_compatibility(artifact_ref=None, **kwargs):",
+                "    ref = artifact_ref or {}",
+                "    return {'compatible': True, 'artifact_id': ref.get('artifact_id'), 'artifact_sha256': ref.get('artifact_sha256'), 'evidence_ref': 'evidence_A'}",
+                "",
+                "def previous_accepted_fp(**kwargs):",
+                "    return {'previous_quality_vector': {'metric_A': 0}}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def run_explicit_provider(
+    root: Path,
+    identity: dict[str, object],
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    artifact = root / "artifact_explicit.json"
+    artifact.write_text('{}\n', encoding="utf-8")
+    (root / "source_cohort_D.json").write_text('{}\n', encoding="utf-8")
+    applicable = {
+        name: row["value"]
+        for name, row in identity.items()
+        if name in {"body_fingerprint", "production_lane", "cohort", "producer_run"}
+        and isinstance(row, dict)
+        and row.get("applicability") == "applicable"
+    }
+    identity_echo = {
+        **{
+            field: identity[field]
+            for field in (
+                "decision_subject_id",
+                "subject_class_id",
+                "revision_id",
+                "subject_digest",
+                "lineage_id",
+                "freshness_status",
+            )
+        },
+        "dimension_values": applicable,
+    }
+    adapter = root / "adapter_explicit.py"
+    write_explicit_adapter(adapter, identity_echo)
+    output = root / "candidate_explicit.json"
+    command = [
+        sys.executable,
+        "-m",
+        "audit_cycle_loopback",
+        "evaluate",
+        "--root",
+        str(root),
+        "--cycle-id",
+        "cycle_explicit",
+        "--task-id",
+        "task_explicit",
+        "--artifact-family",
+        "class_explicit",
+        "--semantic-signature",
+        "family_A",
+        "--root-key",
+        "axis_A",
+        "--domain-adapter",
+        str(adapter),
+        "--artifact-path",
+        artifact.name,
+        "--artifact-ref-json",
+        json.dumps({"decision_identity": identity}, sort_keys=True),
+        "--blocker-signature",
+        "blocker_A",
+        "--output",
+        output.name,
+    ]
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = os.pathsep.join(
+        item
+        for item in (
+            str(SCRIPT_DIR),
+            str(ORCHESTRATE_SCRIPTS),
+            environment.get("PYTHONPATH", ""),
+        )
+        if item
+    )
+    process = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=root,
+        env=environment,
+    )
+    return process, output
+
+
+def test_cli_forward_consumes_all_na_explicit_identity_without_legacy_downgrade(
+    tmp_path: Path,
+) -> None:
+    artifact_digest = hashlib.sha256(b"{}\n").hexdigest()
+    identity = {
+        "decision_subject_id": "subject_explicit",
+        "subject_class_id": "class_explicit",
+        "revision_id": "revision_explicit",
+        "subject_digest": artifact_digest,
+        "lineage_id": "lineage_explicit",
+        "freshness_status": "current",
+        "body_fingerprint": {"applicability": "not_applicable", "value": None},
+        "production_lane": {"applicability": "not_applicable", "value": None},
+        "cohort": {"applicability": "not_applicable", "value": None},
+        "producer_run": {"applicability": "not_applicable", "value": None},
+    }
+
+    process, output = run_explicit_provider(tmp_path, identity)
+
+    assert process.returncode == 0, process.stderr
+    packet = json.loads(output.read_text(encoding="utf-8"))
+    selected = packet["decision_artifact_ref"]
+    assert selected["scope_verified"] is True
+    assert selected["decision_identity_kind"] == "explicit_v2"
+    assert selected["revision_id"] == "revision_explicit"
+    assert selected["lineage_id"] == "lineage_explicit"
+    assert selected["decision_identity_echo"]["dimension_values"] == {}
+    primary_gate = packet["primary_metric_gate"]
+    assert primary_gate["artifact_binding_status"] == "exact"
+    assert primary_gate.get("artifact_binding_mismatches", []) == []
+    assert primary_gate.get("not_evaluated_reason") != (
+        "exact_decision_artifact_binding_missing"
+    )
+
+
 def run_provider(
     root: Path,
     *extra: str,
     metric_value: int = 1,
-    previous_metric_value: int | None = None,
+    previous_metric_value: int | None = 0,
     provenance_label: str = "independently_verified",
     primary_metric_value: int | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
@@ -307,19 +796,23 @@ def test_write_registry_prepares_positive_candidate_without_mutating_state(tmp_p
     ledger = tmp_path / ".task" / "anti_loop" / "root_cause_ledger.jsonl"
     seal = tmp_path / ".task" / "sealed_blocker_families.json"
     registry.parent.mkdir(parents=True)
+    artifact_bytes = b'{"artifact_id":"artifact_A"}\n'
+    prior_artifact_ref = {
+        "artifact_id": "artifact_A",
+        "artifact_class": "class_A",
+        "artifact_sha256": hashlib.sha256(artifact_bytes).hexdigest(),
+        "production_lane_identity": "lane_A",
+        "body_projection_fingerprint": hashlib.sha256(artifact_bytes).hexdigest(),
+        "verification_input_ids": ["source_cohort_C"],
+    }
     registry.write_text(
         json.dumps(
             {
                 "cycle_id": "cycle_prior",
                 "family_key": "family_prior",
-                    "primary_metric_gate": {
-                        "primary_metric_scope_key": "primary_goal_axis:axis_g",
-                        "artifact_binding_status": "exact",
-                        "evidence_provenance": "independently_verified",
-                        "independent_source_separation_status": "pass",
-                        "decision_contribution_allowed": True,
-                    "primary_metric_high_water": 0,
-                },
+                "primary_metric_gate": finalized_scalar_metric_gate(
+                    prior_artifact_ref, value=0
+                ),
             },
             sort_keys=True,
         )
@@ -354,8 +847,9 @@ def test_write_registry_prepares_positive_candidate_without_mutating_state(tmp_p
     assert candidate["root_cause_ledger_status"] == "prepared_not_finalized"
     assert candidate["root_cause_ledger_updated"] is False
     mutation = candidate["durable_mutation_candidate"]
-    assert mutation["status"] == "prepared_not_finalized"
-    assert mutation["legacy_write_requested"] is True
+    assert mutation["contract_version"] == 2
+    assert mutation["mode"] == "typed_operations"
+    assert mutation["producer"] == "audit-cycle-loopback"
     assert {row["target_id"] for row in mutation["operations"]} == {
         "family_progress_registry",
         "root_cause_ledger",
@@ -391,6 +885,58 @@ def test_write_registry_prepares_positive_candidate_without_mutating_state(tmp_p
         if isinstance(finding, dict)
     )
     assert all(path.read_bytes() == content for path, content in before.items())
+
+
+def test_cli_prepares_validated_recurrence_identity_operation(tmp_path: Path) -> None:
+    recurrence = recurrence_identity(
+        supplied_input_delta=material_delta(
+            full_content_sha256="b" * 64,
+            typed_difference_ids=["premise-change-A"],
+        )
+    )
+
+    process, output = run_provider(
+        tmp_path,
+        "--recurrence-identity-json",
+        json.dumps(recurrence, sort_keys=True),
+    )
+
+    assert process.returncode == 0, process.stderr
+    candidate = json.loads(output.read_text(encoding="utf-8"))
+    assert candidate["recurrence_identity_status"] == "pass"
+    recurrence_operation = next(
+        row
+        for row in candidate["durable_mutation_candidate"]["operations"]
+        if row["target_id"] == "recurrence_identity"
+    )
+    assert recurrence_operation["payload"]["state"]["stable_root_id"] == "root-A"
+    assert "source_path" not in json.dumps(recurrence_operation["payload"], sort_keys=True)
+
+
+def test_cli_fails_closed_on_cosmetic_root_recurrence_reset(tmp_path: Path) -> None:
+    recurrence = recurrence_identity(
+        root_recurrence_count=0,
+        supplied_input_delta={
+            "classification": "cosmetic",
+            "delta_id": "delta-cosmetic-A",
+            "rationale_id": "timestamp-only-A",
+            "violated_relation_effect": "does_not_affect",
+        },
+    )
+
+    process, output = run_provider(
+        tmp_path,
+        "--recurrence-identity-json",
+        json.dumps(recurrence, sort_keys=True),
+    )
+
+    assert process.returncode == 2
+    candidate = json.loads(output.read_text(encoding="utf-8"))
+    assert candidate["recurrence_identity_status"] == "block"
+    assert candidate["recommended_disposition"] == "repair_recurrence_contract"
+    assert "recurrence_identity" not in {
+        row["target_id"] for row in candidate["durable_mutation_candidate"]["operations"]
+    }
 
 
 def test_retired_direct_write_helpers_fail_closed_without_mutating_state(
@@ -460,13 +1006,115 @@ def test_exhaustion_prepares_family_seal_without_writing_it(tmp_path: Path) -> N
     assert candidate["hypothesis_exhausted"] is True
     assert candidate["hypothesis_exhaustion_seal_status"] == "prepared_not_finalized"
     assert candidate["hypothesis_exhaustion_seal_candidate"]["root_key"] == "axis_a"
-    mutation_kinds = {
-        row["target_id"]
+    producer_operations = {
+        row["target_id"]: row
         for row in candidate["durable_mutation_candidate"]["operations"]
     }
+    mutation_kinds = set(producer_operations)
     assert "sealed_blocker_families" in mutation_kinds
+    family_rows = producer_operations["family_progress_registry"]["payload"]["rows"]
+    assert family_rows[-1]["hypothesis_exhaustion_seal_status"] == (
+        "prepared_not_finalized"
+    )
+    assert family_rows[-1]["hypothesis_exhaustion_seal_candidate"]["root_key"] == (
+        "axis_a"
+    )
+    seal_families = producer_operations["sealed_blocker_families"]["payload"][
+        "state"
+    ]["families"]
+    assert {row["root_key"] for row in seal_families} == {"axis_prior", "axis_a"}
     assert ledger.read_bytes() == before_ledger
     assert seal.read_bytes() == before_seal
+
+
+def test_non_scalar_metric_durable_projection_is_reference_only() -> None:
+    provider = load_provider()
+    cycle_ledger = load_cycle_ledger()
+    artifact_ref = {
+        "artifact_id": "artifact_A",
+        "artifact_class": "class_A",
+        "artifact_sha256": "a" * 64,
+        "production_lane_identity": "lane_L",
+        "body_projection_fingerprint": "b" * 64,
+        "verification_input_ids": ["source_cohort_C"],
+    }
+    gate = provider.normalize_primary_metric_gate(
+        {
+            "goal_axis_id": "axis_G",
+            "metric_basis_id": "basis_A",
+            "metric_dimension_id": "dimension_A",
+            "metric_subject_id": "subject_A",
+            "metric_provenance_id": "provenance_A",
+            "value_kind": "set",
+            "comparison_semantics": "set_relation",
+            "set_relation_direction": "superset_is_better",
+            "value": ["Alice Smith", "raw source sentence with private content"],
+            **artifact_ref,
+        },
+        rows=[],
+        cap=3,
+        epsilon=0.0,
+        provenance={"axis_g": "independently_verified"},
+        provenance_hook_provided=True,
+        source_separation_gate={
+            "independent_source_separation_status": "pass",
+            "verification_axes": [
+                {
+                    "axis_id": "axis_G",
+                    "evidence_provenance": "independently_verified",
+                }
+            ],
+        },
+        expected_artifact_ref=artifact_ref,
+    )
+    projected_row = provider.bounded_durable_projection(
+        {
+            "cycle_id": "cycle-private-metric",
+            "family_key": "family-private-metric",
+            "primary_metric_gate": gate,
+        }
+    )
+    projected_gate = projected_row["primary_metric_gate"]
+    observation = projected_gate["metric_observation"]
+    assert projected_gate["durable_value_projection_status"] == "reference_only"
+    assert observation["observed_value"]["value_ref"].startswith("metric-value-")
+    serialized = json.dumps(projected_row, sort_keys=True)
+    assert "Alice Smith" not in serialized
+    assert "raw source sentence" not in serialized
+
+    operation = cycle_ledger.build_durable_operation(
+        target_ref="family_progress_registry",
+        operation_kind="replace_projection",
+        attempt_identity="attempt-private-metric",
+        payload_schema_id="family-progress-registry-v1",
+        payload={"rows": [projected_row]},
+    )
+    assert operation["payload"] == {"rows": [projected_row]}
+
+    with pytest.raises(ValueError, match="raw non-scalar"):
+        cycle_ledger.build_durable_operation(
+            target_ref="family_progress_registry",
+            operation_kind="replace_projection",
+            attempt_identity="attempt-private-metric",
+            payload_schema_id="family-progress-registry-v1",
+            payload={
+                "rows": [
+                    {
+                        "cycle_id": "cycle-private-metric",
+                        "family_key": "family-private-metric",
+                        "primary_metric_gate": {
+                            "value_kind": "set",
+                            "metric_observation": {
+                                "observed_value": [
+                                    "Alice Smith",
+                                    "raw source sentence with private content",
+                                ]
+                            },
+                        },
+                    }
+                ]
+            },
+        )
 
 
 def test_label_correction_preserves_logical_attempt_and_revision_lineage() -> None:
@@ -523,6 +1171,7 @@ def test_primary_metric_requires_exact_source_separation_for_high_water() -> Non
     provider = load_provider()
     artifact_ref = {
         "artifact_id": "artifact_A",
+        "artifact_class": "class_A",
         "artifact_sha256": "a" * 64,
         "production_lane_identity": "lane_L",
         "body_projection_fingerprint": "b" * 64,
@@ -530,18 +1179,14 @@ def test_primary_metric_requires_exact_source_separation_for_high_water() -> Non
     }
     metric = {
         "goal_axis_id": "axis_G",
+        "metric_basis_id": "basis_A",
+        "metric_dimension_id": "dimension_A",
+        "comparison_semantics": "higher_is_better",
         "value": 2,
         **artifact_ref,
     }
     prior = {
-        "primary_metric_gate": {
-            "primary_metric_scope_key": "primary_goal_axis:axis_g",
-            "artifact_binding_status": "exact",
-            "evidence_provenance": "independently_verified",
-            "independent_source_separation_status": "pass",
-            "decision_contribution_allowed": True,
-            "primary_metric_high_water": 1,
-        }
+        "primary_metric_gate": finalized_scalar_metric_gate(artifact_ref, value=1)
     }
     overlapping = provider.normalize_primary_metric_gate(
         metric,
@@ -587,6 +1232,164 @@ def test_primary_metric_requires_exact_source_separation_for_high_water() -> Non
     assert separated["evidence_provenance"] == "independently_verified"
 
 
+def test_source_separation_also_requires_independent_invariant_owner() -> None:
+    provider = load_provider()
+
+    def provenance(verifier_owner: str) -> dict[str, object]:
+        return {
+            "verification_input_paths": ["evidence/verification.json"],
+            "verification_input_ids": ["verification_input_A"],
+            "producer_input_ids": ["producer_input_A"],
+            "evidence_provenance": {
+                "axis_G": {
+                    "axis_kind": "semantic",
+                    "axis_scope": "global",
+                    "producer_function_id": "producer_function_A",
+                    "verifier_function_id": "verifier_function_B",
+                    "producer_input_fingerprint": "a" * 64,
+                    "verifier_input_fingerprint": "b" * 64,
+                    "producer_invariant_owner_id": "invariant_owner_A",
+                    "verifier_invariant_owner_id": verifier_owner,
+                    "invariant_separation_status": "independent",
+                }
+            },
+        }
+
+    happy = provider.verification_source_separation_gate(
+        provenance_value=provenance("invariant_owner_B"),
+        verified_artifact_paths=["artifacts/current.json"],
+        independently_verified_fields=["axis_G"],
+    )
+    coupled = provider.verification_source_separation_gate(
+        provenance_value=provenance("invariant_owner_A"),
+        verified_artifact_paths=["artifacts/current.json"],
+        independently_verified_fields=["axis_G"],
+    )
+
+    assert happy["status"] == "pass"
+    assert happy["independent_invariant_separation_status"] == "pass"
+    assert happy["verification_axes"][0]["evidence_provenance"] == "independently_verified"
+    assert happy["verification_axes"][0]["verifier_input_ids"] == ["verification_input_A"]
+    assert coupled["status"] == "block"
+    assert coupled["independent_invariant_separation_status"] == "coupled"
+    assert coupled["verification_axes"][0]["evidence_provenance"] == "producer_attested"
+
+
+def test_self_grounded_is_limited_to_explicit_root_local_structure() -> None:
+    provider = load_provider()
+    root_local = {
+        "evidence_provenance": {
+            "axis_S": {"axis_kind": "structural", "axis_scope": "root_local"}
+        },
+        "self_grounded_axes": ["axis_S"],
+    }
+    global_semantic = {
+        "evidence_provenance": {
+            "axis_S": {"axis_kind": "semantic", "axis_scope": "global"}
+        },
+        "self_grounded_axes": ["axis_S"],
+    }
+    accepted = provider.verification_source_separation_gate(
+        provenance_value=root_local,
+        verified_artifact_paths=["artifact.json"],
+        independently_verified_fields=["axis_S"],
+    )
+    rejected = provider.verification_source_separation_gate(
+        provenance_value=global_semantic,
+        verified_artifact_paths=["artifact.json"],
+        independently_verified_fields=["axis_S"],
+    )
+
+    assert accepted["status"] == "pass"
+    assert accepted["verification_axes"][0]["evidence_provenance"] == "self_grounded"
+    assert rejected["status"] == "block"
+    assert rejected["verification_axes"][0]["evidence_provenance"] == "not_evaluated"
+
+
+def test_primary_metric_requires_comparison_contract_and_supports_lower_is_better() -> None:
+    provider = load_provider()
+    artifact_ref = {
+        "artifact_id": "artifact_A",
+        "artifact_class": "class_A",
+        "artifact_sha256": "a" * 64,
+        "production_lane_identity": "lane_L",
+        "body_projection_fingerprint": "b" * 64,
+        "verification_input_ids": ["source_cohort_C"],
+    }
+    source_separation_gate = {
+        "independent_source_separation_status": "pass",
+        "verification_axes": [
+            {
+                "axis_id": "axis_G",
+                "evidence_provenance": "independently_verified",
+            }
+        ],
+    }
+    missing_basis = provider.normalize_primary_metric_gate(
+        {"goal_axis_id": "axis_G", "value": 1, **artifact_ref},
+        rows=[],
+        cap=None,
+        epsilon=0.0,
+        provenance={"axis_g": "independently_verified"},
+        provenance_hook_provided=True,
+        source_separation_gate=source_separation_gate,
+        expected_artifact_ref=artifact_ref,
+    )
+    assert missing_basis["evaluation_status"] == "not_evaluated"
+    assert missing_basis["not_evaluated_reason"] == "metric_basis_id_missing"
+
+    prior = {
+        "primary_metric_gate": finalized_scalar_metric_gate(
+            artifact_ref,
+            value=2,
+            comparison_semantics="lower_is_better",
+        )
+    }
+    lower_is_better = provider.normalize_primary_metric_gate(
+        {
+            "goal_axis_id": "axis_G",
+            "metric_basis_id": "basis_A",
+            "metric_dimension_id": "dimension_A",
+            "comparison_semantics": "lower_is_better",
+            "value": 1,
+            **artifact_ref,
+        },
+        rows=[prior],
+        cap=None,
+        epsilon=0.0,
+        provenance={"axis_g": "independently_verified"},
+        provenance_hook_provided=True,
+        source_separation_gate=source_separation_gate,
+        expected_artifact_ref=artifact_ref,
+    )
+    assert lower_is_better["evaluation_status"] == "pass"
+    assert lower_is_better["primary_metric_high_water_moved"] is True
+    assert lower_is_better["primary_metric_high_water"] == 1
+
+    changed_basis = provider.normalize_primary_metric_gate(
+        {
+            "goal_axis_id": "axis_G",
+            "metric_basis_id": "basis_B",
+            "metric_dimension_id": "dimension_A",
+            "comparison_semantics": "lower_is_better",
+            "value": 0,
+            **artifact_ref,
+        },
+        rows=[prior],
+        cap=None,
+        epsilon=0.0,
+        provenance={"axis_g": "independently_verified"},
+        provenance_hook_provided=True,
+        source_separation_gate=source_separation_gate,
+        expected_artifact_ref=artifact_ref,
+    )
+    assert changed_basis["evaluation_status"] == "not_evaluated"
+    assert changed_basis["metric_comparability_status"] == (
+        "basis_migration_no_comparable_baseline"
+    )
+    assert changed_basis["primary_metric_high_water_moved"] is False
+
+
 def test_terminal_self_resolution_rechecks_final_disposition() -> None:
     provider = load_provider()
     missing = provider.terminal_self_resolution_gate(
@@ -601,6 +1404,16 @@ def test_terminal_self_resolution_rechecks_final_disposition() -> None:
                     "classification": "local_deterministic_repair_possible",
                 }
             ],
+            "authority_classification": {
+                "item_id": "residual_A",
+                "authority_status": "already_granted",
+                "local_resolution_status": "available",
+                "external_dependency": "none",
+                "risk_or_cost_confirmation": "not_required",
+                "resolution_kind_id": "local_repair_A",
+                "authority_evidence_ids": ["authority_A"],
+                "local_capability_evidence_ids": ["capability_A"],
+            },
         }
     )
     external = provider.terminal_self_resolution_gate(
@@ -612,6 +1425,16 @@ def test_terminal_self_resolution_rechecks_final_disposition() -> None:
                     "classification": "new_external_input_required",
                 }
             ],
+            "authority_classification": {
+                "item_id": "residual_A",
+                "authority_status": "already_granted",
+                "local_resolution_status": "unavailable",
+                "external_dependency": "missing_external_input",
+                "risk_or_cost_confirmation": "not_required",
+                "resolution_kind_id": "external_input_A",
+                "authority_evidence_ids": ["authority_A"],
+                "local_capability_evidence_ids": ["local_scope_A"],
+            },
         }
     )
 
@@ -620,6 +1443,73 @@ def test_terminal_self_resolution_rechecks_final_disposition() -> None:
     assert local["goal_terminal_prohibited"] is True
     assert external["goal_terminal_prohibited"] is False
     assert external["status"] == "pass"
+
+
+def test_authority_axes_keep_waiting_and_risk_routes_independent() -> None:
+    provider = load_provider()
+    waiting = provider.terminal_self_resolution_gate(
+        {
+            "recommended_disposition": "terminal_blocked",
+            "residuals": [
+                {"residual_id": "residual_A", "classification": "external_state_change_required"}
+            ],
+            "authority_classification": {
+                "item_id": "residual_A",
+                "authority_status": "already_granted",
+                "local_resolution_status": "unavailable",
+                "external_dependency": "waiting_state",
+                "risk_or_cost_confirmation": "not_required",
+                "resolution_kind_id": "monitor_A",
+                "authority_evidence_ids": ["authority_A"],
+                "local_capability_evidence_ids": ["local_scope_A"],
+            },
+        }
+    )
+    confirmation = provider.terminal_self_resolution_gate(
+        {
+            "recommended_disposition": "terminal_blocked",
+            "residuals": [
+                {"residual_id": "residual_B", "classification": "new_authority_required"}
+            ],
+            "authority_classification": {
+                "item_id": "residual_B",
+                "authority_status": "already_granted",
+                "local_resolution_status": "unavailable",
+                "external_dependency": "none",
+                "risk_or_cost_confirmation": "required",
+                "resolution_kind_id": "risk_confirmation_B",
+                "authority_evidence_ids": ["authority_B"],
+                "local_capability_evidence_ids": ["local_scope_B"],
+            },
+        }
+    )
+
+    assert waiting["recommended_resolution_route"] == "monitor_or_harvest"
+    assert waiting["allowed_resolution_dispositions"] == ["goal_productive"]
+    assert confirmation["recommended_resolution_route"] == "user_confirmation"
+    assert confirmation["allowed_resolution_dispositions"] == ["user_escalation"]
+
+
+def test_authority_axes_without_per_axis_evidence_remain_unverified() -> None:
+    provider = load_provider()
+    result = provider.terminal_self_resolution_gate(
+        {
+            "recommended_disposition": "terminal_blocked",
+            "authority_classification": {
+                "item_id": "residual_A",
+                "authority_status": "already_granted",
+                "local_resolution_status": "unavailable",
+                "external_dependency": "waiting_state",
+                "risk_or_cost_confirmation": "not_required",
+                "resolution_kind_id": "monitor_A",
+                "authority_evidence_ids": [],
+                "local_capability_evidence_ids": [],
+            },
+        }
+    )
+
+    assert result["offline_scope_unverified"] is True
+    assert result["recommended_resolution_route"] == "classification_repair"
 
 
 def test_next_cycle_consumes_only_helper_verified_finalized_projection(tmp_path: Path) -> None:
@@ -641,13 +1531,16 @@ def test_next_cycle_consumes_only_helper_verified_finalized_projection(tmp_path:
         "expected_previous_finalization_token": None,
         "verdict_contract_version": 1,
         **axes,
-        "durable_state_candidate": {
-            "mode": "typed_operations",
-            "operations": [
-                {
-                    "operation_type": "replace_projection",
-                    "target_id": "family_progress_registry",
-                    "payload": {
+        "durable_state_candidate": cycle_ledger.build_typed_operations_candidate(
+            producer="audit-cycle-loopback-test",
+            attempt_identity="attempt_prior",
+            operations=[
+                cycle_ledger.build_durable_operation(
+                    target_ref="family_progress_registry",
+                    operation_kind="replace_projection",
+                    attempt_identity="attempt_prior",
+                    payload_schema_id="family-progress-registry-v1",
+                    payload={
                         "rows": [
                             {
                                 "cycle_id": prior_cycle_id,
@@ -661,24 +1554,28 @@ def test_next_cycle_consumes_only_helper_verified_finalized_projection(tmp_path:
                             }
                         ]
                     },
-                },
-                {
-                    "operation_type": "replace_projection",
-                    "target_id": "root_cause_ledger",
-                    "payload": {"rows": [{"cycle_id": prior_cycle_id, "root_key": "axis_prior"}]},
-                },
-                {
-                    "operation_type": "replace_projection",
-                    "target_id": "sealed_blocker_families",
-                    "payload": {
+                ),
+                cycle_ledger.build_durable_operation(
+                    target_ref="root_cause_ledger",
+                    operation_kind="replace_projection",
+                    attempt_identity="attempt_prior",
+                    payload_schema_id="root-cause-ledger-v1",
+                    payload={"rows": [{"cycle_id": prior_cycle_id, "root_key": "axis_prior"}]},
+                ),
+                cycle_ledger.build_durable_operation(
+                    target_ref="sealed_blocker_families",
+                    operation_kind="replace_projection",
+                    attempt_identity="attempt_prior",
+                    payload_schema_id="sealed-blocker-families-v1",
+                    payload={
                         "state": {
                             "schema_version": "sealed-blocker-families-v1",
                             "families": [],
                         }
                     },
-                },
+                ),
             ],
-        },
+        ),
     }
     cycle_ledger.finalize_candidate(tmp_path, prior_cycle_id, finalized_candidate)
 
@@ -686,6 +1583,7 @@ def test_next_cycle_consumes_only_helper_verified_finalized_projection(tmp_path:
         tmp_path,
         "--finalized-cycle-id",
         prior_cycle_id,
+        previous_metric_value=None,
     )
 
     assert process.returncode == 0, process.stderr
@@ -708,8 +1606,9 @@ def test_next_cycle_consumes_only_helper_verified_finalized_projection(tmp_path:
         tmp_path,
         "--finalized-cycle-id",
         prior_cycle_id,
+        previous_metric_value=None,
     )
-    assert rejected_process.returncode == 0, rejected_process.stderr
+    assert rejected_process.returncode == 2, rejected_process.stderr
     rejected = json.loads(rejected_output.read_text(encoding="utf-8"))
     assert rejected["finalized_state_status"] == "invalid"
     assert rejected["registry_state_source"] == "invalid_finalized_state"

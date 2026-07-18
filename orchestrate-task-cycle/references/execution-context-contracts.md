@@ -37,6 +37,8 @@ Missing cost or reharvest hooks are fail-quiet: preserve legacy behavior and rec
 
 When a task creates or changes a validation predicate, floor, inclusion check, required output class, or schema validation rule, close requires pairwise satisfiability against producer directives if an adapter or project contract exposes `producer_directives(**ctx)`. The reverse is also true: when a task changes producer directives, close requires comparison against existing affected predicates.
 
+The acceptance normalizer emits canonical, whitespace-normalized criterion/directive identities and recomputed `satisfiability_rows`. Each existing result-contract owner (`acceptance`, `loopback_audit`, `validate`, and `derive`) independently reconstructs the expected rows from the raw predicate/directive records and compares the rows plus both summary booleans exactly. Caller-authored `pass`, `mutually_unsatisfiable_contract=false`, or `unverifiable_acceptance_contract=false` cannot replace a failed or unmapped raw contract. This cross-consumer check is shared logic inside the existing target owners; it does not register a second rule owner or create a new phase.
+
 If the predicate requires output the directive forbids, or the directive allows output that the predicate must fail, set `mutually_unsatisfiable_contract=true`. The same task must revise one side or keep the task partial/blocked with residual scope. Do not defer the contradiction to a later generation while allowing both contracts to coexist as consumable truth.
 
 Missing producer-directive hooks are fail-quiet. The generic skill must not infer domain prompt text, lexical requirements, or thresholds.

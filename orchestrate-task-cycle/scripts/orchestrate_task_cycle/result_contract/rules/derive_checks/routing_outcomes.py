@@ -323,6 +323,20 @@ def _check_routing_outcomes_part_06(facts: DeriveFacts) -> None:
         )
         or ""
     ).lower()
+    independent_invariant_status = str(
+        first_present(
+            result,
+            [
+                "independent_invariant_separation_status",
+                "verification_source_separation_gate.independent_invariant_separation_status",
+                "evidence_provenance_gate.independent_invariant_separation_status",
+                "anti_loop_progress_gate.independent_invariant_separation_status",
+                "anti_loop_progress_gate.verification_source_separation_gate.independent_invariant_separation_status",
+                "result.anti_loop_progress_gate.independent_invariant_separation_status",
+            ],
+        )
+        or ""
+    ).lower()
     independently_verified_downgraded_fields = list_values(
         first_present(
             result,
@@ -361,6 +375,7 @@ def _check_routing_outcomes_part_06(facts: DeriveFacts) -> None:
     facts.envelope_thaw_item = envelope_thaw_item
     facts.envelope_thaw_item_required = envelope_thaw_item_required
     facts.independent_source_status = independent_source_status
+    facts.independent_invariant_status = independent_invariant_status
     facts.independently_verified_downgraded_fields = independently_verified_downgraded_fields
 
 
@@ -370,6 +385,7 @@ def _check_routing_outcomes_part_07(facts: DeriveFacts) -> None:
     diagnostics_unavailable_streak = facts.diagnostics_unavailable_streak
     findings = facts.findings
     independent_source_status = facts.independent_source_status
+    independent_invariant_status = facts.independent_invariant_status
     instrumentation_supply_required = facts.instrumentation_supply_required
     mode = facts.mode
     progress_kind = facts.progress_kind
@@ -431,6 +447,14 @@ def _check_routing_outcomes_part_07(facts: DeriveFacts) -> None:
             "`derive` cannot treat independently_verified evidence as goal_productive when verification inputs overlap verified artifacts or are missing; consume it as attested or repair the source separation.",
             {"independent_source_separation_status": independent_source_status},
         )
+    if progress_kind == "goal_productive" and independent_invariant_status in {"coupled", "unknown", "blocked"} and not terminal_selected:
+        add(
+            findings,
+            "block" if mode == "block" else "warn",
+            "derive_goal_productive_from_coupled_invariant_verification",
+            "`derive` cannot treat evidence as goal_productive when decisive invariant ownership is coupled or unknown.",
+            {"independent_invariant_separation_status": independent_invariant_status},
+        )
 
 
 def _check_routing_outcomes_part_08(facts: DeriveFacts) -> None:
@@ -468,4 +492,3 @@ def check_routing_outcomes(facts: DeriveFacts) -> None:
     _check_routing_outcomes_part_06(facts)
     _check_routing_outcomes_part_07(facts)
     _check_routing_outcomes_part_08(facts)
-

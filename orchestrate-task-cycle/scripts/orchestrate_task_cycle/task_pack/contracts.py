@@ -77,6 +77,13 @@ AUTHORITY_RECEIPT_SOURCE_KINDS = {
     "effective_authority_policy",
     "contemporaneous_authority_record",
 }
+RETIREMENT_BASES = {
+    "already_satisfied",
+    "dependency_rederived",
+    "goal_contract_superseded",
+    "explicit_user_exclusion",
+    "stale_subject_replaced",
+}
 CONTEMPORANEOUS_AUTHORITY_SOURCE_KINDS = {
     "explicit_current_user_instruction",
     "effective_authority_policy",
@@ -101,4 +108,3 @@ def normalize_action(action: str) -> str:
         "normalize_initial_selection_provenance": "normalize_initial_selection_provenance",
     }
     return mapping.get(normalized, normalized)
-

@@ -9,6 +9,8 @@ description: "Record visible user-facing or workflow progress deltas for a task 
 
 Use this skill to capture what visibly changed in a cycle: CLI behavior, API output shape, generated artifacts, workflow state, dashboard/report output, or user-observable guardrails.
 
+The bounded `publish_visible_increment` projection is declared in `authority.operations.json`. Its authority applicability is `none` because it records supplied facts only; this never broadens the session ceiling, authorizes the underlying effect, or replaces an operation grant. Use the shared [authority v2 contract](../manage-agent-authority/references/authority-v2-contract.md).
+
 The artifact is progress context only. It must include `not_validation_evidence: true` and must not be cited as the validation command result.
 
 ## Workflow

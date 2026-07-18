@@ -5,6 +5,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .packet_io import non_empty, scope_fidelity_records, truthy
+from .prerequisite_chain import validate_item_prerequisite_chain
 from .validation_acceptance import (
     validate_evidence_acceptance,
     validate_residual_acceptance,
@@ -21,6 +22,7 @@ def validate_item_scope(
     residual_links: list[tuple[str, str]],
     add: FindingAdder,
 ) -> None:
+    validate_item_prerequisite_chain(item, item_id, result, add)
     records, valid_scope_shape = scope_fidelity_records(item)
     if not valid_scope_shape:
         add("block", "scope_fidelity_invalid", "`scope_fidelity` must be an object or a list of objects.", {"item_id": item_id})

@@ -1,0 +1,23 @@
+{
+  "schema_version": 2,
+  "manifest_kind": "authority_operations",
+  "skill_id": "shape-agent-goal-prompt",
+  "skill_version": "2.0.0",
+  "operations": [
+    {
+      "operation_id": "shape_goal_draft",
+      "operation_version": "1",
+      "authorization_mechanism": "none",
+      "mutation_class": "observe",
+      "required_capabilities": ["goal.prompt.shape"],
+      "source_rank_floor": "S0",
+      "risk_floor": "R0",
+      "decision_class": "D3",
+      "effect_classes": ["draft_goal"],
+      "data_classes": ["goal_prompt"],
+      "reversibility": "reversible",
+      "subject_kinds": ["goal_prompt"],
+      "authority_applicability": "none"
+    }
+  ]
+}

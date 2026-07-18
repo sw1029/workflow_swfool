@@ -252,6 +252,20 @@ def _check_acceptance_facts_part_05(facts: CompletionFacts) -> None:
         )
         or ""
     ).lower()
+    independent_invariant_status = str(
+        first_present(
+            result,
+            [
+                "independent_invariant_separation_status",
+                "verification_source_separation_gate.independent_invariant_separation_status",
+                "evidence_provenance_gate.independent_invariant_separation_status",
+                "anti_loop_progress_gate.independent_invariant_separation_status",
+                "result.verification_source_separation_gate.independent_invariant_separation_status",
+                "result.anti_loop_progress_gate.independent_invariant_separation_status",
+            ],
+        )
+        or ""
+    ).lower()
     independently_verified_downgraded_fields = list_values(
         first_present(
             result,
@@ -281,6 +295,7 @@ def _check_acceptance_facts_part_05(facts: CompletionFacts) -> None:
     independently_verified_field_set = set(list_values(independently_verified_fields))
     self_grounded_mislabeled_independent = sorted(self_grounded_axes & independently_verified_field_set)
     facts.independent_source_status = independent_source_status
+    facts.independent_invariant_status = independent_invariant_status
     facts.independently_verified_downgraded_fields = independently_verified_downgraded_fields
     facts.independently_verified_fields = independently_verified_fields
     facts.self_grounded_mislabeled_independent = self_grounded_mislabeled_independent
@@ -442,4 +457,3 @@ def check_acceptance_facts(facts: CompletionFacts) -> None:
     _check_acceptance_facts_part_06(facts)
     _check_acceptance_facts_part_07(facts)
     _check_acceptance_facts_part_08(facts)
-

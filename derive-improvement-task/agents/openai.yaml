@@ -1,4 +1,4 @@
 interface:
   display_name: "Derive Improvement Task"
-  short_description: "Derive task.md with constrained gates"
-  default_prompt: "Use $derive-improvement-task to verify the predecessor finalization receipt and authoritative projection before ordinary derivation, then select the next task.md or task-pack transaction from goal, authority, advice, loopback, structure, convention, and blocker evidence."
+  short_description: "Derive a validated next task or terminal state"
+  default_prompt: "Use $derive-improvement-task to freeze one exact evidence manifest, obtain exactly three independent candidate lenses, and synthesize one validated next task, task-pack disposition, or disjoint terminal outcome."

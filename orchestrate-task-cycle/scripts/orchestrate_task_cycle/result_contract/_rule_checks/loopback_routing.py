@@ -96,6 +96,17 @@ def _validate_independent_sources(state: LoopbackState) -> None:
             "`loopback_audit` must downgrade independently_verified evidence to attested when verification inputs are missing or overlap verified artifacts.",
             {"independent_source_separation_status": source_status},
         )
+    invariant_status = state.text(
+        "independent_invariant_separation_status",
+        "verification_source_separation_gate.independent_invariant_separation_status",
+        "evidence_provenance_gate.independent_invariant_separation_status",
+    )
+    if invariant_status in {"coupled", "unknown", "blocked"} and progress_claimed:
+        state.emit(
+            "loopback_independent_verification_invariant_not_separated",
+            "`loopback_audit` must downgrade independent evidence when decisive invariant ownership is coupled or unknown.",
+            {"independent_invariant_separation_status": invariant_status},
+        )
     downgraded = state.items(
         "independently_verified_downgraded_fields",
         "verification_source_separation_gate.independently_verified_downgraded_fields",

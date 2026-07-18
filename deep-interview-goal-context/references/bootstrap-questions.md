@@ -1,8 +1,13 @@
 # Bootstrap Questions
 
+## Table of Contents
+
+- [Weak Prompt Detection](#weak-prompt-detection)
+- [Initial Bootstrap Batch](#initial-bootstrap-batch)
+
 Use these questions when the hard gate has passed but the user invoked only `$deep-interview-goal-context`, provided no raw prompt, or provided a weak prompt that does not describe the architecture/theory/schema-contract/agent-authority content to collect.
 
-Do not ask all questions at once. Store them in `.interview/questions.md` and present the first 3-5 blocker questions.
+Do not ask all questions at once. Store them in `.interview/questions.md` and present exactly the first unanswered question. Continue with one question per invocation.
 
 ## Weak Prompt Detection
 
@@ -57,8 +62,8 @@ Use stable ids such as `bq-001`.
   priority: blocker
   target_file: goal_theory.md
   target_section: Algorithms, Models, Or Mechanisms
-  question: What technical logic, algorithms, heuristics, models, or conceptual rules should `goal_theory.md` explain, and which are still unknown?
-  why_needed: Prevents the theory file from inventing rationale or algorithmic behavior.
+  question: Which technical ideas are non-negotiable core invariants or guardrails, which are bounded design choices or runtime-adaptive variables, and which remain experimental or unknown?
+  why_needed: Prevents the theory file from inventing rationale while establishing the concept classes that bound downstream autonomy.
   source: bootstrap
 
 - id: bq-006
@@ -93,8 +98,8 @@ Use stable ids such as `bq-001`.
   priority: blocker
   target_file: agent_authority.md
   target_section: Authority Baseline
-  question: Should `agent_authority.md` default to the current coding agent's effective permissions, and are there any project-specific restrictions on API calls, network/external services, destructive actions, long-running runs, or approval requests?
-  why_needed: Establishes that the authority file narrows or clarifies the active agent permissions instead of inventing new authority.
+  question: Should `agent_authority.md` default to the current coding agent's effective permissions, and which exact action, task, recurring-improvement, policy, or core-goal decisions require one-use, bounded reusable, task-lifecycle, or standing approval?
+  why_needed: Establishes authority kind and grant cardinality without inventing permissions or conflating a task decision with every downstream action.
   source: bootstrap
 
 - id: bq-010
@@ -102,8 +107,8 @@ Use stable ids such as `bq-001`.
   priority: blocker
   target_file: agent_authority.md
   target_section: Direction Freedom
-  question: Which operating posture should future agents use by default: strict application, bounded variation, implementation-first, artifact/output-confirmation-first, quality-verification-first, conservative implementation, or another named profile?
-  why_needed: Lets `$derive-improvement-task` and code-writing workers choose scope, variation, and validation posture consistently.
+  question: For each bounded design or runtime-adaptive concept, what exact choices or ranges may agents select, which deterministic evidence rule selects among them, and which relation or change must return to the user?
+  why_needed: Defines a usable autonomy envelope while preserving user ownership of core concepts and locked relationships.
   source: bootstrap
 
 - id: bq-011
@@ -111,8 +116,8 @@ Use stable ids such as `bq-001`.
   priority: important
   target_file: all
   target_section: Assumptions
-  question: Which facts may future agents infer from repository evidence, and which decisions must remain open until the user confirms them?
-  why_needed: Keeps inference boundaries explicit.
+  question: Which facts may future agents infer from repository evidence, who owns each unresolved design/task/action decision, and which prior or missing decisions must remain explicitly unclassified until the user confirms them?
+  why_needed: Keeps inference and migration boundaries explicit and prevents silence or current implementation from becoming retroactive authority.
   source: bootstrap
 
 - id: bq-012

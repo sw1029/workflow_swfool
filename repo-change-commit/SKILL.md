@@ -9,6 +9,8 @@ description: "Inspect a local Git repository's implementation state and create a
 
 Use this skill to turn a dirty repository into a deliberate commit without hiding important work or committing local noise. Keep the workflow conservative: inspect first, ignore generated artifacts precisely, stage only coherent changes, validate what is practical, then commit.
 
+Creating the commit is `finalize_git_state` in `authority.operations.json` and follows the shared [authority v2 contract](../manage-agent-authority/references/authority-v2-contract.md). Validation, coherent staging, or task completion does not itself authorize committing a different exact repository subject; pushing remains a separate external operation.
+
 When a Codex `/goal` is active, treat `.agent_goal/goal_contract.yaml` as the commit contract. A commit is allowed only when the diff is inside the goal scope, a task node or checkpoint exists, validation is recorded as `passed` or explicitly `known_failed`, and the commit message carries the goal and task identity. Do not turn a partial goal state into an ambiguous success commit.
 
 When invoked from `$orchestrate-task-cycle`, treat commit finalization as the authoritative source of created commit hashes. Workflow artifacts written before this skill may contain `base_commit` or pre-commit context; do not rely on those hashes as the final cycle commit. Use `commit_role: implementation` for the validation/issue-gated change set and `commit_role: closeout` for report/dashboard/ledger/advice artifacts after report rendering.

@@ -1,5 +1,12 @@
 # Initial-Selection Provenance Transactions
 
+## Contents
+
+- [Prospective first selection](#prospective-first-selection)
+- [Replacement first selection](#replacement-first-selection)
+- [Existing-pack normalization](#existing-pack-normalization)
+- [Authority boundary](#authority-boundary)
+
 Use these transactions only for the first canonical item in a task pack. Keep authority policy, operation-authority receipt, creation snapshot, task snapshot, and inline selection receipt distinct.
 
 ## Prospective first selection
@@ -51,8 +58,9 @@ Create with a complete bounded pack:
 Run:
 
 ```bash
-python3 -B "${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/python3 -m orchestrate_task_cycle task-pack" \
-  --root . apply-mutation --plan create-plan.json --render
+PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/scripts" \
+  python3 -B -m orchestrate_task_cycle task-pack --root . \
+  apply-mutation --plan create-plan.json --render
 ```
 
 Use the returned fields directly:
@@ -265,32 +273,26 @@ sha256sum /tmp/pack-P-creation.json
 Compute both canonical digests through the public helper instead of recreating its rules:
 
 ```bash
-PACK_TOOL="${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/python3 -m orchestrate_task_cycle task-pack"
-python3 -B - "$PACK_TOOL" /tmp/pack-P-creation.json <<'PY'
-import importlib.util
+PACK_PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/scripts"
+PYTHONPATH="$PACK_PYTHONPATH" python3 -B - /tmp/pack-P-creation.json <<'PY'
 import json
 import pathlib
 import sys
 
-tool_path = pathlib.Path(sys.argv[1])
-json_path = pathlib.Path(sys.argv[2])
-spec = importlib.util.spec_from_file_location("task_pack_queue_contract", tool_path)
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
-print(module.canonical_pack_sha256(json.loads(json_path.read_text(encoding="utf-8"))))
+from orchestrate_task_cycle.task_pack import canonical_pack_sha256
+
+json_path = pathlib.Path(sys.argv[1])
+print(canonical_pack_sha256(json.loads(json_path.read_text(encoding="utf-8"))))
 PY
-python3 -B - "$PACK_TOOL" .task/task_pack/pack-P.json <<'PY'
-import importlib.util
+PYTHONPATH="$PACK_PYTHONPATH" python3 -B - .task/task_pack/pack-P.json <<'PY'
 import json
 import pathlib
 import sys
 
-tool_path = pathlib.Path(sys.argv[1])
-json_path = pathlib.Path(sys.argv[2])
-spec = importlib.util.spec_from_file_location("task_pack_queue_contract", tool_path)
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
-print(module.canonical_pack_sha256(json.loads(json_path.read_text(encoding="utf-8"))))
+from orchestrate_task_cycle.task_pack import canonical_pack_sha256
+
+json_path = pathlib.Path(sys.argv[1])
+print(canonical_pack_sha256(json.loads(json_path.read_text(encoding="utf-8"))))
 PY
 ```
 

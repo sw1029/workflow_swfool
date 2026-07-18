@@ -1,5 +1,17 @@
 # Execution Log Checklist
 
+## Contents
+
+- [Execution evidence](#execution-evidence)
+- [Log field mapping](#log-field-mapping)
+- [Status rules](#status-rules)
+- [Run disposition fields](#run-disposition-fields)
+- [Gate failure fields](#gate-failure-fields)
+- [Producer progress claim fields](#producer-progress-claim-fields)
+- [Part K lineage fields](#part-k-lineage-fields)
+- [Part L lane and basis fields](#part-l-lane-and-basis-fields)
+- [Redaction rules](#redaction-rules)
+
 Use this checklist before writing the `.agent_log` entry through `$record-agent-work-log`.
 
 ## Execution Evidence
@@ -14,7 +26,7 @@ Capture:
 - Input files, config files, arguments, and environment assumptions that affected the run.
 - Exit code or completion status.
 - For authorized long-term runs: PID, session/job ID, log path, checkpoint path, latest heartbeat or output tail, monitor command, stop command, and next recommended check.
-- For task-cycle long-running branches: `long_run_branch=true`, `event_kind`, `long_run_role`, `run_id`, `owner_task_id`, `launch_cycle_id`, `workdir`, `output_dir`, `expected_completion_signal`, `expected_completion_artifacts`, `remaining_validation`, and residual/harvest task linkage when launch does not satisfy the original live-run target.
+- For task-cycle long-running branches: `long_run_branch=true`, `event_kind`, `long_run_role`, `run_id`, `owner_task_id`, `launch_cycle_id`, `workdir`, `output_dir`, `expected_completion_signal`, `expected_completion_artifacts`, `remaining_validation`, and residual/harvest task linkage when launch does not satisfy the original live-run target. For a cycle-unreachable launch, preserve the exact `cycle_reachability_gate`, open `residual_acceptance`, and a harvest plan bound to the same run, gate digest, scale ID, throughput-evidence ID, residual ID, and validation-predicate IDs.
 - Short stdout/stderr summary, not full noisy output.
 - Produced artifacts, changed files, generated reports, or missing expected outputs.
 - Validation performed after execution.
@@ -25,6 +37,7 @@ Capture:
 - Producer self-reported progress or completion fields only as `observed_producer_claim`, never as authoritative progress evidence.
 - Part K report/comparison fields when artifacts declare them: `expectation_anchor`, `designated_baseline`, `expectation_anchor_missing`, `expectation_lineage_stale`, `parity_axes`, `parity_axis_status`, `parity_unverified`, `adoption_axis_classification`, `required_output_classes`, `majority_vote_adoption`, `provisional_adoption`, `measured_but_disqualified`, `required_evidence_resolution`, `observed_evidence_resolution`, `resolution_downgrade`, `surrogate_resolution_basis`, `report_key_divergence`, and duplicate report-key path/value pairs.
 - Part L run/report/metric fields when artifacts declare them: `production_lane_identity`, `current_decision_lane`, `lane_identity_missing`, `pass_on_stale_lane`, `measurement_run_id`, `upstream_contract_changed_since_measurement`, `stale_measurement_artifact`, `decision_metadata_revision`, `metric_basis_inputs`, `claimed_basis_class`, `consumed_input_classes`, `basis_overclaim`, `actual_basis_class`, and `basis_downgraded_fields`.
+- For each actually invoked acceptance scenario, one exact-bound `premise_receipts` row containing opaque scenario/predicate IDs, premise evaluation status and satisfying-item count, invocation kind/descriptor, ordered typed body-free invocation components, the recomputed canonical invocation digest, input revision IDs, result digest, expected/observed terminal states, run ID, and evidence reference. CLI order uses `cmd:/subcommand:/flag:/mode:/ref:` tokens and any argv echo must match exactly; non-CLI rows use ordered action/parameter/ref IDs. Do not copy source paths, locators/entities, bodies, credentials, or untyped sensitive values into the receipt.
 
 ## Log Field Mapping
 

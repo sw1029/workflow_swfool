@@ -1,0 +1,54 @@
+{
+  "schema_version": 2,
+  "manifest_kind": "authority_operations",
+  "skill_id": "manage-schema-contracts",
+  "skill_version": "2.0.0",
+  "operations": [
+    {
+      "operation_id": "inspect_contracts",
+      "operation_version": "1",
+      "authorization_mechanism": "none",
+      "mutation_class": "observe",
+      "required_capabilities": [
+        "schema.contract.read"
+      ],
+      "source_rank_floor": "S0",
+      "risk_floor": "R0",
+      "decision_class": "D3",
+      "effect_classes": [
+        "inspect_contracts"
+      ],
+      "data_classes": [
+        "schema_contract"
+      ],
+      "reversibility": "reversible",
+      "subject_kinds": [
+        "schema_contract"
+      ],
+      "authority_applicability": "none"
+    },
+    {
+      "operation_id": "publish_contract",
+      "operation_version": "1",
+      "authorization_mechanism": "grant",
+      "mutation_class": "local_mutation",
+      "required_capabilities": [
+        "schema.contract.publish"
+      ],
+      "source_rank_floor": "S1",
+      "risk_floor": "R1",
+      "decision_class": "D3",
+      "effect_classes": [
+        "publish_contract"
+      ],
+      "data_classes": [
+        "schema_contract"
+      ],
+      "reversibility": "conditionally_reversible",
+      "subject_kinds": [
+        "schema_contract"
+      ],
+      "authority_applicability": "required"
+    }
+  ]
+}

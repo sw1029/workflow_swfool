@@ -1,0 +1,23 @@
+{
+  "schema_version": 2,
+  "manifest_kind": "authority_operations",
+  "skill_id": "manage-external-advice",
+  "skill_version": "2.0.0",
+  "operations": [
+    {
+      "operation_id": "mutate_advice_lifecycle",
+      "operation_version": "1",
+      "authorization_mechanism": "grant",
+      "mutation_class": "local_mutation",
+      "required_capabilities": ["advice.lifecycle.mutate"],
+      "source_rank_floor": "S2",
+      "risk_floor": "R2",
+      "decision_class": "D2",
+      "effect_classes": ["intake_apply_defer_reject_or_retire_advice"],
+      "data_classes": ["external_advice"],
+      "reversibility": "conditionally_reversible",
+      "subject_kinds": ["external_advice"],
+      "authority_applicability": "required"
+    }
+  ]
+}

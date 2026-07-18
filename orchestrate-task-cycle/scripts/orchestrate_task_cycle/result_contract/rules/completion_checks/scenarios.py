@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from typing import Any
+
+from ...scenario_receipts import ScenarioReceiptAssessment, assess_scenario_receipts
 from .shared import (
     add,
     boolish,
@@ -8,31 +11,92 @@ from .shared import (
 from .state import CompletionFacts
 
 
+def _declared_bool(result: dict[str, Any], paths: list[str]) -> tuple[bool, bool]:
+    value = first_present(result, paths)
+    return value is not None, boolish(value)
+
+
+def _record_receipt_findings(
+    facts: CompletionFacts,
+    assessment: ScenarioReceiptAssessment,
+) -> None:
+    positive_close = facts.validation_verdict in {"complete", "passed", "pass", "success"}
+    severity = "block" if positive_close and facts.mode == "block" else "warn"
+    for issue in assessment.contract_issues:
+        add(
+            facts.findings,
+            severity,
+            "validate_scenario_contract_malformed",
+            "Scenario-shaped acceptance must retain an opaque scenario ID, premise predicate, and expected terminal state.",
+            issue.evidence(),
+        )
+    for issue in assessment.receipt_issues:
+        add(
+            facts.findings,
+            severity,
+            "validate_scenario_receipt_malformed",
+            "Scenario coverage requires a structured actual-invocation receipt; a caller coverage boolean is not sufficient.",
+            issue.evidence(),
+        )
+    if assessment.uncovered_scenario_ids:
+        add(
+            facts.findings,
+            severity,
+            "validate_scenario_receipt_uncovered",
+            "At least one declared acceptance scenario has no valid premise-satisfying invocation with the expected terminal state.",
+            {"scenario_ids": list(assessment.uncovered_scenario_ids)},
+        )
+
+
 def _check_scenarios_part_01(facts: CompletionFacts) -> None:
     result = facts.result
-    scenario_uncovered = boolish(
-        first_present(
-            result,
-            [
-                "scenario_uncovered",
-                "acceptance_scenario_gate.scenario_uncovered",
-                "result.acceptance_scenario_gate.scenario_uncovered",
-                "anti_loop_progress_gate.scenario_uncovered",
-            ],
+    uncovered_paths = [
+        "scenario_uncovered",
+        "acceptance_scenario_gate.scenario_uncovered",
+        "result.acceptance_scenario_gate.scenario_uncovered",
+        "anti_loop_progress_gate.scenario_uncovered",
+    ]
+    inversion_paths = [
+        "acceptance_inversion",
+        "acceptance_inversion_candidate",
+        "acceptance_scenario_gate.acceptance_inversion",
+        "result.acceptance_scenario_gate.acceptance_inversion",
+        "anti_loop_progress_gate.acceptance_inversion",
+    ]
+    uncovered_declared, claimed_uncovered = _declared_bool(result, uncovered_paths)
+    inversion_declared, claimed_inversion = _declared_bool(result, inversion_paths)
+    receipt_assessment = assess_scenario_receipts(result)
+    if receipt_assessment.applicable:
+        _record_receipt_findings(facts, receipt_assessment)
+        recomputed_uncovered = bool(
+            receipt_assessment.uncovered_scenario_ids
+            or receipt_assessment.contract_issues
         )
-    )
-    acceptance_inversion = boolish(
-        first_present(
-            result,
-            [
-                "acceptance_inversion",
-                "acceptance_inversion_candidate",
-                "acceptance_scenario_gate.acceptance_inversion",
-                "result.acceptance_scenario_gate.acceptance_inversion",
-                "anti_loop_progress_gate.acceptance_inversion",
-            ],
-        )
-    )
+        recomputed_inversion = bool(receipt_assessment.inversion_scenario_ids)
+        mismatch_fields: list[str] = []
+        if uncovered_declared and claimed_uncovered != recomputed_uncovered:
+            mismatch_fields.append("scenario_uncovered")
+        if inversion_declared and claimed_inversion != recomputed_inversion:
+            mismatch_fields.append("acceptance_inversion")
+        if mismatch_fields:
+            positive_close = facts.validation_verdict in {
+                "complete",
+                "passed",
+                "pass",
+                "success",
+            }
+            add(
+                facts.findings,
+                "block" if positive_close and facts.mode == "block" else "warn",
+                "validate_scenario_coverage_claim_mismatch",
+                "Caller scenario booleans conflict with the recomputed structured premise receipts.",
+                {"mismatched_fields": mismatch_fields},
+            )
+        scenario_uncovered = recomputed_uncovered or claimed_uncovered
+        acceptance_inversion = recomputed_inversion or claimed_inversion
+    else:
+        scenario_uncovered = claimed_uncovered
+        acceptance_inversion = claimed_inversion
     producer_residual_blocker = boolish(
         first_present(
             result,
@@ -247,4 +311,3 @@ def check_scenarios(facts: CompletionFacts) -> None:
     _check_scenarios_part_02(facts)
     _check_scenarios_part_03(facts)
     _check_scenarios_part_04(facts)
-

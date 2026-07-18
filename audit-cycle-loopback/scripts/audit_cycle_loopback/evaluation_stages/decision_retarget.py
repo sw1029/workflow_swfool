@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ..runtime_dependencies import (
     bool_value,
+    bind_adapter_invocation_result,
     call_adapter,
     chain_stall_forced_retarget_gate,
     first_actionable_capability_ladder_option,
@@ -37,6 +38,28 @@ def _evaluate_decision_retarget(frame: _EvaluationFrame) -> None:
         high_water=high_water,
     )
     capability_ladder_option = first_actionable_capability_ladder_option(capability_ladder_value)
+    capability_status = (
+        str(
+            capability_ladder_value.get("evaluation_status")
+            or capability_ladder_value.get("status")
+            or ""
+        ).strip().lower()
+        if isinstance(capability_ladder_value, dict)
+        else ""
+    )
+    capability_contract_valid = isinstance(capability_ladder_value, (dict, list))
+    capability_accepted = bool(
+        capability_contract_valid
+        and not capability_ladder_error
+        and capability_status
+        not in {"fail", "failed", "fail_quiet", "not_evaluated", "unavailable"}
+    )
+    bind_adapter_invocation_result(
+        "capability_ladder",
+        return_contract_valid=capability_contract_valid,
+        semantic_accepted=capability_accepted,
+        value_consumed_by_decision=capability_accepted,
+    )
     forced_retarget_gate = chain_stall_forced_retarget_gate(
         chain_gate,
         blocker_mutation=mutation_kind,

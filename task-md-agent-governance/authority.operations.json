@@ -1,0 +1,11 @@
+{
+  "manifest_kind": "authority_operations",
+  "operations": [
+    {"authority_applicability":"required","authorization_mechanism":"grant","data_classes":["repository_code"],"decision_class":"D3","effect_classes":["edit_local"],"mutation_class":"local_mutation","operation_id":"implement_local_change","operation_version":"1","required_capabilities":["implementation.local.edit"],"reversibility":"conditionally_reversible","risk_floor":"R1","source_rank_floor":"S1","subject_kinds":["task"]},
+    {"authority_applicability":"none","authorization_mechanism":"none","data_classes":["validation_evidence"],"decision_class":"D3","effect_classes":["validate_local"],"mutation_class":"observe","operation_id":"validate_local_change","operation_version":"1","required_capabilities":["implementation.local.validate"],"reversibility":"reversible","risk_floor":"R0","source_rank_floor":"S0","subject_kinds":["task"]},
+    {"authority_applicability":"required","authorization_mechanism":"grant","data_classes":["task_state"],"decision_class":"D2","effect_classes":["advance_task_state"],"mutation_class":"local_mutation","operation_id":"advance_task_state","operation_version":"1","required_capabilities":["task.state.advance"],"reversibility":"conditionally_reversible","risk_floor":"R2","source_rank_floor":"S2","subject_kinds":["task"]}
+  ],
+  "schema_version": 2,
+  "skill_id": "task-md-agent-governance",
+  "skill_version": "2.0.0"
+}

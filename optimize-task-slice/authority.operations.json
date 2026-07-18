@@ -1,0 +1,23 @@
+{
+  "schema_version": 2,
+  "manifest_kind": "authority_operations",
+  "skill_id": "optimize-task-slice",
+  "skill_version": "2.0.0",
+  "operations": [
+    {
+      "operation_id": "classify_task_slice",
+      "operation_version": "1",
+      "authorization_mechanism": "none",
+      "mutation_class": "observe",
+      "required_capabilities": ["task.slice.classify"],
+      "source_rank_floor": "S0",
+      "risk_floor": "R0",
+      "decision_class": "D3",
+      "effect_classes": ["recommend_task_slice"],
+      "data_classes": ["task_metadata"],
+      "reversibility": "reversible",
+      "subject_kinds": ["task_candidate"],
+      "authority_applicability": "none"
+    }
+  ]
+}

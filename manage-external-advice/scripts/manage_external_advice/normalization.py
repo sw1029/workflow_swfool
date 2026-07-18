@@ -13,6 +13,8 @@ from .contracts import (
     METADATA_LINE_RE,
     SENSITIVE_PATTERNS,
 )
+from .markdown_directives import parse_directive_document
+
 
 def classify_scope(text: str) -> str:
     lowered = text.lower()
@@ -28,9 +30,11 @@ def classify_scope(text: str) -> str:
             scopes.append(scope)
     return scopes[0] if len(scopes) == 1 else ("mixed" if scopes else "task")
 
+
 def bulletize(lines: list[str], fallback: str) -> list[str]:
     cleaned = [line.strip("-* \t") for line in lines if line.strip()]
     return cleaned[:8] or [fallback]
+
 
 def clean_advice_line(line: str) -> str:
     cleaned = line.strip()
@@ -40,6 +44,7 @@ def clean_advice_line(line: str) -> str:
     cleaned = cleaned.strip("-* \t")
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned
+
 
 def candidate_advice_lines(text: str) -> list[str]:
     candidates: list[str] = []
@@ -60,21 +65,65 @@ def candidate_advice_lines(text: str) -> list[str]:
         candidates.append(line[:500])
     return candidates
 
-def extract_claims_and_directives(text: str) -> tuple[list[str], list[str], dict[str, Any]]:
+
+def extract_claims_and_directives(
+    text: str,
+) -> tuple[list[str], list[str], dict[str, Any]]:
     candidates = candidate_advice_lines(text)
-    claims = [line for line in candidates if CLAIM_LINE_RE.search(line) and not DIRECTIVE_LINE_RE.search(line)]
+    claims = [
+        line
+        for line in candidates
+        if CLAIM_LINE_RE.search(line) and not DIRECTIVE_LINE_RE.search(line)
+    ]
     directives = [line for line in candidates if DIRECTIVE_LINE_RE.search(line)]
     if not claims:
         claims = [line for line in candidates if not DIRECTIVE_LINE_RE.search(line)]
     if not directives:
-        directives = [line for line in candidates if line.strip().startswith(("G-", "A", "Capability"))]
+        directives = [
+            line
+            for line in candidates
+            if line.strip().startswith(("G-", "A", "Capability"))
+        ]
     claims = list(dict.fromkeys(claims))[:8]
     directives = list(dict.fromkeys(directives))[:10]
-    metadata_like_count = sum(1 for line in [*claims, *directives] if METADATA_LINE_RE.search(line))
-    return claims, directives, {
-        "candidate_line_count": len(candidates),
-        "metadata_like_extracted_count": metadata_like_count,
-    }
+    metadata_like_count = sum(
+        1 for line in [*claims, *directives] if METADATA_LINE_RE.search(line)
+    )
+    return (
+        claims,
+        directives,
+        {
+            "candidate_line_count": len(candidates),
+            "metadata_like_extracted_count": metadata_like_count,
+        },
+    )
+
+
+def extract_directive_records(text: str, raw_sha256: str) -> list[dict[str, Any]]:
+    """Return source-ordered directives without claiming fuzzy equivalence."""
+
+    return parse_directive_document(text, raw_sha256).records
+
+
+def analyze_advice(
+    text: str, raw_sha256: str
+) -> tuple[list[str], list[str], dict[str, Any], list[dict[str, Any]]]:
+    claims, _heuristic_directives, extraction_stats = extract_claims_and_directives(
+        text
+    )
+    parsed = parse_directive_document(text, raw_sha256)
+    directives = [
+        str(record.get("directive_text") or "").strip()
+        for record in parsed.records
+        if str(record.get("directive_text") or "").strip()
+    ]
+    return (
+        claims,
+        directives,
+        {**extraction_stats, **parsed.stats},
+        parsed.records,
+    )
+
 
 def normalized_line_set(lines: list[str]) -> set[str]:
     normalized: set[str] = set()
@@ -84,17 +133,30 @@ def normalized_line_set(lines: list[str]) -> set[str]:
             normalized.add(item)
     return normalized
 
-def advice_fidelity(claims: list[str], directives: list[str], stats: dict[str, Any]) -> dict[str, Any]:
+
+def advice_fidelity(
+    claims: list[str], directives: list[str], stats: dict[str, Any]
+) -> dict[str, Any]:
     claim_set = normalized_line_set(claims)
     directive_set = normalized_line_set(directives)
     degenerate = bool(claim_set and directive_set and claim_set == directive_set)
     missing = not claim_set or not directive_set
-    metadata_degenerate = bool(stats.get("metadata_like_extracted_count")) and stats["metadata_like_extracted_count"] >= max(
-        1, len(claims) + len(directives) - 1
+    metadata_degenerate = bool(stats.get("metadata_like_extracted_count")) and stats[
+        "metadata_like_extracted_count"
+    ] >= max(1, len(claims) + len(directives) - 1)
+    raw_fallback_only = bool(stats.get("raw_direct_fallback_used")) and not bool(
+        stats.get("canonical_declaration_count")
     )
-    if degenerate or metadata_degenerate:
+    duplicate_canonical_ids = stats.get("duplicate_canonical_ids") or []
+    if duplicate_canonical_ids:
+        status = "degenerate"
+        reason = "duplicate_canonical_directive_declarations"
+    elif degenerate or metadata_degenerate:
         status = "degenerate"
         reason = "claims_match_directives_or_metadata_only"
+    elif raw_fallback_only:
+        status = "needs_review"
+        reason = "raw_direct_fallback_only"
     elif missing:
         status = "needs_review"
         reason = "claims_or_directives_missing"
@@ -108,13 +170,70 @@ def advice_fidelity(claims: list[str], directives: list[str], stats: dict[str, A
         **stats,
     }
 
-def normalize_text(advice_id: str, text: str, raw_path: str, title: str, priority: str) -> str:
-    lines = text.splitlines()
-    nonempty = [line.strip() for line in lines if line.strip()]
-    summary = " ".join(nonempty[:3])[:600] or title
+
+def _render_directive_record(record: dict[str, Any]) -> list[str]:
+    lines = [
+        f"- directive_id: {record['directive_id']}",
+        f"  directive_state: {record['directive_state']}",
+        f"  id_origin: {record['id_origin']}",
+        f"  declaration_kind: {record.get('declaration_kind', 'unknown')}",
+        "  semantic_equivalence_claimed: false",
+    ]
+    optional_fields = (
+        "change_class",
+        "classification",
+        "consumption_state",
+        "default_state",
+        "selection_disposition",
+        "selection_disposition_when_capability_absent",
+        "activation_rule",
+        "conditional_grouping",
+        "grouping_only",
+        "actionable_child",
+        "actionable_child_consumption_state",
+        "requires_adapter_or_task_contract_adoption",
+        "target_owner",
+        "reference_classification",
+        "reference_count",
+        "reference_kinds",
+    )
+    for field in optional_fields:
+        if field not in record:
+            continue
+        value = record[field]
+        rendered = (
+            json.dumps(value, ensure_ascii=False, sort_keys=True)
+            if isinstance(value, (dict, list))
+            else str(value)
+        )
+        lines.append(f"  {field}: {rendered}")
+    lines.append(f"  directive_text: {record['directive_text']}")
+    return lines
+
+
+def normalize_text(
+    advice_id: str,
+    text: str,
+    raw_path: str,
+    title: str,
+    priority: str,
+    raw_sha256: str,
+    *,
+    source_id: str | None = None,
+) -> str:
+    summary = (
+        "Deterministically normalized external advice; consult the registry-owned "
+        "raw_source_path when exact source wording is required."
+    )
     scope = classify_scope(text)
-    conflict = "Potential sensitive marker detected; review before applying." if SENSITIVE_PATTERNS.search(text) else "None identified during deterministic intake; verify against GT and authority before applying."
-    claims, directives, extraction_stats = extract_claims_and_directives(text)
+    conflict = (
+        "Potential sensitive marker detected; review before applying."
+        if SENSITIVE_PATTERNS.search(text)
+        else "None identified during deterministic intake; verify against GT and authority before applying."
+    )
+    claims, directives, extraction_stats, directive_records = analyze_advice(
+        text, raw_sha256
+    )
     fidelity = advice_fidelity(claims, directives, extraction_stats)
     declared_fingerprints = extract_fingerprint_claims(text)
     rendered = [
@@ -128,7 +247,7 @@ def normalize_text(advice_id: str, text: str, raw_path: str, title: str, priorit
         f"- normalized_at: {now_iso()}",
         f"- scope: {scope}",
         f"- priority: {priority}",
-        f"- source_label: {title}",
+        f"- source_label: {source_id or f'src-sha256-{raw_sha256}'}",
         "",
         "## Summary",
         "",
@@ -136,11 +255,25 @@ def normalize_text(advice_id: str, text: str, raw_path: str, title: str, priorit
         "",
         "## Extracted Claims",
         "",
-        *[f"- {item}" for item in bulletize(claims, "No explicit claims extracted; review the raw source.")],
+        *[
+            f"- {item}"
+            for item in bulletize(
+                claims, "No explicit claims extracted; review the raw source."
+            )
+        ],
         "",
         "## Actionable Directives",
         "",
-        *[f"- {item}" for item in bulletize(directives, "Review raw advice and convert any supported direction into task/design actions.")],
+        *(
+            [
+                line
+                for record in directive_records
+                for line in _render_directive_record(record)
+            ]
+            or [
+                "- No actionable directive extracted; consult the raw source before deciding disposition.",
+            ]
+        ),
         "",
         "## Normalization Fidelity",
         "",
@@ -148,6 +281,11 @@ def normalize_text(advice_id: str, text: str, raw_path: str, title: str, priorit
         f"- fidelity_reason: {fidelity['fidelity_reason']}",
         f"- raw_direct_reference_required: {str(fidelity['raw_direct_reference_required']).lower()}",
         f"- candidate_line_count: {fidelity['candidate_line_count']}",
+        f"- canonical_declaration_count: {fidelity.get('canonical_declaration_count', 0)}",
+        f"- reference_echo_count: {fidelity.get('reference_echo_count', 0)}",
+        f"- raw_direct_fallback_used: {str(bool(fidelity.get('raw_direct_fallback_used'))).lower()}",
+        f"- normalization_complete: {str(fidelity['fidelity_status'] == 'ok').lower()}",
+        "- execution_plan_eligible: false",
         "",
         "## Advice Freshness",
         "",

@@ -5,6 +5,10 @@ from typing import Any
 
 from ..base import RuleContext
 from ..common import add
+from ...cycle_efficiency.producer_receipts import (
+    APPLICABILITY_VALUES,
+    normalize_producer_run_receipt,
+)
 from .cycle_efficiency_common import (
     EXECUTION_SCOPE_EVIDENCE_FIELDS,
     EXECUTION_SCOPE_FIELDS,
@@ -12,6 +16,7 @@ from .cycle_efficiency_common import (
     bounded_opaque_id,
     nonnegative_int,
 )
+from .cycle_efficiency_starvation_scope import validate_scope_evidence
 
 
 @dataclass(slots=True)
@@ -20,11 +25,18 @@ class StarvationState:
     present: bool
     starvation_status: str
     execution_scope_status: str
+    applicability: str
+    exclusion_reason: Any
     starvation: Any
     run_count: Any
     run_ids: Any
+    run_receipts: Any
+    required_input_binding: Any
     missing_scope: Any
     run_ids_valid: bool
+    run_receipts_valid: bool
+    required_input_binding_valid: bool
+    required_input_binding_absent: bool
     run_count_valid: bool
     missing_scope_valid: bool
     starvation_window_valid: bool
@@ -64,6 +76,47 @@ def _starvation_state(context: RuleContext) -> StarvationState:
     )
     run_count = result.get("recent_cycle_run_id_count")
     run_ids = result.get("recent_cycle_run_ids")
+    run_receipts = result.get("recent_cycle_run_receipts")
+    applicability_value = result.get("execution_scope_applicability")
+    applicability = (
+        applicability_value.strip().lower()
+        if isinstance(applicability_value, str)
+        else "legacy_unspecified"
+        if applicability_value is None
+        else ""
+    )
+    required_binding = result.get("required_input_binding")
+    required_binding_absent = required_binding is None
+    required_binding_valid = bool(
+        isinstance(required_binding, dict)
+        and set(required_binding) == {"revision_id", "content_digest"}
+        and bounded_opaque_id(required_binding.get("revision_id")) is not None
+        and isinstance(required_binding.get("content_digest"), str)
+        and len(required_binding["content_digest"]) == 64
+        and all(
+            character in "0123456789abcdef"
+            for character in required_binding["content_digest"]
+        )
+    )
+    legacy_receipts_omitted = bool(
+        "recent_cycle_run_receipts" not in result
+        and applicability == "legacy_unspecified"
+        and required_binding_absent
+    )
+    run_receipts_valid = legacy_receipts_omitted or bool(
+        isinstance(run_receipts, list)
+        and all(
+            normalize_producer_run_receipt(item) is not None for item in run_receipts
+        )
+        and len(
+            {
+                normalized["run_id"]
+                for item in run_receipts
+                if (normalized := normalize_producer_run_receipt(item)) is not None
+            }
+        )
+        == len(run_receipts)
+    )
     missing_scope = result.get("scope_evidence_required")
     run_ids_valid = bounded_id_list(run_ids)
     run_count_valid = nonnegative_int(run_count)
@@ -91,16 +144,31 @@ def _starvation_state(context: RuleContext) -> StarvationState:
     )
     if not window_valid:
         actual_missing.add("execution_starvation_window")
+    if applicability == "scope_unknown":
+        actual_missing.add("execution_scope_applicability")
+    if (applicability == "applicable" and not required_binding_valid) or (
+        not required_binding_absent and not required_binding_valid
+    ):
+        actual_missing.add("required_input_binding")
+    if applicability in {"excluded_by_task", "not_applicable"}:
+        actual_missing.clear()
     return StarvationState(
         context,
         present,
         starvation_status,
         execution_status,
+        applicability,
+        result.get("execution_scope_exclusion_reason_id"),
         result.get("execution_starvation"),
         run_count,
         run_ids,
+        run_receipts,
+        required_binding,
         missing_scope,
         run_ids_valid,
+        run_receipts_valid,
+        required_binding_valid,
+        required_binding_absent,
         run_count_valid,
         missing_scope_valid,
         window_valid,
@@ -114,117 +182,37 @@ def _validate_statuses(state: StarvationState) -> None:
         "present",
         "absent",
         "scope_unknown",
+        "not_applicable",
     }:
         add(
             state.context.findings,
             "block",
             "cycle_efficiency_execution_starvation_status_invalid",
-            "execution_starvation_status must be present, absent, or scope_unknown.",
+            "execution_starvation_status must be present, absent, scope_unknown, or not_applicable.",
         )
     if state.present and state.execution_scope_status not in {
         "evaluated",
         "scope_unknown",
+        "excluded_by_task",
+        "not_applicable",
     }:
         add(
             state.context.findings,
             "block",
             "cycle_efficiency_execution_scope_status_invalid",
-            "execution_scope_status must be evaluated or scope_unknown.",
+            "execution_scope_status must be evaluated, scope_unknown, excluded_by_task, or not_applicable.",
+        )
+    if state.present and state.applicability not in APPLICABILITY_VALUES:
+        add(
+            state.context.findings,
+            "block",
+            "cycle_efficiency_execution_scope_applicability_invalid",
+            "Execution-scope applicability must be applicable, excluded_by_task, not_applicable, legacy_unspecified, or scope_unknown.",
         )
 
 
 def _validate_scope_evidence(state: StarvationState) -> None:
-    findings = state.context.findings
-    if state.present and not state.execution_scope_valid:
-        add(
-            findings,
-            "block",
-            "cycle_efficiency_execution_scope_identity_invalid",
-            "Execution scope requires bounded opaque identifiers for its declared fields.",
-        )
-    if state.present and not state.run_ids_valid:
-        add(
-            findings,
-            "block",
-            "cycle_efficiency_recent_run_ids_invalid",
-            "Recent run identifiers must be unique bounded opaque strings; raw values are not retained.",
-        )
-    if state.present and not state.run_count_valid:
-        add(
-            findings,
-            "block",
-            "cycle_efficiency_recent_run_count_invalid",
-            "recent_cycle_run_id_count must be a nonnegative integer.",
-        )
-    if (
-        state.present
-        and state.run_ids_valid
-        and state.run_count_valid
-        and state.run_count != len(state.run_ids)
-    ):
-        add(
-            findings,
-            "block",
-            "cycle_efficiency_recent_run_count_mismatch",
-            "Recent run count must equal the bounded run-id list cardinality.",
-            {
-                "declared_count": state.run_count,
-                "observed_count": len(state.run_ids),
-            },
-        )
-    if state.present and not state.missing_scope_valid:
-        add(
-            findings,
-            "block",
-            "cycle_efficiency_scope_evidence_ids_invalid",
-            "scope_evidence_required must contain only unique bounded field identifiers.",
-        )
-    if (
-        state.present
-        and state.execution_scope_valid
-        and state.missing_scope_valid
-        and (
-            set(state.missing_scope) != state.actual_missing_scope
-            or (
-                state.execution_scope_status == "evaluated"
-                and state.actual_missing_scope
-            )
-            or (
-                state.execution_scope_status == "scope_unknown"
-                and not state.actual_missing_scope
-            )
-        )
-    ):
-        add(
-            findings,
-            "block",
-            "cycle_efficiency_scope_evidence_mismatch",
-            "Execution-scope status and required evidence must match the exact missing scope fields.",
-            {
-                "declared_missing_count": len(state.missing_scope),
-                "observed_missing_count": len(state.actual_missing_scope),
-            },
-        )
-    if state.present and (
-        (
-            state.execution_scope_status == "scope_unknown"
-            and state.starvation_status != "scope_unknown"
-        )
-        or (
-            state.execution_scope_status == "evaluated"
-            and state.starvation_status == "scope_unknown"
-        )
-        or (
-            state.starvation_status in {"present", "absent"}
-            and state.execution_scope_status != "evaluated"
-        )
-    ):
-        add(
-            findings,
-            "block",
-            "cycle_efficiency_scope_starvation_status_conflict",
-            "Execution scope and starvation statuses must describe the same decision state.",
-        )
+    validate_scope_evidence(state)
 
 
 def _validate_decision(state: StarvationState) -> None:
@@ -232,6 +220,8 @@ def _validate_decision(state: StarvationState) -> None:
         return
     if state.starvation_status == "scope_unknown":
         _validate_scope_unknown(state)
+    elif state.starvation_status == "not_applicable":
+        _validate_not_applicable(state)
     elif state.starvation_status == "present" and not _present_consistent(state):
         add(
             state.context.findings,
@@ -256,6 +246,11 @@ def _validate_scope_unknown(state: StarvationState) -> None:
         or not state.missing_scope
         or (state.run_count_valid and state.run_count != 0)
         or (state.run_ids_valid and bool(state.run_ids))
+        or (
+            state.run_receipts_valid
+            and isinstance(state.run_receipts, list)
+            and bool(state.run_receipts)
+        )
         or result.get("execution_candidate_priority_boost") is True
     ):
         add(
@@ -283,9 +278,76 @@ def _validate_scope_unknown(state: StarvationState) -> None:
         )
 
 
-def _present_consistent(state: StarvationState) -> bool:
+def _validate_not_applicable(state: StarvationState) -> None:
+    result = state.context.result
+    valid = bool(
+        state.applicability == "not_applicable"
+        and state.execution_scope_status == "not_applicable"
+        and bounded_opaque_id(state.exclusion_reason) is not None
+        and state.starvation is None
+        and state.run_count_valid
+        and state.run_count == 0
+        and state.run_ids_valid
+        and not state.run_ids
+        and state.run_receipts_valid
+        and isinstance(state.run_receipts, list)
+        and not state.run_receipts
+        and state.missing_scope_valid
+        and not state.missing_scope
+        and state.required_input_binding_absent
+        and result.get("execution_starvation_window") is None
+        and result.get("execution_candidate_priority_boost") is False
+    )
+    if not valid:
+        add(
+            state.context.findings,
+            "block",
+            "cycle_efficiency_execution_scope_not_applicable_invalid",
+            "not_applicable is a reason-bound intrinsic bypass with no run, binding, starvation, or terminal claim.",
+        )
+
+
+def _receipts_match_binding(state: StarvationState) -> bool:
+    if state.required_input_binding_absent:
+        return bool(
+            state.applicability == "legacy_unspecified"
+            and (
+                state.run_receipts is None
+                or isinstance(state.run_receipts, list)
+                and not state.run_receipts
+            )
+        )
+    if not state.required_input_binding_valid or not isinstance(
+        state.run_receipts, list
+    ):
+        return False
+    normalized = [normalize_producer_run_receipt(item) for item in state.run_receipts]
+    if any(item is None for item in normalized):
+        return False
+    binding = state.required_input_binding
     return bool(
-        state.execution_scope_status == "evaluated"
+        len(normalized) == state.run_count
+        and {str(item["run_id"]) for item in normalized if item is not None}
+        == set(state.run_ids)
+        and all(
+            item is not None
+            and item["input_revision_id"] == binding["revision_id"]
+            and item["input_digest"] == binding["content_digest"]
+            for item in normalized
+        )
+    )
+
+
+def _present_consistent(state: StarvationState) -> bool:
+    excluded_by_task = state.applicability == "excluded_by_task"
+    return bool(
+        state.execution_scope_status
+        == ("excluded_by_task" if excluded_by_task else "evaluated")
+        and (
+            bounded_opaque_id(state.exclusion_reason) is not None
+            if excluded_by_task
+            else True
+        )
         and state.starvation is True
         and not state.actual_missing_scope
         and state.starvation_window_valid
@@ -293,6 +355,12 @@ def _present_consistent(state: StarvationState) -> bool:
         and state.run_count == 0
         and state.run_ids_valid
         and not state.run_ids
+        and state.run_receipts_valid
+        and (
+            state.run_receipts is None
+            or isinstance(state.run_receipts, list)
+            and not state.run_receipts
+        )
         and state.missing_scope_valid
         and not state.missing_scope
         and state.context.result.get("execution_candidate_priority_boost") is True
@@ -309,6 +377,8 @@ def _absent_consistent(state: StarvationState) -> bool:
         and state.run_count > 0
         and state.run_ids_valid
         and len(state.run_ids) == state.run_count
+        and state.run_receipts_valid
+        and _receipts_match_binding(state)
         and state.missing_scope_valid
         and not state.missing_scope
         and state.context.result.get("execution_candidate_priority_boost") is False

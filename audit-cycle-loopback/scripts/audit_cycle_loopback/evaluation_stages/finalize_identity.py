@@ -16,14 +16,14 @@ from ..evaluation_frame import _EvaluationFrame
 
 def _finalize_attempt_identity(frame: _EvaluationFrame) -> None:
     (
-        args, budget_evaluations, current_blocker_signature, current_root_family_key,
+        adapter_revision_sha256, args, budget_evaluations, current_blocker_signature, current_root_family_key,
         current_root_key, current_rung, decision_artifact_ref, domain_adapter,
         evidence_provenance_error, evidence_provenance_value, family_key,
         identity_gate_inputs, output_delta, paths, primary_metric_error,
         primary_metric_source_separation_gate, primary_metric_value, quality, root,
         runner_validation, source_separation_gate,
     ) = frame.require(
-        "args", "budget_evaluations", "current_blocker_signature",
+        "adapter_revision_sha256", "args", "budget_evaluations", "current_blocker_signature",
         "current_root_family_key", "current_root_key", "current_rung",
         "decision_artifact_ref", "domain_adapter", "evidence_provenance_error",
         "evidence_provenance_value", "family_key", "identity_gate_inputs",
@@ -89,6 +89,7 @@ def _finalize_attempt_identity(frame: _EvaluationFrame) -> None:
                     ),
                 }
             },
+            {"adapter_revision_sha256": adapter_revision_sha256},
         ],
         decision_artifact_ref,
     )

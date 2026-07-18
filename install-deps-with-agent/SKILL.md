@@ -11,6 +11,10 @@ Use this skill to keep dependency setup separate from implementation work. The c
 
 The preferred outcome is reuse of an existing environment or cache. Installation is the fallback, not the first step.
 
+## Authority Boundary
+
+Use `authority.operations.json` with the shared [authority v2 contract](../manage-agent-authority/references/authority-v2-contract.md). Cache and environment inspection is read-only. An install and an artifact download are distinct grant-controlled operations; bind the exact dependency subject, destination/environment, effect, risk, attempt, budget, and external-input state before assigning the install agent. Reserve and reverify immediately before the first write or dispatch, consume when an install/download effect occurred, and release only on verified no-effect. Network, license, credential, global-environment, system-package, destructive-cleanup, and lockfile effects remain separate and cannot be inferred from a generic dependency request.
+
 ## Workflow
 
 1. Define the requirement.

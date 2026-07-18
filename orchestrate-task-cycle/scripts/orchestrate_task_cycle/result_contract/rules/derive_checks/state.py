@@ -67,6 +67,8 @@ class DeriveFacts:
     coupled_verifier: Any = None
     cycle_fixed_cost_present: Any = None
     decision_metadata_revision: Any = None
+    decision_lineage_declared: Any = None
+    decision_lineage_status: Any = None
     descope_with_residual: Any = None
     destructive_disposition_blocked: Any = None
     destructive_disposition_requested: Any = None
@@ -86,6 +88,7 @@ class DeriveFacts:
     gt_allowed_evidence_paths: Any = None
     high_cost_artifact: Any = None
     independent_source_status: Any = None
+    independent_invariant_status: Any = None
     independently_verified_downgraded_fields: Any = None
     instrumentation_supply_required: Any = None
     majority_vote_adoption: Any = None

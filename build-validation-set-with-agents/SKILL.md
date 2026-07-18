@@ -9,6 +9,8 @@ description: Build reusable validation-set assets with source tracing, oracle ma
 
 Use this skill to produce validation assets, not completion verdicts. Keep `$validate-task-completion` as the final task gate and keep behavior-changing code/test/script changes owned by `$task-md-agent-governance`.
 
+Creation, refresh, freeze, or replacement of validation assets uses `mutate_validation_set_assets` from `authority.operations.json` and the shared [authority v2 contract](../manage-agent-authority/references/authority-v2-contract.md). Bind the exact set subject and do not infer mutation authority from labeling, validation need, or agent routing.
+
 The skill may create or update `.validation/sets/`, `.validation/candidates/`, `.validation/registry.jsonl`, and cycle-local `.task/validation_set/` evidence. It must not edit implementation source, tests, runtime/build/CI config, or validator code; route those changes to `$task-md-agent-governance`.
 
 ## Agent Routing Policy

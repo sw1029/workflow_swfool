@@ -34,6 +34,7 @@ from orchestrate_task_cycle.progress.registry import (  # noqa: E402
 
 def observed_item() -> dict[str, Any]:
     return {
+        "attempt_identity": "attempt_A",
         "evidence_id": "evidence_A",
         "feature_symbol": {
             "symbol": "feature_A",

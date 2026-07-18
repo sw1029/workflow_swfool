@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..consumer_receipt_contract import validate_consumer_receipt_binding
+from .consumer_contracts import consumer_expectations
+
 from .shared import (
     _consumer_receipt_binding_sha256,
     _declared_values,
@@ -14,6 +17,43 @@ from .shared import (
     non_empty,
 )
 from .state import ValidationState
+from ..decision_identity_dimensions import (
+    expected_dimension_echo,
+    expected_subject_echo,
+    normalized_legacy_identity,
+    parse_decision_identity,
+)
+
+
+def _receipt_binding_mismatches(
+    row: dict[str, Any], expectation: dict[str, Any]
+) -> list[str]:
+    explicit = bool(expectation.get("explicit"))
+    binding = validate_consumer_receipt_binding(
+        row,
+        expected_task_id=expectation.get("task_id") if explicit else None,
+        expected_adapter_revision_sha256=(
+            expectation.get("adapter_revision_sha256") if explicit else None
+        ),
+        expected_hook_id=expectation.get("hook_id") if explicit else None,
+        expected_consumer_revision_sha256=(
+            expectation.get("consumer_revision_sha256") if explicit else None
+        ),
+        expected_required_hook_ids=(
+            expectation.get("required_hook_ids") if explicit else None
+        ),
+        expected_required_gate_ids=(
+            expectation.get("required_gate_ids") if explicit else None
+        ),
+    )
+    mismatches = list(binding["mismatched_fields"])
+    if binding["status"] not in {"legacy", "conformant"}:
+        mismatches.append("consumer_coverage_status")
+    mismatches.extend(
+        f"consumer_contract.{field}"
+        for field in expectation.get("contract_conflicts") or []
+    )
+    return mismatches
 
 
 def _check_consumers_part_01(state: ValidationState) -> None:
@@ -56,7 +96,9 @@ def _check_consumers_part_01(state: ValidationState) -> None:
         )
         if isinstance(rows_value, list):
             conformance_rows.extend(rows_value)
-        elif not (isinstance(conformance_surface, dict) and "rows" not in conformance_surface):
+        elif not (
+            isinstance(conformance_surface, dict) and "rows" not in conformance_surface
+        ):
             malformed_conformance_aliases.append(conformance_path)
     if malformed_conformance_aliases:
         add(
@@ -75,9 +117,12 @@ def _check_consumers_part_01(state: ValidationState) -> None:
     conformance_by_id: dict[str, list[dict[str, Any]]] = {}
     for row in conformance_rows:
         if isinstance(row, dict) and row.get("consumer_context_id"):
-            conformance_by_id.setdefault(str(row["consumer_context_id"]), []).append(row)
+            conformance_by_id.setdefault(str(row["consumer_context_id"]), []).append(
+                row
+            )
     state.conformance_by_id = conformance_by_id
     state.required_consumer_ids = required_consumer_ids
+    state.consumer_expectations = consumer_expectations(result, required_consumer_ids)
 
 
 def _check_consumers_part_02(state: ValidationState) -> None:
@@ -94,9 +139,32 @@ def _check_consumers_part_02(state: ValidationState) -> None:
         ],
     )
     decision_identity = decision_identity if isinstance(decision_identity, dict) else {}
+    identity_projection = parse_decision_identity(decision_identity)
+    state.explicit_decision_identity = identity_projection.explicit
+    if identity_projection.explicit:
+        state.decision_identity = normalized_legacy_identity(decision_identity)
+        state.expected_body_fingerprint = (
+            identity_projection.dimension_values.get("body_fingerprint")
+            if identity_projection.dimension_statuses.get("body_fingerprint")
+            == "applicable"
+            else None
+        )
+        state.expected_verification_input_ids = (
+            identity_projection.dimension_values.get("cohort")
+            if identity_projection.dimension_statuses.get("cohort") == "applicable"
+            else None
+        )
+        state.input_fingerprint_values = []
+        state.expected_decision_identity_echo = {
+            **expected_subject_echo(decision_identity),
+            "dimension_values": expected_dimension_echo(decision_identity),
+        }
+        return
     body_fingerprint_values = []
     if "body_projection_fingerprint" in decision_identity:
-        body_fingerprint_values.append(decision_identity.get("body_projection_fingerprint"))
+        body_fingerprint_values.append(
+            decision_identity.get("body_projection_fingerprint")
+        )
     body_fingerprint_values.extend(
         _declared_values(
             result,
@@ -114,7 +182,9 @@ def _check_consumers_part_02(state: ValidationState) -> None:
     )
     verification_input_values = []
     if "verification_input_ids" in decision_identity:
-        verification_input_values.append(decision_identity.get("verification_input_ids"))
+        verification_input_values.append(
+            decision_identity.get("verification_input_ids")
+        )
     verification_input_values.extend(
         _declared_values(
             result,
@@ -125,7 +195,9 @@ def _check_consumers_part_02(state: ValidationState) -> None:
             ),
         )
     )
-    expected_verification_input_ids = verification_input_values[0] if verification_input_values else None
+    expected_verification_input_ids = (
+        verification_input_values[0] if verification_input_values else None
+    )
     input_fingerprint_values = []
     if "input_fingerprints" in decision_identity:
         input_fingerprint_values.append(decision_identity.get("input_fingerprints"))
@@ -149,16 +221,24 @@ def _check_consumers_part_03(state: ValidationState) -> None:
             ),
         )
     )
-    expected_input_fingerprints = input_fingerprint_values[0] if input_fingerprint_values else None
-    expected_cycle_id = str(first_present(result, ["cycle_id", "result.cycle_id"]) or "").strip()
+    expected_input_fingerprints = (
+        input_fingerprint_values[0] if input_fingerprint_values else None
+    )
+    expected_cycle_id = str(
+        first_present(result, ["cycle_id", "result.cycle_id"]) or ""
+    ).strip()
     expected_input_state_fingerprint = str(
-        first_present(result, ["input_state_fingerprint", "result.input_state_fingerprint"])
+        first_present(
+            result, ["input_state_fingerprint", "result.input_state_fingerprint"]
+        )
         or ""
     ).strip()
     expected_attempt_identity = str(
         first_present(result, ["attempt_identity", "result.attempt_identity"]) or ""
     ).strip()
-    expected_cohort_present = bool(list_values(expected_verification_input_ids)) or bool(
+    expected_cohort_present = bool(
+        list_values(expected_verification_input_ids)
+    ) or bool(
         expected_input_fingerprints
         if isinstance(expected_input_fingerprints, dict)
         else None
@@ -177,6 +257,7 @@ def _check_consumers_part_03(state: ValidationState) -> None:
 def _check_consumers_part_04(state: ValidationState) -> None:
     conformance_by_id = state.conformance_by_id
     consumer_mismatches = state.consumer_mismatches
+    expectations = state.consumer_expectations or {}
     decision_identity = state.decision_identity
     expected_attempt_identity = state.expected_attempt_identity
     expected_body_fingerprint = state.expected_body_fingerprint
@@ -184,12 +265,15 @@ def _check_consumers_part_04(state: ValidationState) -> None:
     expected_cycle_id = state.expected_cycle_id
     expected_input_fingerprints = state.expected_input_fingerprints
     expected_input_state_fingerprint = state.expected_input_state_fingerprint
+    expected_decision_identity_echo = state.expected_decision_identity_echo
     expected_verification_input_ids = state.expected_verification_input_ids
+    explicit_decision_identity = state.explicit_decision_identity
     invalid_consumers = state.invalid_consumers
     required_consumer_ids = state.required_consumer_ids
     for consumer_id in required_consumer_ids:
         candidate_rows = conformance_by_id.get(str(consumer_id)) or []
         mismatched_fields: set[str] = set()
+        expectation = expectations.get(str(consumer_id)) or {}
 
         def row_valid(row: dict[str, Any]) -> bool:
             row_mismatches: list[str] = []
@@ -197,43 +281,81 @@ def _check_consumers_part_04(state: ValidationState) -> None:
                 row_mismatches.append("cycle_id")
             if (
                 not _full_sha256(expected_input_state_fingerprint)
-                or row.get("input_state_fingerprint") != expected_input_state_fingerprint
+                or row.get("input_state_fingerprint")
+                != expected_input_state_fingerprint
             ):
                 row_mismatches.append("input_state_fingerprint")
-            if not expected_attempt_identity or row.get("attempt_identity") != expected_attempt_identity:
+            if (
+                not expected_attempt_identity
+                or row.get("attempt_identity") != expected_attempt_identity
+            ):
                 row_mismatches.append("attempt_identity")
-            for field in ("artifact_id", "artifact_sha256", "production_lane_identity"):
-                expected = decision_identity.get(field)
-                if not non_empty(expected) or row.get(field) != expected:
-                    row_mismatches.append(field)
-            if not _full_sha256(expected_body_fingerprint):
-                row_mismatches.append("body_projection_fingerprint")
-            elif row.get("body_projection_fingerprint") != expected_body_fingerprint:
-                row_mismatches.append("body_projection_fingerprint")
-            if not expected_cohort_present:
-                row_mismatches.append("source_cohort")
-            if expected_verification_input_ids is not None:
-                expected_ids = sorted(str(item) for item in list_values(expected_verification_input_ids))
-                observed_ids = sorted(str(item) for item in list_values(row.get("verification_input_ids")))
-                if observed_ids != expected_ids:
-                    row_mismatches.append("verification_input_ids")
-            if expected_input_fingerprints is not None and row.get("input_fingerprints") != expected_input_fingerprints:
-                row_mismatches.append("input_fingerprints")
+            row_mismatches.extend(_receipt_binding_mismatches(row, expectation))
+            if explicit_decision_identity:
+                if row.get("decision_identity_echo") != expected_decision_identity_echo:
+                    row_mismatches.append("decision_identity_echo")
+            else:
+                for field in (
+                    "artifact_id",
+                    "artifact_sha256",
+                    "production_lane_identity",
+                ):
+                    expected = decision_identity.get(field)
+                    if not non_empty(expected) or row.get(field) != expected:
+                        row_mismatches.append(field)
+                if not _full_sha256(expected_body_fingerprint):
+                    row_mismatches.append("body_projection_fingerprint")
+                elif (
+                    row.get("body_projection_fingerprint") != expected_body_fingerprint
+                ):
+                    row_mismatches.append("body_projection_fingerprint")
+                if not expected_cohort_present:
+                    row_mismatches.append("source_cohort")
+                if expected_verification_input_ids is not None:
+                    expected_ids = sorted(
+                        str(item)
+                        for item in list_values(expected_verification_input_ids)
+                    )
+                    observed_ids = sorted(
+                        str(item)
+                        for item in list_values(row.get("verification_input_ids"))
+                    )
+                    if observed_ids != expected_ids:
+                        row_mismatches.append("verification_input_ids")
+                if (
+                    expected_input_fingerprints is not None
+                    and row.get("input_fingerprints") != expected_input_fingerprints
+                ):
+                    row_mismatches.append("input_fingerprints")
             mismatched_fields.update(row_mismatches)
             invocation_status = str(row.get("invocation_status") or "").strip().lower()
             return_status = str(row.get("return_contract_status") or "").strip().lower()
-            echo_status = str(row.get("artifact_identity_echo_status") or "").strip().lower()
-            consumption_status = str(row.get("decision_consumption_status") or "").strip().lower()
+            echo_status = (
+                str(row.get("artifact_identity_echo_status") or "").strip().lower()
+            )
+            consumption_status = (
+                str(row.get("decision_consumption_status") or "").strip().lower()
+            )
             return not row_mismatches and all(
                 (
                     boolish(row.get("adapter_loaded")),
                     boolish(row.get("hook_resolved")),
-                    boolish(row.get("hook_callable") or row.get("required_hook_callable")),
-                    boolish(row.get("signature_bind_passed") or row.get("hook_signature_compatible")),
-                    boolish(row.get("invocation_completed")) or invocation_status in {"complete", "completed", "pass", "passed", "success"},
-                    boolish(row.get("return_contract_valid")) or return_status in {"valid", "pass", "passed"},
-                    boolish(row.get("artifact_identity_echo_valid")) or echo_status in {"valid", "pass", "passed", "matched"},
-                    boolish(row.get("value_consumed_by_decision")) or consumption_status in {"consumed", "pass", "passed"},
+                    boolish(
+                        row.get("hook_callable") or row.get("required_hook_callable")
+                    ),
+                    boolish(
+                        row.get("signature_bind_passed")
+                        or row.get("hook_signature_compatible")
+                    ),
+                    boolish(row.get("invocation_completed"))
+                    or invocation_status
+                    in {"complete", "completed", "pass", "passed", "success"},
+                    boolish(row.get("return_contract_valid"))
+                    or return_status in {"valid", "pass", "passed"},
+                    boolish(row.get("artifact_identity_echo_valid"))
+                    or echo_status in {"valid", "pass", "passed", "matched"},
+                    boolish(row.get("value_consumed_by_decision"))
+                    or consumption_status in {"consumed", "pass", "passed"},
                     str(row.get("evidence_provenance") or "").strip().lower()
                     in {"independently_verified", "self_grounded"},
                     non_empty(row.get("probe_evidence_ref")),

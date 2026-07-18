@@ -1,0 +1,23 @@
+{
+  "schema_version": 2,
+  "manifest_kind": "authority_operations",
+  "skill_id": "build-validation-set-with-agents",
+  "skill_version": "2.0.0",
+  "operations": [
+    {
+      "operation_id": "mutate_validation_set_assets",
+      "operation_version": "1",
+      "authorization_mechanism": "grant",
+      "mutation_class": "local_mutation",
+      "required_capabilities": ["validation.set.mutate"],
+      "source_rank_floor": "S2",
+      "risk_floor": "R2",
+      "decision_class": "D3",
+      "effect_classes": ["create_refresh_or_freeze_validation_assets"],
+      "data_classes": ["validation_set"],
+      "reversibility": "conditionally_reversible",
+      "subject_kinds": ["validation_set"],
+      "authority_applicability": "required"
+    }
+  ]
+}

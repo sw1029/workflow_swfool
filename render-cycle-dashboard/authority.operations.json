@@ -1,0 +1,23 @@
+{
+  "schema_version": 2,
+  "manifest_kind": "authority_operations",
+  "skill_id": "render-cycle-dashboard",
+  "skill_version": "2.0.0",
+  "operations": [
+    {
+      "operation_id": "publish_cycle_dashboard",
+      "operation_version": "1",
+      "authorization_mechanism": "none",
+      "mutation_class": "local_mutation",
+      "required_capabilities": ["cycle.dashboard.publish"],
+      "source_rank_floor": "S0",
+      "risk_floor": "R1",
+      "decision_class": "D3",
+      "effect_classes": ["publish_derived_dashboard"],
+      "data_classes": ["cycle_dashboard"],
+      "reversibility": "reversible",
+      "subject_kinds": ["cycle_dashboard"],
+      "authority_applicability": "none"
+    }
+  ]
+}

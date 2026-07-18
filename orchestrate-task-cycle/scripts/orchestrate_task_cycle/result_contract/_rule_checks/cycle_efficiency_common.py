@@ -40,7 +40,9 @@ EXECUTION_SCOPE_FIELDS = {
     "decision_lane",
 }
 EXECUTION_SCOPE_EVIDENCE_FIELDS = EXECUTION_SCOPE_FIELDS | {
-    "execution_starvation_window"
+    "execution_starvation_window",
+    "execution_scope_applicability",
+    "required_input_binding",
 }
 
 

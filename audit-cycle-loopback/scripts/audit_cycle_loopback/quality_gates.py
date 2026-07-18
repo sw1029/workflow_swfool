@@ -37,12 +37,6 @@ def coverage_quality_delta_gate(
     current: dict[str, float] = {}
     previous: dict[str, float] = {}
     missing_observations: list[str] = []
-    previous_binding_count = sum(
-        1
-        for key in keys
-        if any(candidate in prev_high for candidate in policy["aliases"].get(key, [key]))
-    )
-    baseline_absent = bool(keys) and previous_binding_count == 0
     for key in keys:
         current_present, current_value = _numeric_metric_value(quality, key, policy["aliases"])
         previous_present, previous_value = _numeric_metric_value(prev_high, key, policy["aliases"])
@@ -50,9 +44,7 @@ def coverage_quality_delta_gate(
             current[key] = current_value
         if previous_present and previous_value is not None:
             previous[key] = previous_value
-        elif baseline_absent:
-            previous[key] = 0.0
-        if not current_present or (not previous_present and not baseline_absent):
+        if not current_present or not previous_present:
             missing_observations.append(key)
     invalid_contract_fields = list(policy["invalid_contract_fields"])
     if not epsilon_valid:

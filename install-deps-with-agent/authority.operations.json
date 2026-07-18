@@ -1,0 +1,53 @@
+{
+  "schema_version": 2,
+  "manifest_kind": "authority_operations",
+  "skill_id": "install-deps-with-agent",
+  "skill_version": "2.0.0",
+  "operations": [
+    {
+      "operation_id": "inspect_dependency_availability",
+      "operation_version": "1",
+      "authorization_mechanism": "none",
+      "mutation_class": "observe",
+      "required_capabilities": ["dependency.inspect"],
+      "source_rank_floor": "S0",
+      "risk_floor": "R0",
+      "decision_class": "D3",
+      "effect_classes": ["inspect_dependency"],
+      "data_classes": ["dependency_metadata"],
+      "reversibility": "reversible",
+      "subject_kinds": ["dependency_requirement"],
+      "authority_applicability": "none"
+    },
+    {
+      "operation_id": "install_dependency",
+      "operation_version": "1",
+      "authorization_mechanism": "grant",
+      "mutation_class": "external_mutation",
+      "required_capabilities": ["dependency.install"],
+      "source_rank_floor": "S2",
+      "risk_floor": "R2",
+      "decision_class": "D2",
+      "effect_classes": ["install_dependency"],
+      "data_classes": ["runtime_environment"],
+      "reversibility": "conditionally_reversible",
+      "subject_kinds": ["dependency_requirement"],
+      "authority_applicability": "required"
+    },
+    {
+      "operation_id": "download_dependency_artifact",
+      "operation_version": "1",
+      "authorization_mechanism": "grant",
+      "mutation_class": "external_mutation",
+      "required_capabilities": ["dependency.download"],
+      "source_rank_floor": "S2",
+      "risk_floor": "R2",
+      "decision_class": "D2",
+      "effect_classes": ["download_dependency"],
+      "data_classes": ["dependency_artifact"],
+      "reversibility": "conditionally_reversible",
+      "subject_kinds": ["dependency_requirement"],
+      "authority_applicability": "required"
+    }
+  ]
+}

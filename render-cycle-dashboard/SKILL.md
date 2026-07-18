@@ -9,6 +9,8 @@ description: "Render a human-readable task-cycle dashboard from ledger, validati
 
 Use this skill to summarize a cycle's current state for handoff and final reporting. The dashboard is workflow state, not a validation verdict.
 
+The deterministic `publish_cycle_dashboard` projection is declared in `authority.operations.json` with no independent grant requirement. This status never authorizes source, task, issue, or cycle-finalization changes and remains bounded by the active session ceiling and shared [authority v2 contract](../manage-agent-authority/references/authority-v2-contract.md).
+
 Use `PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/scripts" python3 -m orchestrate_task_cycle dashboard` when possible. The default output remains Korean Markdown; use `--format json` or `--result-output <path>` to emit the directly validatable dashboard result contract.
 
 ## Domain Adapter Contract

@@ -11,20 +11,41 @@ from .evaluation_frame import _require_values
 
 def _identity_fields(state: dict[str, Any]) -> dict[str, Any]:
     (
-        args, attempt_identity, attempt_revision_candidate, budget_evaluations,
-        current_root_family_key, current_root_key, decision_artifact_ref, family_key,
-        gate_compatibility_results, input_state_fingerprint, legacy_attempt_identity,
-        legacy_family_key, provider_request_count, registry_label_correction,
-        supersedes_attempt_identity_candidate, supersedes_attempt_revision_candidate,
+        args,
+        attempt_identity,
+        attempt_revision_candidate,
+        budget_evaluations,
+        current_root_family_key,
+        current_root_key,
+        decision_artifact_ref,
+        family_key,
+        gate_compatibility_results,
+        input_state_fingerprint,
+        legacy_attempt_identity,
+        legacy_family_key,
+        provider_request_count,
+        registry_label_correction,
+        supersedes_attempt_identity_candidate,
+        supersedes_attempt_revision_candidate,
     ) = _require_values(
         state,
         (
-            'args', 'attempt_identity', 'attempt_revision_candidate', 'budget_evaluations',
-            'current_root_family_key', 'current_root_key', 'decision_artifact_ref',
-            'family_key', 'gate_compatibility_results', 'input_state_fingerprint',
-            'legacy_attempt_identity', 'legacy_family_key', 'provider_request_count',
-            'registry_label_correction', 'supersedes_attempt_identity_candidate',
-            'supersedes_attempt_revision_candidate',
+            "args",
+            "attempt_identity",
+            "attempt_revision_candidate",
+            "budget_evaluations",
+            "current_root_family_key",
+            "current_root_key",
+            "decision_artifact_ref",
+            "family_key",
+            "gate_compatibility_results",
+            "input_state_fingerprint",
+            "legacy_attempt_identity",
+            "legacy_family_key",
+            "provider_request_count",
+            "registry_label_correction",
+            "supersedes_attempt_identity_candidate",
+            "supersedes_attempt_revision_candidate",
         ),
     )
     return {
@@ -42,26 +63,38 @@ def _identity_fields(state: dict[str, Any]) -> dict[str, Any]:
         "artifact_id": decision_artifact_ref.get("artifact_id"),
         "artifact_class": decision_artifact_ref.get("artifact_class"),
         "artifact_sha256": decision_artifact_ref.get("artifact_sha256"),
-        "production_lane_identity": decision_artifact_ref.get("production_lane_identity"),
+        "production_lane_identity": decision_artifact_ref.get(
+            "production_lane_identity"
+        ),
         "discovery_basis": decision_artifact_ref.get("discovery_basis"),
         "scope_verified": bool_value(decision_artifact_ref.get("scope_verified")),
-        "advisory_discovery": bool_value(decision_artifact_ref.get("advisory_discovery")),
+        "advisory_discovery": bool_value(
+            decision_artifact_ref.get("advisory_discovery")
+        ),
         "gate_compatibility_results": gate_compatibility_results,
-        "required_gate_ids": sorted({
-            str(item.get("gate_id"))
-            for item in gate_compatibility_results
-            if item.get("gate_id") and item.get("gate_compatibility_status") == "compatible"
-        }),
-        "decision_consumed_gate_ids": sorted({
-            str(item.get("gate_id"))
-            for item in gate_compatibility_results
-            if item.get("gate_id") and item.get("gate_compatibility_status") == "compatible"
-        }),
-        "decision_excluded_gate_ids": sorted({
-            str(item.get("gate_id"))
-            for item in gate_compatibility_results
-            if item.get("gate_id") and item.get("gate_compatibility_status") != "compatible"
-        }),
+        "required_gate_ids": sorted(
+            {
+                str(item.get("gate_id"))
+                for item in gate_compatibility_results
+                if item.get("gate_id")
+            }
+        ),
+        "decision_consumed_gate_ids": sorted(
+            {
+                str(item.get("gate_id"))
+                for item in gate_compatibility_results
+                if item.get("gate_id")
+                and item.get("gate_compatibility_status") == "compatible"
+            }
+        ),
+        "decision_excluded_gate_ids": sorted(
+            {
+                str(item.get("gate_id"))
+                for item in gate_compatibility_results
+                if item.get("gate_id")
+                and item.get("gate_compatibility_status") != "compatible"
+            }
+        ),
         "input_state_fingerprint": input_state_fingerprint,
         "attempt_identity": attempt_identity,
         "attempt_identity_version": 2,
