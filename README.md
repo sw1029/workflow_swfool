@@ -27,6 +27,8 @@
 - scoped progress는 기존 `--gate-state-json` 입력에서 추출해 공통 계약으로 재평가한다. 실제 retained change가 task-local이면 bounded task close만 허용하고 root/global stall은 reset하지 않는다. root reset은 동일 basis의 residual 감소와 독립 observation 또는 완전한 self-grounded replay가, global reset은 모든 active axis에 대해 source·invariant owner·decisive function이 분리된 exact-bound receipt가 필요하다. 상충하거나 malformed인 scoped 입력은 선언된 surface만 보존하고 positive movement는 만들지 않는다.
 - `$plan-validation-scope`의 two-pass 경로는 `decision_artifact_ref`와 `verification_source_separation_gate`가 공급되면 plan에서 current identity와 source/invariant/function 분리를 검사하고, finalize에서 같은 decision subject/lineage의 최신 revision과 gate를 다시 요구한다. plan 결함은 `affected_chain` 이상으로 올려 warn하고, finalize의 누락·stale·subject 변경·coupling은 fail-close한다.
 - 장기 실행은 새 canonical phase가 아니라 `step: run`의 분기이다. `event_kind: long_run_launch|long_run_monitor|long_run_harvest|long_run_finalize`와 `long_run_role: launch|monitor|harvest|finalize`를 기록하며, `running`과 `completed_pending_validation`은 성공이 아니라 남은 harvest/validation의 증거이다.
+- terminal-wait 재진입은 새 canonical phase나 전체 cycle이 아니라 pre-cycle selection boundary이다. authority-settled current baseline을 `selection-tick`이 재검증하고, 동일 입력은 `no_op`, 미완료 publication은 `recovery_required`, unjournaled head/lineage drift는 `drift_blocked`, exact premise 또는 baseline에 묶인 evidence-class 변화만 `selection_required`로 분기한다. successor가 선택되면 journal 기반 `selection-publication`으로 `task.md`를 마지막에 노출하고, 다시 wait하면 persisted selection receipt로 trigger `B`를 safe baseline `C`로 acknowledge한 뒤 authority-settled terminal-wait baseline을 CAS 활성화한다.
+- 권한 실행 경계는 스킬 전체가 아니라 각 `authority.operations.json`의 versioned operation과 `authorization_mechanism`이다. `grant` operation의 allowed mutation만 decision → reserve → pre-dispatch verification → closed authority packet → initial pre-commit verification → 선택적 owner PREPARE → current/pre-commit revalidation → effect → consume/release/quarantine 경로를 사용한다. PREPARE/activation journal은 해당 operation owner가 계약으로 선언한 경우에만 삽입한다. `typed_source_approval`과 `bound_lifecycle_artifact`는 각각 exact source/lifecycle verifier가 소유하며, `none`은 `not_applicable`로 처리한다. authority·local resolution·external input·risk/cost·goal truth 축은 서로 대체하지 않는다.
 - 스킬 실행 진입점은 스킬별 underscore 패키지의 `python3 -m <package> <command>` 형식으로 통일한다. 평면 `scripts/*.py` 호환 shim은 두지 않으며, 패키지 내부는 명시적 import와 정적 명령 레지스트리를 사용한다.
 
 ### 스크립트 모듈 아키텍처
@@ -44,11 +46,11 @@
 | `audit-session-governance` | `audit_session_governance` | `capture`, `audit` |
 | `build-validation-set-with-agents` | `build_validation_set_with_agents` | `build`, `run-oracles`, `leakage`, `finalize`, `validate`, `freeze`, `verify-root` |
 | `find-local-python-envs` | `find_local_python_envs` | `inventory` |
-| `manage-agent-authority` | `manage_agent_authority` | `receipt` |
+| `manage-agent-authority` | `manage_agent_authority` | `authority`, `receipt` |
 | `manage-external-advice` | `manage_external_advice` | `registry` |
 | `manage-task-state-index` | `manage_task_state_index` | `index`, `migrate`, `verify-migration` |
 | `normalize-acceptance-and-demo` | `normalize_acceptance_and_demo` | `identity` |
-| `orchestrate-task-cycle` | `orchestrate_task_cycle` | `ledger`, `transition`, `packet`, `context`, `report`, `dashboard`, `result-contract`, `task-pack`, `progress-loop`, `gt-conflict`, `evidence-cache`, `mode-profile`, `model-effort`, `monitor`, `output-delta`, `efficiency`, `visible-increment`, `code-structure`, `changed-surface`, `validation-scope` |
+| `orchestrate-task-cycle` | `orchestrate_task_cycle` | `ledger`, `transition`, `packet`, `context`, `report`, `dashboard`, `result-contract`, `task-pack`, `progress-loop`, `gt-conflict`, `evidence-cache`, `mode-profile`, `model-effort`, `monitor`, `output-delta`, `efficiency`, `visible-increment`, `code-structure`, `changed-surface`, `validation-scope`, `selection-tick`, `selection-decision-receipt`, `selection-publication`, `terminal-wait-baseline`, `exact-subject-premise`, `repo-adapter`, `authority-packet` |
 | `plan-validation-scope` | `plan_validation_scope` | `changed-surface`, `plan`, `finalize` |
 | `record-agent-work-log` | `record_agent_work_log` | `write`, `migrate`, `verify-migration` |
 | `run-task-code-and-log` | `run_task_code_and_log` | `failure-autopsy` |
@@ -75,14 +77,17 @@ flowchart TB
   Skill --> Main --> Registry
 
   subgraph Orchestrator["orchestrate_task_cycle composition root"]
-    OCLI["orchestrate_task_cycle/cli.py<br/>20개 정적 root command"]
+    OCLI["orchestrate_task_cycle/cli.py<br/>27개 정적 root command"]
     Ledger["ledger<br/>cycle_ledger.py facade → ledger/*<br/>Repository + finalization Unit-of-Work"]
     Transition["transition<br/>validate_cycle_transition.py facade → transition/*<br/>ValidationContext + 21 ordered stages"]
     Packet["packet<br/>render_subskill_packet.py facade → packet/*<br/>PacketBuildContext + static target registry"]
     Reporting["dashboard / report<br/>facade → dashboard/* / report/*<br/>typed builder pipelines"]
     Result["result-contract<br/>result_contract/api.py → engine + validation_pipeline/*<br/>RuleRegistry → rules/*; sibling _rule_checks/* 지원"]
     Progress["progress-loop<br/>progress/cli.py → AnalysisContext + AnalysisPipeline<br/>evidence → aggregation → roots → gates → findings → result"]
-    TaskPack["task-pack<br/>task_pack/cli.py → validation / mutation / receipts<br/>content-addressed transaction boundary"]
+    TaskPack["task-pack<br/>task_pack/cli.py → validation / mutation / receipts<br/>journal recovery + legacy-retirement settlement"]
+    Selection["selection-tick / selection-decision-receipt / selection-publication<br/>terminal-wait-baseline / exact-subject-premise<br/>pre-cycle re-entry + recoverable pointer publication"]
+    AuthorityRuntime["authority-packet<br/>owner decision / grant lineage / reservation / verification 재개방<br/>closed v2 dispatch projection"]
+    RepoAdapter["repo-adapter scan / handoff<br/>repo-owned metadata validation + phase/consumer binding"]
     Analysis["code-structure / efficiency / output-delta / gt-conflict / model-effort<br/>compatibility facade → typed responsibility package"]
     Support["context / evidence-cache / mode-profile / monitor<br/>visible-increment / changed-surface / validation-scope<br/>public facade → responsibility module"]
     OCLI --> Ledger
@@ -92,6 +97,9 @@ flowchart TB
     OCLI --> Result
     OCLI --> Progress
     OCLI --> TaskPack
+    OCLI --> Selection
+    OCLI --> AuthorityRuntime
+    OCLI --> RepoAdapter
     OCLI --> Analysis
     OCLI --> Support
   end
@@ -115,6 +123,9 @@ flowchart TB
   Ledger --> Artifacts[".task/cycle/* + content-bound receipt"]
   Result --> Artifacts
   TaskPack --> Artifacts
+  Selection --> SelectionArtifacts[".task/selection_publication/*<br/>.task/terminal_wait_baseline/* + decision receipts"]
+  AuthorityRuntime --> AuthorityArtifacts[".task/authorization/*<br/>immutable owner artifacts + CAS state"]
+  RepoAdapter --> AdapterArtifacts["repo_skill_adapter_packet<br/>implementation / legacy_compatibility / renderer<br/>decision_identity_validator / authority_projection bindings"]
   Durable --> DurableArtifacts[".agent_log/* + .task/index.*"]
   Session --> SessionArtifacts["off-chain projection + .task/session_audit/*"]
   Loopback --> LoopArtifacts["anti_loop_progress_gate + prepared mutation candidate"]
@@ -124,12 +135,23 @@ flowchart TB
 
 ```mermaid
 flowchart TD
-  Start([사용자 요청 또는 cycle 시작])
+  Request([사용자 요청 또는 cycle 후보])
+  TerminalGate{"current task가 terminal + non-executable이고<br/>authority-settled baseline이 있는가?"}
+  SelectionTick["pre-cycle: orchestrate_task_cycle selection-tick<br/>current baseline과 sticky exact-premise/authority row 재검증<br/>proposal fanout과 cycle init은 아직 금지"]
+  TickResult{"tick status"}
+  PreserveWait(["no_op | baseline_recorded<br/>wait 유지, fanout 없음"])
+  RecoverSelection["recovery_required<br/>pending selection-publication forward recovery"]
+  RepairSelectionDrift["drift_blocked<br/>committed-head / ambiguous-lineage drift 명시적 수리"]
+  DeriveSelection["selection_required<br/>기존 derive의 3-lens selection boundary만 실행"]
+  SelectionOutcome{"selection outcome"}
+  PublishSuccessor["distinct successor<br/>selection-publication prepare/apply/recover<br/>owner-committed projection bind/verify<br/>publisher-owned projection 후 task.md pointer 마지막"]
+  RebaseWait["terminal_wait again<br/>selection-decision-receipt → B acknowledge/rebase C<br/>authority-settled terminal-wait-baseline activation"]
+  Start([normal/bootstrap cycle 실제 시작])
   Context["python3 -m orchestrate_task_cycle context<br/>README, task.md, .agent_goal, .agent_log,<br/>.task, .issue, .schema, .contract, .validation 수집"]
   LedgerInit["$maintain-cycle-ledger<br/>python3 -m orchestrate_task_cycle ledger init<br/>initialization.json + current_stage.json + packets/ 생성<br/>첫 canonical context append 시 stage.jsonl 생성"]
-  Authority["$manage-agent-authority<br/>권한/외부 호출/검증 우선순위 정책 요약<br/>S8 policy propagation + S5 authority axis"]
+  Authority["$manage-agent-authority v2 mechanism routing<br/>grant + allowed mutation만 evaluate → reserve → pre_dispatch → authority-packet<br/>initial pre_commit → optional PREPARE → revalidate → effect/settle<br/>typed source / bound lifecycle은 owning verifier; none은 not_applicable"]
   Acceptance["$normalize-acceptance-and-demo<br/>python3 -m normalize_acceptance_and_demo identity<br/>acceptance, non-goals, demo, validation commands 정규화<br/>measurable → verifier / movement / scenario / freshness contract"]
-  AdapterScan["repo-local skill adapter scan<br/>code_convention_contract + consumer-probe declarations,<br/>quality_delta_policy, gt_constraint_policy, capability_ladder,<br/>verifier/metric/axis/compatibility/feature/lineage hooks<br/>missing quality policy => domain metrics not_evaluated"]
+  AdapterScan["python3 -m orchestrate_task_cycle repo-adapter scan / handoff<br/>manifest/component digest + declared phase/consumer/hook map 검증<br/>adapter_loaded=false metadata binding만 반환<br/>실제 hook 실행은 downstream owning consumer 책임"]
   RoutePlan["route_plan<br/>task.md 존재 여부와 cycle 경로 결정"]
 
   PacketGate["각 major call 전: orchestrate_task_cycle packet<br/>render_subskill_packet.py → PacketBuilder + TARGET_BUILDERS"]
@@ -176,6 +198,15 @@ flowchart TD
   Closeout["$repo-change-commit closeout<br/>report/dashboard/ledger closeout commit"]
   End([cycle 결과 보고])
 
+  Request --> TerminalGate
+  TerminalGate -- no --> Start
+  TerminalGate -- yes --> SelectionTick --> TickResult
+  TickResult -- no_op / baseline_recorded --> PreserveWait
+  TickResult -- recovery_required --> RecoverSelection --> SelectionTick
+  TickResult -- drift_blocked --> RepairSelectionDrift --> SelectionTick
+  TickResult -- selection_required --> DeriveSelection --> SelectionOutcome
+  SelectionOutcome -- distinct successor --> PublishSuccessor --> Start
+  SelectionOutcome -- terminal_wait --> RebaseWait --> PreserveWait
   Start --> Context --> LedgerInit --> Authority --> NoTask
   NoTask -- yes --> DeriveInitial --> SchemaPreInit --> Context
   NoTask -- no --> AdapterScan --> Acceptance --> RoutePlan --> ValPlan
@@ -209,10 +240,25 @@ flowchart TD
   Architecture["$manage-goal-architecture<br/>.agent_goal/goal_architecture.md"]
   Theory["$manage-goal-theory<br/>.agent_goal/goal_theory.md"]
   SchemaGoal["goal_schema_contract write<br/>.agent_goal/goal_schema_contract.md"]
-  Authority["$manage-agent-authority<br/>.agent_goal/agent_authority.md<br/>policy_consumption_sites + authority_axis_classify"]
+  Authority["$manage-agent-authority policy owner<br/>.agent_goal/agent_authority.md<br/>장기 narrowing policy; runtime grant/receipt와 분리"]
+  Operation["versioned authority.operations.json<br/>exact operation / capability / subject / risk / cardinality"]
+  Mechanism{"authorization_mechanism"}
+  AuthEval["manage_agent_authority authority<br/>policy/source snapshot + grant lineage<br/>evaluate → immutable closed decision"]
+  AuthDecision{"grant decision"}
+  AuthReserve["reserve exact uses<br/>lineage CAS + immutable reservation"]
+  AuthPacket["pre_dispatch verify<br/>orchestrate_task_cycle authority-packet<br/>owner artifacts를 workspace에서 재개방"]
+  AuthPrepare["optional owner PREPARE<br/>declared journal/activation contract만"]
+  AuthInitialCommit["initial pre_commit verify<br/>packet에 묶인 current subject/grant/reservation"]
+  AuthRevalidate["after PREPARE current/pre_commit revalidation<br/>packet/subject/grant/reservation 다시 개방"]
+  AuthEffect["exact effect + immutable execution-result"]
+  AuthSettle["consume → authority_use_receipt<br/>또는 not_started / verified-no-effect release<br/>unknown-effect quarantine"]
+  AuthTyped["typed_source_approval<br/>exact source/rank/subset/lineage verifier<br/>recursive grant 없이 administrative action"]
+  AuthBound["bound_lifecycle_artifact<br/>exact reservation/receipt/state-change verifier<br/>이미 승인된 lifecycle만 finalization"]
+  AuthNone["none<br/>authority decision=not_applicable<br/>grant reservation/preflight 없이 owner contract 적용"]
+  AuthRoute["approval_required / denied / wait / repair / conflict<br/>authority·external input·risk·GT 축을 분리 routing"]
   SchemaRegistry["$manage-schema-contracts<br/>.schema/.contract registry 정렬<br/>policy_propagation_incomplete debt 기록"]
   AdviceIn["외부 조언 파일 또는 본문"]
-  Advice["$manage-external-advice<br/>python3 -m manage_external_advice registry<br/>raw → active/deferred/applied/rejected<br/>mark-applied → integrity-bound past_advice log"]
+  Advice["$manage-external-advice<br/>canonical directive parse + exact disposition coverage<br/>prepare → applied/log projections → canonical event last<br/>commit receipt / forward recovery; never GT or authority"]
   AdvicePacket["active advice packet<br/>not_goal_truth=true"]
   Index["$manage-task-state-index<br/>python3 -m manage_task_state_index index scan/link/audit<br/>goal-*, int-*, adv-*, schema-* 링크"]
   Consumers["orchestrate / derive / governance / validate<br/>GT와 비-GT를 분리 소비<br/>additive signal 대신 acceptance/gate/progress key에 반영"]
@@ -232,6 +278,15 @@ flowchart TD
   FinalReview -- yes --> Theory --> Index
   FinalReview -- yes --> SchemaGoal --> SchemaRegistry --> Index
   FinalReview -- yes --> Authority --> Index
+  Authority -. narrowing policy input .-> Mechanism
+  Operation --> Mechanism
+  Mechanism -- grant --> AuthEval --> AuthDecision
+  AuthDecision -- allowed mutation --> AuthReserve --> AuthPacket --> AuthInitialCommit --> AuthRevalidate --> AuthEffect --> AuthSettle --> Consumers
+  AuthInitialCommit -. owner contract가 선언할 때 .-> AuthPrepare --> AuthRevalidate
+  AuthDecision -- other closed decision --> AuthRoute --> Consumers
+  Mechanism -- typed_source_approval --> AuthTyped --> Consumers
+  Mechanism -- bound_lifecycle_artifact --> AuthBound --> Consumers
+  Mechanism -- none --> AuthNone --> Consumers
   AdviceIn --> Advice --> AdvicePacket --> Consumers
   Index --> Consumers
 ```
@@ -240,7 +295,12 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-  Trigger([next task 필요 또는 명시적 task doctor 요청])
+  Trigger([next task 필요 / terminal-wait 재진입 / 명시적 task doctor 요청])
+  WaitBound{"verified current terminal-wait baseline?"}
+  WaitSelection["Flowchart 9 pre-cycle boundary<br/>selection-tick → no_op | baseline_recorded / recovery_required<br/>/ drift_blocked / selection_required<br/>cycle init과 proposal fanout을 먼저 차단"]
+  WaitHold(["terminal wait 유지<br/>cycle init과 fanout 없이 종료"])
+  WaitRecovery["recovery_required<br/>pending selection-publication forward recovery<br/>완료 후 current baseline을 다시 resolve/tick"]
+  WaitDrift["drift_blocked<br/>committed-head / ambiguous-lineage drift 명시적 수리<br/>완료 후 current baseline을 다시 resolve/tick"]
   ExplicitDoctor{"명시적 doctor/replace/pack 지시?"}
   TaskDoctor["$task-doctor<br/>task.md retarget/replace 또는 task_pack proposal"]
   DoctorRead["읽기: task.md, .agent_goal, named advice, .task, .issue, .schema"]
@@ -257,12 +317,15 @@ flowchart TD
   PackScan[".task/task_pack 분류<br/>promote/insert/reorder/skip/supersede/terminal"]
   IssueFit["$manage-implementation-issues issue-fit agent<br/>fit/partial/misfit/unknown"]
   ImproveAgents["3 parallel improvement-analysis agents<br/>goal fit, architecture fit, miss/risk fit"]
-  Synthesis["1 xhigh synthesis agent<br/>한 개 task 또는 terminal blocker 선택"]
+  LensReceipts["3 durable lens projections + canonical synthesis output<br/>동일 frozen manifest / exact candidate union / advice clause reconciliation"]
+  Synthesis["1 xhigh synthesis agent<br/>digest-bound authoritative selection decision"]
   Decision{"선택 결과"}
   ArchivePast["$record-agent-work-log<br/>기존 task.md past_task archive"]
-  WriteTask["task.md 작성<br/>Execution Environment 최상단 포함"]
   MutatePack["task_pack transaction<br/>create/promote/insert/reorder/skip/supersede/terminal"]
-  Candidates["unselected proposals -> .task/candidate_task/<br/>selected candidate는 task 작성 후 삭제"]
+  PublicationPlan["selection-publication plan<br/>source decision + bounded roles + exact before/after bytes"]
+  Publish["selection-publication apply<br/>owner-committed archive/log/task-pack은 unchanged bind/verify<br/>publisher-owned advice/index 후 task.md alias last<br/>after-state 검증 후 committed receipt"]
+  Candidates["unselected proposals → candidate lifecycle 유지<br/>selected candidate도 applied/superseded로 전이<br/>physical deletion 없이 provenance 보존"]
+  WaitAgain["terminal_wait<br/>selection-decision receipt + A/B/C rebase<br/>authority-settled baseline publication은 Flowchart 9"]
   Terminal["terminal_blocker / user_escalation<br/>sealed family와 missing input 기록"]
   DeriveIndex["python3 -m manage_task_state_index index scan<br/>then index audit"]
 
@@ -293,8 +356,14 @@ flowchart TD
   Profile["$profile-cycle-efficiency<br/>sprawl, duplicate evidence, safety_only loops"]
 
   Trigger --> ExplicitDoctor
-  ExplicitDoctor -- yes --> DoctorRead --> TaskDoctor --> DoctorArchive --> DoctorWrite --> DoctorIndex --> DoctorCommit
-  ExplicitDoctor -- no --> NormalDerive
+  ExplicitDoctor -- yes --> TaskDoctor --> DoctorRead --> DoctorArchive --> DoctorWrite --> DoctorIndex --> DoctorCommit
+  ExplicitDoctor -- no --> WaitBound
+  WaitBound -- yes --> WaitSelection
+  WaitBound -- no --> NormalDerive
+  WaitSelection -- no_op / baseline_recorded --> WaitHold
+  WaitSelection -- recovery_required --> WaitRecovery --> WaitSelection
+  WaitSelection -- drift_blocked --> WaitDrift --> WaitSelection
+  WaitSelection -- selection_required --> NormalDerive
   LoopInputs --> ProgressDetect --> Loopback --> LoopGate --> LongRunDebt
   LongRunDebt -- yes --> LongRunRoute --> NormalDerive
   LongRunDebt -- no --> ScopedDebt
@@ -317,10 +386,12 @@ flowchart TD
   GlobalMoved -- no --> GlobalRoute --> NormalDerive
   GlobalMoved -- yes --> Slice --> NormalDerive
   Profile --> NormalDerive
-  NormalDerive --> Inputs --> Alignment --> MissAgents --> CandidateScan --> PackScan --> IssueFit --> ImproveAgents --> Synthesis --> Decision
-  Decision -- standalone task --> ArchivePast --> WriteTask --> Candidates --> DeriveIndex
-  Decision -- pack mutation --> ArchivePast --> MutatePack --> WriteTask --> DeriveIndex
-  Decision -- no viable task --> Terminal --> DeriveIndex
+  NormalDerive --> Inputs --> Alignment --> MissAgents --> CandidateScan --> PackScan --> IssueFit --> ImproveAgents --> LensReceipts --> Synthesis --> Decision
+  Decision -- standalone task --> ArchivePast --> Candidates --> PublicationPlan
+  Decision -- pack mutation --> ArchivePast --> MutatePack --> Candidates
+  PublicationPlan --> Publish --> DeriveIndex
+  Decision -- terminal_wait --> WaitAgain --> DeriveIndex
+  Decision -- terminal_blocked / user_escalation --> Terminal --> DeriveIndex
 ```
 
 ### Mermaid Flowchart 4: implementation, execution, validation
@@ -381,6 +452,14 @@ flowchart TD
 
 ```mermaid
 flowchart TD
+  EffectRequest([grant-authorized mutating skill operation])
+  OperationManifest["authority.operations.json<br/>authorization_mechanism=grant<br/>versioned operation + exact subject"]
+  AuthorityOwner["$manage-agent-authority v2<br/>allowed decision → reserve → pre_dispatch verify"]
+  AuthorityPacket["orchestrate_task_cycle authority-packet<br/>decision/grant/reservation/verification artifact 재개방"]
+  InitialPreCommit["initial pre_commit verify<br/>packet-bound current CAS / subject / manifest"]
+  Prepare["optional operation owner PREPARE<br/>owner contract가 선언한 경우에만<br/>effect는 아직 operationally inactive"]
+  RevalidatePreCommit["after PREPARE revalidate<br/>current CAS / subject / packet / pre_commit 재개방"]
+  EffectSettlement["exact effect → immutable execution-result<br/>consume + authority_use_receipt<br/>not_started / verified-no-effect release<br/>unknown-effect quarantine"]
   Evidence([어떤 스킬이 artifact 생성])
   Cache["$manage-evidence-cache<br/>python3 -m orchestrate_task_cycle evidence-cache<br/>fingerprint → reuse/fresh_required/stale/unsafe_to_reuse"]
   Log["$record-agent-work-log<br/>python3 -m record_agent_work_log write<br/>write.py → integrity/append.py<br/>body_sha256/content_id/record_id binding"]
@@ -394,6 +473,12 @@ flowchart TD
   Chronic["S10 chronic_blocker debt<br/>first_seen_generation + consecutive_generation_count<br/>visibility only, not verdict"]
   FinalCandidate["$validate-task-completion output<br/>identity-bound final_candidate"]
   Finalize["python3 -m orchestrate_task_cycle ledger finalize<br/>immutable snapshot + CAS current_finalization.json<br/>content-bound cycle_finalization_receipt"]
+  FinalizeState{"finalization result"}
+  PendingConflict["state_commit_status=recovery_required<br/>attempt_memory_disposition=pending_conflict<br/>expected predecessor/target revision mismatch를 immutable 보존<br/>현재 authoritative state는 변경하지 않음"]
+  ResolvePending{"pending-finalization resolution"}
+  RebasedRetry["rebase candidate + finalize retry<br/>successful publish가 matching pending을 auto-merge"]
+  ManualMerged["merged<br/>exact committed_finalization_token 필수"]
+  RetiredPending["retired<br/>committed token 금지; pending 종료<br/>current authoritative state 불변"]
   Verify["ledger verify-finalization<br/>load_current_finalized_state<br/>authoritative verified projection"]
   Index["$manage-task-state-index<br/>python3 -m manage_task_state_index index scan/link/audit<br/>task/log/run/audit/val/miss/issue/goal/adv/schema IDs"]
   Visible["$record-visible-increment<br/>visible delta, not_validation_evidence=true"]
@@ -404,6 +489,8 @@ flowchart TD
   Closeout["$repo-change-commit closeout<br/>dashboard/report/ledger artifacts commit"]
   User([사용자에게 결과 보고])
 
+  EffectRequest --> OperationManifest --> AuthorityOwner --> AuthorityPacket --> InitialPreCommit --> RevalidatePreCommit --> EffectSettlement --> Evidence
+  InitialPreCommit -. owner contract가 선언할 때 .-> Prepare --> RevalidatePreCommit
   Evidence --> Cache
   Evidence --> Log --> LogIntegrity --> LogClass
   Evidence --> Contract --> Ledger
@@ -414,7 +501,12 @@ flowchart TD
   Ledger --> Chronic --> Index
   Evidence --> Visible --> Ledger
   Evidence -. completion bundle .-> FinalCandidate
-  FinalCandidate --> Finalize --> Verify
+  FinalCandidate --> Finalize --> FinalizeState
+  FinalizeState -- state_commit_status=committed --> Verify
+  FinalizeState -- recovery_required + pending_conflict --> PendingConflict --> ResolvePending
+  ResolvePending -- rebased retry --> RebasedRetry --> Finalize
+  ResolvePending -- merged --> ManualMerged --> Verify
+  ResolvePending -- retired --> RetiredPending --> Index
   Verify --> Index
   Index --> Issue --> Commit
   Verify --> Dashboard
@@ -471,12 +563,17 @@ flowchart TD
   QualityLayer["quality.py facade<br/>quality_policy + quality_values + quality_gates<br/>metric aliases/axes/thresholds stay repo-local"]
   GenericOnly["generic contracts only<br/>domain metric gates remain not_evaluated<br/>no global metric fallback"]
   EvalStages["ordered stage families<br/>setup_* → failure_* → progress_*<br/>→ decision_* → finalize_*"]
+  ConsumerReceipt["consumer receipt + decision identity<br/>artifact/subject/revision/lineage binding 재검증"]
+  PrimaryMetric["typed primary metric comparator<br/>scalar / set / vector / ordered / predicate<br/>basis migration + source-separated high-water gate"]
+  Reachability["cycle reachability<br/>producer supply / acceptance scale / lane / quota로<br/>현재 cycle에서 가능한 변화인지 판정"]
+  Recurrence["cli.py post-evaluator recurrence identity<br/>stable basis + semantic delta<br/>packet을 downgrade할 수 있음"]
   ScopedSelect["setup_external_gates<br/>scoped declarations 추출 + conflict fail-close<br/>actual changed-file/content evidence 전달"]
-  ScopedAssess["shared assess_scoped_progress<br/>retained_change_classification 재계산<br/>task/root/global reset permission 분리"]
+  ScopedAssess["progress stage의 shared assess_scoped_progress<br/>retained_change_classification 재계산<br/>task/root/global reset permission 분리"]
   LoopGates["gates + acceptance + verification + blockers<br/>coverage/substance, verifier status, target movement,<br/>source + invariant owner + decisive function separation,<br/>scenario/argv/blocker/stochastic, compatibility skip,<br/>feature/frozen-input/Q1, failure/source/chain stalls"]
   RootCause["root_cause.py + root_cause_runtime.py<br/>hypotheses, repo-owned actionability,<br/>reason_to_attempt, exhaustion and untried repair"]
-  LoopRegistry["registry.py + family_registry.py + finalized_state.py<br/>durable_projection.py + registry_identity.py<br/>prepared mutation candidate; orchestrator가 최종화"]
+  LoopRegistry["registry.py + family_registry.py + finalized_state.py<br/>durable_projection.py + registry_identity.py<br/>evaluator가 registry/root-cause/seal rows를 반환"]
   LoopPacket["packet.py + assembly.py + outcome.py<br/>anti_loop_progress_gate packet<br/>effective dispositions + allowed task kinds"]
+  DurableCandidate["cli.py가 recurrence 반영 후 조립<br/>recurrence-bound durable_mutation_candidate<br/>orchestrator가 최종화"]
 
   DetectCLI["python3 -m orchestrate_task_cycle progress-loop<br/>static package command"]
   DetectFacade["progress/cli.py → analysis.py compatibility facade<br/>ProgressLoopAnalyzer builds AnalysisContext"]
@@ -501,9 +598,16 @@ flowchart TD
   LoopbackEval --> AdapterPolicy
   AdapterPolicy -- yes --> AdapterLayer --> QualityLayer --> EvalStages
   AdapterPolicy -- no --> GenericOnly --> EvalStages
-  EvalStages --> ScopedSelect --> ScopedAssess --> LoopGates --> LoopPacket
-  LoopbackEval --> RootCause --> LoopRegistry --> LoopPacket
-  LoopPacket --> Derive
+  Inputs -. consumer binding evidence .-> ConsumerReceipt
+  Inputs -. cycle supply / scale / lane / quota .-> Reachability
+  Inputs -. scoped declarations + changed content .-> ScopedSelect --> ScopedAssess
+  Inputs -. typed metric evidence .-> PrimaryMetric
+  ConsumerReceipt -. setup / failure / finalize checks .-> EvalStages
+  Reachability -. earlier progress stage .-> PrimaryMetric
+  ScopedAssess -. earlier progress stage .-> PrimaryMetric
+  PrimaryMetric -. later progress / decision checks .-> EvalStages
+  EvalStages --> LoopGates --> RootCause --> LoopRegistry --> LoopPacket
+  LoopPacket --> Recurrence --> DurableCandidate --> Derive
 
   Inputs --> DetectCLI --> DetectFacade --> DetectPipeline --> DetectEvidence --> DetectAggregate --> DetectRoots --> DetectGates --> DetectFindings --> DetectResult --> Derive
   DetectRegistry -. history input .-> DetectEvidence
@@ -562,6 +666,93 @@ flowchart TD
   RepairGate -- absent or semantic mutation --> Owner
 ```
 
+### Mermaid Flowchart 9: authority v2 settlement and terminal-wait selection
+
+```mermaid
+flowchart TD
+  subgraph AuthorityV2["operation-bound authority v2"]
+    Manifest["authority.operations.json<br/>versioned operation / authorization mechanism<br/>capability / mutation / risk"]
+    Request["exact request + existing regular-file subject<br/>session ceiling + GT autonomy envelope"]
+    Mechanism{"authorization_mechanism"}
+    Evaluate["grant mechanism<br/>manage_agent_authority authority evaluate<br/>policy/source snapshot + one covering grant or explicit composition"]
+    Decision{"grant decision"}
+    WaitRoute["approval_required / denied / waiting_external_input<br/>capability_unavailable / blocked_by_goal_truth<br/>classification_repair / conflict / not_applicable"]
+    TypedApproval["typed_source_approval<br/>exact source/rank/subset/lineage owner verifier"]
+    BoundLifecycle["bound_lifecycle_artifact<br/>exact reservation/receipt/state-change owner verifier"]
+    NoAuthority["none<br/>authority decision=not_applicable<br/>owner contract만 적용"]
+    Reserve["reserve exact uses<br/>selected grant + unique lineage ancestors CAS"]
+    PreDispatch["authority verify --stage pre_dispatch<br/>subject / manifest / grant / reservation freshness"]
+    ClosedPacket["orchestrate_task_cycle authority-packet<br/>result-contract --target authority --mode block<br/>owner artifacts를 workspace에서 재개방"]
+    InitialPreCommit["initial authority verify --stage pre_commit<br/>packet-bound current state 검증"]
+    Prepare["optional operation owner PREPARE<br/>declared non-active journal / prospective effect binding"]
+    RevalidatePreCommit["after PREPARE reopen/revalidate<br/>current subject / packet / pre_commit"]
+    Effect["operation-specific exact effect<br/>bounded mutation"]
+    ExecutionResult["immutable execution-result binding"]
+    Settlement{"effect status"}
+    Consume["consume<br/>authority_use_receipt + lineage state changes"]
+    Release["not_started | verified_no_effect<br/>release reserved use"]
+    Quarantine["unknown_effect<br/>quarantined_unknown_effect; budget 유지"]
+    Activation["optional operation owner settlement validation<br/>declared expected-current CAS activation"]
+
+    Request --> Manifest --> Mechanism
+    Mechanism -- grant --> Evaluate --> Decision
+    Decision -- decision=allowed + mutation --> Reserve --> PreDispatch --> ClosedPacket --> InitialPreCommit --> RevalidatePreCommit --> Effect --> ExecutionResult --> Settlement
+    InitialPreCommit -. owner contract가 선언할 때 .-> Prepare --> RevalidatePreCommit
+    Decision -- other closed decision --> WaitRoute
+    Mechanism -- typed_source_approval --> TypedApproval
+    Mechanism -- bound_lifecycle_artifact --> BoundLifecycle
+    Mechanism -- none --> NoAuthority
+    Settlement -- known effect --> Consume
+    Consume -. owner contract가 선언할 때 .-> Activation
+    Settlement -- not_started / verified no effect --> Release
+    Settlement -- unknown --> Quarantine
+  end
+
+  subgraph TerminalWait["terminal-wait bounded pre-cycle re-entry"]
+    Current[".task/terminal_wait_baseline/current.json<br/>pointer → activation → completion → snapshot<br/>authority settlement + source bindings 재검증"]
+    ExactPremise["exact-subject-premise<br/>artifact-reopened consumed v2 receipt<br/>v1/raw digest는 autonomous wake 불가"]
+    Tick["selection-tick<br/>current baseline auto-discovery<br/>sticky exact-premise/effective-authority rows"]
+    TickStatus{"tick status"}
+    Preserve["no_op | baseline_recorded<br/>terminal wait 유지<br/>fanout=false, full_cycle=false"]
+    Recovery["recovery_required<br/>pending selection-publication forward recovery"]
+    DriftRepair["drift_blocked<br/>committed-head / ambiguous-lineage drift repair"]
+    DeriveOnly["selection_required<br/>기존 derive의 3-lens selection만 실행<br/>full implementation cycle은 시작하지 않음"]
+    Outcome{"selection outcome"}
+    Publication["distinct successor<br/>selection-publication prepare/apply/recover<br/>exact before/after journal"]
+    ProjectionWrites["owner-committed archive/log/task-pack projection은<br/>unchanged bind/verify; publisher-owned advice/index만 write"]
+    TaskPointer["task.md alias를 마지막에 write<br/>committed publication receipt"]
+    NormalCycle(["successor가 활성화됨<br/>이후 fresh normal cycle 시작 가능"])
+    RuntimeReceipts["terminal_wait again<br/>3 lens projections + canonical synthesis output<br/>preliminary decision + selection-decision receipt"]
+    Rebase["A predecessor → material trigger B<br/>receipt로 acknowledge → input-stable safe baseline C"]
+    DirectFinal["direct full final derive result<br/>C + receipt identity + exact analysis manifest"]
+    BaselineSubject["terminal-wait-baseline materialize-subject<br/>non-active content-addressed exact authority subject"]
+    BaselineArtifacts["terminal-wait owner effect artifacts<br/>immutable snapshot + completion<br/>current pointer는 아직 미노출"]
+    BaselineActivate["settled use receipt 검증 후 activate<br/>expected predecessor CAS<br/>current pointer를 마지막에 노출"]
+
+    Current --> Tick
+    ExactPremise --> Tick
+    ClosedPacket -. exact authority scope row .-> Tick
+    Tick --> TickStatus
+    TickStatus -- no_op / baseline_recorded --> Preserve
+    TickStatus -- recovery_required --> Recovery --> Tick
+    TickStatus -- drift_blocked --> DriftRepair --> Tick
+    TickStatus -- selection_required --> DeriveOnly --> Outcome
+    Outcome -- distinct successor --> Publication --> ProjectionWrites --> TaskPointer --> NormalCycle
+    Outcome -- terminal_wait --> RuntimeReceipts --> Rebase --> DirectFinal --> BaselineSubject
+    BaselineSubject -. publish_terminal_wait_baseline_binding subject .-> Request
+    Effect -. terminal-wait owner effect .-> BaselineArtifacts --> ExecutionResult
+    Consume -. exact settled receipt .-> BaselineActivate --> Current
+  end
+
+  LegacyPack["invalid but declared-closed legacy task pack<br/>raw bytes/findings 보존 + exact retirement subject"]
+  LegacyArtifacts["raw snapshot/overlay → completion<br/>canonical pack은 변경하지 않고 settlement 대기"]
+  LegacyActivation["settled receipt 검증<br/>activate-legacy-retirement"]
+  LegacyOverlay["operational retired_legacy projection<br/>historical completion/authority를 증명하지 않음"]
+  LegacyPack -. mutate_task_topology authority operation .-> Request
+  Effect -. legacy owner effect .-> LegacyArtifacts -. completion binding .-> ExecutionResult
+  Consume -. settled legacy-retirement receipt .-> LegacyActivation --> LegacyOverlay
+```
+
 ## 순수 텍스트 Flowchart
 
 아래 블록은 Mermaid 렌더링 없이도 구조가 보이도록 박스, 분기, 화살표만으로 그린 텍스트 도형이다.
@@ -570,9 +761,20 @@ flowchart TD
 
 ```text
 +--------------------------------------------------------------------------------+
-| USER REQUEST / CYCLE START                                                     |
+| USER REQUEST / CYCLE CANDIDATE                                                 |
 +--------------------------------------------------------------------------------+
         |
+        v
++--------------------------------------------------------------------------------+
+| PRE-CYCLE TERMINAL-WAIT GATE                                                   |
+| - verified authority-settled current가 있으면 Text Flowchart 9의 selection-tick|
+| - no_op|baseline_recorded: wait 유지 후 종료                                    |
+| - recovery_required: pending publication forward recovery 후 gate 재실행        |
+| - drift_blocked: committed-head/lineage drift를 명시적으로 수리 후 gate 재실행   |
+| - selection_required: derive selection만 실행; successor publish 뒤에만 진행    |
+| - verified current가 없으면 normal/bootstrap 경로로 진행                        |
++--------------------------------------------------------------------------------+
+        | no current / activated successor only
         v
 +--------------------------------------------------------------------------------+
 | CONTEXT                                                                        |
@@ -595,9 +797,11 @@ flowchart TD
         |
         v
 +----------------------------+     +---------------------------------------------+
-| $manage-agent-authority    | --> | authority_policy                           |
-| 권한/외부호출/검증 우선순위 |     | agent_authority.md or default permissions   |
-|                             |     | S8 propagation debt + S5 axis classification|
+| authority mechanism route  | --> | grant+allowed: evaluate/reserve/pre_dispatch|
+| from versioned operation   |     | packet -> initial pre_commit -> optional    |
+|                            |     | PREPARE -> revalidate -> effect/settle      |
+| manifest + exact subject   |     | typed-source/bound-lifecycle: owner verifier|
+|                            |     | none: not_applicable; other decisions route |
 +----------------------------+     +---------------------------------------------+
         |
         v
@@ -613,10 +817,10 @@ flowchart TD
         |                            +-------------------------------------------+
         v
 +----------------------------+     +---------------------------------------------+
-| repo-local adapter scan    | --> | code convention + consumer-probe declarations|
-| explicit policies/hooks    |     | quality/GT-constraint/capability policies   |
-|                             |     | verifier/metric/axis/feature/lineage hooks   |
-|                             |     | missing quality policy -> metric not_eval   |
+| repo-adapter scan/handoff  | --> | manifest/map/component digests + declared   |
+| metadata validation only  |     | phase/consumer/hook bindings                |
+| adapter_loaded=false      |     | downstream owning consumer loads/runs hook |
+|                            |     | missing quality policy -> metric not_eval   |
 +----------------------------+     +---------------------------------------------+
         |
         v
@@ -845,16 +1049,43 @@ flowchart TD
 | audit                         |      | index ...; goal/int IDs               |
 +-------------------------------+      +----------------------------------------+
 
+Authority policy/runtime side path:
+
++-------------------------------+      +----------------------------------------+
+| agent_authority.md            | ---> | durable narrowing policy only          |
+| versioned operation manifest  |      | operation + exact subject + mechanism  |
++-------------------------------+      +----------------------------------------+
+                                                     |
+                                                     v
+                                       +-----------------------------+
+                                       | authorization_mechanism     |
+                                       +-----------------------------+
+                                         |-- grant
+                                         |     -> immutable decision
+                                         |     -> allowed mutation only: reserve
+                                         |        -> pre_dispatch -> authority-packet
+                                         |        -> initial pre_commit -> optional PREPARE
+                                         |        -> current/pre_commit revalidation
+                                         |        -> effect -> settle
+                                         |-- typed_source_approval
+                                         |     -> exact source/rank/subset/lineage verifier
+                                         |-- bound_lifecycle_artifact
+                                         |     -> exact reservation/receipt/state-change verifier
+                                         +-- none -> decision=not_applicable; owner contract only
+
+Owner PREPARE/activation is inserted only when that operation's contract declares it.
+Authority, local resolution, external input, risk/cost, and GT remain separate axes.
+
 External advice side path:
 
 +-------------------------------+      +----------------------------------------+
-| external advice Markdown      | ---> | $manage-external-advice               |
-+-------------------------------+      | raw -> active/deferred/applied/rejected|
-                                       | python3 -m manage_external_advice      |
-                                       | registry ...                           |
-                                       | workflow advice becomes in-place      |
-                                       | acceptance/gate/progress-key revision |
-                                       | applied -> standard past_advice log   |
+| external advice file/body     | ---> | $manage-external-advice               |
++-------------------------------+      | canonical directive + exact clause    |
+                                       | disposition coverage                   |
+                                       | prepare -> applied/log projections    |
+                                       | -> canonical event last               |
+                                       | commit receipt or forward recovery    |
+                                       | never goal truth or authority          |
                                        +----------------------------------------+
                                                      |
                                                      v
@@ -870,8 +1101,8 @@ External advice side path:
 
 ```text
 +-------------------------------+
-| next task needed              |
-| or explicit task doctor input |
+| next task / terminal-wait     |
+| re-entry / task doctor input  |
 +-------------------------------+
               |
               v
@@ -881,9 +1112,31 @@ External advice side path:
           | yes                                      | no
           v                                          v
 +-------------------------------+        +---------------------------------------+
-| $task-doctor                  |        | $derive-improvement-task              |
-| pre-cycle intervention only   |        | normal next-task selection            |
-+-------------------------------+        +---------------------------------------+
+| $task-doctor                  |        | verified terminal-wait current?       |
+| explicit direction wins before|        +---------------------------------------+
+| autonomous selection tick     |          | yes                      | no
++-------------------------------+          v                          v
+                                 +-------------------------+  +------------------+
+                                 | Text Flowchart 9 tick   |  | bounded derive   |
+                                 +-------------------------+  | selection        |
+                                   | no_op/baseline_recorded|  +------------------+
+                                   |   -> STOP; no fanout   |           |
+                                   | recovery_required      |           |
+                                   |   -> forward recovery  |           |
+                                   |   -> re-run tick       |           |
+                                   | drift_blocked          |           |
+                                   |   -> explicit repair   |           |
+                                   |   -> re-run tick       |           |
+                                   | selection_required     |           |
+                                   +-----------+------------+           |
+                                               |                        |
+                                               +-----------+------------+
+                                                           |
+                                                           v
+                                                +------------------------+
+                                                | $derive-improvement-task|
+                                                | selection boundary only |
+                                                +------------------------+
           |                                          |
           v                                          v
 +-------------------------------+        +---------------------------------------+
@@ -902,9 +1155,9 @@ External advice side path:
           |                              | - task_pack scan                      |
           v                              | - 1 issue-fit agent                   |
 +-------------------------------+        | - 3 improvement agents                |
-| write task.md or task_pack    |        | - 1 synthesis agent                   |
-| preserve scope_fidelity,      |        +---------------------------------------+
-| envelope, verifier contract,  |                         |
+| write task.md or task_pack    |        | - 3 durable lens projections          |
+| preserve scope_fidelity,      |        | - canonical synthesis decision        |
+| envelope, verifier contract,  |        +---------------------------------------+
 | terminal/global residuals,    |                         |
 | G-axis/cost/P-Q/S7-S10 debt   |                         |
 +-------------------------------+                         v
@@ -925,30 +1178,24 @@ External advice side path:
 | optional task-direction commit|        +---------------------------------------+
 | $repo-change-commit           |        | synthesis decision                    |
 +-------------------------------+        +---------------------------------------+
-          |                                      | standalone task
-          |                                      v
-          |                         +----------------------------------+
-          |                         | archive old task -> write task.md |
-          |                         | keep/delete candidates safely     |
-          |                         +----------------------------------+
           |                                      |
-          |                                      | pack mutation
-          |                                      v
-          |                         +----------------------------------+
-          |                         | create/promote/insert/reorder/   |
-          |                         | skip/supersede task_pack + task  |
-          |                         +----------------------------------+
-          |                                      |
-          |                                      | no viable task
-          |                                      v
-          |                         +----------------------------------+
-          |                         | terminal_blocker / user_escalation|
-          |                         | sealed family + missing input     |
-          |                         +----------------------------------+
-          |                                      |
-          +---------------------------+----------+
-                                      |
-                                      v
+          |                                      +------------------------------+
+          |                                      | mutually exclusive outcome   |
+          |                                      +------------------------------+
+          |                                        | successor       | wait       | blocked/escalation
+          |                                        v                 v            v
+          |                         +-------------------------+ +----------------+ +------------------+
+          |                         | owner archive/log/pack  | | B receipt ->   | | sealed family +  |
+          |                         | commit first; candidate | | safe C ->      | | bounded report   |
+          |                         | retained/applied/supers.| | authority-     | +------------------+
+          |                         | bind owner projections;| | settled current|
+          |                         | advice/index -> task.md | +----------------+
+          |                         | last -> receipt         |          |
+          |                         +-------------------------+          |            |
+          |                                        |                 |            |
+          +----------------------------------------+-----------------+------------+
+                                                           |
+                                                           v
                          +----------------------------------+
                          | $manage-task-state-index         |
                          | python3 -m manage_task_state_index|
@@ -1199,60 +1446,77 @@ Anti-loop and efficiency inputs into derive:
 
 ```text
 +-------------------------------+
-| any skill creates evidence    |
-| run/audit/validation/report   |
+| grant-authorized mutation     |
+| exact operation + subject     |
 +-------------------------------+
               |
               v
 +-------------------------------+      +----------------------------------------+
-| orchestrate_task_cycle        | ---> | result_contract/api.py -> engine.py   |
-| result-contract              |      | -> validation_pipeline -> rules       |
+| authority v2 grant boundary   | ---> | decision=allowed -> reserve            |
+| closed owner artifacts        |      | -> pre_dispatch -> authority-packet    |
+|                               |      | -> initial pre_commit verification     |
 +-------------------------------+      +----------------------------------------+
               |
               v
 +-------------------------------+      +----------------------------------------+
-| $maintain-cycle-ledger        | ---> | .task/cycle/<cycle-id>/stage.jsonl    |
-| append canonical stage event  |      | current_stage.json, packets/          |
-| long-run remains step=run     |      | event_kind long_run_* when applicable |
-| terminal_delta_record allowed |      | unchanged_ref only reduces record cost|
+| optional owner PREPARE       | ---> | reopen/revalidate current packet,      |
+| when contract declares it   |      | subject, and pre_commit -> exact effect|
+|                               |      | -> execution-result -> consume/release |
+|                               |      | or unknown-effect quarantine           |
 +-------------------------------+      +----------------------------------------+
               |
               v
-+-------------------------------+      +----------------------------------------+
-| record_agent_work_log write   | ---> | .agent_log Markdown + index.jsonl     |
-| write.py -> integrity append  |      | body_sha256/content_id/record_id      |
-| factual intent/work/result    |      | immutable body/index binding          |
-+-------------------------------+      +----------------------------------------+
++-------------------------------+
+| any skill creates evidence    |
+| run/audit/validation/report   |
++-------------------------------+
               |
-              v
-+-------------------------------+      +----------------------------------------+
-| shared agent_log_integrity    | ---> | valid -> normal consumption           |
-| no-follow + path containment  |      | legacy_unverified -> readable,        |
-| duplicate/orphan/missing/     |      |   no body-integrity guarantee         |
-| tamper/symlink inspection     |      | unsafe/invalid -> integrity metadata  |
-|                               |      | only; semantic use/indexing blocked   |
-+-------------------------------+      +----------------------------------------+
+              +-- fingerprint lane
+              |     -> evidence-cache: reuse / fresh_required / stale / unsafe
               |
-              | valid or legacy_unverified only
-              v
-+-------------------------------+      +----------------------------------------+
-| completion final_candidate    | ---> | ledger finalize: immutable snapshot   |
-| six verdict axes + identity   |      | CAS current_finalization + receipt    |
-| ledger verify-finalization    |      | verified authoritative projection     |
-+-------------------------------+      +----------------------------------------+
+              +-- work-log lane
+              |     -> record_agent_work_log write
+              |     -> .agent_log body/index content binding
+              |     -> shared no-follow integrity gate
+              |        * valid -> normal semantic consumption + index
+              |        * legacy_unverified -> readable without integrity claim + index
+              |        * unsafe/invalid -> metadata only; no semantic use/index
               |
-              v
+              +-- result lane
+              |     -> result-contract api/engine/pipeline/rules
+              |     -> validated ledger append
+              |     -> stage.jsonl/current_stage.json/packets + long_run_* events
+              |     -> terminal_delta/chronic debt projections -> index
+              |
+              +-- visible lane
+              |     -> record-visible-increment
+              |     -> not_validation_evidence=true -> ledger append
+              |
+              +-- completion bundle lane
+                    -> identity-bound final_candidate
+                    -> ledger finalize: immutable snapshot + current CAS + receipt
+                    -> ledger verify-finalization: authoritative projection
+
+CAS/target-revision conflict side path:
+
+  finalize -> state_commit_status=recovery_required
+           -> immutable attempt_memory_disposition=pending_conflict
+              (current state unchanged)
+           -> ledger pending-finalizations
+           -> one of:
+              * rebase candidate + finalize retry
+                -> successful publish auto-merges matching pending record
+              * resolve-pending-finalization --disposition merged
+                -> exact committed_finalization_token required -> verify current
+              * resolve-pending-finalization --disposition retired
+                -> committed token forbidden -> close pending; current unchanged
+
+All valid/indexable log, ledger, and verified-finalization projections converge at:
+
 +-------------------------------+      +----------------------------------------+
 | $manage-task-state-index      | ---> | .task/index.jsonl + index.md          |
 | index scan/link/audit         |      | task/log/run/audit/val/miss/issue/    |
 | nested index command          |      | goal/adv/schema IDs                   |
-+-------------------------------+      +----------------------------------------+
-              |
-              v
-+-------------------------------+      +----------------------------------------+
-| $record-visible-increment     | ---> | .task/delta/<cycle-id>-visible-delta  |
-| before/after user-visible     |      | not_validation_evidence=true          |
-| workflow change only          |      | not a completion proof                |
 +-------------------------------+      +----------------------------------------+
               |
               v
@@ -1273,6 +1537,10 @@ Anti-loop and efficiency inputs into derive:
 | orchestrate_task_cycle        | ---> | dashboard/* consumes verified ledger |
 | dashboard                     |      | malformed/running/partial visible     |
 +-------------------------------+      +----------------------------------------+
+
+The verified-finalization projection also feeds the dashboard directly; the
+index/issue/commit lane is a separate convergence path.
+
               |
               v
 +-------------------------------+      +----------------------------------------+
@@ -1324,13 +1592,46 @@ Anti-loop and efficiency inputs into derive:
 | ordered evaluation stages       |                  |
 | setup -> failure -> progress     |                  |
 | -> decision -> finalize         |                  |
-| root cause + registry services  |                  |
+| setup: scoped input/consumer    |                  |
+|        probes                   |                  |
+| failure/finalize: consumer      |                  |
+|        receipt + identity checks|                  |
+| progress: reachability -> scoped|                  |
+|        assessment -> typed      |                  |
+|        primary metric compare   |                  |
+| decision/finalize: gates, root  |                  |
+|        cause, registry services |                  |
++----------------------------------+                  |
+                |                                     |
+                v                                     |
++----------------------------------+                  |
+| evaluator loopback packet       |                  |
+| typed metric: scalar/set/vector |                  |
+| ordered/predicate + basis       |                  |
+| migration/separated high-water  |                  |
+| scoped task/root/global permits |                  |
++----------------------------------+                  |
+                |                                     |
+                v                                     |
++----------------------------------+                  |
+| CLI post-evaluator recurrence   |                  |
+| stable basis + semantic delta   |                  |
+| may downgrade returned packet   |                  |
++----------------------------------+                  |
+                |                                     |
+                v                                     |
++----------------------------------+                  |
+| build durable mutation candidate|
+| only after recurrence is bound  |
+| registry/root-cause/seal rows + |
+| recurrence; orchestrator finalizes|
 +----------------------------------+                  |
                 |                                     |
                 +------------------+------------------+
                                    v
                       +-----------------------------+
-                      | loop/progress packets       |
+                      | loop packet + durable       |
+                      | candidate / progress packet |
                       +-----------------------------+
 
 GT constraint side path:
@@ -1473,14 +1774,172 @@ Mode and bounded-repair lane:
 +-------------------------------+
 ```
 
+### Text Flowchart 9: authority v2 settlement and terminal-wait selection
+
+```text
+Authority v2 lane:
+
++----------------------------------------+
+| authority.operations.json              |
+| exact operation/version/mechanism      |
+| existing regular-file subject          |
++----------------------------------------+
+                    |
+                    v
+          +-----------------------------+
+          | authorization_mechanism     |
+          +-----------------------------+
+            |-- typed_source_approval
+            |     -> exact source/rank/subset/lineage owner verifier
+            |        and authority decision=not_applicable
+            |-- bound_lifecycle_artifact
+            |     -> exact reservation/receipt/state-change owner verifier
+            |        and authority decision=not_applicable
+            |-- none -> decision=not_applicable; owner contract only
+            |
+            +-- grant
+                    |
+                    v
+          +-----------------------+
+          | immutable grant       |
+          | decision              |
+          +-----------------------+
+            | allowed mutation                 | other closed status
+            v                                  -> exact status route; stop
++----------------------------------+
+| reserve exact lineage uses       |
+| -> verify pre_dispatch           |
+| -> closed authority-packet       |
+| -> result-contract block gate    |
+| -> initial pre_commit verify     |
+| -> optional owner PREPARE only   |
+|    when its contract declares it |
+| -> reopen/revalidate current     |
+|    packet/subject/pre_commit     |
+| -> exact effect + execution-result|
++----------------------------------+
+            |
+            v
+          +-----------------------+
+          | effect status         |
+          +-----------------------+
+            | known      | not_started or verified_no_effect   | unknown
+            v            v                                      v
++------------------+ +------------------+ +-------------------------------+
+| consume          | | release reserved | | quarantined_unknown_effect    |
+| authority-use    | | use with exact   | | reserved budget is not        |
+| receipt + CAS    | | no-effect proof  | | restored automatically        |
++------------------+ +------------------+ +-------------------------------+
+          |
+          v
++----------------------------------------+
+| optional owner settlement after-image   |
+| validation + expected-current CAS       |
+| activation only when contract declares  |
++----------------------------------------+
+
+All other grant decisions route by their exact closed status. Authority, local
+resolution, external input, risk/cost, and goal truth stay independent.
+
+Terminal-wait pre-cycle lane:
+
++----------------------------------------+
+| .task/terminal_wait_baseline/current.json|
+| pointer/activation/completion/snapshot  |
+| authority settlement/source revalidation|
++----------------------------------------+
+                    |
+                    v
++----------------------------------------+      +--------------------------------+
+| selection-tick                         | <--- | exact-subject-premise          |
+| current baseline auto-discovery        |      | consumed artifact-verified v2 |
+| sticky premise/effective-authority rows|      | raw/v1 alone cannot wake      |
++----------------------------------------+      +--------------------------------+
+                    |
+                    v
+          +-----------------------+
+          | tick status           |
+          +-----------------------+
+            | no_op/baseline_recorded
+            |   -> preserve wait; no cycle init and no proposal fanout
+            |
+            | recovery_required
+            |   -> pending selection-publication forward recovery -> re-run tick
+            |
+            | drift_blocked
+            |   -> committed-head/lineage drift explicit repair -> re-run tick
+            |
+            | selection_required
+            v
++----------------------------------------+
+| existing derive selection only         |
+| three durable lenses + canonical       |
+| synthesis; no implementation cycle yet |
++----------------------------------------+
+                    |
+                    v
+          +-----------------------+
+          | selection outcome     |
+          +-----------------------+
+            | distinct successor               | terminal_wait again
+            v                                  v
++----------------------------------+   +--------------------------------------+
+| selection-publication            |   | trigger B receipt chain              |
+| prepare exact before/after journal|   | lenses -> synthesis -> preliminary  |
+| owner archive/log/task-pack      |   | decision -> selection receipt       |
+| unchanged bind/verify            |   +--------------------------------------+
+| publisher advice/index writes    |                  |
+| task.md alias last                |                  v
+| verify -> committed receipt       |   +--------------------------------------+
++----------------------------------+   | acknowledge/rebase                  |
+            |                         | predecessor A -> material B        |
+            v                         | -> input-stable safe baseline C    |
++----------------------------------+   +--------------------------------------+
+| fresh normal cycle may start     |                  |
+| from the activated successor     |                  |
++----------------------------------+                  |
+                                                    v
+                                      +--------------------------------------+
+                                      | direct full final derive result      |
+                                      | C + receipt + reopened analysis      |
+                                      +--------------------------------------+
+                                                    |
+                                                    v
+                                      +--------------------------------------+
+                                      | terminal-wait-baseline               |
+                                      | materialize non-active exact subject |
+                                      | -> authority v2 publish settlement   |
+                                      | -> immutable snapshot/completion     |
+                                      | -> consume -> predecessor CAS        |
+                                      | -> expose current pointer last       |
+                                      +--------------------------------------+
+                                                    |
+                                                    +----> next selection-tick
+
+Legacy task-pack settlement reuse:
+
+  invalid but declared-closed pack + preserved raw bytes/findings
+    -> exact per-pack retirement subject
+    -> grant-authorized mutate_task_topology packet + initial pre_commit verification
+    -> PREPARE -> current packet/pre_commit revalidation
+    -> immutable raw snapshot/overlay -> completion
+       (canonical pack remains unchanged; settlement is still pending)
+    -> consume exact completion-bound use -> activate-legacy-retirement
+    -> operational retired_legacy projection
+
+The overlay does not prove historical completion, dependency satisfaction,
+provenance repair, or historical authority. Pending mutation/publication/settlement
+is recovered by exact forward replay; ambiguous state is never chosen by filename order.
+```
+
 ### 스킬별 빠른 참조
 
 ```text
 orchestrate-task-cycle
-  context -> ledger init -> authority -> task bootstrap when absent -> adapter scan -> acceptance/verifier/scenario/freshness/target-movement contracts -> validation-scope plan -> validation-set planning workflow -> governance -> code-structure -> run or long-run branch -> review/loopback or monitor -> validation-set build/leakage/run-oracles/finalize/validate -> visible/gap/profile evidence -> validation-scope finalize + task-state index scan -> validate current task -> final_candidate -> ledger finalize/verify-finalization -> issue reconciliation -> schema/derive/index only when promotion is allowed -> commit -> verified dashboard -> report -> closeout; every major subskill call uses packet -> transition -> owning call -> result-contract -> ledger append, while ModeSpec/session observation remains an optional non-canonical sidecar
+  terminal-wait current가 있으면 pre-cycle selection-tick -> no_op|baseline_recorded / recovery_required / drift_blocked / selection_required를 먼저 판정하고, distinct successor가 recoverable selection-publication으로 활성화된 뒤에만 context -> ledger init -> authority-mechanism routing -> task bootstrap when absent -> repo-adapter scan/handoff -> acceptance/verifier/scenario/freshness/target-movement contracts -> validation-scope plan -> validation-set planning workflow -> governance -> code-structure -> run or long-run branch -> review/loopback or monitor -> validation-set build/leakage/run-oracles/finalize/validate -> visible/gap/profile evidence -> validation-scope finalize + task-state index scan -> validate current task -> final_candidate -> ledger finalize/verify-finalization -> issue reconciliation -> schema/derive/index only when promotion is allowed -> commit -> verified dashboard -> report -> closeout; every major subskill call uses packet -> transition -> owning call -> result-contract -> ledger append, while ModeSpec/session observation remains an optional non-canonical sidecar
 
 maintain-cycle-ledger
-  cycle init creates initialization.json/current_stage.json/packets -> first canonical append creates stage.jsonl -> packet link -> preserve terminal_delta_record/unchanged_ref and S10 blocker persistence fields -> final_candidate -> immutable snapshot + CAS current_finalization.json + content-bound receipt -> verify-finalization/load_current_finalized_state -> dashboard/report
+  cycle init creates initialization.json/current_stage.json/packets -> first canonical append creates stage.jsonl -> packet link -> preserve terminal_delta_record/unchanged_ref and S10 blocker persistence fields -> final_candidate -> immutable snapshot + expected-predecessor/target-revision CAS -> committed receipt or state_commit_status=recovery_required + immutable attempt_memory_disposition=pending_conflict -> rebased successful finalize auto-merges a matching pending record, explicit merged requires exact committed_finalization_token before verification, explicit retired forbids that token and leaves current unchanged -> verify-finalization/load_current_finalized_state -> dashboard/report
 
 validate-subskill-result-contract
   subskill result -> orchestrate_task_cycle result-contract -> result_contract/api.py -> engine.py -> validation_pipeline -> SessionAuditRule + RuleRegistry -> rules/* with sibling _rule_checks/* -> required fields including long-run detail, command_argv, scenario/blocker/stochastic gates and collector origin -> warn/block -> ledger event
@@ -1501,16 +1960,16 @@ manage-goal-theory
   technical evidence -> mechanisms/assumptions/tradeoffs/validation logic -> goal_theory.md
 
 manage-agent-authority
-  context -> operation selection -> authority template -> safety validation -> policy_consumption_sites propagation debt + authority_axis_classify escalation split -> authority summary/file
+  current ceiling + durable narrowing policy -> authority.operations.json exact operation/existing-file subject + authorization_mechanism -> grant+allowed mutation only: policy/source snapshots -> grant/delegation/composition -> immutable decision -> reserve -> pre_dispatch verification -> closed orchestrator authority-packet -> initial pre_commit verification -> optional owner PREPARE when declared -> reopen/revalidate current packet/subject/pre_commit -> exact effect -> consume with execution-result or not_started|verified_no_effect release / unknown-effect quarantine -> authority-use receipt and CAS state; typed_source_approval and bound_lifecycle_artifact use their exact owner verifiers, none returns not_applicable, and authority/local resolution/external input/risk/GT/design decisions remain separate
 
 manage-schema-contracts
   goal schema contract + source/interfaces -> contract surfaces -> S8 policy_propagation_incomplete debt, Part P/Q `adapter_hook_debt`/`unenforced`, and code_convention_contract visibility when consumers attempted hooks -> versions/causal map -> .schema/.contract updates
 
 manage-external-advice
-  python3 -m manage_external_advice registry -> raw advice -> normalize active advice -> in-place workflow revisions without GT upgrade, including S6 consumption_state and S7-S10 hook advice -> audit stale/dead/degenerate claims -> apply/defer/reject -> integrity-bound past_advice work log -> adv-* links
+  python3 -m manage_external_advice registry -> canonical directive parsing + exact clause disposition coverage -> prepare -> applied/log projections -> canonical event last -> committed receipt or exact forward recovery; active packets remain not_goal_truth and never grant authority
 
 derive-improvement-task
-  context + agents + gates -> respect allowed dispositions, verifier debt, target-metric movement debt, policy propagation debt, gate compatibility skip, chronic blocker debt, long-run pending state, scenario/argv/blocker/stochastic repair, count-key hygiene, goal-axis completeness, residual cost, global invariant keys, Part P/Q feature/freshness/frozen-input/provenance/primary-reason constraints, and explicit adapter capability ladder when supplied -> one next task/task_pack/terminal blocker -> archive old task -> write task.md -> index; no global domain ladder fallback
+  context + agents + gates -> respect allowed dispositions, verifier debt, target-metric movement debt, policy propagation debt, gate compatibility skip, chronic blocker debt, long-run pending state, scenario/argv/blocker/stochastic repair, count-key hygiene, goal-axis completeness, residual cost, global invariant keys, Part P/Q feature/freshness/frozen-input/provenance/primary-reason constraints, and explicit adapter capability ladder when supplied -> three durable lens projections + canonical synthesis -> one authoritative next-task/task-pack/terminal decision -> retain candidate files and transition selected IDs to applied/superseded -> bind/verify unchanged owner-committed archive/log/task-pack projections, publish advice/index roles, then recoverable selection-publication exposes task.md last; or terminal-wait B receipt/C rebase + authority-settled baseline; no global domain ladder fallback
 
 task-doctor
   explicit doctor instruction -> read rules/task/advice -> archive old task -> rewrite task/task_pack while preserving verifier/hook/axis/cost/global residuals -> reconcile schema/index/issue -> optional commit
@@ -1555,7 +2014,7 @@ review-cycle-output-quality
   output artifacts -> one read-only qualitative reviewer -> quality/output-delta/no-overclaim/goal-axis packet, landed_feature_inventory and feature_presence_evidence body checks when supplied
 
 audit-cycle-loopback
-  run/review/output-delta/failure-autopsy/explicit quality policy -> python3 -m audit_cycle_loopback evaluate -> commands.py dispatch -> package facade/runtime-cache bridge -> cli.py -> evaluator ordered setup/failure/progress/decision/finalize stages -> 3-state gates, adapter-owned metrics, root-cause and prepared registry mutation -> derive constraints; api.py is the separate stable explicit import surface, and missing quality policy leaves domain metric gates not_evaluated
+  run/review/output-delta/failure-autopsy/explicit quality policy -> python3 -m audit_cycle_loopback evaluate -> commands.py dispatch -> package facade/runtime-cache bridge -> cli.py -> evaluator ordered setup/failure/progress/decision/finalize stages -> 3-state gates, adapter-owned metrics, root-cause and registry/root-cause/seal rows -> CLI recurrence binding/downgrade -> recurrence-bound durable_mutation_candidate assembly -> derive constraints; orchestrator finalizes the candidate, api.py is the separate stable explicit import surface, and missing quality policy leaves domain metric gates not_evaluated
 
 audit-session-governance
   Stop-hook descriptor -> python3 -m audit_session_governance capture -> audit inspect -> audit validate -> result_contract/_session_audit/collection.py -> packet.py consumer checks + lazy producer validate_packet replay/parity -> complete/bound/evaluated-integrity/consumable projection may satisfy caller-required audit without upgrading a verdict; direct/result-owned claims stay advisory, the independent comparator is only a future/external contract, and verified ModeSpec may run audit auto-rebuild-index only for .task/session_audit/index.json with a before/after-hash receipt
