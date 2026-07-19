@@ -63,6 +63,17 @@ Do not infer blocker families, hook wiring, or verification success from advice 
 
 ## Workflow
 
+Before retiring an advice container, compile the mechanical disposition rows from a small clause decision map. Render the exact actionable-ID template, decide only each clause's semantic disposition and evidence ref, and let the script reopen the evidence and derive its digest.
+
+```bash
+python3 -m manage_external_advice registry --root . \
+  render-disposition-template --advice-id <id>
+python3 -m manage_external_advice registry --root . \
+  compile-dispositions --advice-id <id> --decision-map decisions.json
+```
+
+Prefer `mark-applied --decision-map decisions.json` over hand-authoring full disposition rows. Compilation never decides whether advice is incorporated, retired, or residual and never upgrades clause consumption state.
+
 1. Intake raw advice.
    - Use `python3 -m manage_external_advice registry --root . intake --source <path.md> --title <title>` with the module path above when a local Markdown file is provided.
    - For deterministic review/apply separation, add `--plan .agent_advice/journal/intake/<name>.plan.json`; this authority-free prepare operation publishes a reversible, non-canonical body-safe plan plus one opaque content-addressed source snapshot. It freezes the advice ID, timestamp, registry-owned raw/active paths, source/raw/normalized/event digests, and registry/Markdown CAS anchors without writing canonical raw, active, registry, or Markdown artifacts. It cannot authorize apply. Apply later under the separately authorized `mutate_advice_lifecycle` operation with `intake --apply-plan <plan-path>`.
@@ -103,7 +114,7 @@ Do not infer blocker families, hook wiring, or verification success from advice 
    - When advice is used by a Git-backed workflow, classify the safe normalized active/applied advice file as an intentional workflow artifact for staging/commit unless a `local_only` reason is recorded.
 
 4. Apply or reject advice.
-   - Use `mark-applied --directive-dispositions-json <json-or-path>` only after every actionable directive has one `incorporated|retired|residual` row with a workspace-relative evidence file and its exact full SHA-256. Missing/extra rows, an opaque ref without a verifiable file, or a stale digest rejects the transition before the active artifact moves.
+   - Prefer `mark-applied --decision-map <json-or-path>` so the owner computes evidence digests; retain `--directive-dispositions-json` for compatibility and diagnostics. Every actionable directive still requires one semantic `incorporated|retired|residual` decision and a workspace-relative evidence file. Missing/extra rows, an opaque ref without a verifiable file, or stale evidence rejects the transition before the active artifact moves.
    - Keep registry lifecycle and clause consumption orthogonal: `mark-applied` may retire the advice container, but it does not by itself change any clause from `pending` to `wired` or `verified`.
    - `mark-applied` writes a content-bound `past_advice` entry through `$record-agent-work-log` and moves the normalized advice to `.agent_advice/applied/`; do not create orphan Markdown outside `.agent_log/index.jsonl`.
    - Treat `mark-applied` as one recoverable publication owned by this skill. Freeze the validated request plus the active source event revision/content digest in an immutable `.agent_advice/journal/mark_applied/` prepare record, stage the status-updated applied artifact, and bind the work log with the operation digest. Publish the canonical `mark_applied` JSONL event last by atomic replacement; staged files and the conditional work log are not retirement authority before that event exists.

@@ -125,6 +125,11 @@ from .state.transition_plan import (
     settle_transition_no_effect,
     verify_transition_plan,
 )
+from .state.transition_compiler import (
+    compile_transition_intent,
+    load_transition_intent,
+    verify_transition_compilation,
+)
 
 
 def _rebuild_markdown_unlocked(
@@ -261,8 +266,22 @@ def cmd_audit(args: argparse.Namespace) -> None:
 def cmd_plan_transition(args: argparse.Namespace) -> None:
     root = Path(args.root).resolve()
     try:
-        request = load_request_json(args.request_json)
+        intent_value = getattr(args, "intent", None)
+        if intent_value is not None:
+            if not args.at:
+                raise ValueError("--at is required with --intent for deterministic replay")
+            compilation = compile_transition_intent(
+                root,
+                load_transition_intent(intent_value),
+                at=args.at,
+            )
+            request = compilation["request"]
+            verify_transition_compilation(root, compilation)
+        else:
+            request = load_request_json(args.request_json)
         plan = build_transition_plan(root, request, at=args.at)
+        if intent_value is not None:
+            verify_transition_compilation(root, compilation)
         if args.dry_run:
             result = {
                 "result_kind": "task_state_transition_plan_result",
@@ -296,6 +315,19 @@ def cmd_plan_transition(args: argparse.Namespace) -> None:
             }
         else:
             result = publish_transition_plan(root, plan, args.output)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def cmd_compile_transition(args: argparse.Namespace) -> None:
+    root = Path(args.root).resolve()
+    try:
+        result = compile_transition_intent(
+            root,
+            load_transition_intent(args.intent),
+            at=args.at,
+        )
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
@@ -373,10 +405,14 @@ def build_parser() -> argparse.ArgumentParser:
         "plan-transition",
         help="Build and optionally publish an immutable task-state event batch.",
     )
-    plan_parser.add_argument(
+    plan_input = plan_parser.add_mutually_exclusive_group(required=True)
+    plan_input.add_argument(
         "--request-json",
-        required=True,
         help="JSON text or path with schema_version, events, and optional render/updated_at.",
+    )
+    plan_input.add_argument(
+        "--intent",
+        help="Compact lifecycle intent JSON text, '-', or a regular input file.",
     )
     plan_parser.add_argument(
         "--output",
@@ -389,6 +425,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print the complete plan without creating task-state files.",
     )
     plan_parser.set_defaults(func=cmd_plan_transition)
+
+    compile_parser = subparsers.add_parser(
+        "compile-transition",
+        help="Compile a compact lifecycle intent into a canonical event request.",
+    )
+    compile_parser.add_argument(
+        "--intent",
+        required=True,
+        help="Compact lifecycle intent JSON text, '-', or a regular input file.",
+    )
+    compile_parser.add_argument(
+        "--at",
+        required=True,
+        help="Fixed RFC3339 timestamp for deterministic replay.",
+    )
+    compile_parser.set_defaults(func=cmd_compile_transition)
 
     apply_parser = subparsers.add_parser(
         "apply-plan", help="CAS-apply one immutable task-state transition plan."

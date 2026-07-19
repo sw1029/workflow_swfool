@@ -11,6 +11,7 @@ This contract defines `.agent_advice/` artifacts. Advice is direction evidence, 
 - [Intake deduplication and directive identity](#intake-deduplication-and-directive-identity)
 - [Immutable intake plan](#immutable-intake-plan)
 - [Applied container dispositions](#applied-container-dispositions)
+- [Disposition compilation](#disposition-compilation)
 - [Index fields](#index-fields)
 - [Audit freshness gate](#audit-freshness-gate)
 - [Precedence](#precedence)
@@ -178,6 +179,10 @@ Use `manage_external_advice.intake_plan.verify_intake_plan(root, plan_ref)` as t
 The transition is a bounded recoverable publication, not a sequence of independently authoritative writes. Under the advice registry lock, create an immutable prepare record in `.agent_advice/journal/mark_applied/` whose operation digest binds the exact request digest, expected active-source path/content SHA-256, advice-local source event revision and event digest, and deterministic applied destination/content SHA-256. Keep the active source in place while staging the status-updated applied artifact. Write the `past_advice` log with `advice-operation:<operation_digest>` and an explicit statement that it becomes authoritative only when the matching canonical event exists; this permits recovery after the log writer commits but before the advice registry commits without misrepresenting container state.
 
 Re-read the canonical JSONL and source after all staged artifacts exist. If either expected revision/digest or source content/path/status changed, do not publish. Otherwise atomically replace `.agent_advice/index.jsonl` with exactly one final `mark_applied` event carrying the operation digest, request digest, source CAS fields, applied digest, and work-log pointer. That event is the retirement authority and is published last; `.agent_advice/index.md` is explicitly a derived projection. After the event, remove only the exact source digest, rebuild the projection atomically, and publish an immutable commit receipt. A retry with the identical request resumes the prepare, recovers the operation-tagged log, reuses an exact staged artifact, or completes post-event cleanup without duplicate events/logs. A changed request, tampered journal/staged artifact, stale source CAS, or superseding lifecycle event fails closed. Do not generalize this into a cross-skill transaction engine.
+
+## Disposition Compilation
+
+`render-disposition-template` returns the exact actionable directive IDs and advice/source binding without copying directive or source body text. Fill only the per-ID `disposition` and workspace-relative `evidence_ref`. `compile-dispositions` reopens each regular evidence file, computes its SHA-256, proves exact actionable-set coverage, and returns rows accepted by the existing disposition validator. The template or compilation is preparation, not lifecycle truth or clause-consumption evidence. A stale advice binding, missing/extra ID, unsupported disposition, unsafe path, or changed evidence fails before `mark-applied` mutates anything.
 
 ## Index Fields
 

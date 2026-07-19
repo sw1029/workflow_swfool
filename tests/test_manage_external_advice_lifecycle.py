@@ -423,6 +423,34 @@ def test_workflow_directive_uses_one_generic_owner_record_without_parallel_secti
     assert "## Workflow Contract Revisions" not in normalized
 
 
+def test_normalized_directive_block_preserves_semantic_continuation_fields(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = tmp_path / "normalized-block-advice.md"
+    source.write_text(
+        "# Advice\n\nCurrent workflow evidence is incomplete.\n\n"
+        "## Actionable Directives\n\n"
+        "- directive_id: WF-003\n"
+        "  directive_state: pending\n"
+        "  change_class: in_place_revision\n"
+        "  consumption_state: pending\n"
+        "  target_owner: task-doctor\n"
+        "  directive_text: Preserve the exact owner handoff.\n",
+        encoding="utf-8",
+    )
+
+    _intake(tmp_path, source)
+    event = json.loads(capsys.readouterr().out)["event"]
+    record = event["fields"]["directives"][0]
+
+    assert record["directive_id"] == "WF-003"
+    assert record["directive_text"] == "Preserve the exact owner handoff."
+    assert record["change_class"] == "in_place_revision"
+    assert record["consumption_state"] == "pending"
+    assert record["target_owner"] == "task-doctor"
+
+
 def test_document_local_contract_key_stays_raw_and_is_not_globalized(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

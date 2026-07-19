@@ -17,6 +17,7 @@ from .markdown_directive_contracts import (
     ANY_HEADING_RE,
     BRACKET_DECLARATION_RE,
     CONDITIONAL_METADATA_KEYS,
+    CONTINUATION_METADATA_RE,
     DIRECTIVE_METADATA_KEYS,
     DirectiveParseResult,
     EXPLICIT_ID_RE,
@@ -70,6 +71,19 @@ def _visible_lines(text: str) -> list[SourceLine]:
 
 def _metadata(line: SourceLine) -> tuple[str, str] | None:
     match = METADATA_RE.match(line.raw)
+    if not match:
+        return None
+    key = match.group("key").lower().replace("-", "_")
+    return key, _strip_markup(match.group("value"))
+
+
+def _block_metadata(line: SourceLine) -> tuple[str, str] | None:
+    """Parse a bullet field or its normalized indented continuation."""
+
+    parsed = _metadata(line)
+    if parsed is not None:
+        return parsed
+    match = CONTINUATION_METADATA_RE.match(line.raw)
     if not match:
         return None
     key = match.group("key").lower().replace("-", "_")
@@ -148,6 +162,7 @@ def _record(
     line_number: int,
     metadata: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    body = str((metadata or {}).get("directive_text") or body)
     values = {
         key: value
         for key, value in (metadata or {}).items()
@@ -284,7 +299,7 @@ def _explicit_block_records(
         for following in lines[index + 1 :]:
             if not following.cleaned:
                 continue
-            item = _metadata(following)
+            item = _block_metadata(following)
             if item and item[0] != "directive_id":
                 metadata[item[0]] = item[1]
                 continue

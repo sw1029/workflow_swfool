@@ -127,6 +127,11 @@ def available_goal_truth(context: dict[str, Any]) -> list[str]:
 
 
 def active_advice(context: dict[str, Any]) -> list[dict[str, Any]]:
+    normalized = deep_get(context, "external_advice", "normalized_packet")
+    if isinstance(normalized, dict) and isinstance(normalized.get("used_advice"), list):
+        return [
+            dict(item) for item in normalized["used_advice"] if isinstance(item, dict)
+        ]
     value = deep_get(context, "external_advice", "active_files")
     if isinstance(value, list):
         workspace = context.get("workspace")

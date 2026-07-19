@@ -49,6 +49,7 @@ from manage_agent_authority.projection_reservations import (  # noqa: E402
 
 from .authority_grant import verify_materialized_grant  # noqa: E402
 from .authority_materialization import normalize_materialization  # noqa: E402
+from .authority_reservation_window import verify_reservation_recipe  # noqa: E402
 
 
 T = TypeVar("T")
@@ -108,6 +109,7 @@ def _manifest_reasons(request: dict[str, Any], manifest: dict[str, Any]) -> list
 
 def normalize_authority(
     owner_skill: str, effect_class: str, plan_binding: dict[str, str], raw: Any,
+    *, plan_schema_version: int = 1,
 ) -> dict[str, Any]:
     require(isinstance(raw, dict), "invalid_plan", "authority must be an object")
     applicability = raw.get("applicability")
@@ -162,7 +164,10 @@ def normalize_authority(
     reasons = _manifest_reasons(request, manifest)
     require(not reasons, "invalid_authority_contract",
             f"authority request conflicts with manifest: {sorted(reasons)}")
-    materialization = normalize_materialization(raw["materialization"], request)
+    materialization = normalize_materialization(
+        raw["materialization"], request,
+        plan_schema_version=plan_schema_version,
+    )
     return {
         "applicability": "required", "request": request,
         "request_sha256": object_sha256(request),
@@ -244,11 +249,7 @@ def _reservation_scope(
         lambda: load_grant_artifact(root, materialization["grant_spec"]["grant_id"]),
     )
     verify_materialized_grant(grant, authority)
-    require(reservation["idempotency_key"]
-            == materialization["reservation"]["idempotency_key"]
-            and reservation["reserved_at"]
-            == _iso_time(materialization["reservation"]["reserved_at"]),
-            "authority_binding_mismatch", "reservation materialization recipe mismatch")
+    verify_reservation_recipe(reservation, materialization["reservation"])
     return reservation, uses, normalized
 
 

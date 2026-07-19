@@ -13,6 +13,7 @@ from record_agent_work_log.write import write_log
 
 from .application_publication import publish_mark_applied
 from .common import now_iso, rel_path, sha256_file, stamp
+from .disposition_compiler import compile_dispositions
 from .directive_dispositions import validate_directive_dispositions
 from .storage import (
     advice_root,
@@ -118,11 +119,15 @@ def write_past_advice_log(
 def cmd_mark_applied(args: argparse.Namespace) -> None:
     root = Path(args.root).resolve()
     item = find_item(root, args.advice_id)
-    dispositions = validate_directive_dispositions(
-        root,
-        item,
-        args.directive_dispositions_json,
-    )
+    decision_map = getattr(args, "decision_map", None)
+    if decision_map is not None:
+        dispositions = compile_dispositions(root, item, decision_map)["rows"]
+    else:
+        dispositions = validate_directive_dispositions(
+            root,
+            item,
+            args.directive_dispositions_json,
+        )
     result = publish_mark_applied(
         root,
         item,

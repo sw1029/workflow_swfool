@@ -1,4 +1,4 @@
 interface:
   display_name: "Orchestrate Task Cycle"
-  short_description: "Run governed cycles with routing gates"
-  default_prompt: "Use $orchestrate-task-cycle to run one governed repository task cycle with configured routing, source-separated evidence, finalization-receipt gates, and Korean reporting."
+  short_description: "Run governed cycles with compact packets"
+  default_prompt: "Use $orchestrate-task-cycle to advance a governed cycle with script-built packets, bounded semantic judgments, validated receipts, and explicit stop boundaries."

@@ -3,6 +3,7 @@
 ## Contents
 
 - Ownership and user-interaction invariant
+- Compiler-first preparation and bounded advance
 - Exact owner-plan and workflow-plan contract
 - Declared authorization and consolidated review
 - Authority materialization bridge
@@ -31,6 +32,73 @@ Keep truth ownership separate:
 Never replace exact operation authority with a wildcard, standing lease, broad
 composition, or reusable approval budget. Approval, goal ratification, risk/cost
 acceptance, external input, and design selection remain separate typed decisions.
+
+## Compiler-first preparation and bounded advance
+
+Prefer the task-doctor compiler surface over hand-authoring the full workflow plan.
+The compact intent contains semantic choices and content-addressed owner-plan or
+compiled-operation bindings; the compiler derives request digests, operation order,
+dependency edges, materialization identities, exact review scope, and the normalized
+workflow-plan envelope. It remains non-authoritative: compilation never creates a
+user decision, source approval, grant, reservation, owner result, or settlement.
+The `compiled_operation` field accepts an inline compilation, an exact
+`{ref, sha256}` binding, or the unmodified
+`{ref, sha256, compilation_fingerprint}` receipt returned by authority
+`compile-operation --publish`; the latter also cross-checks the published object's
+internal fingerprint.
+
+Use the package entry point directly or route it through the orchestrator's
+`workflow task-doctor` launcher. The representative sequence is:
+
+```bash
+python3 -m task_doctor_workflow_lib compile-intent \
+  --root . --intent compact-intent.json --at '<rfc3339>'
+python3 -m task_doctor_workflow_lib prepare-intent \
+  --root . --intent compact-intent.json --at '<rfc3339>'
+```
+
+`compile-intent` is read-only. `prepare-intent` publishes either one immutable
+workflow plan when every exact decision source already exists, or one immutable,
+content-addressed consolidated review containing only uncovered operations. Compact
+output is the default; use `--detail full` only for diagnostics. Replaying identical
+inputs returns the same review or plan identity instead of rotating IDs.
+
+After the actual user decision has been represented by pre-existing closed authority
+source-approval snapshots, accept the exact review binding:
+
+```bash
+python3 -m task_doctor_workflow_lib accept-review \
+  --root . --review-ref '<workspace-ref>' --review-sha256 '<sha256>' \
+  --decision review-decision.json
+```
+
+The decision file is a binding to an actual decision and its typed source snapshots;
+it is not permission by itself. The command must reject a missing snapshot, an
+uncovered or extra operation, a stale review, a pre-decision source, a source whose
+evidence/request/grant/lineage scope differs, or any attempt to manufacture approval
+from the review. The accepted plan uses schema-v2 reservation windows. It fixes the
+post-decision source/grant/evaluation identities while leaving `reserved_at` to the
+later dependency-ready instant. Legacy schema-v1 plans retain their exact planned
+`reserved_at` and remain readable without rewriting.
+
+For an existing journal, derive a small resolution bundle and advance only across
+deterministic system-owned transitions:
+
+```bash
+python3 -m task_doctor_workflow_lib build-resolution-bundle \
+  --root . --workflow-id '<workflow-id>' --publish
+python3 -m task_doctor_workflow_lib advance \
+  --root . --workflow-id '<workflow-id>' --max-steps 8
+python3 -m task_doctor_workflow_lib advance \
+  --root . --workflow-id '<workflow-id>' --max-steps 8 --apply --at '<rfc3339>'
+```
+
+Dry-run is the default. Mutating advance requires explicit `--apply` and `--at`, uses
+the already verified source snapshot, registers/evaluates the exact grant, and
+reserves only a dependency-ready governed operation. It must stop on owner/model
+judgment, genuine approval, goal truth, external input, risk/cost, design selection,
+effect settlement, stale evidence, or an exhausted step budget. A repeated state
+fingerprint is `no_progress_replay`, not an excuse to regenerate JSON or ask again.
 
 ## Exact owner-plan and workflow-plan contract
 
@@ -64,7 +132,7 @@ they are explanatory, not wildcards.
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "execution_mode": "execute_with_declared_authorization",
   "complete_effect_inventory": true,
   "max_user_approval_interactions": 0,
@@ -136,7 +204,8 @@ they are explanatory, not wildcards.
             "idempotency_key": "grant-key-id"
           },
           "reservation": {
-            "reserved_at": "<rfc3339>",
+            "not_before": "<rfc3339>",
+            "expires_at": "<rfc3339>",
             "idempotency_key": "reservation-key-id"
           }
         }

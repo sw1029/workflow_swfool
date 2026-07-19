@@ -93,6 +93,7 @@ REQUIRED_WORKFLOW_OPERATIONS = {
         "inspect_cycle",
         "materialize_terminal_wait_baseline_subject",
         "mutate_task_topology",
+        "publish_compiled_stage_projection",
         "publish_terminal_wait_baseline_binding",
         "validate_exact_subject_premise",
         "validate_selection_decision_receipt",
@@ -115,6 +116,7 @@ REQUIRED_WORKFLOW_OPERATIONS = {
         "coordinate_task_doctor_workflow",
         "diagnose_task",
         "mutate_task_scope",
+        "prepare_task_transition_plan",
     },
     "task-md-agent-governance": {
         "advance_task_state",
@@ -142,10 +144,12 @@ PROJECTION_ONLY_MUTATIONS = {
     ("manage-external-advice", "prepare_advice_intake_plan"),
     ("manage-task-state-index", "prepare_task_state_transition_plan"),
     ("orchestrate-task-cycle", "materialize_terminal_wait_baseline_subject"),
+    ("orchestrate-task-cycle", "publish_compiled_stage_projection"),
     ("record-agent-work-log", "publish_agent_work_log"),
     ("record-visible-increment", "publish_visible_increment"),
     ("render-cycle-dashboard", "publish_cycle_dashboard"),
     ("task-doctor", "coordinate_task_doctor_workflow"),
+    ("task-doctor", "prepare_task_transition_plan"),
     ("validate-task-completion", "publish_validation_projection"),
 }
 

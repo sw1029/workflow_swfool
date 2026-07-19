@@ -18,6 +18,9 @@ from .task_transition_plan import validate_task_transition_plan
 
 TRANSACTION_ROOT = PurePosixPath(".task/task_doctor/transitions")
 PLAN_ROOT = PurePosixPath(".task/task_doctor/transition-plans")
+REVIEW_ROOT = PurePosixPath(".task/task_doctor/reviews")
+WORKFLOW_PLAN_ROOT = PurePosixPath(".task/task_doctor/workflow-plans")
+BUNDLE_ROOT = PurePosixPath(".task/task_doctor/bundles")
 
 
 def _canonical_ref(value: str, label: str) -> PurePosixPath:
@@ -147,7 +150,9 @@ def _digest(payload: bytes) -> str:
 def _owned_relative(ref: str) -> PurePosixPath:
     relative = _canonical_ref(ref, "owned artifact ref")
     transaction_artifact = relative.parts[:3] == TRANSACTION_ROOT.parts
-    plan_artifact = relative.parent == PLAN_ROOT
+    plan_artifact = relative.parent in {
+        PLAN_ROOT, REVIEW_ROOT, WORKFLOW_PLAN_ROOT, BUNDLE_ROOT,
+    }
     require(transaction_artifact or plan_artifact, "invalid_owner_path",
             "task transition artifact escapes its owned roots")
     return relative

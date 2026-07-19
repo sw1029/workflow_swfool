@@ -38,6 +38,10 @@ from manage_agent_authority.lifecycle import (  # noqa: E402
     verify_reservation_with_recovery,
 )
 from manage_agent_authority.operations import load_operation  # noqa: E402
+from manage_agent_authority.operation_compiler import compile_operation  # noqa: E402
+from manage_agent_authority.operation_publication import (  # noqa: E402
+    publish_compilation,
+)
 from manage_task_state_index.state.transition_plan_contract import (  # type: ignore[import-not-found]  # noqa: E402
     validate_transition_plan,
 )
@@ -72,6 +76,20 @@ from task_doctor_workflow_lib.task_transition_store import (  # noqa: E402
 from task_doctor_workflow_lib import task_transition_transaction  # noqa: E402
 from task_doctor_workflow_lib import task_transition_store  # noqa: E402
 from task_doctor_workflow_lib import journal as journal_store  # noqa: E402
+from task_doctor_workflow_lib import cli as task_doctor_cli  # noqa: E402
+from task_doctor_workflow_lib.authority_reservation_window import (  # noqa: E402
+    verify_reservation_recipe,
+)
+from task_doctor_workflow_lib.intent_compiler import (  # noqa: E402
+    accept_review,
+    compile_intent,
+    publish_review,
+)
+from task_doctor_workflow_lib.workflow_advance import (  # noqa: E402
+    advance_workflow,
+    build_resolution_bundle,
+    publish_resolution_bundle,
+)
 
 
 AT = "2026-07-18T10:00:00+09:00"
@@ -2876,6 +2894,443 @@ def test_prior_no_effect_receipt_survives_later_unrelated_task_publication(
     assert workflow.status(tmp_path, scope_done["workflow_id"])[
         "classification"
     ] == "plan_changed"
+
+
+def _compact_advice_operation(
+    root: Path, workspace_state: dict[str, Any], suffix: str,
+) -> dict[str, Any]:
+    operation, approval, _runtime = _authority_operation(
+        root, workspace_state, suffix,
+    )
+    request = operation["authority"]["request"]
+    compilation = compile_operation(
+        root,
+        {
+            "skill_id": request["skill_id"],
+            "operation_id": request["operation_id"],
+            "subject": {
+                "ref": request["subject"]["ref"],
+                "revision": request["subject"]["revision"],
+            },
+            "scope": {
+                "cycle_id": request["cycle_id"],
+                "task_id": request["task_id"],
+                "pack_id": request["pack_id"],
+            },
+            "actor_rank": request["actor_rank"],
+            "classification": {
+                "effect_class": request["effect_class"],
+                "data_class": request["data_class"],
+                "subject_kind": request["subject"]["kind"],
+            },
+            "context": {
+                "external_input_status": "not_required",
+                "goal_truth_status": "aligned",
+                "risk_acceptance_status": "not_required",
+                "design_selection_status": "not_required",
+            },
+            "session_ceiling": {
+                "capabilities": request["required_capabilities"],
+                "risk_ceiling": "R3",
+                "mutation_classes": ["local_mutation"],
+                "evidence_id": f"compact-session-{suffix}",
+            },
+            "goal_autonomy_envelope": {
+                "envelope_id": f"compact-envelope-{suffix}",
+                "capabilities": request["required_capabilities"],
+                "risk_ceiling": "R3",
+                "decision_classes": [request["decision_class"]],
+                "subjects": [request["subject"]["digest"]],
+                "operations": [":".join(request[key] for key in (
+                    "skill_id", "skill_version", "operation_id", "operation_version"
+                ))],
+                "source_ref": workspace_state["goal"]["ref"],
+            },
+        },
+        compiled_at=AT,
+        skills_root=SKILLS_ROOT,
+    )
+    old_grant = operation["authority"]["materialization"]["grant_spec"]["grant_id"]
+    for path in (
+        root / ".task/authorization/grants" / f"{old_grant}.json",
+        root / ".task/authorization/state/grants" / f"{old_grant}.json",
+        root / approval["ref"],
+        Path(f"{root / approval['ref']}.json"),
+    ):
+        path.unlink(missing_ok=True)
+    return {
+        "operation_id": suffix,
+        "compiled_operation": compilation,
+        "effect_summary": f"Apply compact advice effect {suffix}.",
+        "required": True,
+    }
+
+
+def _compact_intent(
+    workspace_state: dict[str, Any], operations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "intent_kind": "task_doctor_compact_intent",
+        "policy_snapshot": workspace_state["policy"],
+        "expires_at": EXPIRY,
+        "git_finalization": "deferred",
+        "operations": operations,
+        "reporting": {"detail": "concise", "language": "ko"},
+    }
+
+
+def _review_source(
+    root: Path, review: dict[str, Any], operation_id: str, *,
+    not_before: str, evidence_id: str,
+) -> dict[str, str]:
+    row = next(
+        item for item in review["operations"]
+        if item["operation_id"] == operation_id
+    )
+    request = row["compiled_operation"]["request"]
+    identity = row["materialization_identity"]
+    body = {
+        "schema_version": 2,
+        "artifact_kind": "authority_source_approval",
+        "approval_id": f"approval-{operation_id}-{evidence_id}",
+        "source_kind": "explicit_user_instruction",
+        "source_rank": "S3",
+        "decision_type": "grant_authority",
+        "capabilities": sorted({"authority.grant.issue", *request["required_capabilities"]}),
+        "subjects": [request["subject"]],
+        "operations": [{key: request[key] for key in (
+            "skill_id", "skill_version", "operation_id", "operation_version"
+        )}],
+        "risk_ceiling": request["risk_tier"],
+        "decision_classes": [request["decision_class"]],
+        "cardinalities": ["single_use"],
+        "max_uses": 1,
+        "grant_ids": [identity["grant_id"]],
+        "request_digests": [row["compiled_operation"]["request_sha256"]],
+        "lineage_ids": [identity["lineage_id"]],
+        "delegation_binding": None,
+        "not_before": not_before,
+        "expires_at": EXPIRY,
+        "evidence_id": evidence_id,
+        "integrity_status": "verified",
+    }
+    source = _write_json(
+        root, f".task/authorization/review-source-{operation_id}-{evidence_id}.json",
+        body,
+    )
+    return snapshot_file(root, source["ref"], "source_approval")
+
+
+def test_compact_intent_review_replays_and_cannot_self_authorize(
+    tmp_path: Path,
+) -> None:
+    workspace_state = _workspace(tmp_path)
+    intent = _compact_intent(
+        workspace_state,
+        [_compact_advice_operation(tmp_path, workspace_state, "compact-one")],
+    )
+    compiled = compile_intent(tmp_path, intent, prepared_at=AT)
+    assert compiled["status"] == "awaiting_exact_approval"
+    assert compiled["uncovered_operations"] == ["compact-one"]
+    first = publish_review(tmp_path, compiled["review"])
+    second = publish_review(tmp_path, compiled["review"])
+    assert first["review_ref"] == second["review_ref"]
+    assert first["review_sha256"] == second["review_sha256"]
+    assert first["created"] is True and second["replayed"] is True
+
+    with pytest.raises(workflow.WorkflowError) as caught:
+        accept_review(
+            tmp_path, first["review_ref"], first["review_sha256"],
+            {
+                "schema_version": 1,
+                "decision_kind": "task_doctor_review_acceptance",
+                "review_id": compiled["review"]["review_id"],
+                "review_fingerprint": compiled["review"]["review_fingerprint"],
+                "decided_at": RESERVED_AT,
+                "evidence_id": "user-review-one",
+                "source_approvals": {"compact-one": {"approved": True}},
+            },
+        )
+    assert caught.value.code in {"invalid_intent", "invalid_review_decision"}
+
+
+def test_compact_intent_cli_hides_full_compiler_and_owner_plan_by_default(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    workspace_state = _workspace(tmp_path)
+    intent = _compact_intent(
+        workspace_state,
+        [_compact_advice_operation(tmp_path, workspace_state, "compact-cli")],
+    )
+    result = task_doctor_cli.main([
+        "compile-intent", "--root", str(tmp_path),
+        "--intent", json.dumps(intent), "--at", AT,
+    ])
+    payload = json.loads(capsys.readouterr().out)
+    assert result == 0
+    assert payload["status"] == "awaiting_exact_approval"
+    assert payload["uncovered_operations"] == ["compact-cli"]
+    assert "review" not in payload and "plan" not in payload
+    assert "compiled_operation" not in json.dumps(payload)
+
+
+def test_compact_intent_cli_rejects_non_scalar_git_finalization_cleanly(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    workspace_state = _workspace(tmp_path)
+    intent = _compact_intent(
+        workspace_state,
+        [_compact_advice_operation(tmp_path, workspace_state, "bad-git-value")],
+    )
+    intent["git_finalization"] = {"requested": False}
+
+    result = task_doctor_cli.main([
+        "compile-intent", "--root", str(tmp_path),
+        "--intent", json.dumps(intent), "--at", AT,
+    ])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert result == 2
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "invalid_intent"
+    assert "git_finalization" in payload["error"]["message"]
+
+
+def test_compact_intent_consumes_published_compilation_receipt_directly(
+    tmp_path: Path,
+) -> None:
+    workspace_state = _workspace(tmp_path)
+    operation = _compact_advice_operation(
+        tmp_path, workspace_state, "published-compiler",
+    )
+    receipt = publish_compilation(tmp_path, operation["compiled_operation"])
+    operation["compiled_operation"] = receipt
+    compiled = compile_intent(
+        tmp_path,
+        _compact_intent(workspace_state, [operation]),
+        prepared_at=AT,
+    )
+    assert compiled["status"] == "awaiting_exact_approval"
+    assert compiled["uncovered_operations"] == ["published-compiler"]
+
+    operation["compiled_operation"] = {
+        **receipt,
+        "compilation_fingerprint": "0" * 64,
+    }
+    with pytest.raises(workflow.WorkflowError, match="fingerprint mismatch"):
+        compile_intent(
+            tmp_path,
+            _compact_intent(workspace_state, [operation]),
+            prepared_at=AT,
+        )
+
+
+def test_prepare_task_transition_cli_publishes_existing_builder_contract(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    prospective = tmp_path / ".task/task_doctor/prospective/cli-transition.md"
+    prospective.parent.mkdir(parents=True)
+    prospective.write_text("# Task\n", encoding="utf-8")
+    result = task_doctor_cli.main([
+        "prepare-task-transition", "--root", str(tmp_path),
+        "--transition-id", "cli-transition",
+        "--transition-kind", "initial_task",
+        "--prospective-ref",
+        ".task/task_doctor/prospective/cli-transition.md",
+    ])
+    payload = json.loads(capsys.readouterr().out)
+    assert result == 0
+    assert payload["plan"]["plan_kind"] == "task_transition_plan"
+    assert payload["plan_ref"].endswith("/cli-transition.json")
+
+
+def test_mixed_coverage_reviews_only_uncovered_operations(tmp_path: Path) -> None:
+    workspace_state = _workspace(tmp_path)
+    operations = [
+        _compact_advice_operation(tmp_path, workspace_state, "covered"),
+        _compact_advice_operation(tmp_path, workspace_state, "uncovered"),
+    ]
+    first = compile_intent(
+        tmp_path, _compact_intent(workspace_state, operations), prepared_at=AT
+    )
+    covered_source = _review_source(
+        tmp_path, first["review"], "covered", not_before=AT,
+        evidence_id="existing-user-decision",
+    )
+    operations[0]["source_approval"] = covered_source
+    intent = _compact_intent(workspace_state, operations)
+    compiled = compile_intent(tmp_path, intent, prepared_at=AT)
+    replay = compile_intent(tmp_path, intent, prepared_at=AT)
+    assert compiled == replay
+    assert compiled["uncovered_operations"] == ["uncovered"]
+    assert [
+        item["operation_id"]
+        for item in compiled["review"]["approval_scope"]["operations"]
+    ] == ["uncovered"]
+
+
+def test_accept_review_emits_v2_plan_after_typed_post_review_source(
+    tmp_path: Path,
+) -> None:
+    workspace_state = _workspace(tmp_path)
+    intent = _compact_intent(
+        workspace_state,
+        [_compact_advice_operation(tmp_path, workspace_state, "accepted")],
+    )
+    compiled = compile_intent(tmp_path, intent, prepared_at=AT)
+    published = publish_review(tmp_path, compiled["review"])
+    source = _review_source(
+        tmp_path, compiled["review"], "accepted", not_before=RESERVED_AT,
+        evidence_id=(
+            "user-review-accepted@" + compiled["review"]["review_fingerprint"]
+        ),
+    )
+    with pytest.raises(workflow.WorkflowError) as stale:
+        accept_review(
+            tmp_path, published["review_ref"], published["review_sha256"],
+            {
+                "schema_version": 1,
+                "decision_kind": "task_doctor_review_acceptance",
+                "review_id": compiled["review"]["review_id"],
+                "review_fingerprint": "0" * 64,
+                "decided_at": RESERVED_AT,
+                "evidence_id": "user-review-accepted",
+                "source_approvals": {"accepted": source},
+            },
+        )
+    assert stale.value.code == "invalid_review_decision"
+    accepted = accept_review(
+        tmp_path, published["review_ref"], published["review_sha256"],
+        {
+            "schema_version": 1,
+            "decision_kind": "task_doctor_review_acceptance",
+            "review_id": compiled["review"]["review_id"],
+            "review_fingerprint": compiled["review"]["review_fingerprint"],
+            "decided_at": RESERVED_AT,
+            "evidence_id": "user-review-accepted",
+            "source_approvals": {"accepted": source},
+        },
+    )
+    plan = accepted["plan"]
+    assert plan["schema_version"] == 2
+    materialization = plan["operations"][0]["authority"]["materialization"]
+    assert materialization["evaluated_at"] == parse_time(
+        RESERVED_AT, "decided_at"
+    ).isoformat()
+    assert materialization["reservation"] == {
+        "not_before": parse_time(RESERVED_AT, "not_before").isoformat(),
+        "expires_at": parse_time(EXPIRY, "expires_at").isoformat(),
+        "idempotency_key": materialization["reservation"]["idempotency_key"],
+    }
+    verify_reservation_recipe(
+        {
+            "reserved_at": SETTLED_AT,
+            "idempotency_key": materialization["reservation"]["idempotency_key"],
+        },
+        materialization["reservation"],
+    )
+    with pytest.raises(workflow.WorkflowError, match="outside"):
+        verify_reservation_recipe(
+            {
+                "reserved_at": AT,
+                "idempotency_key": materialization["reservation"]["idempotency_key"],
+            },
+            materialization["reservation"],
+        )
+    prepared = workflow.prepare(tmp_path, tmp_path / accepted["plan_ref"])
+    advanced = advance_workflow(
+        tmp_path, prepared["workflow_id"], max_steps=8,
+        apply_changes=True, at=SETTLED_AT,
+    )
+    assert advanced["stop_reason"] == "awaiting_owner_result"
+    jit_steps = [item["jit_authority"] for item in advanced["steps"]
+                 if "jit_authority" in item]
+    assert len(jit_steps) == 1
+    assert jit_steps[0]["reserved_at"] == parse_time(
+        SETTLED_AT, "reserved_at"
+    ).isoformat()
+
+
+def test_accept_review_rehashes_frozen_owner_plan_before_publication(
+    tmp_path: Path,
+) -> None:
+    workspace_state = _workspace(tmp_path)
+    intent = _compact_intent(
+        workspace_state,
+        [_compact_advice_operation(tmp_path, workspace_state, "stale-review")],
+    )
+    compiled = compile_intent(tmp_path, intent, prepared_at=AT)
+    published = publish_review(tmp_path, compiled["review"])
+    source = _review_source(
+        tmp_path, compiled["review"], "stale-review", not_before=RESERVED_AT,
+        evidence_id=(
+            "user-review-stale@" + compiled["review"]["review_fingerprint"]
+        ),
+    )
+    plan_ref = compiled["review"]["operations"][0]["plan_binding"]["ref"]
+    (tmp_path / plan_ref).write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(workflow.WorkflowError) as stale:
+        accept_review(
+            tmp_path, published["review_ref"], published["review_sha256"],
+            {
+                "schema_version": 1,
+                "decision_kind": "task_doctor_review_acceptance",
+                "review_id": compiled["review"]["review_id"],
+                "review_fingerprint": compiled["review"]["review_fingerprint"],
+                "decided_at": RESERVED_AT,
+                "evidence_id": "user-review-stale",
+                "source_approvals": {"stale-review": source},
+            },
+        )
+    assert stale.value.code == "invalid_intent"
+    assert not (tmp_path / ".task/task_doctor/workflow-plans").exists()
+
+
+def test_legacy_v1_materialization_stays_exact(tmp_path: Path) -> None:
+    body, _runtime = _plan(tmp_path)
+    normalized = workflow.normalize_plan(body)
+    assert normalized["schema_version"] == 1
+    assert normalized["operations"][0]["authority"]["materialization"][
+        "reservation"
+    ]["reserved_at"] == parse_time(RESERVED_AT, "reserved_at").isoformat()
+
+
+def test_resolution_builder_and_bounded_advance_use_one_exact_review(
+    tmp_path: Path,
+) -> None:
+    body, runtime = _plan(tmp_path)
+    prepared = _prepare(tmp_path, body)
+    reservations = {
+        operation_id: _materialize(tmp_path, item)
+        for operation_id, item in runtime.items()
+    }
+    bundle = build_resolution_bundle(
+        tmp_path, prepared["workflow_id"]
+    )
+    assert bundle["from_classification"] == "already_covered"
+    assert bundle["user_interaction"] is False
+    assert bundle["resolutions"][0]["evidence_ref"] == reservations["op-1"]["ref"]
+    first = publish_resolution_bundle(tmp_path, bundle)
+    second = publish_resolution_bundle(tmp_path, bundle)
+    assert first["bundle_ref"] == second["bundle_ref"]
+    assert first["created"] is True and second["replayed"] is True
+
+    advanced = advance_workflow(
+        tmp_path, prepared["workflow_id"], max_steps=8,
+        apply_changes=True, at=RESERVED_AT,
+    )
+    assert advanced["stop_reason"] == "awaiting_owner_result"
+    assert len(advanced["steps"]) == 2
+    current = workflow.status(tmp_path, prepared["workflow_id"])
+    assert current["approval_interactions"]["used"] == 0
+    before_revision = current["revision"]
+    routed = advance_workflow(
+        tmp_path, prepared["workflow_id"], apply_changes=False
+    )
+    assert routed["dry_run"] is True
+    assert workflow.status(tmp_path, prepared["workflow_id"])["revision"] == before_revision
 
 
 def test_helper_modules_and_definitions_have_hard_size_budgets() -> None:

@@ -23,6 +23,10 @@ METADATA_RE = re.compile(
     r"^\s*[-*]\s+(?P<key>[A-Za-z][A-Za-z0-9_.-]{1,95})\s*:\s*"
     r"(?P<value>.+?)\s*$"
 )
+CONTINUATION_METADATA_RE = re.compile(
+    r"^\s{2,}(?P<key>[A-Za-z][A-Za-z0-9_.-]{1,95})\s*:\s*"
+    r"(?P<value>.+?)\s*$"
+)
 INLINE_DECLARATION_RE = re.compile(
     rf"^\s*(?:[-*]\s+)?`?(?P<id>{CANONICAL_ID_PATTERN})`?\s*"
     r"(?:[:：]|\s+[—–-]\s+)\s*(?P<body>.+?)\s*$"
@@ -97,6 +101,7 @@ __all__ = [
     "CANONICAL_ID_SEARCH_RE",
     "BRACKET_DECLARATION_RE",
     "CONDITIONAL_METADATA_KEYS",
+    "CONTINUATION_METADATA_RE",
     "DIRECTIVE_METADATA_KEYS",
     "DirectiveParseResult",
     "EXPLICIT_ID_RE",

@@ -50,6 +50,41 @@ Route unsupplyable external input to a local-data alternative, descope, or an ex
 
 ## Deterministic workflow
 
+### Compile mechanical fields first
+
+Prefer the non-authoritative operation compiler whenever a caller has a compact semantic intent. It derives the manifest floor, exact subject binding, IDs, request, and evaluation context, then revalidates those closed inputs through the existing evaluator.
+
+```bash
+python3 -m manage_agent_authority authority compile-operation \
+  --root . --seed operation-seed.json --at 2026-01-01T00:00:00Z --publish
+
+python3 -m manage_agent_authority authority evaluate --root . \
+  --compiled-operation compiled-operation.json --at 2026-01-01T00:00:00Z
+```
+
+Without `--publish`, the command preserves the legacy full-JSON stdout result. With `--publish`, it writes that same non-authoritative compilation once under its content-addressed workspace path and returns only `{ref, sha256, compilation_fingerprint}`; pass the referenced file to authority consumers, or pass the compact receipt directly to a task-doctor intent. Treat either form as preparation only. It cannot create a source approval, grant, decision, reservation, or settlement, and it cannot lower an operation manifest. Reuse the same compilation only while its subject and manifest bindings still rehash exactly. Use hand-authored full request/context JSON only for legacy compatibility or contract diagnostics.
+
+The required seed shape is closed and intentionally separates derived request facts
+from asserted ceilings:
+
+- operation: `skill_id`, `operation_id`, optional matching versions;
+- subject/scope: `subject={ref,revision[,kind]}` and
+  `scope={cycle_id,task_id,pack_id}` with explicit nulls where inapplicable;
+- decision axes: `context={external_input_status,goal_truth_status,
+  risk_acceptance_status,design_selection_status}` plus only the corresponding
+  evidence refs when resolved;
+- actual session assertion: `session_ceiling={capabilities,risk_ceiling,
+  mutation_classes,evidence_id}`;
+- actual goal assertion: `goal_autonomy_envelope={envelope_id,capabilities,
+  risk_ceiling,decision_classes,subjects,operations,source_ref}`.
+
+Read the selected owner's `authority.operations.json` for the exact capability,
+operation identity, manifest floors, and allowed enum choices. Hash the current
+subject for `subjects`; do not copy request requirements into either ceiling unless
+the active session and goal evidence independently establish them. Optional seed
+keys cover actor rank, intent/cardinality/use/reservation budgets, upward-only
+classification, and composition receipt.
+
 1. Resolve the workspace and current ceiling.
    - Read current instructions and tool/sandbox permissions first.
    - Read `.agent_goal/final_goal.md`, `.agent_goal/conventions.md`, `.agent_goal/agent_authority.md`, and relevant goal theory/architecture when present.

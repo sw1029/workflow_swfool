@@ -34,6 +34,10 @@ from .contracts import (
     ROOT_CAUSE_LEDGER_REL_PATH,
     SENSITIVE_PATTERNS,
 )
+from .disposition_compiler import (
+    cmd_compile_dispositions,
+    cmd_render_disposition_template,
+)
 from .intake import cmd_init, cmd_intake, load_source
 from .intake_plan import apply_intake_plan, build_intake_plan, publish_intake_plan
 from .lifecycle import (
@@ -119,6 +123,25 @@ def build_parser() -> argparse.ArgumentParser:
     packet.add_argument("--format", choices=("markdown", "json"), default="markdown")
     packet.set_defaults(func=cmd_render_packet)
 
+    disposition_template = sub.add_parser(
+        "render-disposition-template",
+        help="Render a fillable decision template for actionable directives.",
+    )
+    disposition_template.add_argument("--advice-id", required=True)
+    disposition_template.set_defaults(func=cmd_render_disposition_template)
+
+    compile_disposition = sub.add_parser(
+        "compile-dispositions",
+        help="Compile a compact directive decision map and derive evidence digests.",
+    )
+    compile_disposition.add_argument("--advice-id", required=True)
+    compile_disposition.add_argument(
+        "--decision-map",
+        required=True,
+        help="JSON text, '-', or a regular file keyed by directive ID.",
+    )
+    compile_disposition.set_defaults(func=cmd_compile_dispositions)
+
     applied = sub.add_parser(
         "mark-applied",
         help="Move active advice to applied and write a past_advice log.",
@@ -129,10 +152,14 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Path, ID, or concise evidence proving application/retirement.",
     )
-    applied.add_argument(
+    disposition_input = applied.add_mutually_exclusive_group(required=True)
+    disposition_input.add_argument(
         "--directive-dispositions-json",
-        required=True,
         help="JSON text or path covering every directive with disposition, evidence_ref, and evidence_sha256.",
+    )
+    disposition_input.add_argument(
+        "--decision-map",
+        help="Compact decision map; evidence SHA-256 values are derived locally.",
     )
     applied.add_argument("--note", default="")
     applied.set_defaults(func=cmd_mark_applied)

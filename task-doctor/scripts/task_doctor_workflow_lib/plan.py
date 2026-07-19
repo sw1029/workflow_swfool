@@ -30,7 +30,9 @@ ROLE_BY_OPERATION = {
 }
 
 
-def _header(raw: dict[str, Any]) -> tuple[str, int, list[str], list[str], str]:
+def _header(
+    raw: dict[str, Any],
+) -> tuple[int, str, int, list[str], list[str], str]:
     expect_keys(
         raw,
         {
@@ -42,8 +44,9 @@ def _header(raw: dict[str, Any]) -> tuple[str, int, list[str], list[str], str]:
         {"authorization_basis", "reporting"},
         "workflow plan",
     )
-    require(raw["schema_version"] == SCHEMA_VERSION, "invalid_plan",
-            f"schema_version must be {SCHEMA_VERSION}")
+    plan_schema_version = raw["schema_version"]
+    require(plan_schema_version in {SCHEMA_VERSION, 2}, "invalid_plan",
+            "schema_version must be 1 or 2")
     mode = raw["execution_mode"]
     require(mode in MODES, "invalid_plan", f"unsupported execution_mode: {mode}")
     require(raw["complete_effect_inventory"] is True, "plan_incomplete",
@@ -69,10 +72,12 @@ def _header(raw: dict[str, Any]) -> tuple[str, int, list[str], list[str], str]:
     git_state = raw["git_finalization"]
     require(git_state in GIT_STATES, "invalid_plan",
             f"unsupported git_finalization: {git_state}")
-    return mode, maximum, authorized, excluded, git_state
+    return plan_schema_version, mode, maximum, authorized, excluded, git_state
 
 
-def _operation(item: Any, index: int, mode: str) -> dict[str, Any]:
+def _operation(
+    item: Any, index: int, mode: str, plan_schema_version: int,
+) -> dict[str, Any]:
     require(isinstance(item, dict), "invalid_plan",
             f"operations[{index}] must be an object")
     expect_keys(
@@ -117,7 +122,8 @@ def _operation(item: Any, index: int, mode: str) -> dict[str, Any]:
     validate_nonempty(plan_binding["ref"], f"{operation_id}.plan_binding.ref")
     validate_hex(plan_binding["sha256"], f"{operation_id}.plan_binding.sha256")
     normalized_authority = normalize_authority(
-        owner.removeprefix("$"), effect_class, plan_binding, item["authority"]
+        owner.removeprefix("$"), effect_class, plan_binding, item["authority"],
+        plan_schema_version=plan_schema_version,
     )
     authority_free = normalized_authority["applicability"] == "none"
     expected_resolution = (
@@ -322,11 +328,18 @@ def _basis(raw: dict[str, Any], mode: str, effects: set[str], authorized: list[s
 
 def normalize_plan(raw: Any) -> dict[str, Any]:
     require(isinstance(raw, dict), "invalid_plan", "workflow plan must be an object")
-    mode, maximum, authorized, excluded, git_state = _header(raw)
+    (
+        plan_schema_version,
+        mode,
+        maximum,
+        authorized,
+        excluded,
+        git_state,
+    ) = _header(raw)
     operations_raw = raw["operations"]
     require(isinstance(operations_raw, list) and bool(operations_raw), "invalid_plan",
             "operations must be a non-empty list")
-    operations = [_operation(item, index, mode)
+    operations = [_operation(item, index, mode, plan_schema_version)
                   for index, item in enumerate(operations_raw)]
     _validate_operations(operations, excluded)
     _validate_index(raw, operations)
@@ -363,7 +376,7 @@ def normalize_plan(raw: Any) -> dict[str, Any]:
             "task-doctor default reporting must be concise")
     validate_nonempty(reporting["language"], "reporting.language")
     result = {
-        "kind": PLAN_KIND, "schema_version": SCHEMA_VERSION,
+        "kind": PLAN_KIND, "schema_version": plan_schema_version,
         "execution_mode": mode, "complete_effect_inventory": True,
         "max_user_approval_interactions": maximum,
         "authorized_local_effects": sorted(set(authorized)),

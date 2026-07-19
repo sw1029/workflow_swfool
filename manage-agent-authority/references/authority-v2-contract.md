@@ -15,6 +15,7 @@
 - [Workflow status and resolution](#workflow-status-and-resolution)
 - [Transition and revocation](#transition-and-revocation)
 - [Typed decisions](#typed-decisions)
+- [Operation compilation](#operation-compilation)
 - [CLI surface](#cli-surface)
 - [Migration](#migration)
 - [Required invariants](#required-invariants)
@@ -25,6 +26,7 @@ Use this workspace-local layout:
 
 ```text
 .task/authorization/
+├── operation_compilations/ immutable non-authoritative preparation artifacts
 ├── policy_snapshots/       immutable content-addressed policy bytes and metadata
 ├── source_snapshots/       immutable content-addressed approval/evidence bytes
 ├── grants/                 immutable closed grant contracts
@@ -412,6 +414,16 @@ Keep these questions independent:
 | Is required input available? | Input availability/supply evidence | Approval |
 | Which bounded design option is selected? | Design decision/autonomy rule | Executor convenience |
 
+## Operation compilation
+
+`compile-operation` accepts a closed semantic seed and emits an `authority_operation_compilation` schema-v1. The seed selects one manifest operation, an exact workspace subject, scope IDs, actor/cardinality/budget, the four independent decision axes, a session ceiling, a goal-autonomy envelope, and optional upward-only runtime classification.
+
+The compiler derives request/attempt/idempotency IDs, current subject and manifest digests, manifest-owned effect/data/decision/mutation/reversibility fields, request/context digests, provenance, and a compilation fingerprint. Identical seed, subject/manifest bytes, and explicit compile time must produce identical bytes.
+
+The default command emits the full object for compatibility. `--publish` immutably writes it to `.task/authorization/operation_compilations/operation_compilation-<compilation_fingerprint>.json` and emits the compact `{ref, sha256, compilation_fingerprint}` receipt. Exact replay returns the same receipt; different bytes at that content-addressed path fail closed. Publication does not call source, grant, decision, reservation, or settlement issuance.
+
+The result is `non_authoritative_compilation`: it never satisfies source approval, grant, reservation, or settlement. Seed-provided session and goal envelopes are asserted-untrusted narrowing inputs, not authority evidence; the compiler never expands them to fit a request. `evaluate` and `resolve` reopen the subject and manifest and run the independent request/context and authority validators before consuming it. Subject or manifest drift returns `recompile_required`; ambiguous manifest choices, malformed nested input, and any classification downgrade fail closed.
+
 ## CLI surface
 
 Invoke through:
@@ -423,6 +435,7 @@ PYTHONPATH="<skills-root>/manage-agent-authority/scripts" \
 
 Use:
 
+- `compile-operation` for mechanical request/context preparation;
 - `snapshot-policy`, `snapshot-source`;
 - `register-grant`, `delegate`, `compose`;
 - `evaluate`, `resolve`, `prepare-source-recovery`, `reserve`, `verify`, `consume`, `release`, `prepare-reconciliation-evidence`, `reconcile`;

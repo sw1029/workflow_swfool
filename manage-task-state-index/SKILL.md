@@ -62,6 +62,63 @@ For the complete event schema and link relationship names, read [index-schema.md
 
 ## Workflow
 
+Prefer compact lifecycle intent compilation before writing an event batch. Put only lifecycle actions, artifact refs, relationship intents, and the expected current index revision in the intent; let the script derive stable IDs, content digests, event rows, and replay identity.
+
+Minimal closed intent shape:
+
+```json
+{
+  "schema_version": 1,
+  "expected_index_revision": "current",
+  "actions": [
+    {
+      "action": "set_lifecycle",
+      "artifact_ref": "task.md",
+      "artifact_type": "task",
+      "identity": "current",
+      "status": "superseded",
+      "relationships": [
+        {
+          "rel": "superseded_by",
+          "target_ref": "task.md",
+          "target_type": "task",
+          "target_identity": "new"
+        }
+      ]
+    },
+    {
+      "action": "set_lifecycle",
+      "artifact_ref": "task.md",
+      "artifact_type": "task",
+      "identity": "new",
+      "status": "active",
+      "relationships": [
+        {
+          "rel": "supersedes",
+          "target_ref": "task.md",
+          "target_type": "task",
+          "target_identity": "current"
+        }
+      ]
+    }
+  ]
+}
+```
+
+`identity` is `auto`, `current`, or `new`. Each action is exactly
+`set_lifecycle`; optional fields are `note` and `relationships`. Relationship
+targets use the same exact artifact ref/type plus `auto|current|new` identity.
+
+```bash
+python3 -m manage_task_state_index index --root . compile-transition \
+  --intent transition-intent.json --at 2026-01-01T00:00:00Z
+
+python3 -m manage_task_state_index index --root . plan-transition \
+  --intent transition-intent.json --at 2026-01-01T00:00:00Z --dry-run
+```
+
+Use the full `--request-json` path only for compatibility or contract diagnostics. Compilation is read-only and does not authorize `apply-plan`; subject or index drift requires recompilation rather than manual digest repair.
+
 1. Initialize or refresh the index.
    - Create `.task/` if missing.
    - Preserve existing `.task/index.jsonl`; never truncate it.
@@ -182,7 +239,8 @@ Use `python3 -m manage_task_state_index index` for deterministic updates:
 - `link`: append a relationship from one indexed artifact to another.
 - `rebuild`: regenerate `.task/index.md` from `.task/index.jsonl`.
 - `audit`: inspect global ID consistency, broken links, duplicate active paths, stale digests, missing files, active task conflicts, and unindexed standard artifacts. Add `--write-report` to write `.task/id_audit/*.md` and index it as `audit-*`. Add `--summary-only --focus-path <path>` to emit compact counts and focused issues for report packets.
-- `plan-transition`: build one content-bound event batch from `--request-json <json-or-path>`. The request contains a non-empty exact `events` list plus an optional fixed `updated_at`; Markdown rendering is mandatory. Use `--dry-run` for a zero-write plan or omit it to immutably publish reversible, non-canonical workflow metadata at the sole canonical `.task/transition_plans/<plan-id>.json` path. If `--output` is supplied it must equal that path exactly; aliases are rejected because intent and receipt sidecars are keyed by `plan_id`. This prepare operation is authority-free; it cannot authorize `apply-plan`.
+- `compile-transition`: compile a closed compact lifecycle intent into the existing event-batch request without writing task state. It derives artifact identity and digests from current workspace/index bytes and fails with `recompile_required` on stale state.
+- `plan-transition`: build one content-bound event batch from either `--intent <json-or-path>` plus explicit `--at`, or the legacy `--request-json <json-or-path>`. The request contains a non-empty exact `events` list plus an optional fixed `updated_at`; Markdown rendering is mandatory. Use `--dry-run` for a zero-write plan or omit it to immutably publish reversible, non-canonical workflow metadata at the sole canonical `.task/transition_plans/<plan-id>.json` path. If `--output` is supplied it must equal that path exactly; aliases are rejected because intent and receipt sidecars are keyed by `plan_id`. This prepare operation is authority-free; it cannot authorize `apply-plan`.
 - `verify-plan`: read-only verify the immutable plan digest, event bindings, ledger/Markdown/artifact CAS anchors, exact replay state, and receipt consistency. Use `--phase planning` before dependency owners publish prospective artifacts: ledger/Markdown must still match the plan prestate and every artifact must match `before_sha256`. Use `--phase apply` after dependencies finish: the same ledger/Markdown prestate must hold and artifacts must match `expected_sha256`. Do not emulate this distinction by ignoring artifact defects.
 - `apply-plan`: under `.task/index.lock`, CAS-apply every planned task/archive/supersede/advice/task-pack link event as one append batch, render once, and publish an immutable receipt. Apply remains the separately authorized `mutate_task_state_index` operation. Before canonical append it publishes an immutable pending intent; every normal writer fails closed on an unfinished foreign intent. Exact replay appends zero events; a post-append render/receipt interruption is repaired only from one unique exact plan-tagged event batch, preserving and re-rendering any later unrelated suffix.
 - `settle-plan-no-effect`: close one stale plan that has no plan-tagged event, no pending intent, and no apply receipt. It publishes an immutable plan/file-bound no-effect receipt only when apply-time CAS is no longer current. A still-applicable plan, partial or ambiguous intent, any observed plan effect, conflicting receipt, or unsafe owned path fails closed. Replay returns the original receipt. This supporting settlement record can release the existing reservation; it is not canonical index mutation, a new authority source, or permission to apply a replacement plan.
@@ -214,7 +272,9 @@ Use `python3 -m manage_task_state_index migrate` only for the bounded `inspect` 
 
 Use `python3 -m manage_task_state_index verify-migration` only to verify a committed receipt with an external exact mapping manifest and caller-owned recovery expectation. It emits safe scalar, bounded opaque identity, evidence-ref, count, digest, and status evidence, with separate migration-boundary and current task/pack surfaces; failures expose only an allowlisted error code. A fixture recovery pass requires an exact, fully graph-bound pre-recovery observation and a phase-specific before/after transition; a path-name allowlist alone is not recovery ownership evidence. The verifier proves physical source separation, while the governing cycle must separately attest who selected the external expectation because equal bytes cannot prove human ownership. The verifier must not mutate the ledger, projection, transaction, task, pack, or local bytecode cache. Issue state and cycle-wide live-operation counts require external cycle evidence rather than relocated-fixture constants.
 
-All commands print JSON so the caller can capture IDs and changed paths.
+Successful commands print JSON so the caller can capture IDs and changed paths.
+Contract or safety failures exit nonzero and may use concise stderr text; callers
+must treat the exit status, not stdout shape, as the failure boundary.
 
 All writers serialize through workspace-local `.task/index.lock`, validate the existing JSONL before mutation, and atomically replace changed `index.jsonl` and Markdown payloads after durable flush. Read-only `scan --dry-run|--check` does not enter this writer path. New events carry `format_version` and `schema_version`. Detect legacy versions before validating the current event discriminator and normalize only unambiguous legacy upsert/link shapes at read time. During audit, quarantine malformed rows, continue scanning valid rows, and classify their current-projection impact as `independent`, `affected`, or `unknown`; keep affected or unknown current identities `not_evaluated`. Keep mutation paths strict: malformed or future-version JSONL fails closed without append. An empty scan/audit is `not_evaluated_no_artifacts`, not success or completion evidence.
 

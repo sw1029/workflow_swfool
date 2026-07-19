@@ -30,7 +30,7 @@ from .journal import (
     workflow_paths,
 )
 from .journal_contract import validate_journal
-from .plan import normalize_plan, verify_plan_bindings
+from .plan import normalize_plan, validate_normalized_plan, verify_plan_bindings
 from .terminal_validation import validate_terminal_operations
 from .phase_validation import project_nonterminal_status
 from .mutation import mutate_workflow as _mutate
@@ -68,7 +68,12 @@ def _bind_initial_approval_scope(
 
 
 def prepare(root: Path, plan_path: Path) -> dict[str, Any]:
-    plan = normalize_plan(read_json(plan_path))
+    raw_plan = read_json(plan_path)
+    plan = (
+        validate_normalized_plan(raw_plan)
+        if raw_plan.get("kind") == "task_doctor_workflow_plan"
+        else normalize_plan(raw_plan)
+    )
     validate_root_effect_inventory(root, plan)
     plan_sha256 = sha256_json(plan)
     workflow_id = f"tdw-{plan_sha256[:20]}"

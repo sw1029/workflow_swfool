@@ -24,7 +24,9 @@ def _public(label: str, action: Callable[[], T]) -> T:
         ) from error
 
 
-def normalize_materialization(raw: Any, request: dict[str, Any]) -> dict[str, Any]:
+def normalize_materialization(
+    raw: Any, request: dict[str, Any], *, plan_schema_version: int = 1,
+) -> dict[str, Any]:
     require(isinstance(raw, dict), "invalid_plan",
             "authority.materialization must be an object")
     expect_keys(raw, {"evaluation_context", "evaluated_at", "grant_spec",
@@ -41,7 +43,14 @@ def normalize_materialization(raw: Any, request: dict[str, Any]) -> dict[str, An
     reservation = raw["reservation"]
     require(isinstance(reservation, dict), "invalid_plan",
             "reservation must be an object")
-    expect_keys(reservation, {"reserved_at", "idempotency_key"}, set(), "reservation")
+    reservation_keys = (
+        {"reserved_at", "idempotency_key"}
+        if plan_schema_version == 1
+        else {"not_before", "expires_at", "idempotency_key"}
+    )
+    require(plan_schema_version in {1, 2}, "invalid_plan",
+            "unsupported workflow plan schema version")
+    expect_keys(reservation, reservation_keys, set(), "reservation")
     policy = raw["policy_snapshot"]
     require(isinstance(policy, dict), "invalid_plan",
             "policy_snapshot must be an exact binding")
@@ -69,10 +78,6 @@ def normalize_materialization(raw: Any, request: dict[str, Any]) -> dict[str, An
     not_before = _public(
         "grant.not_before", lambda: parse_time(grant["not_before"], "grant.not_before")
     )
-    reserved_at = _public(
-        "reservation.reserved_at",
-        lambda: parse_time(reservation["reserved_at"], "reservation.reserved_at"),
-    )
     expires_at = (
         None
         if grant["expires_at"] is None
@@ -81,16 +86,46 @@ def normalize_materialization(raw: Any, request: dict[str, Any]) -> dict[str, An
             lambda: parse_time(grant["expires_at"], "grant.expires_at"),
         )
     )
-    require(not_before <= evaluated_at <= reserved_at, "invalid_authority_contract",
-            "authority times must satisfy not_before <= evaluated_at <= reserved_at")
-    require(expires_at is None or reserved_at < expires_at,
-            "invalid_authority_contract",
-            "reservation must occur before the grant expires")
+    require(not_before <= evaluated_at, "invalid_authority_contract",
+            "grant not_before cannot follow authority evaluation")
     normalized_grant = copy.deepcopy(grant)
     normalized_grant["not_before"] = not_before.isoformat()
     normalized_grant["expires_at"] = expires_at.isoformat() if expires_at else None
     normalized_reservation = copy.deepcopy(reservation)
-    normalized_reservation["reserved_at"] = reserved_at.isoformat()
+    if plan_schema_version == 1:
+        reserved_at = _public(
+            "reservation.reserved_at",
+            lambda: parse_time(
+                reservation["reserved_at"], "reservation.reserved_at"
+            ),
+        )
+        require(evaluated_at <= reserved_at, "invalid_authority_contract",
+                "authority evaluation cannot follow reservation")
+        require(expires_at is None or reserved_at < expires_at,
+                "invalid_authority_contract",
+                "reservation must occur before the grant expires")
+        normalized_reservation["reserved_at"] = reserved_at.isoformat()
+    else:
+        window_start = _public(
+            "reservation.not_before",
+            lambda: parse_time(
+                reservation["not_before"], "reservation.not_before"
+            ),
+        )
+        window_end = _public(
+            "reservation.expires_at",
+            lambda: parse_time(
+                reservation["expires_at"], "reservation.expires_at"
+            ),
+        )
+        require(evaluated_at <= window_start < window_end,
+                "invalid_authority_contract",
+                "reservation window must begin after evaluation and be non-empty")
+        require(expires_at is not None and window_end <= expires_at,
+                "invalid_authority_contract",
+                "reservation window must remain inside the finite grant lifetime")
+        normalized_reservation["not_before"] = window_start.isoformat()
+        normalized_reservation["expires_at"] = window_end.isoformat()
     return {
         "evaluation_context": copy.deepcopy(context),
         "evaluation_context_sha256": object_sha256(context),

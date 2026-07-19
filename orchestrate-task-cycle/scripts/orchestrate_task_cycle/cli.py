@@ -181,6 +181,18 @@ def _authority_packet(argv: Sequence[str]) -> int:
     return main(list(argv))
 
 
+def _stage(argv: Sequence[str]) -> int:
+    from .stage.cli import main
+
+    return main(list(argv))
+
+
+def _workflow(argv: Sequence[str]) -> int:
+    from .workflow_launcher import main
+
+    return main(list(argv))
+
+
 COMMANDS = (
     CommandSpec("ledger", "manage the durable cycle ledger", _ledger),
     CommandSpec("transition", "validate cycle stage transitions", _transition),
@@ -244,6 +256,16 @@ COMMANDS = (
         "authority-packet",
         "construct and verify an authority owner projection",
         _authority_packet,
+    ),
+    CommandSpec(
+        "stage",
+        "prepare, submit, or boundedly advance a compiled stage",
+        _stage,
+    ),
+    CommandSpec(
+        "workflow",
+        "run a workflow owner with exact sibling dependencies",
+        _workflow,
     ),
 )
 COMMANDS_BY_NAME = {spec.name: spec for spec in COMMANDS}

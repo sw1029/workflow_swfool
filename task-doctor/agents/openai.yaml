@@ -1,4 +1,4 @@
 interface:
   display_name: "Task Doctor"
-  short_description: "Coordinate task retargeting and recovery"
-  default_prompt: "Use $task-doctor to prepare the supported advice, canonical-task, and final-index effects, consolidate genuinely missing decisions into at most one review, and resume safely after interruptions."
+  short_description: "Retarget tasks with one bounded review"
+  default_prompt: "Use $task-doctor to compile a retargeting intent, coordinate supported owner plans, and stop at a genuine decision or terminal receipt."

@@ -22,11 +22,15 @@ from .lifecycle import release
 from .reconciliation import reconcile_quarantine
 from .lifecycle import reserve
 from .lifecycle import verify_reservation_with_recovery
+from .operation_compiler import compilation_inputs
+from .operation_compiler import compile_operation
+from .operation_publication import publish_compilation
 from .workflow_status import resolve_operation
 from .workflow_status import status_snapshot
 from .reconciliation_evidence import prepare_reconciliation_evidence
 from .source_recovery import prepare_source_recovery
 from .cli_errors import emit_error
+from .cli_parser import build_parser as _build_parser
 
 
 def _emit(value: Any) -> int:
@@ -51,6 +55,37 @@ def _binding(value: str, label: str) -> dict[str, str]:
     return {"ref": str(loaded["ref"]), "sha256": str(loaded["sha256"])}
 
 
+def _input_object(value: str) -> dict[str, Any]:
+    if value == "-":
+        try:
+            loaded = json.load(sys.stdin)
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"JSON input is invalid: {exc}") from exc
+        if not isinstance(loaded, dict):
+            raise SystemExit("JSON input must be an object.")
+        return loaded
+    return load_object(value)
+
+
+def _operation_inputs(
+    args: argparse.Namespace, root: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    compiled = getattr(args, "compiled_operation", None)
+    if compiled is not None:
+        if getattr(args, "context", None) is not None:
+            raise SystemExit(
+                "--context cannot be combined with --compiled-operation."
+            )
+        return compilation_inputs(
+            root,
+            _input_object(compiled),
+            skills_root=_skills_root(args),
+        )
+    if getattr(args, "context", None) is None:
+        raise SystemExit("--request requires --context.")
+    return load_object(args.request), load_object(args.context)
+
+
 def command_snapshot_policy(args: argparse.Namespace) -> int:
     binding = snapshot_file(_root(args), args.policy_ref, "policy")
     pointer = update_current_policy(
@@ -71,6 +106,19 @@ def command_register_grant(args: argparse.Namespace) -> int:
     return _emit({"status": "registered", **result})
 
 
+def command_compile_operation(args: argparse.Namespace) -> int:
+    root = _root(args)
+    compilation = compile_operation(
+        root,
+        _input_object(args.seed),
+        compiled_at=args.at,
+        skills_root=_skills_root(args),
+    )
+    if args.publish:
+        return _emit(publish_compilation(root, compilation))
+    return _emit(compilation)
+
+
 def command_delegate(args: argparse.Namespace) -> int:
     result = register_grant(
         _root(args), load_object(args.grant), parent_id=args.parent_grant_id
@@ -80,10 +128,11 @@ def command_delegate(args: argparse.Namespace) -> int:
 
 def command_evaluate(args: argparse.Namespace) -> int:
     root = _root(args)
+    request, context = _operation_inputs(args, root)
     decision = evaluate(
         root,
-        load_object(args.request),
-        load_object(args.context),
+        request,
+        context,
         evaluated_at=args.at,
         skills_root=_skills_root(args),
     )
@@ -296,196 +345,40 @@ def command_status(args: argparse.Namespace) -> int:
 
 
 def command_resolve(args: argparse.Namespace) -> int:
+    root = _root(args)
+    request, context = _operation_inputs(args, root)
     return _emit(
         resolve_operation(
-            _root(args),
-            load_object(args.request),
-            load_object(args.context),
+            root,
+            request,
+            context,
             evaluated_at=args.at,
             skills_root=_skills_root(args),
         )
     )
 
 
-def _add_root(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--root", default=".")
-
-
-def _add_at(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--at", required=True, help="RFC3339 time with timezone")
-
-
-def _add_skills_root(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--skills-root")
-
-
-def _add_reconciliation_parsers(subparsers: Any) -> None:
-    reconcile_parser = subparsers.add_parser("reconcile")
-    _add_root(reconcile_parser)
-    _add_at(reconcile_parser)
-    reconcile_parser.add_argument("--reservation-ref", required=True)
-    reconcile_parser.add_argument("--reservation-sha256", required=True)
-    reconcile_parser.add_argument("--effect-evidence", required=True)
-    reconcile_parser.add_argument("--pre-commit-verification")
-    reconcile_parser.add_argument("--expected-version", type=int, required=True)
-    reconcile_parser.add_argument("--idempotency-key", required=True)
-    reconcile_parser.add_argument(
-        "--outcome",
-        choices=("confirmed_effect", "confirmed_no_effect", "still_unknown"),
-        required=True,
-    )
-    reconcile_parser.set_defaults(func=command_reconcile)
-
-    evidence_parser = subparsers.add_parser("prepare-reconciliation-evidence")
-    _add_root(evidence_parser)
-    _add_at(evidence_parser)
-    evidence_parser.add_argument("--reservation-ref", required=True)
-    evidence_parser.add_argument("--reservation-sha256", required=True)
-    evidence_parser.add_argument("--owner-result")
-    evidence_parser.add_argument("--expected-version", type=int, required=True)
-    evidence_parser.add_argument(
-        "--outcome",
-        choices=("confirmed_effect", "confirmed_no_effect", "still_unknown"),
-        required=True,
-    )
-    evidence_parser.set_defaults(func=command_prepare_reconciliation_evidence)
-
-
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Manage deterministic authority v2 grants and leases."
-    )
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    snapshot_policy = subparsers.add_parser("snapshot-policy")
-    _add_root(snapshot_policy)
-    snapshot_policy.add_argument(
-        "--policy-ref", default=".agent_goal/agent_authority.md"
-    )
-    snapshot_policy.add_argument("--expected-version", type=int, required=True)
-    snapshot_policy.set_defaults(func=command_snapshot_policy)
-
-    snapshot_source = subparsers.add_parser("snapshot-source")
-    _add_root(snapshot_source)
-    snapshot_source.add_argument("--source-ref", required=True)
-    snapshot_source.set_defaults(func=command_snapshot_source)
-
-    register = subparsers.add_parser("register-grant")
-    _add_root(register)
-    register.add_argument("--grant", required=True)
-    register.set_defaults(func=command_register_grant)
-
-    delegate = subparsers.add_parser("delegate")
-    _add_root(delegate)
-    delegate.add_argument("--parent-grant-id", required=True)
-    delegate.add_argument("--grant", required=True)
-    delegate.set_defaults(func=command_delegate)
-
-    evaluate_parser = subparsers.add_parser("evaluate")
-    _add_root(evaluate_parser)
-    _add_at(evaluate_parser)
-    _add_skills_root(evaluate_parser)
-    evaluate_parser.add_argument("--request", required=True)
-    evaluate_parser.add_argument("--context", required=True)
-    evaluate_parser.set_defaults(func=command_evaluate)
-
-    compose = subparsers.add_parser("compose")
-    _add_root(compose)
-    compose.add_argument("--composition", required=True)
-    compose.set_defaults(func=command_compose)
-
-    reserve_parser = subparsers.add_parser("reserve")
-    _add_root(reserve_parser)
-    _add_at(reserve_parser)
-    _add_skills_root(reserve_parser)
-    reserve_parser.add_argument("--decision-ref", required=True)
-    reserve_parser.add_argument("--decision-sha256", required=True)
-    reserve_parser.add_argument("--idempotency-key", required=True)
-    reserve_parser.set_defaults(func=command_reserve)
-
-    verify_parser = subparsers.add_parser("verify")
-    _add_root(verify_parser)
-    _add_at(verify_parser)
-    _add_skills_root(verify_parser)
-    verify_parser.add_argument("--reservation-ref", required=True)
-    verify_parser.add_argument("--reservation-sha256", required=True)
-    verify_parser.add_argument("--expected-version", type=int, required=True)
-    verify_parser.add_argument(
-        "--stage", choices=("pre_dispatch", "pre_commit"), required=True
-    )
-    verify_parser.set_defaults(func=command_verify)
-
-    consume_parser = subparsers.add_parser("consume")
-    _add_root(consume_parser)
-    _add_at(consume_parser)
-    _add_skills_root(consume_parser)
-    consume_parser.add_argument("--reservation-ref", required=True)
-    consume_parser.add_argument("--reservation-sha256", required=True)
-    consume_parser.add_argument("--execution-result", required=True)
-    consume_parser.add_argument("--pre-commit-verification", required=True)
-    consume_parser.add_argument("--expected-subject-after-sha256", required=True)
-    consume_parser.add_argument("--expected-version", type=int, required=True)
-    consume_parser.add_argument("--idempotency-key", required=True)
-    consume_parser.set_defaults(func=command_consume)
-
-    release_parser = subparsers.add_parser("release")
-    _add_root(release_parser)
-    _add_at(release_parser)
-    release_parser.add_argument("--reservation-ref", required=True)
-    release_parser.add_argument("--reservation-sha256", required=True)
-    release_parser.add_argument("--no-effect-evidence", required=True)
-    release_parser.add_argument("--expected-version", type=int, required=True)
-    release_parser.add_argument("--idempotency-key", required=True)
-    release_parser.add_argument(
-        "--effect-status",
-        choices=("not_started", "verified_no_effect", "unknown_effect"),
-        required=True,
-    )
-    release_parser.set_defaults(func=command_release)
-
-    _add_reconciliation_parsers(subparsers)
-
-    recovery_parser = subparsers.add_parser("prepare-source-recovery")
-    _add_root(recovery_parser)
-    _add_at(recovery_parser)
-    _add_skills_root(recovery_parser)
-    recovery_parser.add_argument("--decision-ref", required=True)
-    recovery_parser.add_argument("--decision-sha256", required=True)
-    recovery_parser.set_defaults(func=command_prepare_source_recovery)
-
-    transition = subparsers.add_parser("transition")
-    _add_root(transition)
-    _add_at(transition)
-    transition.add_argument("--grant-id", required=True)
-    transition.add_argument(
-        "--transition",
-        choices=("revoked", "suspended", "expired", "reactivated"),
-        required=True,
-    )
-    transition.add_argument("--event-id", required=True)
-    transition.add_argument("--expected-version", type=int, required=True)
-    transition.add_argument("--source-approval", required=True)
-    transition.set_defaults(func=command_transition)
-
-    status = subparsers.add_parser("status")
-    _add_root(status)
-    _add_skills_root(status)
-    status.add_argument(
-        "--at",
-        help="RFC3339 evaluation time with timezone; defaults to the current UTC time",
-    )
-    status.add_argument("--grant-id")
-    status.add_argument("--request-sha256")
-    status.set_defaults(func=command_status)
-
-    resolve_parser = subparsers.add_parser("resolve")
-    _add_root(resolve_parser)
-    _add_at(resolve_parser)
-    _add_skills_root(resolve_parser)
-    resolve_parser.add_argument("--request", required=True)
-    resolve_parser.add_argument("--context", required=True)
-    resolve_parser.set_defaults(func=command_resolve)
-    return parser
+    handlers = {
+        "compile_operation": command_compile_operation,
+        "snapshot_policy": command_snapshot_policy,
+        "snapshot_source": command_snapshot_source,
+        "register_grant": command_register_grant,
+        "delegate": command_delegate,
+        "evaluate": command_evaluate,
+        "compose": command_compose,
+        "reserve": command_reserve,
+        "verify": command_verify,
+        "consume": command_consume,
+        "release": command_release,
+        "reconcile": command_reconcile,
+        "prepare_reconciliation_evidence": command_prepare_reconciliation_evidence,
+        "prepare_source_recovery": command_prepare_source_recovery,
+        "transition": command_transition,
+        "status": command_status,
+        "resolve": command_resolve,
+    }
+    return _build_parser(handlers)
 
 
 def main(argv: list[str] | None = None) -> int:

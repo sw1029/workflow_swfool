@@ -2,6 +2,17 @@
 
 Use this reference for the `code_structure_audit` phase in `$orchestrate-task-cycle`. This gate is read-only workflow evidence. It may recommend a moduleization, semantic consolidation, reuse extraction, or coupling-reduction task, but it must not create directories, move code, or patch implementation files.
 
+## Contents
+
+- [Purpose](#purpose)
+- [Inputs](#inputs)
+- [Thresholds](#thresholds)
+- [Responsibility Clusters](#responsibility-clusters)
+- [Semantic Modularity Signals](#semantic-modularity-signals)
+- [Status Policy](#status-policy)
+- [Output Contract](#output-contract)
+- [Derive Handoff](#derive-handoff)
+
 ## Purpose
 
 Catch oversized generated code, mixed responsibilities, mechanical shards, duplicate helpers, hidden global coupling, and weak reuse signals immediately after `$task-md-agent-governance`, before execution normalizes the structure as acceptable. Preserve existing behavior by routing any refactor through the next `$task-md-agent-governance` cycle.

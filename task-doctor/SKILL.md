@@ -88,6 +88,30 @@ never convert uncertainty into no effect.
 Keep approval, goal ratification, risk acceptance, external-input availability, and
 bounded design selection as separate typed decisions.
 
+## Compile before coordinating
+
+Prefer a compact task-doctor intent over a hand-authored workflow plan. First publish each owner plan through its public builder; use `prepare-task-transition` for the canonical task transition. Compile each governed operation with `$manage-agent-authority --publish`, then place its returned `{ref, sha256, compilation_fingerprint}` receipt directly in the compact intent. Legacy inline compilations and two-field `{ref, sha256}` bindings remain accepted.
+
+The closed compact contract uses `schema_version=1`,
+`intent_kind=task_doctor_compact_intent`, and only
+`git_finalization=deferred|not_applicable`. Do not guess capability or operation
+enums: read the selected owner's `authority.operations.json`; for example, the
+task-doctor scope owner declares capability `task.scope.mutate` and operation
+identity `task-doctor:2.2.0:mutate_task_scope:1`.
+
+```bash
+python3 -m task_doctor_workflow_lib compile-intent \
+  --root . --intent task-doctor-intent.json --at 2026-01-01T00:00:00Z
+python3 -m task_doctor_workflow_lib prepare-intent \
+  --root . --intent task-doctor-intent.json --at 2026-01-01T00:00:00Z
+```
+
+`compile-intent` is read-only. `prepare-intent` either prepares a prompt-free workflow when every exact source already exists, or publishes one content-addressed review for only the uncovered operations. Do not create a grant, evaluation, or reservation before the actual decision.
+
+After a genuine decision, call `accept-review` only with exact pre-existing typed source snapshots whose evidence IDs bind that review and whose `not_before` is not earlier than the decision. The compiler then emits workflow plan schema-v2: source/grant/evaluation time is fixed after the decision, while each reservation stores a finite `not_before|expires_at` window so JIT reservation records its real later time. Continue reading legacy schema-v1 plans without rewriting them.
+
+Use `build-resolution-bundle` to derive classifications and evidence bindings from live status, and use bounded `advance` or read-only `replay-or-route` to reuse settled state. These commands may prepare coordinator/authority state, but they stop at the exact owner dispatch, genuine approval, GT/risk/design/external-input decision, unknown effect, stale plan, recovery, or terminal result. Never rotate IDs to redispatch a released, consumed, or settled-no-effect owner plan.
+
 ## Run the prepare-all workflow
 
 1. Confirm an explicit direction source.

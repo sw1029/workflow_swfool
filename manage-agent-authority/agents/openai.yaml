@@ -1,4 +1,4 @@
 interface:
   display_name: "Manage Agent Authority"
-  short_description: "Resolve, settle, and recover exact authority"
-  default_prompt: "Use $manage-agent-authority to resolve the exact operation at one explicit evaluation time, reuse or resume only closed validated authority without re-prompting, prepare a non-authoritative exact recovery recipe when source IDs are exhausted, settle the effect with typed evidence, and fail closed without expanding permissions."
+  short_description: "Compile and settle exact authority safely"
+  default_prompt: "Use $manage-agent-authority to compile a compact operation intent, resume reusable authority, and request only a genuinely missing exact decision."
