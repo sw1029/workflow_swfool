@@ -101,7 +101,12 @@ def _decode_payload(target: dict[str, Any]) -> bytes:
     return payload
 
 
-def _normalize_plan(root: Path, raw: dict[str, Any]) -> dict[str, Any]:
+def _normalize_plan(
+    root: Path,
+    raw: dict[str, Any],
+    *,
+    require_current_owner_projections: bool = True,
+) -> dict[str, Any]:
     helper_owned = {"transaction_id", "predecessor_transaction_id"} & set(raw)
     if helper_owned:
         raise ValueError(
@@ -143,11 +148,16 @@ def _normalize_plan(root: Path, raw: dict[str, Any]) -> dict[str, Any]:
         total += len(payload)
         after_sha = _sha256_bytes(payload)
         if role in OWNER_COMMITTED_PROJECTION_ROLES:
-            current_sha = _sha256_file(_target_path(root, role, reference))
-            if current_sha is None or before != current_sha or after_sha != current_sha:
+            if before != after_sha:
                 raise ValueError(
                     f"selection-publication role {role!r} must bind an owner-committed unchanged projection"
                 )
+            if require_current_owner_projections:
+                current_sha = _sha256_file(_target_path(root, role, reference))
+                if current_sha is None or current_sha != after_sha:
+                    raise ValueError(
+                        f"selection-publication role {role!r} must bind an owner-committed unchanged projection"
+                    )
         targets.append(
             {
                 "role": role,

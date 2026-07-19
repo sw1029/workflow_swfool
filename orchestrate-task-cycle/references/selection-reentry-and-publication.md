@@ -251,4 +251,13 @@ python3 -m orchestrate_task_cycle selection-publication --root . recover
 
 Use `status` for a read-only pending/head check and `prepare` only when an explicit prepare-only boundary is required. At most one transaction may be pending: exact prepare/publish replay for that transaction is allowed, but any different prepare or uncommitted publish must fail before mutation until recovery completes. Multiple legacy pending journals are ambiguous and automatic recovery must not choose one by sort order. The status projection follows task-alias before/after links to the unique committed head: historical receipts may be superseded, but current unjournaled `task.md` drift or multiple heads blocks selection consumption. A target outside its exact before/after states blocks recovery and preserves the pending evidence; it never overwrites the foreign bytes. Replaying the same committed plan returns the existing receipt.
 
+When `status` reports one unique `drift_blocked` head and the unjournaled `task.md` bytes are independently authorized, reconcile only that exact task-alias transition with:
+
+```bash
+python3 -m orchestrate_task_cycle selection-publication --root . reconcile \
+  --plan <selection-publication-drift-reconciliation-plan.json>
+```
+
+The reconciliation plan must contain exactly one `task_alias` target. Its before digest must equal the unique head's expected task digest, and its after payload must reproduce the current regular, non-symlink `task.md` bytes exactly. Reconciliation records a successor journal and receipt without rewriting `task.md`; it rejects extra projections, stale or noncurrent payloads, pending publication, and ambiguous heads.
+
 The publication receipt proves logical atomicity of workflow projections only. It does not prove that the proposed task is correct. Downstream selection consumers must still verify the three-agent receipt contract, adapter seal, authority, exact subject, task-pack state, and derive result contract.

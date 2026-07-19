@@ -10,6 +10,7 @@ import pytest
 from orchestrate_task_cycle import selection_publication as publication
 from orchestrate_task_cycle.selection_publication import (
     pending_transaction_ids,
+    prepare_drift_reconciliation,
     prepare_publication,
     publication_status,
     publish_prepared,
@@ -147,6 +148,52 @@ def test_selection_publication_commits_all_targets_and_replays(tmp_path: Path) -
     assert replay["receipt_sha256"] == receipt["receipt_sha256"]
     assert pending_transaction_ids(tmp_path) == []
     assert publication_status(tmp_path)["current_head"]["status"] == "current"
+
+
+def test_historical_owner_projection_reopens_after_later_owner_append(
+    tmp_path: Path,
+) -> None:
+    old_task = b"# old\n"
+    new_task = b"# new\n"
+    archive = b"# archived task\n"
+    original_index = b'{"path":".agent_log/2026-01-01/archive.md"}\n'
+    appended_index = original_index + b'{"path":".agent_log/2026-01-02/later.md"}\n'
+    (tmp_path / "task.md").write_bytes(old_task)
+    (tmp_path / ".agent_log/2026-01-01").mkdir(parents=True)
+    (tmp_path / ".agent_log/2026-01-01/archive.md").write_bytes(archive)
+    (tmp_path / ".agent_log/index.jsonl").write_bytes(original_index)
+    prepared = prepare_publication(
+        tmp_path,
+        _plan(
+            [
+                _target("task_alias", "task.md", old_task, new_task),
+                _target(
+                    "past_task_archive",
+                    ".agent_log/2026-01-01/archive.md",
+                    archive,
+                    archive,
+                ),
+                _target(
+                    "agent_log_index_jsonl",
+                    ".agent_log/index.jsonl",
+                    original_index,
+                    original_index,
+                ),
+            ]
+        ),
+    )
+    committed = publish_prepared(tmp_path, prepared["transaction_id"])
+    (tmp_path / ".agent_log/index.jsonl").write_bytes(appended_index)
+
+    status = publication_status(tmp_path)
+    historical = publish_prepared(tmp_path, prepared["transaction_id"])
+
+    assert status["status"] == "clear"
+    assert status["current_head"]["status"] == "current"
+    assert historical["receipt_sha256"] == committed["receipt_sha256"]
+    assert historical["publication_authority_status"] == "historical_receipt_only"
+    assert historical["mutation_performed"] is False
+    assert (tmp_path / ".agent_log/index.jsonl").read_bytes() == appended_index
 
 
 def test_selection_publication_drift_blocks_before_any_target_write(
@@ -336,6 +383,68 @@ def test_selection_publication_status_blocks_unjournaled_current_task_drift(
     assert status["status"] == "drift_blocked"
     assert status["selection_consumption_allowed"] is False
     assert status["current_head"]["status"] == "drifted"
+
+
+def test_selection_publication_reconciles_exact_current_task_drift(
+    tmp_path: Path,
+) -> None:
+    task_a = b"# task-a\n"
+    task_b = b"# task-b\n"
+    task_c = b"# task-c\n"
+    (tmp_path / "task.md").write_bytes(task_a)
+    first = prepare_publication(
+        tmp_path,
+        _named_plan(task_a, task_b, "A"),
+    )
+    publish_prepared(tmp_path, first["transaction_id"])
+    (tmp_path / "task.md").write_bytes(task_c)
+
+    prepared = prepare_drift_reconciliation(
+        tmp_path,
+        _named_plan(task_b, task_c, "reconcile"),
+    )
+    receipt = publish_prepared(tmp_path, prepared["transaction_id"])
+
+    status = publication_status(tmp_path)
+    assert receipt["predecessor_transaction_id"] == first["transaction_id"]
+    assert status["status"] == "clear"
+    assert status["current_head"]["status"] == "current"
+    assert status["current_head"]["head_transaction_id"] == prepared["transaction_id"]
+    assert (tmp_path / "task.md").read_bytes() == task_c
+
+
+def test_selection_publication_reconciliation_rejects_noncurrent_or_extra_targets(
+    tmp_path: Path,
+) -> None:
+    task_a = b"# task-a\n"
+    task_b = b"# task-b\n"
+    task_c = b"# task-c\n"
+    (tmp_path / "task.md").write_bytes(task_a)
+    (tmp_path / ".task").mkdir()
+    (tmp_path / ".task/index.jsonl").write_bytes(b"old-index\n")
+    first = prepare_publication(
+        tmp_path,
+        _named_plan(task_a, task_b, "A"),
+    )
+    publish_prepared(tmp_path, first["transaction_id"])
+    (tmp_path / "task.md").write_bytes(task_c)
+
+    with pytest.raises(ValueError, match="exact current task.md bytes"):
+        prepare_drift_reconciliation(
+            tmp_path,
+            _named_plan(task_b, b"# foreign\n", "wrong-current"),
+        )
+    extra_target_plan = _named_plan(task_b, task_c, "extra-target")
+    extra_target_plan["targets"].append(
+        _target(
+            "task_index_jsonl",
+            ".task/index.jsonl",
+            b"old-index\n",
+            b"new-index\n",
+        )
+    )
+    with pytest.raises(ValueError, match="accepts only task_alias"):
+        prepare_drift_reconciliation(tmp_path, extra_target_plan)
 
 
 def test_selection_publication_tracks_the_unique_superseding_head(

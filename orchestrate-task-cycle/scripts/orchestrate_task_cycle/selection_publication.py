@@ -70,7 +70,11 @@ def _load_prepare(root: Path, transaction_id: str) -> tuple[dict[str, Any], Path
         if key not in {"transaction_id", "predecessor_transaction_id"}
     }
     plan_material["kind"] = "selection_publication_plan"
-    normalized = _normalize_plan(root, plan_material)
+    normalized = _normalize_plan(
+        root,
+        plan_material,
+        require_current_owner_projections=False,
+    )
     if "predecessor_transaction_id" in prepare:
         predecessor = prepare.get("predecessor_transaction_id")
         if predecessor is not None and not TRANSACTION_ID.fullmatch(str(predecessor)):
@@ -116,6 +120,70 @@ def prepare_publication(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
         transaction_material = {
             **normalized,
             "predecessor_transaction_id": predecessor,
+        }
+        transaction_id = "selection-" + _sha256_bytes(
+            _canonical_json(transaction_material)
+        )
+        prepare = {**transaction_material, "transaction_id": transaction_id}
+        path = _prepare_path(root, transaction_id)
+        digest = _write_once(
+            path, _display_json(prepare), "selection-publication prepare journal"
+        )
+        _load_prepare(root, transaction_id)
+    return prepare_response(
+        root,
+        transaction_id,
+        path,
+        digest,
+        status="prepared",
+        mutation_performed=True,
+        recovery_required=True,
+    )
+
+
+def prepare_drift_reconciliation(
+    root: Path, plan: dict[str, Any]
+) -> dict[str, Any]:
+    """Journal the exact current task bytes as a successor to one drifted head."""
+
+    root = root.expanduser().resolve(strict=True)
+    normalized = _normalize_plan(root, plan)
+    if len(normalized["targets"]) != 1 or normalized["targets"][0]["role"] != "task_alias":
+        raise ValueError(
+            "selection-publication drift reconciliation accepts only task_alias"
+        )
+    with _lock(root):
+        replay = pending_replay(
+            root,
+            normalized,
+            pending_transaction_ids(root),
+            load_prepare=_load_prepare,
+        )
+        if replay is not None:
+            return replay
+        receipts = _committed_receipts(root)
+        replay = committed_replay(
+            root, normalized, receipts, load_prepare=_load_prepare
+        )
+        if replay is not None:
+            return replay
+        current_task_sha256 = _sha256_file(root / "task.md")
+        head = current_head_status(receipts, current_task_sha256)
+        if head.get("status") != "drifted" or head.get("head_count") != 1:
+            raise ValueError(
+                "selection-publication drift reconciliation requires one unique drifted head"
+            )
+        target = normalized["targets"][0]
+        if (
+            target.get("before_sha256") != head.get("expected_task_sha256")
+            or target.get("after_sha256") != current_task_sha256
+        ):
+            raise ValueError(
+                "selection-publication drift reconciliation must bind the expected head and exact current task.md bytes"
+            )
+        transaction_material = {
+            **normalized,
+            "predecessor_transaction_id": head["head_transaction_id"],
         }
         transaction_id = "selection-" + _sha256_bytes(
             _canonical_json(transaction_material)

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .selection_publication import (
+    prepare_drift_reconciliation,
     prepare_publication,
     publication_status,
     publish_prepared,
@@ -31,6 +32,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     prepare.add_argument("--plan", required=True)
     apply = commands.add_parser("apply")
     apply.add_argument("--plan", required=True)
+    reconcile = commands.add_parser("reconcile")
+    reconcile.add_argument("--plan", required=True)
     recover = commands.add_parser("recover")
     recover.add_argument("--transaction-id")
     commands.add_parser("status")
@@ -41,6 +44,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = prepare_publication(root, _read_plan(args.plan))
         elif args.command == "apply":
             prepared = prepare_publication(root, _read_plan(args.plan))
+            result = publish_prepared(root, str(prepared["transaction_id"]))
+        elif args.command == "reconcile":
+            prepared = prepare_drift_reconciliation(root, _read_plan(args.plan))
             result = publish_prepared(root, str(prepared["transaction_id"]))
         elif args.command == "recover":
             result = recover_publications(root, args.transaction_id)
