@@ -38,10 +38,15 @@ from .terminal_wait_baseline_validation import (
     validate_activation_binding,
     validate_completion_binding,
 )
+from .terminal_wait_baseline_retirement import (
+    active_current_pointer as _active_current_pointer,
+    inactive_pointer as _inactive_pointer,
+    retire_terminal_wait_baseline,
+)
 
 
 def _current_snapshot_sha256(root: Path) -> str | None:
-    current = load_current_pointer(root, require_current_task=False)
+    current = _active_current_pointer(root, require_current_task=False)
     return None if current is None else current[0]["snapshot"]["sha256"]
 
 
@@ -163,7 +168,7 @@ def activate_terminal_wait_baseline(
             "ref": artifact_ref("activations", body["activation_id"]),
             "sha256": sha256_bytes(display_bytes(body)),
         }
-        current = load_current_pointer(root, require_current_task=False)
+        current = _active_current_pointer(root, require_current_task=False)
         if current is not None and current[0]["snapshot"] == completion["snapshot"]:
             if current[0]["activation"] != activation_binding:
                 raise ValueError("current snapshot has a conflicting activation")
@@ -227,6 +232,23 @@ def resolve_terminal_wait_baseline(root: Path) -> dict[str, Any]:
             "mutation_performed": False,
             "current_pointer": None,
         }
+    inactive = _inactive_pointer(root)
+    if inactive is not None:
+        pointer, digest = inactive
+        return {
+            "status": "inactive",
+            "mutation_performed": False,
+            "binding_id": None,
+            "task_id": pointer["task_id"],
+            "task_sha256": pointer["task_sha256"],
+            "snapshot": pointer["snapshot"],
+            "retirement": pointer["retirement"],
+            "publication": pointer["publication"],
+            "current_pointer": {
+                "ref": ".task/terminal_wait_baseline/current.json",
+                "sha256": digest,
+            },
+        }
     resolved = load_current_pointer(root, require_current_task=True)
     after = read_current_bytes(root)
     if resolved is None or before != after:
@@ -260,7 +282,7 @@ def current_selection_tick_packet(root: Path) -> dict[str, Any] | None:
     """Return the verified current tick packet for internal re-entry consumption."""
 
     root = root.expanduser().resolve(strict=True)
-    current = load_current_pointer(root, require_current_task=True)
+    current = _active_current_pointer(root, require_current_task=True)
     if current is None:
         return None
     pointer, _pointer_sha256, snapshot = current
@@ -393,5 +415,6 @@ __all__ = (
     "current_selection_tick_packet",
     "materialize_terminal_wait_authority_subject",
     "prepare_terminal_wait_baseline",
+    "retire_terminal_wait_baseline",
     "resolve_terminal_wait_baseline",
 )

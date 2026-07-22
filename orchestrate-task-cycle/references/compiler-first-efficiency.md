@@ -55,24 +55,38 @@ before removing it. If a zero-result scan has no domain evidence path, the adapt
 use the exact bound renderer artifact ref as evidence; it must never invent evidence or
 silently discard an unknown envelope field.
 
+For adapter architecture, keep deterministic facts, bounded semantic assessment, and
+final adjudication separate. The semantic receipt may distill responsibilities,
+recursive module boundaries, design-pattern tradeoffs, and compatibility risks only by
+citing deterministic fact IDs. It cannot set consumability, audit status, severity, or
+raw-source fields. The deterministic adjudicator owns those final fields, and native
+`repo_skill_adapter_validate` / `code_structure_audit` envelopes preserve their field
+origins and integrity through stage normalization.
+
 Classify every required and optional result field exactly once as `derived`, `owner`,
 `semantic`, or explicitly permitted `reasoned_not_applicable`. Do not use a name-based
 semantic fallback. Reject semantic overlays that set derived or owner fields.
 
 ## Body-free selection publication
 
-Use a compact selection intent that binds the authoritative selection decision,
-prospective task source when applicable, and already-committed owner receipts. The
-compiler must derive the publication ID, predecessor, target order, before/after hashes,
-and transaction identity.
+Use a compact selection intent that binds the authoritative selection decision, exact
+prospective task source, and a schema-v2 prospective task-state plan. The compiler must
+derive the publication ID, predecessor, target order, before/after hashes, and
+transaction identity. Do not require an already-applied task-state receipt: that would
+recreate a dependency cycle because the task-state owner intentionally binds prospective
+bytes before `task.md` changes.
 
 - Store exact task bytes once in the selection blob CAS.
 - Keep Base64, task bodies, index bodies, and caller-authored target arrays out of v2
   prepares and command output.
-- Reuse the task-state owner's transition plan and apply receipt; do not duplicate index
-  payloads inside selection publication.
-- Publish the task alias last. A prepare or partial owner projection is not selection
-  authority.
+- Reuse the task-state owner's prospective transition plan and pending receipt; do not
+  duplicate index payloads inside selection publication.
+- Apply the task-state event batch/render first as `pending_external_settlement` while
+  `task.md` remains at its before digest. Publish the task alias last by CAS, then settle
+  task-state from the exact committed schema-v3 publication receipt.
+- Keep selection consumption false while settlement is missing or invalid. A prepare,
+  pending owner projection, or committed alias without its exact external settlement is
+  not a consumable selection lifecycle.
 - Update the compact head/pending state under the same publication lock. Normal status
   validates compact state and small receipt projections without decoding historical
   prepares or blobs; reserve deep audit for full plan/blob revalidation and migration.

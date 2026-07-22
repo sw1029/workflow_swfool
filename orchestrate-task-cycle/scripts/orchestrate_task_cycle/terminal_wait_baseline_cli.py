@@ -13,6 +13,7 @@ from .terminal_wait_baseline import (
     audit_terminal_wait_baseline,
     materialize_terminal_wait_authority_subject,
     prepare_terminal_wait_baseline,
+    retire_terminal_wait_baseline,
     resolve_terminal_wait_baseline,
 )
 from .terminal_wait_baseline_contract import (
@@ -57,6 +58,9 @@ def _parser() -> argparse.ArgumentParser:
     activate.add_argument("--use-receipt-ref", required=True)
     activate.add_argument("--use-receipt-sha256", required=True)
     commands.add_parser("resolve")
+    retire = commands.add_parser("retire-successor")
+    retire.add_argument("--publication-ref", required=True)
+    retire.add_argument("--publication-sha256", required=True)
     commands.add_parser("audit")
     return parser
 
@@ -102,6 +106,17 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         )
     if args.action == "resolve":
         return resolve_terminal_wait_baseline(root)
+    if args.action == "retire-successor":
+        return retire_terminal_wait_baseline(
+            root,
+            binding(
+                {
+                    "ref": args.publication_ref,
+                    "sha256": args.publication_sha256,
+                },
+                "publication binding",
+            ),
+        )
     return audit_terminal_wait_baseline(root)
 
 

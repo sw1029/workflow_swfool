@@ -119,6 +119,14 @@ python3 -m manage_task_state_index index --root . plan-transition \
 
 Use the full `--request-json` path only for compatibility or contract diagnostics. Compilation is read-only and does not authorize `apply-plan`; subject or index drift requires recompilation rather than manual digest repair.
 
+Selected-successor publication is the one intentional schema-v2 request path. It binds
+the exact prospective task Markdown in `artifact_sources`, declares
+`external_settlement_kind: selection_publication`, and lets the plan use
+`prospective_source_sha256` for `task.md` without requiring the alias to change first.
+Follow the full transaction in [index-schema.md](references/index-schema.md#prospective-selected-successor-settlement): publication prepare, `apply-plan` with that
+prepare, publication CAS of `task.md` last, then `settle-plan-external`. Do not use the
+ordinary schema-v1 compact intent to fake this cross-owner dependency.
+
 1. Initialize or refresh the index.
    - Create `.task/` if missing.
    - Preserve existing `.task/index.jsonl`; never truncate it.
@@ -240,9 +248,10 @@ Use `python3 -m manage_task_state_index index` for deterministic updates:
 - `rebuild`: regenerate `.task/index.md` from `.task/index.jsonl`.
 - `audit`: inspect global ID consistency, broken links, duplicate active paths, stale digests, missing files, active task conflicts, and unindexed standard artifacts. Add `--write-report` to write `.task/id_audit/*.md` and index it as `audit-*`. Add `--summary-only --focus-path <path>` to emit compact counts and focused issues for report packets.
 - `compile-transition`: compile a closed compact lifecycle intent into the existing event-batch request without writing task state. It derives artifact identity and digests from current workspace/index bytes and fails with `recompile_required` on stale state.
-- `plan-transition`: build one content-bound event batch from either `--intent <json-or-path>` plus explicit `--at`, or the legacy `--request-json <json-or-path>`. The request contains a non-empty exact `events` list plus an optional fixed `updated_at`; Markdown rendering is mandatory. Use `--dry-run` for a zero-write plan or omit it to immutably publish reversible, non-canonical workflow metadata at the sole canonical `.task/transition_plans/<plan-id>.json` path. If `--output` is supplied it must equal that path exactly; aliases are rejected because intent and receipt sidecars are keyed by `plan_id`. This prepare operation is authority-free; it cannot authorize `apply-plan`.
+- `plan-transition`: build one content-bound event batch from either `--intent <json-or-path>` plus explicit `--at`, or `--request-json <json-or-path>`. Schema-v1 requests use ordinary current/expected anchors. Schema-v2 is reserved for selected-successor external settlement and requires an exact prospective `task.md` source plus `external_settlement_kind: selection_publication`. Markdown rendering is mandatory. Use `--dry-run` for a zero-write plan or omit it to immutably publish reversible, non-canonical workflow metadata at the sole canonical `.task/transition_plans/<plan-id>.json` path. If `--output` is supplied it must equal that path exactly; aliases are rejected because intent and receipt sidecars are keyed by `plan_id`. This prepare operation is authority-free; it cannot authorize `apply-plan`.
 - `verify-plan`: read-only verify the immutable plan digest, event bindings, ledger/Markdown/artifact CAS anchors, exact replay state, and receipt consistency. Use `--phase planning` before dependency owners publish prospective artifacts: ledger/Markdown must still match the plan prestate and every artifact must match `before_sha256`. Use `--phase apply` after dependencies finish: the same ledger/Markdown prestate must hold and artifacts must match `expected_sha256`. Do not emulate this distinction by ignoring artifact defects.
-- `apply-plan`: under `.task/index.lock`, CAS-apply every planned task/archive/supersede/advice/task-pack link event as one append batch, render once, and publish an immutable receipt. Apply remains the separately authorized `mutate_task_state_index` operation. Before canonical append it publishes an immutable pending intent; every normal writer fails closed on an unfinished foreign intent. Exact replay appends zero events; a post-append render/receipt interruption is repaired only from one unique exact plan-tagged event batch, preserving and re-rendering any later unrelated suffix.
+- `apply-plan`: under `.task/index.lock`, CAS-apply every planned task/archive/supersede/advice/task-pack link event as one append batch and render once. Apply remains the separately authorized `mutate_task_state_index` operation. For schema v1 it publishes the settled apply receipt. For schema v2 require the exact selection-publication prepare through `--external-prepare-ref|sha256`, keep `task.md` at its before digest, and publish `activation_status: pending_external_settlement` under `.task/transition_pending_receipts/`; every normal writer remains blocked on that unfinished lifecycle. Exact replay appends zero events and returns the same pending or settled state.
+- `settle-plan-external`: for one schema-v2 plan, reopen its pending receipt and the exact committed schema-v3 selection-publication receipt, verify that publication wrote the prospective bytes to `task.md` and bound the same prepare/plan, then publish the settled schema-v2 apply receipt. Replay returns `already_settled`. The result alone opens `selection_consumption_allowed`; it cannot select another publication or serve as a new authority source.
 - `settle-plan-no-effect`: close one stale plan that has no plan-tagged event, no pending intent, and no apply receipt. It publishes an immutable plan/file-bound no-effect receipt only when apply-time CAS is no longer current. A still-applicable plan, partial or ambiguous intent, any observed plan effect, conflicting receipt, or unsafe owned path fails closed. Replay returns the original receipt. This supporting settlement record can release the existing reservation; it is not canonical index mutation, a new authority source, or permission to apply a replacement plan.
 
 For task switches or other multi-artifact lifecycle projections, prefer the immutable `task_index_transition_plan` as the authority subject. The legacy `task_index` subject remains accepted for existing direct `scan|add|link|rebuild` callers. Apply results expose `execution_result_binding: {ref, sha256}` whose SHA-256 is the exact receipt file digest; `plan_sha256` and `receipt_content_sha256` are canonical body digests and must not be substituted for the exact `plan_file_sha256` or `receipt_file_sha256` bindings.
@@ -266,6 +275,20 @@ python3 -m manage_task_state_index index --root . apply-plan \
   --plan .task/transition_plans/<plan-id>.json
 ```
 
+For a selected successor, supply the publication prepare to `apply-plan`, then settle
+from the committed publication receipt:
+
+```bash
+python3 -m manage_task_state_index index --root . apply-plan \
+  --plan .task/transition_plans/<plan-id>.json \
+  --external-prepare-ref <publication-prepare-ref> \
+  --external-prepare-sha256 <publication-prepare-raw-sha256>
+python3 -m manage_task_state_index index --root . settle-plan-external \
+  --plan .task/transition_plans/<plan-id>.json \
+  --external-commit-ref <publication-receipt-ref> \
+  --external-commit-sha256 <publication-receipt-raw-sha256>
+```
+
 If a foreign index write or a genuinely foreign artifact digest makes that exact plan stale before its intent is published, do not request the same semantic approval again. Verify `plan_effect_observed: false`, `plan_intent_observed: false`, and `no_effect_eligible: true`; publish the exact no-effect receipt; release the old reservation against that receipt; then prepare a new exact plan from the unchanged source decision. Artifacts that are all still at `before_sha256`, all at `expected_sha256`, or partially moving only between those two states are normal dependency states (`ready` or `materializing`), never no-effect. Only a changed semantic subject, effect, risk, or exclusion requires another user decision.
 
 Use `python3 -m manage_task_state_index migrate` only for the bounded `inspect` and `migrate plan|apply|validate|recover` transaction documented in [legacy-migration.md](references/legacy-migration.md). `plan` and `apply --dry-run` must leave canonical `.task` state unchanged. Never use migration as a general malformed-row ignore mode.
@@ -284,6 +307,7 @@ All writers serialize through workspace-local `.task/index.lock`, validate the e
 - Do not delete, move, or rewrite task artifacts from this skill unless the user or owning workflow explicitly requested it.
 - Do not overwrite `.task/index.jsonl`.
 - Do not dispatch a plan after `settled_no_effect`. Do not accept `stale`, the plan file, or arbitrary JSON as no-effect evidence. Require `status: settled_no_effect`, `no_effect_verified: true`, both observed activity flags false, and the exact no-effect receipt file binding.
+- Do not change `task.md` before applying a schema-v2 prospective plan, and do not treat its pending receipt as active task state. Require the exact committed publication receipt and `settle-plan-external` before selection consumption or terminal-wait retirement.
 - Do not compare an immutable historical snapshot digest with the current mutable alias body. Store `record_class: mutable_alias|immutable_snapshot`, `snapshot_digest`, and `canonical_id` in the existing event `fields` when applicable.
 - Do not remove historical events from `.task/index.jsonl`; append a correcting event instead.
 - Do not store secrets, private tokens, raw sensitive data, or large copyrighted excerpts in index fields.

@@ -19,6 +19,15 @@ from .selection_decision_receipt import (
 from .selection_synthesis import render_selection_synthesis
 from .selection_decision_store import canonical_bytes
 from .selection_publication_store import _write_once
+from .selection_trigger import (
+    render_normal_cycle_trigger,
+    render_publication_bootstrap,
+)
+from .selection_decision_receipt_v2 import (
+    render_preliminary_selection_decision_v2,
+    render_selection_decision_receipt_v2,
+    validate_selection_decision_receipt_v2,
+)
 
 
 CYCLE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
@@ -54,8 +63,22 @@ def _parser() -> argparse.ArgumentParser:
     pipeline.add_argument("--cycle-id", required=True)
     pipeline.add_argument("--source-result-ref", required=True)
     pipeline.add_argument("--source-result-sha256", required=True)
-    pipeline.add_argument("--trigger-tick-ref", required=True)
-    pipeline.add_argument("--trigger-tick-sha256", required=True)
+    pipeline.add_argument(
+        "--trigger-kind",
+        choices=("terminal_wait", "normal_cycle"),
+        default="terminal_wait",
+    )
+    pipeline.add_argument("--trigger-tick-ref")
+    pipeline.add_argument("--trigger-tick-sha256")
+    for prefix in (
+        "cycle-finalization",
+        "schema-pre-derive",
+        "current-task",
+        "task-index",
+        "publication-head",
+    ):
+        pipeline.add_argument(f"--{prefix}-ref")
+        pipeline.add_argument(f"--{prefix}-sha256")
     return parser
 
 
@@ -94,37 +117,104 @@ def _pipeline(root: Path, args: argparse.Namespace) -> dict[str, Any]:
     _, source_result = read_bound_json(
         root, source_binding, "derive synthesis source result"
     )
-    trigger_binding, trigger = _trigger(root, args)
     synthesis = render_selection_synthesis(root, source_result)
     directory = _pipeline_directory(root, args.cycle_id)
     synthesis_binding, synthesis_created = _persist_pipeline_artifact(
         root, directory, "synthesis", synthesis
     )
-    decision = render_preliminary_selection_decision(
-        root, trigger, synthesis_binding
-    )
+    trigger_created = False
+    if args.trigger_kind == "normal_cycle":
+        def required_binding(prefix: str) -> dict[str, str]:
+            ref = getattr(args, prefix + "_ref")
+            digest = getattr(args, prefix + "_sha256")
+            if not ref or not digest:
+                raise ValueError(
+                    f"normal-cycle selection trigger requires --{prefix.replace('_', '-')}-ref and SHA-256"
+                )
+            return _binding(ref, digest)
+
+        current_task = required_binding("current_task")
+        task_index = required_binding("task_index")
+        publication_ref = args.publication_head_ref
+        publication_sha = args.publication_head_sha256
+        if bool(publication_ref) != bool(publication_sha):
+            raise ValueError(
+                "normal-cycle publication head requires both ref and SHA-256"
+            )
+        bootstrap_created = False
+        if publication_ref:
+            publication_head = _binding(publication_ref, publication_sha)
+        else:
+            bootstrap = render_publication_bootstrap(
+                root,
+                cycle_id=args.cycle_id,
+                current_task=current_task,
+                task_index=task_index,
+            )
+            publication_head, bootstrap_created = _persist_pipeline_artifact(
+                root, directory, "publication-bootstrap", bootstrap
+            )
+        trigger = render_normal_cycle_trigger(
+            root,
+            cycle_id=args.cycle_id,
+            cycle_finalization=required_binding("cycle_finalization"),
+            schema_pre_derive=required_binding("schema_pre_derive"),
+            derive_result=source_binding,
+            current_task=current_task,
+            task_index=task_index,
+            publication_head=publication_head,
+            input_evidence_manifest_sha256=synthesis[
+                "input_evidence_manifest_sha256"
+            ],
+        )
+        trigger_binding, trigger_artifact_created = _persist_pipeline_artifact(
+            root, directory, "trigger", trigger
+        )
+        trigger_created = bootstrap_created or trigger_artifact_created
+        decision = render_preliminary_selection_decision_v2(
+            root, trigger_binding, synthesis_binding
+        )
+    else:
+        trigger_binding, trigger = _trigger(root, args)
+        decision = render_preliminary_selection_decision(
+            root, trigger, synthesis_binding
+        )
     decision_binding, decision_created = _persist_pipeline_artifact(
         root, directory, "decision", decision
     )
-    receipt = render_selection_decision_receipt(
-        root, trigger, trigger_binding, decision_binding
+    receipt = (
+        render_selection_decision_receipt_v2(
+            root, trigger_binding, decision_binding
+        )
+        if args.trigger_kind == "normal_cycle"
+        else render_selection_decision_receipt(
+            root, trigger, trigger_binding, decision_binding
+        )
     )
     receipt_binding, receipt_created = _persist_pipeline_artifact(
         root, directory, "receipt", receipt
     )
-    reopened = read_selection_decision_receipt(
-        root, receipt_binding, expected_trigger_tick=trigger
-    )
+    if args.trigger_kind == "normal_cycle":
+        _, reopened_value = read_bound_json(
+            root, receipt_binding, "selection decision receipt v2"
+        )
+        reopened = validate_selection_decision_receipt_v2(root, reopened_value)
+    else:
+        reopened = read_selection_decision_receipt(
+            root, receipt_binding, expected_trigger_tick=trigger
+        )
     return {
         "status": "completed",
         "cycle_id": args.cycle_id,
         "outcome": reopened["outcome"],
         "selected_task_id": reopened["selected_task_id"],
+        "trigger_kind": args.trigger_kind,
+        "trigger": trigger_binding,
         "synthesis": synthesis_binding,
         "decision": decision_binding,
         "receipt": receipt_binding,
         "mutation_performed": any(
-            (synthesis_created, decision_created, receipt_created)
+            (trigger_created, synthesis_created, decision_created, receipt_created)
         ),
     }
 
@@ -132,6 +222,8 @@ def _pipeline(root: Path, args: argparse.Namespace) -> dict[str, Any]:
 def _trigger(
     root: Path, args: argparse.Namespace
 ) -> tuple[dict[str, str], dict[str, Any]]:
+    if not args.trigger_tick_ref or not args.trigger_tick_sha256:
+        raise ValueError("terminal-wait selection requires an exact trigger tick")
     binding = _binding(args.trigger_tick_ref, args.trigger_tick_sha256)
     _, trigger = read_bound_json(
         root,

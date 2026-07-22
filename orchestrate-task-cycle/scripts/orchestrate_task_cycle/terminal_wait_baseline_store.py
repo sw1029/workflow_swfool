@@ -21,7 +21,9 @@ except ImportError:  # pragma: no cover - POSIX is the production path.
 
 STORE_REF = ".task/terminal_wait_baseline"
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
-ARTIFACT_ID = re.compile(r"^(?:twbp|twbc|twba)-[0-9a-f]{32}$|^[0-9a-f]{64}$")
+ARTIFACT_ID = re.compile(
+    r"^(?:twbp|twbc|twba|twbr)-[0-9a-f]{32}$|^[0-9a-f]{64}$"
+)
 MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
 MAX_CATEGORY_ARTIFACTS = 4096
 
@@ -196,6 +198,8 @@ def category_dir(root: Path, category: str, *, create: bool = False) -> Path:
         "snapshots",
         "completions",
         "activations",
+        "pointers",
+        "retirements",
     }:
         raise ValueError("unknown terminal-wait baseline artifact category")
     return _safe_directory(

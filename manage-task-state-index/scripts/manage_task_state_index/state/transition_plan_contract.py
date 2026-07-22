@@ -13,6 +13,7 @@ from .transition_publication import publish_immutable_file
 
 
 PLAN_SCHEMA_VERSION = 1
+PROSPECTIVE_PLAN_SCHEMA_VERSION = 2
 PLAN_KIND = "task_state_transition_plan"
 RESULT_SCHEMA_VERSION = 1
 PLAN_FIELDS = {
@@ -65,18 +66,56 @@ def _timezone_timestamp(value: Any, label: str) -> str:
 def validate_transition_request(request: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(request, dict):
         raise ValueError("Task-state transition request must be a JSON object")
-    allowed = {"schema_version", "events", "updated_at", "render"}
+    allowed = {
+        "schema_version",
+        "events",
+        "updated_at",
+        "render",
+        "artifact_sources",
+        "external_settlement_kind",
+    }
     if set(request) - allowed:
         raise ValueError("Task-state transition request has unsupported fields")
     schema_version = request.get("schema_version", PLAN_SCHEMA_VERSION)
     if (
         not isinstance(schema_version, int)
         or isinstance(schema_version, bool)
-        or schema_version != PLAN_SCHEMA_VERSION
+        or schema_version not in {PLAN_SCHEMA_VERSION, PROSPECTIVE_PLAN_SCHEMA_VERSION}
     ):
         raise ValueError("Unsupported task-state transition request schema_version")
     if request.get("render", True) is not True:
         raise ValueError("Task-state transition plans require Markdown rendering")
+    if schema_version == PLAN_SCHEMA_VERSION:
+        if "artifact_sources" in request or "external_settlement_kind" in request:
+            raise ValueError("Legacy transition requests cannot declare external settlement")
+    else:
+        sources = request.get("artifact_sources")
+        if (
+            request.get("external_settlement_kind") != "selection_publication"
+            or not isinstance(sources, list)
+            or not sources
+        ):
+            raise ValueError(
+                "Prospective transition requests require selection-publication settlement and artifact sources"
+            )
+        seen_targets: set[str] = set()
+        for row in sources:
+            if not isinstance(row, dict) or set(row) != {"target_ref", "source"}:
+                raise ValueError("Prospective artifact source is malformed")
+            target_ref = row.get("target_ref")
+            source = row.get("source")
+            if (
+                not isinstance(target_ref, str)
+                or not target_ref
+                or target_ref in seen_targets
+                or not isinstance(source, dict)
+                or set(source) != {"ref", "sha256"}
+                or not isinstance(source.get("ref"), str)
+                or not source["ref"]
+                or not _is_sha256(source.get("sha256"))
+            ):
+                raise ValueError("Prospective artifact source binding is invalid")
+            seen_targets.add(target_ref)
     if "updated_at" in request:
         _timezone_timestamp(request["updated_at"], "Transition request updated_at")
     events = request.get("events")
@@ -138,6 +177,7 @@ def owned_transition_file(
         "transition_plans",
         "transition_intents",
         "transition_receipts",
+        "transition_pending_receipts",
         "transition_no_effect_receipts",
     }
     if directory not in allowed or Path(filename).name != filename or not filename:
@@ -251,6 +291,7 @@ def _validated_artifact_anchors(plan: dict[str, Any]) -> dict[str, dict[str, Any
         if anchor["expectation"] not in {
             "planned_content_sha256",
             "unchanged_from_plan",
+            "prospective_source_sha256",
         }:
             raise ValueError("Task-state transition plan artifact expectation is invalid")
         for field in ("before_sha256", "expected_sha256"):
@@ -284,7 +325,8 @@ def _validate_anchor_coverage(
             if not _is_sha256(expected):
                 raise ValueError("Task-state transition event content digest is invalid")
             if (
-                anchor["expectation"] != "planned_content_sha256"
+                anchor["expectation"]
+                not in {"planned_content_sha256", "prospective_source_sha256"}
                 or anchor["expected_sha256"] != expected
             ):
                 raise ValueError(
@@ -302,7 +344,8 @@ def validate_transition_plan(plan: dict[str, Any]) -> None:
     if (
         not isinstance(plan.get("schema_version"), int)
         or isinstance(plan.get("schema_version"), bool)
-        or plan.get("schema_version") != PLAN_SCHEMA_VERSION
+        or plan.get("schema_version")
+        not in {PLAN_SCHEMA_VERSION, PROSPECTIVE_PLAN_SCHEMA_VERSION}
         or plan.get("plan_kind") != PLAN_KIND
     ):
         raise ValueError("Unsupported task-state transition plan")
@@ -312,6 +355,8 @@ def validate_transition_plan(plan: dict[str, Any]) -> None:
         raise ValueError("Task-state transition plan digest mismatch")
     request = plan.get("request")
     validate_transition_request(request)
+    if plan.get("schema_version") != request.get("schema_version", PLAN_SCHEMA_VERSION):
+        raise ValueError("Task-state transition plan/request schema mismatch")
     request_sha256 = plan.get("request_sha256")
     if (
         not _is_sha256(request_sha256)
@@ -352,7 +397,25 @@ def validate_transition_plan(plan: dict[str, Any]) -> None:
     if any(event.get("updated_at") != plan.get("created_at") for event in events):
         raise ValueError("Task-state transition plan timestamp binding mismatch")
     _validate_plan_projections(plan, events)
-    _validate_anchor_coverage(_validated_artifact_anchors(plan), events)
+    anchors = _validated_artifact_anchors(plan)
+    _validate_anchor_coverage(anchors, events)
+    if plan.get("schema_version") == PROSPECTIVE_PLAN_SCHEMA_VERSION:
+        source_by_target = {
+            row["target_ref"]: row["source"]
+            for row in request["artifact_sources"]
+        }
+        prospective = {
+            path: anchor
+            for path, anchor in anchors.items()
+            if anchor["expectation"] == "prospective_source_sha256"
+        }
+        if set(prospective) != set(source_by_target):
+            raise ValueError(
+                "Prospective transition sources must exactly cover prospective anchors"
+            )
+        for path, anchor in prospective.items():
+            if source_by_target[path]["sha256"] != anchor["expected_sha256"]:
+                raise ValueError("Prospective transition source digest mismatch")
 
 
 def load_transition_plan(

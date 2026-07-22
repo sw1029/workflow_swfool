@@ -35,9 +35,30 @@ from .transition_plan_contract import (
 )
 from .transition_recovery import committed_boundary_valid, matching_events
 from .transition_semantics import validate_transition_plan_semantics
+from .transition_external import (
+    is_external_plan,
+    load_pending_receipt,
+    settled_receipt_status,
+)
 
 
 VERIFY_PHASES = {"planning", "apply"}
+
+
+def _prospective_sources(plan: dict[str, Any]) -> dict[str, dict[str, str]]:
+    request = plan.get("request")
+    if not isinstance(request, dict) or request.get("schema_version", 1) != 2:
+        return {}
+    return {
+        row["target_ref"]: row["source"]
+        for row in request.get("artifact_sources", [])
+    }
+
+
+def _source_digest(root: Path, source: dict[str, str]) -> str | None:
+    path = workspace_path(root, source["ref"])
+    regular_payload(path)
+    return sha256_file(path)
 
 
 def _artifact_digest(root: Path, relative: str) -> str | None:
@@ -71,6 +92,8 @@ def _materialization_status(
             states.append("before")
         else:
             return "foreign"
+    if not states:
+        return "expected"
     if all(state == "expected" for state in states):
         return "expected"
     if all(state == "before" for state in states):
@@ -94,13 +117,25 @@ def cas_status(
     if markdown_digest != plan["markdown"]["before_sha256"]:
         defects.append("markdown_sha256_mismatch")
     expected_field = "before_sha256" if phase == "planning" else "expected_sha256"
+    sources = _prospective_sources(plan)
     for anchor in plan["artifact_anchors"]:
         try:
             observed = _artifact_digest(root, anchor["path"])
         except ValueError:
             defects.append(f"artifact_not_regular:{anchor['path']}")
             continue
-        if observed != anchor[expected_field]:
+        expected = anchor[expected_field]
+        if anchor["path"] in sources:
+            try:
+                source_digest = _source_digest(root, sources[anchor["path"]])
+            except ValueError:
+                defects.append(f"artifact_source_not_regular:{anchor['path']}")
+                continue
+            if source_digest != sources[anchor["path"]]["sha256"]:
+                defects.append(f"artifact_source_sha256_mismatch:{anchor['path']}")
+            if phase == "apply":
+                expected = anchor["before_sha256"]
+        if observed != expected:
             defects.append(f"artifact_sha256_mismatch:{anchor['path']}")
     return not defects, defects
 
@@ -132,8 +167,14 @@ def _apply_receipt(
         f"{plan['plan_id']}.json",
         create_parent=False,
     )
-    expected = receipt_for_plan(plan, plan_ref, plan_file_sha256)
-    status, digest = receipt_status(path, expected)
+    if is_external_plan(plan):
+        expected = {"receipt_content_sha256": None}
+        status, digest = settled_receipt_status(
+            root, plan, plan_ref, plan_file_sha256
+        )
+    else:
+        expected = receipt_for_plan(plan, plan_ref, plan_file_sha256)
+        status, digest = receipt_status(path, expected)
     return path, expected, status, digest
 
 
@@ -153,6 +194,23 @@ def _observation(
         "plan_effect_observed": False,
         "plan_intent_observed": False,
     }
+
+
+def _pending_external_observed(
+    root: Path,
+    plan: dict[str, Any],
+    plan_ref: str,
+    plan_file_sha256: str,
+) -> bool:
+    if not is_external_plan(plan):
+        return False
+    try:
+        receipt, _binding = load_pending_receipt(
+            root, plan, plan_ref, plan_file_sha256
+        )
+    except (OSError, ValueError):
+        return False
+    return receipt.get("activation_status") == "pending_external_settlement"
 
 
 def verify_transition_plan_state(
@@ -189,6 +247,9 @@ def verify_transition_plan_state(
         root, plan, plan_ref, plan_file_sha256
     )
     projection_healthy = _markdown_projection_matches(root, merge_state(existing))
+    pending_external = _pending_external_observed(
+        root, plan, plan_ref, plan_file_sha256
+    )
     historical_complete = bool(
         exact and boundary_valid and apply_receipt_status == "current"
     )
@@ -208,6 +269,8 @@ def verify_transition_plan_state(
             defects.append("apply_receipt_conflict")
         elif apply_receipt_status == "current" and projection_healthy:
             status = "already_applied"
+        elif pending_external and projection_healthy:
+            status = "pending_external_settlement"
         else:
             status = "recovery_required"
             if apply_receipt_status == "missing":
@@ -266,6 +329,7 @@ def verify_transition_plan_state(
             "ready",
             "already_applied",
             "recovery_required",
+            "pending_external_settlement",
         },
         "idempotent_replay": status == "already_applied",
         "plan_effect_observed": effect_observed,

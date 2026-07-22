@@ -6,9 +6,11 @@ This reference defines how `$orchestrate-task-cycle` discovers, consumes, schedu
 
 - [Core Rule](#core-rule)
 - [Adapter Scan](#adapter-scan)
+- [Manifest v3 closure](#manifest-v3-closure)
 - [Adapter Consumption](#adapter-consumption)
 - [Creation Or Update Routing](#creation-or-update-routing)
 - [Adapter Validation](#adapter-validation)
+- [Adapter Architecture Audit](#adapter-architecture-audit)
 - [Gap Analysis And Derive Handoff](#gap-analysis-and-derive-handoff)
 - [Failure Handling](#failure-handling)
 
@@ -27,11 +29,12 @@ Adapters must not:
 
 ## Adapter Scan
 
-During `repo_skill_adapter_scan`, inspect only compact metadata:
+During `repo_skill_adapter_scan`, inspect only compact metadata and contract bindings:
 
 - `.codex/skills/<skill-name>/SKILL.md` frontmatter;
 - optional `.codex/skills/<skill-name>/adapter.manifest.json`;
 - existence of optional `scripts/render_adapter_packet.py`;
+- manifest-v3 component/runtime-closure, hook-contract, and code-convention bindings;
 - basic active/inactive/invalid status.
 
 Use the deterministic scanner when callable adapters are registered:
@@ -43,7 +46,45 @@ python3 -m orchestrate_task_cycle repo-adapter scan \
 
 Do not load adapter body text, examples, long references, fixtures, or domain maps during the initial scan. Load them only when a phase packet says the detail is relevant.
 
-Record the scan as `repo_skill_adapter_packet`. Require and hash the callable wrapper for a callable v2 registration. Preserve and hash a legacy delegate or deterministic renderer only when the repository declares one; neither migration compatibility nor a renderer is a universal adapter requirement. Validate every phase-consumer and phase-hook value as a unique string list whose members exist in the corresponding closed registry. Bind the present components plus both phase maps as one `adapter_revision_sha256`. Do not record source bodies, credentials, prompts, or corpus metadata.
+Record the scan as `repo_skill_adapter_packet`. Require and hash the callable wrapper for a callable registration. Preserve and hash a legacy delegate or deterministic renderer only when the repository declares one; neither migration compatibility nor a renderer is a universal adapter requirement. Validate every phase-consumer and phase-hook value as a unique string list whose members exist in the corresponding closed registry. Bind the present components plus both phase maps as one `adapter_revision_sha256`. Do not record source bodies, credentials, prompts, or corpus metadata.
+
+## Manifest v3 closure
+
+Prefer manifest format v3 for a callable adapter. Version 3 closes the complete adapter
+revision and executable local dependency surface rather than hashing only a façade:
+
+- `components` is a closed registry. Every row owns a unique component ID and safe regular
+  path, kind, semantic role, required/revision/runtime/audit booleans, and declared
+  dependency IDs. Unknown dependencies, duplicate IDs/paths, unsafe files, or a component
+  dependency cycle block static validation.
+- `runtime_closure` names entry component IDs, separately declared dynamic dependency
+  IDs, and `unresolved_local_import_policy: block`. The scanner recursively follows
+  declared dependencies and statically resolvable local Python imports. A local import
+  not listed as a component is still auto-bound by path/digest as discovered transitive
+  closure; it is never silently omitted from the adapter revision.
+- The closure records component and discovered-transitive digests, local import edges,
+  external distribution versions, dynamic-import call count, and interpreter ABI-bound
+  revision material. Runtime-marked components must be reachable. A dynamic import call
+  without declared dynamic dependencies or an unsafe/unreadable resolved local import
+  fails closed; the manifest must explicitly declare its unresolved-local policy.
+- `hook_contract_path` binds a closed typed registry. Each hook names input/output schema
+  IDs, phases, consumers, side-effect class, owner component/symbol, fail policy, and
+  optional test components. The hook registry must exactly agree with manifest phase
+  maps and all owner/test component IDs must resolve.
+- `code_convention_contract_path` binds repository-owned module roles, dependency DAG,
+  size limits, forbidden effects or names, reuse/pattern guidance, and staged rollout
+  policy when supplied by that contract.
+
+The scanner derives `component_registry_sha256`, `runtime_closure_sha256`, and one
+`adapter_revision_sha256` over the manifest, all revision-included component bytes,
+closure, hook/convention contracts, phase maps, algorithm revision, and interpreter ABI.
+The handoff reopens the manifest, every component, discovered transitive closure, and
+both contracts and recompiles the row; any drift returns `registered_unavailable` with
+bounded stale-component fields. Do not substitute the façade digest for this revision.
+
+Manifest v2 remains readable as explicit `legacy_partial`. It has no closed component or
+runtime-closure proof and must not be described as v3-complete. Compatibility is a
+migration state, not a scanner pass upgraded by inference.
 
 ## Adapter Consumption
 
@@ -55,7 +96,7 @@ python3 .codex/skills/<skill-name>/scripts/render_adapter_packet.py --phase <pha
 
 Use a rendered packet only for the phase it names. If no renderer exists, assemble a compact manual packet from metadata and safe summaries.
 
-An adapter may declare hook signatures, phase-scoped consumer probes, or a requested tracked mode-profile ID. The coordinator resolves that request through the global mode-profile registry and independent activation provenance. An ignored repo-local override may only disable capture, lower consumption/reaction authority, remove repairs, or add probes; adapter observations and packets are never activation sources.
+An adapter may declare typed hook signatures, phase-scoped consumer probes, or a requested tracked mode-profile ID. For manifest v3, consume only a fresh handoff carrying the exact component registry, recursive runtime closure, hook/convention bindings, and adapter revision from the scan. The coordinator resolves a mode-profile request through the global registry and independent activation provenance. An ignored repo-local override may only disable capture, lower consumption/reaction authority, remove repairs, or add probes; adapter observations and packets are never activation sources.
 
 Adapters may inform these phases when applicable:
 
@@ -180,6 +221,55 @@ Validation must check:
 
 Treat validation failures as validation/derive blockers. The orchestrator must not patch the adapter directly; route correction through a selected task and `$task-md-agent-governance`.
 
+## Adapter Architecture Audit
+
+For a manifest-v3 adapter, audit architecture through three explicitly separated layers:
+
+1. **Deterministic facts.** Compile a content-bound, raw-source-free fact packet from all
+   audit-scoped components plus discovered transitive Python modules. Record module LOC
+   and import-time effect kinds; symbols/signatures; import graph, SCCs, cycles, and
+   condensation layers; call graph and dynamic calls; normalized-AST clone groups;
+   inheritance bases, protocol/abstract markers, and overrides; hook owner/test mapping;
+   repository dependency-DAG violations; and changed-path structural pressures.
+2. **Semantic receipt.** When judgment is required, let a bounded semantic owner distill
+   component responsibilities, recursively nested meaning-based module boundaries,
+   cohesion/leakage observations, compatibility risks, and design observations. Every
+   finding must cite existing deterministic fact IDs. Optional design-pattern assessment
+   must state the problem force, benefit, risk, and simpler alternative. The receipt may
+   not contain raw source, prompts, status/severity fields, authority, or completion
+   claims.
+3. **Deterministic adjudication.** Reopen the exact fact, convention, and semantic
+   bindings and derive separate `adapter_consumability_status` and
+   `adapter_architecture_status`. Unsafe/unreadable sources, unresolved hook owners, or
+   forbidden import-time effects block consumability. Structural pressure alone is not
+   a semantic defect; under strict repo policy it becomes `refactor_required` only when
+   an actionable deterministic fact is corroborated by the semantic receipt. Missing
+   convention or semantic receipt produces conservative `not_evaluated` architecture,
+   not a fabricated pass and not a consumability block absent deterministic blockers.
+
+Inheritance and design-pattern review are conditional: audit existing inheritance when
+present and assess a pattern only against a demonstrated problem force. Absence of
+inheritance or a named pattern is never a defect. Nested modules are allowed when their
+distilled responsibilities, dependency direction, and compatibility constraints justify
+them; depth or file count alone is not modularity.
+
+Apply repo-owned rollout policy. A common migration mode enforces changed code while
+grandfathering unchanged legacy pressure only below an exact per-axis high-water mark.
+Do not reset high-water debt, convert unchanged debt to pass, or let a semantic receipt
+set final severity.
+
+Cache only by an exact fingerprint over before/after adapter revision material,
+component registry, runtime closure, hook/convention contracts, analyzer/adjudicator and
+semantic schema revisions, policy revision, and parser/runtime versions. A cached
+semantic receipt must reopen and validate against the current fact IDs. Any mismatch is
+a cache miss, never reusable judgment.
+
+Emit integrity-bound native envelopes for `repo_skill_adapter_validate` and
+`code_structure_audit`. Stage normalization may remove an envelope only after checking
+its closed fields, cycle scope, internal digest, and field origins. Preserve raw fact and
+semantic artifacts by ref/digest; do not flatten semantic judgments into deterministic
+origins or persist source bodies.
+
 ## Gap Analysis And Derive Handoff
 
 Build `repo_skill_gap_packet` before derivation when current-cycle evidence shows reusable friction:
@@ -234,7 +324,7 @@ If `$derive-improvement-task` selects adapter work, the selected task must name:
 
 ## Failure Handling
 
-If adapter scan fails, record the invalid adapter path/status and continue without consuming it unless the active task requires adapter work.
+If adapter scan fails, record the invalid adapter path/status and continue without consuming it unless the active task requires adapter work. For manifest v3, component, transitive-import, hook/convention, or revision drift is a wiring defect; never fall back to the stale façade or implicit legacy adapter.
 
 If adapter validation fails, preserve the adapter files and logs, mark the adapter as not consumable for future routing, and derive a correction task or blocker.
 

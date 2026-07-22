@@ -14,6 +14,7 @@ from typing import Any
 
 from .common import DOMAIN_ADAPTER_ENV
 from .context import RuntimeCache
+from .adapter_scan_contract import adapter_revision_valid, scan_packet_valid
 
 
 AdapterLoader = Callable[[Path, str], Any | None]
@@ -21,14 +22,6 @@ AdapterCandidates = Callable[[Path, str | None], list[Path]]
 AdapterGetter = Callable[[], Any | None]
 AdapterBinder = Callable[[Any | None, str | None], None]
 _MISSING_MODULE = object()
-
-
-def _object_sha256(value: Any) -> str:
-    raw = (
-        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        + "\n"
-    ).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()
 
 
 def file_sha256(path: Path) -> str:
@@ -53,6 +46,8 @@ def _scan_value(root: Path, raw: str) -> dict[str, Any]:
         value = json.loads(resolved.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
         raise ValueError("adapter scan packet is not an object")
+    if not scan_packet_valid(value):
+        raise ValueError("adapter scan packet integrity is invalid")
     return value
 
 
@@ -84,53 +79,6 @@ def _current_adapter_components(
     return current
 
 
-def _adapter_revision_valid(
-    row: dict[str, Any], components: dict[str, tuple[str, str]]
-) -> bool:
-    basis = {
-        "adapter_id": row.get("adapter_id"),
-        "manifest_sha256": row.get("manifest_sha256"),
-        "implementation_sha256": row.get("implementation_sha256"),
-        "legacy_compatibility_sha256": row.get("legacy_compatibility_sha256"),
-        "renderer_sha256": row.get("renderer_sha256"),
-        "decision_identity_validator_sha256": row.get(
-            "decision_identity_validator_sha256"
-        ),
-        "phase_consumer_map": row.get("phase_consumer_map"),
-        "phase_hook_map": row.get("phase_hook_map"),
-    }
-    if row.get("authority_projection_path") is not None:
-        basis["authority_projection_sha256"] = row.get("authority_projection_sha256")
-    revision = str(row.get("adapter_revision_sha256") or "").lower()
-    try:
-        manifest = json.loads(
-            Path(components["manifest_path"][0]).read_text(encoding="utf-8")
-        )
-    except (OSError, ValueError, json.JSONDecodeError, KeyError):
-        return False
-    manifest_matches = all(
-        manifest.get(manifest_field) == row.get(row_field)
-        for manifest_field, row_field in (
-            ("adapter_id", "adapter_id"),
-            ("status", "status"),
-            ("implementation_path", "implementation_path"),
-            ("legacy_compatibility_path", "legacy_compatibility_path"),
-            ("renderer_path", "renderer_path"),
-            ("decision_identity_validator_path", "decision_identity_validator_path"),
-            ("authority_projection_path", "authority_projection_path"),
-            ("phase_consumers", "phase_consumer_map"),
-            ("phase_hooks", "phase_hook_map"),
-        )
-    )
-    return bool(
-        row.get("static_validation", {}).get("status") == "pass"
-        and manifest_matches
-        and revision == _object_sha256(basis)
-        and len(revision) == 64
-        and all(character in "0123456789abcdef" for character in revision)
-    )
-
-
 def registered_adapter_from_scan(
     root: Path,
     raw: str | None,
@@ -140,6 +88,7 @@ def registered_adapter_from_scan(
 ) -> dict[str, Any]:
     """Resolve one hash-current registered adapter without importing it."""
 
+    root = root.expanduser().resolve(strict=True)
     if not raw:
         return {
             "status": "not_supplied",
@@ -204,7 +153,12 @@ def registered_adapter_from_scan(
         }
     revision = str(row.get("adapter_revision_sha256") or "").lower()
     valid = bool(
-        _adapter_revision_valid(row, current_components)
+        adapter_revision_valid(
+            root,
+            row,
+            Path(current_components["manifest_path"][0]),
+            file_sha256,
+        )
         and current_sha256 == row.get("implementation_sha256")
     )
     return {

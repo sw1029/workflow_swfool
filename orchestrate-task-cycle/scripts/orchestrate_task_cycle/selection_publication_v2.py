@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-import re
 from typing import Any
 
 from .selection_decision_receipt import validate_selection_decision_receipt
@@ -16,12 +15,22 @@ from .selection_decision_store import (
     read_bound_json,
 )
 from .selection_publication_plan import MAX_TARGET_BYTES, OPAQUE_ID, SHA256
+from .selection_publication_payload import (
+    payload_for_target,
+    persist_blob,
+    task_id as _task_id,
+)
+from .selection_publication_external import (
+    external_intent_identity,
+    prospective_plan_assertion as _prospective_plan_assertion,
+    task_event_matches as _task_event_matches,
+    validate_external_pending_assertion,
+    validate_external_settlement_assertion,
+)
 from .selection_publication_store import (
-    _blob_path,
     _canonical_json,
     _sha256_bytes,
     _sha256_file,
-    _write_once,
 )
 
 
@@ -44,6 +53,7 @@ PREPARE_KEYS = {
     "targets",
     "compiler_metrics",
 }
+EXTERNAL_PREPARE_KEYS = PREPARE_KEYS | {"task_state_plan", "intent_sha256"}
 TARGET_KEYS = {
     "role",
     "target_ref",
@@ -75,27 +85,12 @@ TRANSITION_RECEIPT_KEYS = {
     "event_count",
     "receipt_content_sha256",
 }
-TASK_ID_LINE = re.compile(
-    r"(?m)^\s*-\s*Task ID:\s*(?:`([^`\r\n]+)`|([^\s`\r\n]+))\s*$"
-)
 
 
 def _closed(value: Any, keys: set[str], label: str) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != keys:
         raise ValueError(f"{label} requires exact fields {sorted(keys)}")
     return value
-
-
-def _task_id(payload: bytes) -> str:
-    try:
-        text = payload.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise ValueError("selection task source must be UTF-8 Markdown") from exc
-    matches = TASK_ID_LINE.findall(text)
-    identifiers = [left or right for left, right in matches]
-    if len(identifiers) != 1 or not OPAQUE_ID.fullmatch(identifiers[0]):
-        raise ValueError("selection task source requires exactly one bounded Task ID")
-    return identifiers[0]
 
 
 def _compact_sha256(value: object) -> str:
@@ -203,26 +198,6 @@ def _transition_assertion(
     return assertion, plan
 
 
-def _task_event_matches(
-    plan: dict[str, Any], task_id: str, task_sha256: str
-) -> bool:
-    events = plan.get("events")
-    if not isinstance(events, list):
-        return False
-    matches = [
-        row
-        for row in events
-        if isinstance(row, dict)
-        and row.get("event") == "upsert"
-        and row.get("type") == "task"
-        and row.get("status") == "active"
-        and row.get("path") == "task.md"
-        and row.get("id") == task_id
-        and row.get("content_sha256") == task_sha256
-    ]
-    return len(matches) == 1
-
-
 def validate_owner_assertion(root: Path, assertion_value: Any) -> dict[str, Any]:
     assertion = _closed(
         assertion_value, ASSERTION_KEYS, "selection publication owner assertion"
@@ -255,13 +230,20 @@ def _selected_source(
 ) -> tuple[dict[str, str], dict[str, Any]]:
     binding = normalize_binding(source_binding_value, "selection decision receipt")
     _, raw = read_bound_json(root, binding, "selection decision receipt")
-    trigger_binding = normalize_binding(
-        raw.get("trigger_selection_tick"), "selection trigger tick"
-    )
-    _, trigger = read_bound_json(root, trigger_binding, "selection trigger tick")
-    receipt = validate_selection_decision_receipt(
-        root, raw, expected_trigger_tick=trigger
-    )
+    if raw.get("schema_version") == 2:
+        from .selection_decision_receipt_v2 import (
+            validate_selection_decision_receipt_v2,
+        )
+
+        receipt = validate_selection_decision_receipt_v2(root, raw)
+    else:
+        trigger_binding = normalize_binding(
+            raw.get("trigger_selection_tick"), "selection trigger tick"
+        )
+        _, trigger = read_bound_json(root, trigger_binding, "selection trigger tick")
+        receipt = validate_selection_decision_receipt(
+            root, raw, expected_trigger_tick=trigger
+        )
     if receipt.get("outcome") != "selected":
         raise ValueError("selection publication intent requires a selected decision")
     return binding, receipt
@@ -273,6 +255,50 @@ def compile_intent(
     """Compile one exact intent into canonical v2 prepare material without writing."""
 
     root = root.expanduser().resolve(strict=True)
+    if raw.get("schema_version") == 2:
+        intent, intent_sha256 = external_intent_identity(raw)
+        source_binding, selected = _selected_source(root, intent["source_decision"])
+        task_binding = normalize_binding(intent["task_source"], "selection task source")
+        _, task_payload = read_bound_bytes(root, task_binding, "selection task source")
+        selection_id = _task_id(task_payload)
+        if selection_id != selected.get("selected_task_id"):
+            raise ValueError("selected task source differs from the decision task ID")
+        plan_binding = _prospective_plan_assertion(
+            root, intent["task_state_plan"], task_binding, selection_id
+        )
+        if len(task_payload) > MAX_TARGET_BYTES:
+            raise ValueError("selection task source exceeds the size limit")
+        task_sha = _sha256_bytes(task_payload)
+        normalized = {
+            "schema_version": 3,
+            "kind": "selection_publication_prepare",
+            "selection_id": selection_id,
+            "source_decision_id": str(selected["receipt_id"]),
+            "source_decision_sha256": source_binding["sha256"],
+            "source_decision": source_binding,
+            "publication_mode": "selected_successor_external_settlement",
+            "owner_assertions": [],
+            "task_state_plan": plan_binding,
+            "intent_sha256": intent_sha256,
+            "targets": [
+                {
+                    "role": "task_alias",
+                    "target_ref": "task.md",
+                    "before_sha256": _sha256_file(root / "task.md"),
+                    "after_sha256": task_sha,
+                    "payload_ref": f".task/selection_publication/blobs/sha256/{task_sha}",
+                    "payload_sha256": task_sha,
+                    "payload_size": len(task_payload),
+                }
+            ],
+            "compiler_metrics": {
+                "inline_payload_bytes": 0,
+                "model_authored_mechanical_bytes": 0,
+                "task_payload_bytes": len(task_payload),
+            },
+        }
+        return normalized, task_payload
+
     intent = _closed(raw, INTENT_KEYS, "selection publication intent")
     if (
         intent.get("schema_version") != 1
@@ -369,8 +395,10 @@ def normalize_prepare(root: Path, raw: dict[str, Any]) -> dict[str, Any]:
 
     helper = {"transaction_id", "predecessor_transaction_id"}
     material = {key: value for key, value in raw.items() if key not in helper}
-    _closed(material, PREPARE_KEYS, "selection publication v2 prepare")
-    if material.get("schema_version") != 2 or material.get("kind") != (
+    schema_version = material.get("schema_version")
+    expected_keys = EXTERNAL_PREPARE_KEYS if schema_version == 3 else PREPARE_KEYS
+    _closed(material, expected_keys, "selection publication prepare")
+    if schema_version not in {2, 3} or material.get("kind") != (
         "selection_publication_prepare"
     ):
         raise ValueError("selection publication v2 prepare contract is invalid")
@@ -386,15 +414,25 @@ def normalize_prepare(root: Path, raw: dict[str, Any]) -> dict[str, Any]:
     if material.get("publication_mode") not in {
         "selected_successor",
         "task_state_reconciliation",
+        "selected_successor_external_settlement",
     }:
         raise ValueError("selection publication v2 mode is invalid")
     assertions = material.get("owner_assertions")
-    if not isinstance(assertions, list) or len(assertions) != 1:
-        raise ValueError("selection publication v2 requires one owner assertion")
+    expected_assertions = 0 if schema_version == 3 else 1
+    if not isinstance(assertions, list) or len(assertions) != expected_assertions:
+        raise ValueError("selection publication owner assertion count is invalid")
     for assertion in assertions:
         _closed(assertion, ASSERTION_KEYS, "selection publication owner assertion")
         normalize_binding(assertion.get("receipt"), "task-state transition receipt")
         normalize_binding(assertion.get("plan"), "task-state transition plan")
+    if schema_version == 3:
+        normalize_binding(
+            material.get("task_state_plan"), "prospective task-state transition plan"
+        )
+        if not isinstance(material.get("intent_sha256"), str) or not SHA256.fullmatch(
+            material["intent_sha256"]
+        ):
+            raise ValueError("selection publication intent digest is invalid")
     targets = material.get("targets")
     if not isinstance(targets, list) or len(targets) != 1:
         raise ValueError("selection publication v2 requires one task_alias target")
@@ -435,29 +473,13 @@ def normalize_prepare(root: Path, raw: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def persist_blob(root: Path, payload: bytes) -> tuple[Path, str, bool]:
-    digest = _sha256_bytes(payload)
-    path = _blob_path(root, digest)
-    created = not path.exists()
-    _write_once(path, payload, "selection publication task blob")
-    return path, digest, created
-
-
-def payload_for_target(root: Path, target: dict[str, Any]) -> bytes:
-    binding = {
-        "ref": target["payload_ref"],
-        "sha256": target["payload_sha256"],
-    }
-    _, payload = read_bound_bytes(root, binding, "selection publication task blob")
-    if len(payload) != target["payload_size"]:
-        raise ValueError("selection publication task blob size is inconsistent")
-    return payload
-
-
 __all__ = (
     "compile_intent",
+    "external_intent_identity",
     "normalize_prepare",
     "payload_for_target",
     "persist_blob",
+    "validate_external_pending_assertion",
+    "validate_external_settlement_assertion",
     "validate_owner_assertion",
 )

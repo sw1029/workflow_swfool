@@ -189,6 +189,15 @@ OPTIONAL_SEMANTIC_FIELDS: dict[str, tuple[str, ...]] = {
     ),
 }
 OPTIONAL_OWNER_FIELDS: dict[str, tuple[str, ...]] = {
+    "repo_skill_adapter_validate": (
+        "adapter_consumability_status",
+        "adapter_architecture_status",
+        "adapter_revision_before_sha256",
+        "adapter_revision_after_sha256",
+        "adapter_architecture",
+        "field_origins",
+    ),
+    "code_structure_audit": ("field_origins",),
     "run": (
         "run_id",
         "owner_task_id",

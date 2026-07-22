@@ -112,7 +112,14 @@ def assert_no_pending_transition_intents(
             create_parent=False,
         )
         receipt = receipt_for_plan(plan, rel_path(root, plan_path), plan_file_sha256)
-        status, _digest = receipt_status(receipt_path, receipt)
+        if plan.get("schema_version") == 2:
+            from .transition_external import settled_receipt_status
+
+            status, _digest = settled_receipt_status(
+                root, plan, rel_path(root, plan_path), plan_file_sha256
+            )
+        else:
+            status, _digest = receipt_status(receipt_path, receipt)
         if status == "conflict":
             raise ValueError("Task-state transition apply receipt conflict")
         if status == "current":

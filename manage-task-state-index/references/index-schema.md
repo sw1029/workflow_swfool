@@ -6,6 +6,7 @@
 - [Stable path and replacement contract](#stable-path-and-replacement-contract)
 - [Durability contract](#durability-contract)
 - [Immutable transition plan contract](#immutable-transition-plan-contract)
+- [Prospective selected-successor settlement](#prospective-selected-successor-settlement)
 - [Link relationships](#link-relationships)
 - [Global ID audit](#global-id-audit)
 - [Markdown index](#markdown-index)
@@ -108,6 +109,69 @@ An exact replay finds the unique complete ordered set of plan-tagged events, app
 For a stale untouched plan caused by canonical ledger/Markdown drift or an artifact digest that is neither its before nor expected value, `settle-plan-no-effect` records `.task/transition_no_effect_receipts/<plan-id>.json` under the same index lock. The receipt binds the exact plan body and newline-bearing plan file, the observed ledger, Markdown, and artifact digests, non-empty CAS defects, and false effect/intent observations. It contains no artifact body. Once present it is terminal for that plan: apply rejects it before creating canonical files, verifier reopens it, and a caller uses its actual file SHA-256 as no-effect execution evidence. All-before, all-expected, and partial before/expected dependency states are ineligible. An invalid or tampered receipt, an intent without a complete event batch, or any plan-tagged event requires conflict or recovery handling and can never be relabeled no-effect.
 
 Use `task_index_transition_plan` as the preferred authority subject for this batch. Retain `task_index` only as the compatibility subject for legacy direct writers.
+
+### Prospective selected-successor settlement
+
+A selected successor uses transition request schema version 2 to break the former
+publication cycle without weakening ownership. The request is the ordinary exact event
+batch plus these closed fields:
+
+```json
+{
+  "schema_version": 2,
+  "external_settlement_kind": "selection_publication",
+  "artifact_sources": [
+    {
+      "target_ref": "task.md",
+      "source": {"ref": "<prospective-task-ref>", "sha256": "<raw-sha256>"}
+    }
+  ],
+  "events": ["<exact supersede/new-active event rows>"],
+  "render": true
+}
+```
+
+The prospective source must be one safe regular workspace file and must exactly match
+the new active task event's content digest. The plan records a `task.md` artifact anchor
+whose expectation is `prospective_source_sha256`; it does not claim those bytes are
+already current. Prospective sources must exactly cover all such anchors. Schema-v1
+requests cannot declare artifact sources or external settlement, and schema-v2 requests
+cannot use another external owner.
+
+Use this closed transaction:
+
+1. Publish the immutable task-state plan while ledger, render, and `task.md` still match
+   their planning prestate.
+2. Prepare a schema-v3 selection publication that binds the exact plan and prospective
+   task source.
+3. Run `apply-plan` with that publication prepare. Under the task-state lock, verify the
+   plan/prepare/CAS bindings, publish the usual transition intent, append the exact event
+   batch, render the index, and publish
+   `.task/transition_pending_receipts/<plan-id>.json`. Its schema version is 2, kind is
+   `task_state_transition_pending_receipt`, and activation is
+   `pending_external_settlement`. It binds the plan/file digests, ledger/render after
+   digests, event count, and exact publication prepare. `task.md` remains unchanged.
+4. The selection-publication owner reopens that pending receipt, CAS-writes only
+   `task.md` last, verifies the prospective digest, and commits a schema-v3 receipt that
+   echoes the pending receipt and plan ID.
+5. Run `settle-plan-external` with the exact committed publication binding. The task-state
+   owner reopens the pending/prepare/commit chain, verifies current `task.md`, its exact
+   event batch, and current render, then publishes
+   `.task/transition_receipts/<plan-id>.json` with schema version 2, kind
+   `task_state_transition_apply_receipt`, and `activation_status: settled`.
+
+The pending intent remains a barrier to unrelated task-state writers until step 5.
+`verify-plan` reports `pending_external_settlement` after step 3 and `already_applied`
+after settlement. Exact replay appends no events and returns
+`already_pending_external_settlement` or `already_settled`. A missing, stale, or
+conflicting prepare/commit binding; foreign `task.md` bytes; missing exact event batch;
+or stale projection fails closed. Never repair this lifecycle by writing `task.md`
+ahead of publication or by manufacturing an apply receipt.
+
+The settled receipt sets `selection_consumption_allowed: true`. The pending receipt and
+committed publication without settlement keep that value false. External settlement is
+a bound-lifecycle finalization of the already authorized exact task-state/publication
+subject, not a second authority source.
 
 Relationship object:
 

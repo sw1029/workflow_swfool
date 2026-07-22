@@ -125,6 +125,10 @@ from .state.transition_plan import (
     settle_transition_no_effect,
     verify_transition_plan,
 )
+from .state.transition_external_cli import (
+    external_prepare_from_args,
+    register_external_settlement_parser,
+)
 from .state.transition_compiler import (
     compile_transition_intent,
     load_transition_intent,
@@ -335,7 +339,11 @@ def cmd_compile_transition(args: argparse.Namespace) -> None:
 
 def cmd_apply_plan(args: argparse.Namespace) -> None:
     try:
-        result = apply_transition_plan(Path(args.root), args.plan)
+        result = apply_transition_plan(
+            Path(args.root),
+            args.plan,
+            external_prepare=external_prepare_from_args(args),
+        )
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
@@ -446,6 +454,8 @@ def build_parser() -> argparse.ArgumentParser:
         "apply-plan", help="CAS-apply one immutable task-state transition plan."
     )
     apply_parser.add_argument("--plan", required=True, help="Workspace-relative plan path.")
+    apply_parser.add_argument("--external-prepare-ref")
+    apply_parser.add_argument("--external-prepare-sha256")
     apply_parser.set_defaults(func=cmd_apply_plan)
 
     verify_parser = subparsers.add_parser(
@@ -469,6 +479,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     settle_parser.add_argument("--at", help="Fixed receipt timestamp for deterministic runs.")
     settle_parser.set_defaults(func=cmd_settle_plan_no_effect)
+    register_external_settlement_parser(subparsers)
     return parser
 
 

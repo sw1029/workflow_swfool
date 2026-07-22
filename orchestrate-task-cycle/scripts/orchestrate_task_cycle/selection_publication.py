@@ -1,5 +1,4 @@
 """Forward-recoverable publication of one canonical task selection."""
-
 from __future__ import annotations
 
 import json
@@ -27,7 +26,7 @@ from .selection_publication_plan import (
     _target_path,
 )
 from .selection_publication_status import current_head_status
-from .selection_publication_state import load_state, status_from_state, write_state
+from .selection_publication_state import load_state, write_state
 from .selection_publication_store import (
     TRANSACTION_ID,
     _atomic_write,
@@ -45,6 +44,7 @@ from .selection_publication_store import (
 from .selection_publication_v2 import (
     normalize_prepare as normalize_v2_prepare,
     payload_for_target,
+    validate_external_pending_assertion,
     validate_owner_assertion,
 )
 
@@ -64,7 +64,7 @@ def _load_prepare(root: Path, transaction_id: str) -> tuple[dict[str, Any], Path
     prepare = _load_json(path, "selection-publication prepare journal")
     if prepare.get("transaction_id") != transaction_id:
         raise ValueError("selection-publication prepare transaction id is inconsistent")
-    if prepare.get("schema_version") == 2:
+    if prepare.get("schema_version") in {2, 3}:
         normalized = normalize_v2_prepare(root, prepare)
     else:
         plan_material = {
@@ -241,9 +241,24 @@ def validate_receipt(
     ) and receipt.get("predecessor_transaction_id") == prepare.get(
         "predecessor_transaction_id"
     )
+    external_fields_valid = True
+    if prepare.get("schema_version") == 3:
+        plan_binding = prepare.get("task_state_plan") or {}
+        plan_id = Path(str(plan_binding.get("ref") or "")).stem
+        pending = receipt.get("owner_pending_receipt")
+        external_fields_valid = bool(
+            receipt.get("external_settlement_plan_id") == plan_id
+            and isinstance(pending, dict)
+            and set(pending) == {"ref", "sha256"}
+            and pending.get("ref")
+            == f".task/transition_pending_receipts/{plan_id}.json"
+            and _sha256_file(root / pending["ref"]) == pending.get("sha256")
+        )
+    elif "owner_pending_receipt" in receipt or "external_settlement_plan_id" in receipt:
+        external_fields_valid = False
     if (
         receipt.get("schema_version") != prepare.get("schema_version")
-        or receipt.get("schema_version") not in {SCHEMA_VERSION, 2}
+        or receipt.get("schema_version") not in {SCHEMA_VERSION, 2, 3}
         or receipt.get("kind") != "selection_publication_receipt"
         or receipt.get("status") != "committed"
         or receipt.get("transaction_id") != transaction_id
@@ -256,6 +271,7 @@ def validate_receipt(
         or receipt.get("targets") != expected_targets
         or receipt.get("authoritative_pointer_role") != "task_alias"
         or not lineage_matches
+        or not external_fields_valid
     ):
         raise ValueError("selection-publication receipt contract is invalid")
     if require_current_targets:
@@ -304,9 +320,19 @@ def publish_prepared(root: Path, transaction_id: str) -> dict[str, Any]:
             _sha256_file(root / "task.md"),
         )
         targets = list(prepare["targets"])
+        pending_binding: dict[str, str] | None = None
         if prepare.get("schema_version") == 2:
             for assertion in prepare["owner_assertions"]:
                 validate_owner_assertion(root, assertion)
+        elif prepare.get("schema_version") == 3:
+            pending_binding = validate_external_pending_assertion(
+                root,
+                prepare,
+                {
+                    "ref": prepare_path.relative_to(root).as_posix(),
+                    "sha256": prepare_sha,
+                },
+            )
         for target in targets:
             current = _sha256_file(
                 _target_path(root, target["role"], target["target_ref"])
@@ -321,7 +347,7 @@ def publish_prepared(root: Path, transaction_id: str) -> dict[str, Any]:
                 continue
             payload = (
                 payload_for_target(root, target)
-                if prepare.get("schema_version") == 2
+                if prepare.get("schema_version") in {2, 3}
                 else _decode_payload(target)
             )
             _atomic_write(path, payload)
@@ -350,6 +376,12 @@ def publish_prepared(root: Path, transaction_id: str) -> dict[str, Any]:
             "authoritative_pointer_role": "task_alias",
             "all_targets_verified_before_receipt": True,
         }
+        if prepare.get("schema_version") == 3:
+            assert pending_binding is not None
+            receipt["owner_pending_receipt"] = pending_binding
+            receipt["external_settlement_plan_id"] = Path(
+                prepare["task_state_plan"]["ref"]
+            ).stem
         if "predecessor_transaction_id" in prepare:
             receipt["predecessor_transaction_id"] = prepare.get(
                 "predecessor_transaction_id"
@@ -359,7 +391,7 @@ def publish_prepared(root: Path, transaction_id: str) -> dict[str, Any]:
         )
         verified = validate_receipt(root, transaction_id, require_current_targets=True)
         _refresh_state(root)
-        return {
+        result = {
             **verified,
             "receipt_sha256": receipt_sha,
             "mutation_performed": True,
@@ -368,6 +400,16 @@ def publish_prepared(root: Path, transaction_id: str) -> dict[str, Any]:
             "publication_authority_status": "published_current",
             "recovery_required": False,
         }
+        if prepare.get("schema_version") == 3:
+            result.update(
+                {
+                    "activation_status": "pending_external_settlement",
+                    "selection_consumption_allowed": False,
+                    "recovery_required": True,
+                    "next_action": "settle_task_state_external",
+                }
+            )
+        return result
 
 
 def pending_transaction_ids(root: Path) -> list[str]:
@@ -447,52 +489,12 @@ def migrate_publication_state(root: Path) -> dict[str, Any]:
 def recover_publications(
     root: Path, transaction_id: str | None = None
 ) -> dict[str, Any]:
-    root = root.expanduser().resolve(strict=True)
-    identifiers = [transaction_id] if transaction_id else pending_transaction_ids(root)
-    if transaction_id is None and len(identifiers) > 1:
-        raise ValueError(
-            "selection-publication has competing pending transactions; "
-            "automatic recovery cannot choose an authoritative selection"
-        )
-    receipts = [publish_prepared(root, item) for item in identifiers]
-    return {
-        "status": "recovered" if receipts else "no_op",
-        "recovered_count": len(receipts),
-        "receipts": receipts,
-        "remaining_pending_transaction_ids": pending_transaction_ids(root),
-        "mutation_performed": bool(receipts),
-    }
+    from .selection_publication_runtime import recover_publications as recover
+
+    return recover(root, transaction_id)
 
 
 def publication_status(root: Path, *, deep: bool = False) -> dict[str, Any]:
-    root = root.expanduser().resolve(strict=True)
-    if not deep:
-        state = load_state(root)
-        if state is not None:
-            return status_from_state(root, state)
-    pending = pending_transaction_ids(root)
-    head = current_head_status(
-        _committed_receipts(root), _sha256_file(root / "task.md")
-    )
-    if pending:
-        status = "recovery_required"
-    elif head["status"] in {"drifted", "ambiguous"}:
-        status = "drift_blocked"
-    else:
-        status = "clear"
-    initialized = head["status"] != "not_initialized"
-    return {
-        "status": status,
-        "pending_transaction_ids": pending,
-        "selection_journal_initialized": initialized,
-        "selection_consumption_allowed": status == "clear" and initialized,
-        "selection_consumption_reason": (
-            "committed_unique_current_head"
-            if status == "clear" and initialized
-            else "no_committed_selection"
-            if not initialized
-            else "publication_recovery_or_drift_repair_required"
-        ),
-        "current_head": head,
-        "mutation_performed": False,
-    }
+    from .selection_publication_runtime import publication_status as status
+
+    return status(root, deep=deep)

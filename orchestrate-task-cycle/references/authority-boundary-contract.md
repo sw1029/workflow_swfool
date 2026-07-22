@@ -10,6 +10,7 @@ Use this contract at the existing `authority` phase. `$manage-agent-authority` r
 - [Dispatch protocol](#dispatch-protocol)
 - [Commit and settlement gates](#commit-and-settlement-gates)
 - [Terminal-wait baseline publication](#terminal-wait-baseline-publication)
+- [Selected-successor publication](#selected-successor-publication)
 - [Decision routing](#decision-routing)
 - [Terminal-wait replay](#terminal-wait-replay)
 - [Legacy migration](#legacy-migration)
@@ -134,6 +135,45 @@ exact terminal/task/direct-final-derive/transition/C/predecessor-A source bindin
 `publish_terminal_wait_baseline_binding` is the grant-authorized effect. `activate_terminal_wait_baseline_settlement` is a bound-lifecycle finalization and cannot alter the subject, sources, predecessor, completion, or use receipt. Preparation never exposes current state. Activation requires the exact consumed execution-result binding; an unconsumed completion remains visibly pending. A competing predecessor, source drift, subject drift, forged use receipt, malformed pointer, or selection baseline that permits raw premise wake fails closed.
 
 After activation, `selection-tick` may discover the current pointer when no explicit previous packet is supplied. It must reopen and revalidate the pointer, activation, completion, snapshot, authority settlement, exact task/source bindings, and selection packet before comparison. No change returns `no_op` without proposal-agent fanout. A read failure is a blocker, not permission to silently initialize another baseline.
+
+## Selected-successor publication
+
+Treat publication of a selected successor as one authority-bound lifecycle spanning two
+owners, not as permission inferred from either owner's receipt. The coordinator must use
+the exact registered operations:
+
+- `materialize_selection_publication_subject`: authority-free, non-active subject preparation only;
+- `publish_selected_successor_topology`: ordinary grant-authorized publication of the selected successor topology;
+- `settle_selected_successor_task_state`: bound-lifecycle settlement of the exact prospective task-state plan from the committed publication;
+- `retire_terminal_wait_baseline_successor`: bound-lifecycle retirement of the exact predecessor baseline after settlement.
+
+The task-state event batch remains separately governed by its ordinary
+`mutate_task_state_index` operation. None of the low-level decision, task-state,
+publication, status, or retirement helpers grants authority or mints an authority
+packet. Do not share or infer a grant across these operations. The two bound-lifecycle
+operations are not new authority sources; they accept only artifacts from the already
+authorized exact subject and cannot widen the selected task, prospective bytes, index
+events, publication target, predecessor, effect, or consume key.
+
+Use this order:
+
+```text
+exact normal-cycle trigger + selection-decision receipt v2
+  -> prospective task-state plan v2 over candidate bytes
+  -> non-active selection-publication prepare v3
+  -> authority/pre-commit gates for the exact owner effects
+  -> task-state event batch/render + pending-external receipt (task.md unchanged)
+  -> selection-publication task.md CAS last + committed receipt v3
+  -> task-state external settlement from that exact committed receipt
+  -> selection-consumption gate becomes true
+  -> retire an exact predecessor terminal-wait baseline to an inactive pointer/history
+```
+
+Missing or conflicting pending/commit/settlement bindings, alias CAS drift, a different
+plan or candidate digest, or an unsettled publication keeps selection consumption false.
+Recovery must replay the same transaction artifacts or rederive a new exact subject; it
+must not fabricate a trigger, mutate `task.md` ahead of the owners, or ask the user to
+repeat authority for unchanged semantics.
 
 ## Decision routing
 

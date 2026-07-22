@@ -91,10 +91,14 @@ REQUIRED_WORKFLOW_OPERATIONS = {
         "dispatch_external_operation",
         "dispatch_local_worker",
         "inspect_cycle",
+        "materialize_selection_publication_subject",
         "materialize_terminal_wait_baseline_subject",
         "mutate_task_topology",
         "publish_compiled_stage_projection",
+        "publish_selected_successor_topology",
         "publish_terminal_wait_baseline_binding",
+        "retire_terminal_wait_baseline_successor",
+        "settle_selected_successor_task_state",
         "validate_exact_subject_premise",
         "validate_selection_decision_receipt",
     },
@@ -130,6 +134,8 @@ REQUIRED_WORKFLOW_OPERATIONS = {
 BOUND_LIFECYCLE_MUTATIONS = {
     ("orchestrate-task-cycle", "activate_terminal_wait_baseline_settlement"),
     ("orchestrate-task-cycle", "activate_task_topology_settlement"),
+    ("orchestrate-task-cycle", "retire_terminal_wait_baseline_successor"),
+    ("orchestrate-task-cycle", "settle_selected_successor_task_state"),
 }
 
 PROJECTION_ONLY_MUTATIONS = {
@@ -144,6 +150,7 @@ PROJECTION_ONLY_MUTATIONS = {
     ("manage-external-advice", "prepare_advice_intake_plan"),
     ("manage-task-state-index", "prepare_task_state_transition_plan"),
     ("orchestrate-task-cycle", "materialize_terminal_wait_baseline_subject"),
+    ("orchestrate-task-cycle", "materialize_selection_publication_subject"),
     ("orchestrate-task-cycle", "publish_compiled_stage_projection"),
     ("record-agent-work-log", "publish_agent_work_log"),
     ("record-visible-increment", "publish_visible_increment"),

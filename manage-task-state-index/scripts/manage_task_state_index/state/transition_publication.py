@@ -12,6 +12,7 @@ OWNED_DIRECTORIES = {
     "transition_plans",
     "transition_intents",
     "transition_receipts",
+    "transition_pending_receipts",
     "transition_no_effect_receipts",
 }
 

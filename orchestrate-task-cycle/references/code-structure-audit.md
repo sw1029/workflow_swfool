@@ -9,6 +9,7 @@ Use this reference for the `code_structure_audit` phase in `$orchestrate-task-cy
 - [Thresholds](#thresholds)
 - [Responsibility Clusters](#responsibility-clusters)
 - [Semantic Modularity Signals](#semantic-modularity-signals)
+- [Repo-Adapter Architecture Pipeline](#repo-adapter-architecture-pipeline)
 - [Status Policy](#status-policy)
 - [Output Contract](#output-contract)
 - [Derive Handoff](#derive-handoff)
@@ -77,6 +78,55 @@ Report scalar/symbol-level signals only. Do not persist raw source bodies.
 
 Use these fields to detect file-count-as-progress mistakes. Creating more files is not structural improvement unless an adapter or validation packet shows lower coupling, fewer mechanical shards, less duplication, better reuse, lower burden, or a named transition unlocked.
 
+## Repo-Adapter Architecture Pipeline
+
+When a fresh manifest-v3 repo-adapter handoff is available, extend the same
+`code_structure_audit` boundary with adapter architecture evidence; do not create a new
+workflow phase. Compile deterministic facts over every audit-scoped registered component
+and statically discovered transitive Python module. The fact packet is bound to the
+manifest, complete adapter revision, convention digest, and analyzer revision, and may
+contain only scalar/symbol/graph facts:
+
+- module LOC, changed-path flag, symbol count, dynamic-import count, and top-level effect kinds;
+- symbol kinds, signatures, line spans, decorators/bases, and normalized-AST digests;
+- local import graph, SCCs/cycles/layers, call edges, and repo dependency-DAG violations;
+- normalized-AST clone groups;
+- inheritance, protocol/abstract markers, and override relationships when present;
+- typed hook-to-owner/test-component resolution;
+- deterministic structural pressures and unreadable/unsafe-source blockers.
+
+Set `raw_source_persisted: false` and never include source/literal bodies. A semantic
+owner may then emit a closed receipt bound to the exact fact packet and convention. It
+may distill responsibilities, propose recursively nested meaning-based modules, explain
+cohesion/leakage, record compatibility risks, and assess design patterns. Every finding
+must cite deterministic `fact_id` values. Pattern assessment must state the problem
+force, benefit, risk, and simpler alternative. It cannot set `audit_status`, severity,
+consumability, authority, or completion fields.
+
+The deterministic adjudicator owns final outcomes. Keep these axes separate:
+
+- `adapter_consumability_status`: `pass|blocked` from static/closure and safety facts;
+- `adapter_architecture_status`: `pass|warn|refactor_required|blocked|not_evaluated|not_applicable` from repo policy, facts, and any validated semantic corroboration.
+
+A missing convention or semantic receipt leaves architecture `not_evaluated`; it does
+not block a statically safe adapter and does not manufacture pass. Under strict policy,
+structural pressure becomes `refactor_required` only when an actionable fact is
+semantically corroborated. Under changed-code enforcement, unchanged legacy pressure
+may remain warn-only only within the exact adapter-owned per-axis high-water. Unsafe
+import-time effects, unreadable sources, and unresolved hook owners remain deterministic
+blockers.
+
+Audit inheritance and design patterns only when evidence makes them relevant. No
+inheritance or named-pattern absence is a defect. Prefer the simplest structure that
+satisfies the demonstrated force; nested packages and subpackages are valid when their
+distilled responsibilities and dependency direction are explicit. A pattern name,
+deeper tree, or greater file count without evidence is not an improvement.
+
+Cache reuse requires one exact fingerprint over before/after manifest revisions,
+component registry, runtime closure, hook/convention digests, analyzer/adjudicator and
+semantic schema revisions, policy revision, and parser/runtime versions. Reopen and
+validate the cached semantic receipt against current fact IDs; any mismatch is a miss.
+
 ## Status Policy
 
 - `pass`: no changed implementation file crosses soft thresholds.
@@ -86,6 +136,11 @@ Use these fields to detect file-count-as-progress mistakes. Creating more files 
 - `not_applicable`: no changed implementation source file was present. Record a concrete reason.
 
 When `code_convention_contract_status=not_provided`, depth/fan-out findings are warn-only and cannot by themselves produce `refactor_required` or `blocked`. Size thresholds, mixed-responsibility risk, mechanical naming/sharding, duplicate symbols, global rebinding, and unsafe generated code keep their existing severity. The absent contract should be visible downstream as Q5 `adapter_hook_debt(code_convention_contract, code_structure_audit)`.
+
+For an adapter architecture result, apply the separate axis policy above. Do not collapse
+a consumability pass plus architecture `not_evaluated|warn|refactor_required` into one
+generic pass/block value. A refactor requirement is derive/validation debt unless an
+independent safety blocker makes execution unsafe.
 
 ## Output Contract
 
@@ -110,6 +165,13 @@ Emit JSON with:
 - `existing_debt_exemptions`
 - `forbidden_raw_source_persisted: true`
 - `evidence_paths`
+
+For native manifest-v3 architecture results, wrap this result in an integrity-bound
+`code_structure_audit_packet` and preserve `field_origins`: final audit status and
+semantic findings are deterministic adjudication, graph/metric fields are deterministic
+facts, convention conformance is repo policy, and a semantic refactor plan is semantic
+receipt output. Stage normalization must verify the envelope digest and cycle scope
+before importing those fields.
 
 `responsibility_split_plan` should name target modules and responsibilities, not implementation code. `compatibility_constraints` should preserve public APIs, CLIs, schemas, artifact paths, and tests that callers rely on.
 
