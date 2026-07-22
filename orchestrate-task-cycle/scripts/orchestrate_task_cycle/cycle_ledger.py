@@ -37,6 +37,7 @@ from .ledger.constants import (
     SHA256_PATTERN,
     STAGE_STATUS_NORMALIZATION,
     STAGE_COMPILER_PROTOCOL_VERSION,
+    STAGE_PREPARATION_SCHEMA_VERSION,
     SUPPORTED_LEDGER_FORMAT_VERSIONS,
     SUPPORTED_STAGE_COMPILER_PROTOCOL_VERSIONS,
     TERMINAL_LATCH_KEY_VERSION,
@@ -77,6 +78,7 @@ from .ledger.no_change_contract import (
     build_no_change_evidence,
     build_unchanged_target_observation,
 )
+from .ledger.cli_parser import build_parser as _build_parser
 from .ledger.initialization import cli_init_protocol as _cli_init_protocol
 from .ledger.initialization import init_cycle as _init_cycle
 from .ledger.reporting import render_markdown, summarize
@@ -85,6 +87,7 @@ from .ledger.repository import (
     duplicate_event,
     read_all_cycle_events,
     read_events,
+    read_events_raw,
     read_events_unlocked,
     read_current_expanded,
     write_current as _write_current,
@@ -147,6 +150,7 @@ __all__ = [
     "SHA256_PATTERN",
     "STAGE_STATUS_NORMALIZATION",
     "STAGE_COMPILER_PROTOCOL_VERSION",
+    "STAGE_PREPARATION_SCHEMA_VERSION",
     "SUPPORTED_LEDGER_FORMAT_VERSIONS",
     "SUPPORTED_STAGE_COMPILER_PROTOCOL_VERSIONS",
     "TERMINAL_LATCH_KEY_VERSION",
@@ -202,6 +206,7 @@ __all__ = [
     "read_all_cycle_events",
     "read_current_expanded",
     "read_events",
+    "read_events_raw",
     "read_events_unlocked",
     "read_initialization_metadata",
     "rel_path",
@@ -275,6 +280,7 @@ def init_cycle(
     terminal_state: dict[str, Any] | None = None,
     allow_missing_task_for_bootstrap: bool = False,
     stage_compiler_protocol_version: int | None = None,
+    stage_preparation_schema_version: int | None = None,
 ) -> dict[str, Any]:
     return _init_cycle(
         root,
@@ -284,6 +290,7 @@ def init_cycle(
         terminal_state,
         allow_missing_task_for_bootstrap,
         stage_compiler_protocol_version,
+        stage_preparation_schema_version,
         atomic_writer=atomic_write_text,
         append_event=append_event,
     )
@@ -335,102 +342,6 @@ def _append_cli_event(args: argparse.Namespace) -> dict[str, Any]:
     return append_event(root=args.root, cycle_id=args.cycle_id, event=event, allow_noncanonical_step=args.allow_noncanonical_step)
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Maintain .task/cycle/<cycle-id> stage ledger artifacts.")
-    parser.add_argument("--root", default=".", help="Workspace root.")
-    sub = parser.add_subparsers(dest="command", required=True)
-
-    init_p = sub.add_parser("init", help="Initialize a cycle ledger.")
-    init_p.add_argument("--cycle-id")
-    init_p.add_argument("--task-id")
-    init_p.add_argument("--allow-missing-task-for-bootstrap", action="store_true")
-    init_p.add_argument(
-        "--stage-compiler-protocol-version",
-        type=int,
-        choices=(1, STAGE_COMPILER_PROTOCOL_VERSION),
-        help=(
-            "Compiler protocol for a new cycle (default: 2); omitted on an "
-            "existing cycle preserves its initialized protocol."
-        ),
-    )
-    init_p.add_argument("--reason", default="cycle ledger initialized")
-    init_p.add_argument("--terminal-state-json", help="Optional terminal state used to suppress an unchanged full-cycle restart.")
-
-    append_p = sub.add_parser("append", help="Append a stage event.")
-    append_p.add_argument("--cycle-id", required=True)
-    append_p.add_argument("--event-json", help="JSON object, JSON file path, or '-' for stdin.")
-    append_p.add_argument("--step")
-    append_p.add_argument("--status")
-    append_p.add_argument("--reason")
-    append_p.add_argument("--task-id")
-    append_p.add_argument("--completed-task-id")
-    append_p.add_argument("--next-task-id")
-    append_p.add_argument("--changed-file", action="append", default=[])
-    append_p.add_argument("--artifact", action="append", default=[])
-    append_p.add_argument("--blocker", action="append", default=[])
-    append_p.add_argument("--validation-verdict")
-    append_p.add_argument("--progress-verdict")
-    append_p.add_argument("--task-pack-id")
-    append_p.add_argument("--task-pack-item-id")
-    append_p.add_argument("--task-pack-path")
-    append_p.add_argument("--task-pack-status")
-    append_p.add_argument("--selected-task-source")
-    append_p.add_argument("--promoted-item-id")
-    append_p.add_argument("--completed-item-id")
-    append_p.add_argument("--blocker-signature")
-    append_p.add_argument("--input-delta-gate")
-    append_p.add_argument("--terminal-blocker")
-    append_p.add_argument("--authority-policy")
-    append_p.add_argument("--authority-policy-source")
-    append_p.add_argument(
-        "--allow-noncanonical-step",
-        action="store_true",
-        help="Allow a noncanonical step and mark it as malformed/noncanonical evidence.",
-    )
-
-    render_p = sub.add_parser("render", help="Render a ledger summary.")
-    render_p.add_argument("--cycle-id", required=True)
-    render_p.add_argument("--format", choices=("json", "markdown"), default="markdown")
-    render_p.add_argument("--write-dashboard", action="store_true")
-
-    current_p = sub.add_parser("current", help="Refresh and print current_stage.json.")
-    current_p.add_argument("--cycle-id", required=True)
-
-    finalize_p = sub.add_parser("finalize", help="Atomically publish one validated final candidate.")
-    finalize_p.add_argument("--cycle-id", required=True)
-    finalize_p.add_argument("--candidate-json", required=True, help="JSON object, JSON file path, or '-' for stdin.")
-
-    verify_p = sub.add_parser(
-        "verify-finalization",
-        help="Verify a finalization receipt against its immutable snapshot and current pointer.",
-    )
-    verify_p.add_argument("--cycle-id", required=True)
-    verify_p.add_argument(
-        "--receipt-json",
-        required=True,
-        help="Receipt or current-pointer JSON object, file path, or '-' for stdin.",
-    )
-    pending_p = sub.add_parser(
-        "pending-finalizations",
-        help="List unresolved immutable finalization conflict records.",
-    )
-    pending_p.add_argument("--cycle-id", required=True)
-
-    resolve_p = sub.add_parser(
-        "resolve-pending-finalization",
-        help="Resolve one pending conflict as merged or evidence-bound retired.",
-    )
-    resolve_p.add_argument("--cycle-id", required=True)
-    resolve_p.add_argument("--pending-conflict-id", required=True)
-    resolve_p.add_argument("--disposition", choices=("merged", "retired"), required=True)
-    resolve_p.add_argument("--resolution-evidence-id", required=True)
-    resolve_p.add_argument("--resolution-evidence-digest", required=True)
-    resolve_p.add_argument("--resolution-evidence-ref", required=True)
-    resolve_p.add_argument("--resolution-rationale-id", required=True)
-    resolve_p.add_argument("--committed-finalization-token")
-    return parser
-
-
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     args.root = Path(args.root).resolve()
@@ -447,6 +358,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.cycle_id,
                 args.stage_compiler_protocol_version,
             ),
+            args.stage_preparation_schema_version,
         )
     elif args.command == "append":
         result = _append_cli_event(args)

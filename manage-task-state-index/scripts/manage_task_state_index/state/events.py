@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 from ..migration.api import load_sealed_events_if_present
 
@@ -18,13 +18,21 @@ from .contracts import (
 from .storage import (
     _ensure_index_unlocked,
     atomic_write_bytes,
+    existing_index_read_lock,
     id_stamp,
     index_lock,
     jsonl_path,
+    lock_path,
     now_iso,
     sha256_file,
+    StableReadRaceError,
+    stable_file_token,
     slugify,
 )
+
+
+ReadResult = TypeVar("ReadResult")
+READ_SNAPSHOT_ATTEMPTS = 3
 
 def _version(value: Any, *, field: str, line_no: int, source: Path, default: int) -> int:
     if value is None:
@@ -180,13 +188,16 @@ def _load_events_for_audit_unlocked(root: Path) -> tuple[list[dict[str, Any]], l
     Mutation paths continue to use `_load_events_unlocked` and therefore fail
     closed on any malformed or unsupported row.
     """
-    _ensure_index_unlocked(root)
     sealed = load_sealed_events_if_present(root)
     if sealed is not None:
         return sealed
     events: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
     source = jsonl_path(root)
+    if not source.exists() and not source.is_symlink():
+        return events, results
+    if source.is_symlink() or not source.is_file():
+        raise ValueError("Task-state index must be a regular file")
     with source.open("rb") as handle:
         for line_no, raw_line in enumerate(handle, start=1):
             if not raw_line.strip():
@@ -219,9 +230,38 @@ def _load_events_for_audit_unlocked(root: Path) -> tuple[list[dict[str, Any]], l
     return events, results
 
 
+def _stable_index_read(root: Path, reader: Callable[[], ReadResult]) -> ReadResult:
+    root = root.resolve()
+    source = jsonl_path(root)
+    lock = lock_path(root)
+    for _attempt in range(READ_SNAPSHOT_ATTEMPTS):
+        try:
+            with existing_index_read_lock(root) as locked:
+                if locked:
+                    return reader()
+                before = stable_file_token(source)
+                error: OSError | UnicodeError | ValueError | None = None
+                result: ReadResult | None = None
+                try:
+                    result = reader()
+                except (OSError, UnicodeError, ValueError) as exc:
+                    error = exc
+                after = stable_file_token(source)
+                lock_appeared = lock.exists() or lock.is_symlink()
+                if before != after or lock_appeared:
+                    continue
+                if error is not None:
+                    raise error
+                return result  # type: ignore[return-value]
+        except StableReadRaceError:
+            continue
+    raise ValueError("Task-state index changed during read-only snapshot")
+
+
 def load_events_for_audit(root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    with index_lock(root):
-        return _load_events_for_audit_unlocked(root)
+    return _stable_index_read(
+        root, lambda: _load_events_for_audit_unlocked(root.resolve())
+    )
 
 
 def _load_events_unlocked(root: Path) -> list[dict[str, Any]]:
@@ -238,6 +278,8 @@ def _read_existing_events(root: Path) -> list[dict[str, Any]]:
         return [validate_event(event, line_no, jsonl_path(root)) for line_no, event in enumerate(events, start=1)]
     events: list[dict[str, Any]] = []
     source = jsonl_path(root)
+    if source.is_symlink() or not source.is_file():
+        raise ValueError("Task-state index must be a regular file")
     with source.open("r", encoding="utf-8") as handle:
         for line_no, line in enumerate(handle, start=1):
             if not line.strip():
@@ -260,14 +302,14 @@ def load_events_read_only(root: Path) -> tuple[list[dict[str, Any]], str | None]
 
     root = root.resolve()
     source = jsonl_path(root)
-    if not source.is_file():
-        return [], None
-    before = sha256_file(source)
-    events = _read_existing_events(root)
-    after = sha256_file(source)
-    if before != after:
-        raise ValueError("Task-state index changed during read-only scan preflight")
-    return events, before
+
+    def load() -> tuple[list[dict[str, Any]], str | None]:
+        if not source.exists() and not source.is_symlink():
+            return [], None
+        events = _read_existing_events(root)
+        return events, sha256_file(source)
+
+    return _stable_index_read(root, load)
 
 
 def merge_state(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:

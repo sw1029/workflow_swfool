@@ -15,6 +15,7 @@ from .render import (
     _markdown_projection_matches,
     _rebuild_markdown_unlocked as _default_rebuild_markdown,
 )
+from .selected_successor_guard import require_selected_successor_execution
 from .storage import index_lock, markdown_path, rel_path, sha256_file
 from .transition_external import (
     is_external_plan,
@@ -318,11 +319,14 @@ def apply_transition_plan(
     path_value: str | Path,
     *,
     external_prepare: dict[str, str] | None = None,
+    _selected_successor_execution_token: object | None = None,
     rebuild_markdown: Callable[..., dict[str, Any]] = _default_rebuild_markdown,
 ) -> dict[str, Any]:
     context, replay = _preflight(
         root, path_value, external_prepare, rebuild_markdown
     )
+    if context.external:
+        require_selected_successor_execution(_selected_successor_execution_token)
     return replay if replay is not None else _result(context, _apply_locked(context))
 
 

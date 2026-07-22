@@ -18,9 +18,13 @@ This reference defines durable workflow artifacts for `$orchestrate-task-cycle`.
 
 Store cycle state under `.task/cycle/<cycle-id>/`:
 
-- `stage.jsonl`: append-only stage events. New rows carry `format_version: 1`; versionless rows are legacy-compatible. Malformed rows, unknown versions, duplicate event IDs, and cycle-ID mismatches fail closed.
+- `stage.jsonl`: append-only stage events. Ordinary rows carry `format_version: 1`; compiled stage-result rows carry `format_version: 2` and `event_kind: compiled_stage_result_ref`. Explicit format-v0/versionless legacy rows remain readable. Malformed rows, unknown versions, duplicate event IDs, cycle-ID mismatches, or invalid compact-result bindings fail closed.
 - `current_stage.json`: atomically replaced latest stage summary with its source `event_count`. Protocol-v1 cycles retain full events; protocol-v2 cycles store only bounded event refs/scalars and hydrate exact event bodies from `stage.jsonl` through the ledger reader.
 - `packets/*.md` or `packets/*.json`: rendered subskill packets.
+- `compiler/context/sha256/*.json` and `compiler/work_order/sha256/*.json`: owner/hybrid preparation context and bounded work orders, written only when published.
+- `compiler/machine_input/sha256/*.json`: preparation-v3 machine-only deterministic inputs; deterministic preparations contain no context/work-order binding.
+- `compiler/owner_result/sha256/*.json` and `compiler/semantic/sha256/*.json`: canonical exact stage-input wrappers. Semantic wrappers are limited to 64 KiB.
+- `packets/result-<target>-<body-sha256>.json`: the single canonical compiled result body referenced by a format-v2 ledger row.
 - `.task/cycle/<cycle-id>/packets/code_structure_audit_packet.json`: read-only generated-code size, module-boundary, semantic-structure, and convention-conformance audit evidence.
 - `final_report.md`: durable final report draft when written.
 - `dashboard.md`: Korean dashboard snapshot rendered from ledger evidence, preserving canonical step/status tokens, paths, IDs, hashes, and the rendered `event_count`.
@@ -189,7 +193,9 @@ Ledger `status` is a required workflow-stage lifecycle status, not the owning su
 
 When an event references an artifact path already recorded with the same SHA-256, the ledger writer should emit `artifact_refs[].unchanged_ref: {path, sha256}` and top-level `unchanged_refs`. Downstream profile snapshots use `unchanged_ref_count` to avoid counting repeated packet bodies as fresh fixed cost.
 
-New CLI-created cycles record `stage_compiler_protocol_version: 2` in `initialization.json`. Existing cycles without that field remain protocol v1 and are never rewritten implicitly. A consumer that needs nested result fields must use the expanded ledger read surface; it must not treat the compact `current_stage.json` event ref as a full event. The v2 projection is accepted only when its event IDs, sequence numbers, event digests, step/status scalars, and event count exactly reproject the authoritative `stage.jsonl` bytes.
+New CLI- and direct-API-created cycles record `stage_compiler_protocol_version: 2` and `stage_preparation_schema_version: 3` in `initialization.json`. Existing cycles preserve their initialized markers; cycles without a protocol field remain protocol v1 and are never rewritten implicitly. Explicit protocol-v1/preparation-v1 and protocol-v2/preparation-v2 initialization remain compatibility paths.
+
+A compiled result body is canonicalized and stored once. Its format-v2 ledger row contains only bounded lifecycle/result scalars, structural compiler metrics, the exact-input-binding digest, and the exact result ref, byte size, raw-file SHA-256, and canonical-body SHA-256. Compiler CAS metrics are cumulative: context/work-order or machine-input, preparation, and result writers report actual immutable-link mutation, new/reused bytes, and actual new-file count; a later publication must add its receipt rather than overwrite prior counters. Schema-v3 preparation publication writes a canonical preparation-scoped origin intent before each compiler/preparation CAS link and derives the aggregate schema-v2 origin receipt from the verified intents, so a post-link/pre-receipt crash cannot turn an original new write into a replay reuse. Intent files count as visible compiler I/O; established schema-v1 aggregate receipts remain readable. Per-attempt CAS counters are omitted from preparation identity and durable preparation bytes so replay preserves one preparation CAS digest. A crash after result CAS write but before ledger append classifies that result as reused on retry and appends only one event. `read_events_raw` returns those authoritative rows without hydration. `read_events` and `read_current_expanded` reopen only the exact cycle packet CAS, reject symlinks/path escape/oversize/noncanonical bytes, require the exact digest-bearing filename, verify every binding, rederive promoted scalars from the CAS body, enforce body step/cycle scope, and return a hydrated legacy-equivalent view. Integrity and projection validation operate on raw rows; dashboard, context, efficiency, and semantic consumers use expanded readers. A consumer must not treat either a compact result row or the compact `current_stage.json` event ref as a full result. A replay with different owner, semantic, routing, or usage bindings fails even when its result body is byte-identical. The v2 current projection is accepted only when its event IDs, sequence numbers, event digests, step/status scalars, and event count exactly reproject the authoritative raw `stage.jsonl` bytes. Protocol-v1/preparation-v1 publication retains the legacy full format-v1 event so old current-state consumers do not lose result fields.
 
 ## Finalization Durable-State Contracts
 
@@ -237,7 +243,7 @@ Stop-hook capture must not repair workflow, source, task, acceptance, or goal ar
 
 ## Result Contracts
 
-Use `$validate-subskill-result-contract` or `python3 -m orchestrate_task_cycle result-contract` before advancing major stages.
+Use `$validate-subskill-result-contract` or `python3 -P -m orchestrate_task_cycle result-contract` before advancing major stages.
 
 - Default mode is `warn`.
 - The `authority` target is a closed schema-version-2 exception that must run in `block` mode before dispatch with an explicit workspace root. It binds and reopens the authority owner's immutable decision, exact operation/subject/scope, independent authority/local/external/risk/GT axes, selected and lineage grants plus immutable policy snapshots, deterministic approval projection, explicit composition, scoped fingerprint, and, for mutation, the exact reserved-use artifact/state plus immutable `pre_dispatch` verification. Workspace escape, symlink, byte drift, forged echoes, or missing artifact verification fail closed. See [authority-boundary-contract.md](authority-boundary-contract.md). Legacy shapes remain diagnostic and cannot pass.

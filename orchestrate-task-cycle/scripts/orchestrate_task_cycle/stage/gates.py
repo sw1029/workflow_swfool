@@ -15,7 +15,7 @@ MODEL_JUDGMENT_TARGETS = frozenset(
 def boundary_reason(target: str, schema_version: int = 1) -> str:
     if target == "authority":
         return "awaiting_authority"
-    if schema_version == 2:
+    if schema_version in {2, 3}:
         from .specs import TARGET_COMPILE_SPECS
 
         kind = TARGET_COMPILE_SPECS[target].executor_kind

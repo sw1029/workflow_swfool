@@ -26,7 +26,7 @@ from .operations import load_operation
 from .grant_diagnostics import near_miss_reasons
 
 
-def _manifest_reasons(request: dict[str, Any], operation: dict[str, Any]) -> list[str]:
+def manifest_reasons(request: dict[str, Any], operation: dict[str, Any]) -> list[str]:
     reasons: list[str] = []
     if not set(operation["required_capabilities"]).issubset(
         request["required_capabilities"]
@@ -340,6 +340,20 @@ def _fingerprint_payload(
     }
 
 
+def effective_authority_fingerprint(
+    request: dict[str, Any],
+    context: dict[str, Any],
+    manifest_binding: dict[str, str] | None,
+    selected: list[dict[str, Any]],
+    lineage: list[dict[str, Any]],
+) -> str:
+    """Reproduce the evaluator fingerprint from already validated inputs."""
+
+    return object_sha256(
+        _fingerprint_payload(request, context, manifest_binding, selected, lineage)
+    )
+
+
 def evaluate(
     root: Path,
     raw_request: dict[str, Any],
@@ -371,9 +385,9 @@ def evaluate(
         else:
             decision, reasons = "denied", ["unknown_mutating_operation_fail_closed"]
     else:
-        manifest_reasons = _manifest_reasons(request, operation)
-        if manifest_reasons:
-            decision, reasons = "conflict", manifest_reasons
+        request_manifest_reasons = manifest_reasons(request, operation)
+        if request_manifest_reasons:
+            decision, reasons = "conflict", request_manifest_reasons
         elif operation["authorization_mechanism"] == "none":
             decision, reasons = (
                 "not_applicable",
@@ -402,8 +416,8 @@ def evaluate(
                     context["session_ceiling"]["evidence_id"],
                 )
     context_sha = object_sha256(context)
-    fingerprint = object_sha256(
-        _fingerprint_payload(request, context, manifest_binding, selected, lineage)
+    fingerprint = effective_authority_fingerprint(
+        request, context, manifest_binding, selected, lineage
     )
     approval_projection = (
         build_approval_projection(request, context, reasons)

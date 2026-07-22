@@ -328,19 +328,28 @@ Before dispatch or commit, write an immutable `authority_verification` binding:
 
 Consume only with an explicit exact `pre_commit` verification binding, a typed owner-result binding, and an exact expected subject-after SHA-256. Do not discover or silently select a verification. The pre-commit verification proves the pre-effect subject and reserved CAS state. After the effect, do not re-require the pre-effect subject digest. Instead, compare the current subject to the expected-after digest and create an immutable `authority_execution_result` that binds the reservation, verification, owner result, subject before/after, effect status, and completion time. Bind the use receipt to this typed result and the owner result. Decrement remaining/reserved uses, increment consumed uses and state version, and exhaust a finite grant at zero.
 
-Release only with immutable evidence of `not_started` or `verified_no_effect`. For `unknown_effect`, preserve reserved use and set reservation state to `quarantined_unknown_effect`.
+Release only with immutable evidence of `not_started` or `verified_no_effect`. For a registered owner operation, direct release is forbidden even when the caller supplies a valid-looking owner receipt. Use `settle`; its private release branch must reopen the canonical owner-validation receipt, validate the exact current pre-commit CAS state, and reproduce the fixed owner validator before accepting `verified_no_effect` or `unknown_effect`. For `unknown_effect`, preserve reserved use and set reservation state to `quarantined_unknown_effect`.
 
 ## Execution settlement and reconciliation
 
-Require this closed authority-generated execution result for every new consume:
+Prefer the registered owner-settlement path for every new supported operation. The static registry is keyed by exact `(skill_id, skill_version, operation_id, operation_version)` and names checked-in modules and fixed subcommands only; neither a workspace manifest nor an owner result may supply a callable, module, or raw argv. Resolve executable validator imports only from the installed skills root co-located with `manage-agent-authority`; reject any explicit skills root that resolves elsewhere. Before validator dispatch or lifecycle writes, acquire and hash the exact registered owner-result bytes under a 1 MiB limit. Capture the fixed subprocess through bounded pipes of 256 KiB stdout and 64 KiB stderr. Reopen a canonical owner-validation path only after its ref matches the exact content-addressed shape, then acquire, hash, and parse it once under a 256 KiB limit; registered release-evidence classification uses one exact bound acquisition capped at 1 MiB. These registered-path limits do not narrow the historical unregistered schema-v2 compatibility reader. The owner validator reopens the owner result, reservation, and pre-commit verification. Settlement requires its current validation first, then persists the replay-stable historical form as a closed `owner_validation_receipt` schema-v1. `confirmed_effect` consumes, `confirmed_no_effect` releases, and `unknown_effect` quarantines. A legacy opaque owner result can only produce `unknown_effect`.
+
+Schema-v3 authority execution results add the exact immutable `owner_validation` binding to the existing fields:
 
 ```text
 schema_version, artifact_kind=authority_execution_result, result_id,
 reservation, pre_commit_verification, owner_result, effect_status=confirmed_effect,
-subject_before, subject_after, expected_subject_after_sha256, completed_at
+owner_validation, subject_before, subject_after, expected_subject_after_sha256,
+completed_at
 ```
 
-Derive `result_id` and its `execution_results/<result_id>.json` path from the canonical body. Require `subject_after.sha256=expected_subject_after_sha256`. Preserve validation of older immutable use receipts, but never issue a new untyped receipt.
+Derive `result_id` and its `execution_results/<result_id>.json` path from the canonical body. Require `subject_after.sha256=expected_subject_after_sha256`; in schema v3 both are derived from the validated owner boundary rather than caller-authored expected JSON. Append-only current descendants remain valid when the owner proves the committed historical boundary. Preserve read validation of immutable schema-v2 execution results and use receipts.
+
+Direct `consume` and caller-evidenced `release` reject a new settlement when the exact operation identity is present in the registered owner-validator table. Existing unregistered schema-v2 receipts remain readable and replayable, while operations without a registered validator retain the compatibility path until they are migrated.
+
+Registry rollout is reader-first and never rewrites historical authority artifacts. Inventory and status may classify a pre-registry schema-v2 use or release receipt for a now-registered operation as historical, legacy-unattested evidence only after the normal closed path, digest, schema, deterministic-ID, reservation/decision, grant-accounting, and state-change validators pass and every current projection equals that receipt's exact terminal `after` object. This exception is observation-only. It does not authorize lifecycle replay, does not create schema-v3 evidence, and does not permit recovery to apply any `before -> after` edge. Recovery may skip such an already exact-settled receipt; a missing projection, `before` state, descendant instead of the exact terminal state, malformed binding, forged transition, or owner-validation-shaped evidence outside its canonical path fails closed before every write. Do not rewrite, delete, or backfill the historical receipt merely to satisfy the new registry.
+
+Before replaying an existing schema-v3 registered settlement event or applying its pending projection intent, reopen its reservation and bound decision; require the canonical historical owner-validation receipt; validate the typed pre-commit reservation, reserved status, and exact before-version with `require_current_state=false`; rerun the co-located fixed owner validator; and require byte-for-byte-equivalent receipt content. Perform all of these checks before any state projection changes. A manually assembled chain that is structurally valid but unsupported by the fixed owner must leave every authority projection unchanged. A historical schema-v2 registered receipt is never an applicable recovery edge.
 
 Prepare reconciliation evidence with `prepare-reconciliation-evidence`; do not hand-author paths or IDs. Settle a quarantined reservation only with the resulting closed `authority_effect_reconciliation_evidence` at its deterministic content-derived path. Bind its evidence ID, exact reservation, versioned operation, subject before, observed subject digest, outcome, observation time, and a typed owner result for a confirmed effect or confirmed no-effect. Require confirmed no-effect to preserve the exact subject-before digest. Reject arbitrary JSON, mismatched outcomes, stale observed subjects, or a missing typed owner result.
 
@@ -356,7 +365,7 @@ Reconciliation settles evidence about an existing effect. It does not create a n
 
 `status` must include `evaluated_at`, an optional exact `request_sha256_filter`, grants, reservations, quarantines, pending versus superseded waits, verifications, typed execution results, use/release/reconciliation receipts, `workflow_state`, `should_prompt`, and one machine-readable next action. It must also include a `workflow_basis` carrying the exact decision, reservation and reservation-state, source-approval, settlement-receipt, and blocker bindings that justify the selected state. Accept an optional explicit RFC3339 `--at` for deterministic diagnosis and replay; otherwise capture the current UTC time once. Use only that captured time for the selected grant and every ancestor. Report each grant's raw state separately from `effective_usable`, effective status, and lineage blocker codes. A raw `active` grant is effectively unusable before its `not_before`, at or after its `expires_at`, or under any ancestor that is inactive, not yet active, or time-expired.
 
-Before deriving workflow state or suppressing a prompt, validate the complete immutable lifecycle intent graph and prove every intent projection is at its exact `after` state or a validated descendant. Public closed validators must recheck deterministic identities, paths, bindings, and schemas for decisions, reservations, use/release/reconciliation receipts, grants, and current grant/reservation states. Resolve the decision's operation manifest from the same explicit skills root used for evaluation (or the declared default), validate its closed contents and exact requested operation identity, and require its current ref/digest binding to equal the persisted decision binding. A missing, changed, or identity-incompatible manifest and any malformed or unsettled artifact are errors, never evidence that a wait was superseded or that an operation can resume. Reject a symlink at any component of every authority-owned decision, source-snapshot, grant, state, and receipt directory. Read status-visible JSON through a stable no-follow acquisition and report the digest of the same bytes that were parsed. Suppress an approval wait only when the same request digest has a validated reserved, consumed, released, or quarantined lifecycle artifact, a current exact allowed decision, or an exact usable/materializable source candidate.
+Before deriving workflow state or suppressing a prompt, validate the complete immutable lifecycle intent graph and prove every intent projection is at its exact `after` state or a validated descendant. Public closed validators must recheck deterministic identities, paths, bindings, and schemas for every historical decision, reservation, use/release/reconciliation receipt, grant, and current grant/reservation state. Historical inventory validation is reader-first: it validates the persisted decision body and its immutable bindings without requiring the current operation-manifest digest to remain equal, so a later skill release does not make valid history unreadable or require a history rewrite. Resolve the current manifest separately from the same explicit skills root used for evaluation (or the declared default), validate its closed contents and exact requested identity, and expose a missing, changed, unreadable, or identity-incompatible manifest as a current-candidacy blocker. Classify an affected old allowed decision as stale and an affected old approval wait as historical; neither may become `ready_to_reserve` or a live prompt. Add the same blocker to any affected reserved operation and select `reserved_authority_recovery`, never `ready_to_resume`. Reserve, verify, settlement replay, recovery application, and every new action keep strict current-manifest validation before any write. A malformed historical artifact or unsettled intent remains an error rather than evidence that a wait was superseded or an operation can resume. Reject a symlink at any component of every authority-owned decision, source-snapshot, grant, state, and receipt directory. Read status-visible JSON through a stable no-follow acquisition and report the digest of the same bytes that were parsed. Suppress an approval wait only when the same request digest has a validated reserved, consumed, released, or quarantined lifecycle artifact, a current exact allowed decision, or an exact usable/materializable source candidate.
 
 Choose the public state using this precedence, after applying the optional exact request filter: `effect_reconciliation` for quarantine; `already_consumed` or `already_released` for settled lifecycle state; `ready_to_resume` for a reserved operation whose complete authority lineage remains usable; `reserved_authority_recovery` for a reserved operation blocked by selected or ancestor authority; `ready_to_reserve` for a current persisted exact allowed decision; `source_approval_ready_for_grant` for a usable or cleanly materializable exact source; `source_authority_defect` for an internally inconsistent source/grant projection; `source_authority_exhausted` for a source whose existing IDs cannot be reused; then `needs_user_approval` for a genuine remaining wait. Never let a lower-precedence stale wait override a higher-precedence lifecycle or authority fact.
 
@@ -370,7 +379,7 @@ The recipe has `authority_status=non_authoritative_prepare_only`. No nested reci
 
 `prepared_at` is T1 preparation time, not approval evidence. The actual explicit user decision establishes T2 with T2 >= T1. Source `not_before`, grant `not_before`, and grant `created_at` must be T2 or later under the normal source/grant validators. A replayed evaluation at T1 remains non-allowed; no recipe field may backdate prospective authority.
 
-Prepare, status, and resolve expose the same non-authoritative `post_approval_handoff`. It names only existing public commands: `snapshot-source` for a source artifact derived from the actual explicit user-decision evidence, `register-grant` after substituting that actual snapshot binding into a newly validated grant, and `evaluate` for the closed replacement request. It also binds `continuation_request_sha256`. After exact approval and materialization, consumers must switch their status/resolve filter to that replacement digest; continued polling of the exhausted original digest is historical recovery observation, not forward progress.
+Prepare, status, and resolve expose the same non-authoritative `post_approval_handoff`. It names `materialize-approved-recovery` and binds `continuation_request_sha256`. The command requires a separately supplied, exact, immutable `authority_recovery_user_decision` echoing the complete approval projection and recipe binding; it cannot infer consent. It deterministically renders and validates source approval, source snapshot, grant, replacement request, and decision. After exact approval and materialization, consumers switch their status/resolve filter to the replacement digest; continued polling of the exhausted original digest is historical recovery observation, not forward progress.
 
 Recipe discovery precedes current covering-source wait classification. Reopen a recipe by its exact historical decision binding and by reproducing its T1 source/grant/state exhaustion evidence; do not require the old source to remain currently covering. If its continuation window is still open, keep the recovery projection as the sole active prompt. If its expiry ceiling is closed, return the existing `source_authority_exhausted` state with reason `source_recovery_window_closed`, action `prepare_fresh_recovery_plan`, `should_prompt=false`, the exact recipe binding, and a closed-window handoff. In both cases the original projection and wait identity remain historical. All non-prompt resolver outcomes return `approval_projection=null` rather than falling back to a persisted decision projection.
 
@@ -420,9 +429,63 @@ Keep these questions independent:
 
 The compiler derives request/attempt/idempotency IDs, current subject and manifest digests, manifest-owned effect/data/decision/mutation/reversibility fields, request/context digests, provenance, and a compilation fingerprint. Identical seed, subject/manifest bytes, and explicit compile time must produce identical bytes.
 
+The Python API permits `compile_operation(...,
+trusted_request_idempotency_key=...)` only for a trusted owner renderer that is
+replaying an exact immutable owner binding, such as a selected-successor bundle row.
+The trusted key participates in the seed and compilation fingerprints and must satisfy
+the ordinary request identifier validator. It is not a `SEED_KEYS` member, JSON seed
+field, or CLI flag; reject a caller that attempts to place it in the semantic seed.
+Without this Python-only argument, retain the ordinary fingerprint-derived request key.
+
 The default command emits the full object for compatibility. `--publish` immutably writes it to `.task/authorization/operation_compilations/operation_compilation-<compilation_fingerprint>.json` and emits the compact `{ref, sha256, compilation_fingerprint}` receipt. Exact replay returns the same receipt; different bytes at that content-addressed path fail closed. Publication does not call source, grant, decision, reservation, or settlement issuance.
 
 The result is `non_authoritative_compilation`: it never satisfies source approval, grant, reservation, or settlement. Seed-provided session and goal envelopes are asserted-untrusted narrowing inputs, not authority evidence; the compiler never expands them to fit a request. `evaluate` and `resolve` reopen the subject and manifest and run the independent request/context and authority validators before consuming it. Subject or manifest drift returns `recompile_required`; ambiguous manifest choices, malformed nested input, and any classification downgrade fail closed.
+
+An owner-specific batch renderer may coordinate compilation with the existing evaluator
+and lifecycle only when its input is closed and its authority boundary remains explicit.
+For new work, the selected-successor renderer accepts one exact bundle and only the
+producer-owned request/evaluation CAS bindings emitted together by
+`selected-successor prepare-authority-context`, plus exactly one present/absent grant
+choice for each of the three bundle operations. The context producer receives the
+complete actual semantic session ceiling and goal-autonomy envelope, validates that the
+bundle and current manifests fit within them, and never constructs or widens those
+asserted scopes from request requirements. Both generated contexts are canonical,
+bounded, content-addressed artifacts; canonical bytes copied to an arbitrary path are
+not an equivalent input. There is no mutation-capable legacy-location opt-out.
+Standalone legacy contexts may be inspected only through explicit historical
+audit/recovery validation and cannot bootstrap a new decision or reservation.
+The renderer derives three closed requests using
+the bundle's exact operation, subject, and idempotency-key rows. It must not create a
+source approval or grant, union grants, or substitute a selection artifact for
+authority. It must not derive an asserted session ceiling or goal envelope from those
+requirements.
+Bind one exact semantic `actor_rank` in the self-sealed request context and require
+every present grant's `holder_rank` to equal it. Never derive actor identity from a
+manifest `source_rank_floor`, from absence, or from the strongest available row.
+
+Run the canonical evaluator independently for all three requests. The renderer may
+publish decisions, reservations, and `pre_commit` verifications only after all results
+are `allowed` and every supplied grant binding is exact, current, and selected by the
+evaluator. Publish a canonical decision only through
+`manage_agent_authority.decision_publication.evaluate_and_publish(...)` and publish
+the typed pre-commit artifact only through
+`manage_agent_authority.verification_publication.verify_and_publish_precommit(...)`.
+The fixed `verify_and_publish_predispatch(...)` helper remains compatibility-only for
+the existing `verify --stage pre_dispatch` CLI. The renderer then publishes a compact
+packet binding the three request/decision/reservation/verification/version chains. That
+packet is transport and replay evidence; it is not a fourth decision and cannot broaden
+or repair one chain.
+
+Treat genuine no-covering authority or any other non-allowed evaluator result as an
+atomic batch stop. Emit one deterministic minimum-scope approval projection with the
+exact non-authoritative compilation bindings and publish zero decisions, reservations,
+and verifications. An absent declaration that canonical evaluation resolves to allowed,
+or a supplied grant that is not exactly selected, is an input conflict rather than an
+approval wait. Do not publish the allowed prefix of a mixed result, fabricate a dummy
+grant, or turn a request context into source approval. Bind the three manifest digests
+into the input index and pre-index packet locator; preserve any custom skills root in
+generated replay argv. Exact input replay may return the same packet or projection. Drift in a
+bundle, context, subject, manifest, grant, or grant state requires reevaluation.
 
 ## CLI surface
 
@@ -430,12 +493,14 @@ Invoke through:
 
 ```bash
 PYTHONPATH="<skills-root>/manage-agent-authority/scripts" \
-  python3 -m manage_agent_authority authority <command> ...
+  python3 -P -m manage_agent_authority authority <command> ...
 ```
 
 Use:
 
 - `compile-operation` for mechanical request/context preparation;
+- owner batch renderers such as `selected-successor prepare-authority` for closed
+  compile/evaluate/reserve/verify orchestration over explicit existing grants;
 - `snapshot-policy`, `snapshot-source`;
 - `register-grant`, `delegate`, `compose`;
 - `evaluate`, `resolve`, `prepare-source-recovery`, `reserve`, `verify`, `consume`, `release`, `prepare-reconciliation-evidence`, `reconcile`;

@@ -6,8 +6,9 @@ from typing import Any
 from .artifact_store import AUTHORIZATION_ROOT
 from .canonical import sha256_file
 from .projection_io import safe_json, safe_owned_directory, validate_reservation_state
-from .projection_recovery import validated_settled_intents
+from .projection_recovery import validated_inventory_intents
 from .projection_reservations import validate_decision_artifact
+from .projection_reservations import current_operation_manifest_blockers
 from .workflow_candidates import grant_status_records
 from .workflow_candidates import reservation_authority_blockers
 from .workflow_candidates import validated_grants
@@ -69,19 +70,18 @@ def _load_decisions(
     for path, decision, digest in _safe_artifacts(
         root, "decisions", "authority decision"
     ):
-        selected = (
-            request_sha256 is None
-            or decision.get("request_sha256") == request_sha256
-        )
         validate_decision_artifact(
             root,
             decision,
             path,
-            skills_root=skills_root,
-            verify_manifest=selected,
+            verify_manifest=False,
         )
         summary = _decision_summary(root, path, decision, digest)
         decisions_by_ref[summary["ref"]] = decision
+        selected = (
+            request_sha256 is None
+            or decision["request_sha256"] == request_sha256
+        )
         if not selected:
             continue
         decisions.append((decision, summary))
@@ -95,6 +95,7 @@ def _load_reservations(
     grant_records: dict[str, Any],
     request_sha256: str | None,
     at: Any,
+    skills_root: Path | None,
 ) -> list[dict[str, Any]]:
     reservations: list[dict[str, Any]] = []
     for path, artifact in settled.get("reservations", []):
@@ -114,11 +115,14 @@ def _load_reservations(
         decision = decisions_by_ref.get(artifact["decision"]["ref"])
         if decision is None:
             raise SystemExit("Authority reservation decision is not status-visible.")
-        blockers = (
-            reservation_authority_blockers(artifact, decision, grant_records, at)
-            if state["status"] == "reserved"
-            else []
-        )
+        blockers: list[str] = []
+        if state["status"] == "reserved":
+            blockers.extend(current_operation_manifest_blockers(decision, skills_root))
+            blockers.extend(
+                reservation_authority_blockers(
+                    artifact, decision, grant_records, at
+                )
+            )
         reservations.append(
             {
                 "reservation": {
@@ -149,7 +153,9 @@ def load_status_inventory(
     skills_root: Path | None,
 ) -> dict[str, Any]:
     settled: dict[str, list[tuple[Path, dict[str, Any]]]] = {}
-    for path, artifact in validated_settled_intents(root):
+    for path, artifact in validated_inventory_intents(
+        root, skills_root=skills_root
+    ):
         settled.setdefault(path.parent.name, []).append((path, artifact))
     grant_records = validated_grants(root)
     decisions, decisions_by_ref = _load_decisions(
@@ -174,6 +180,7 @@ def load_status_inventory(
             grant_records,
             request_sha256,
             at,
+            skills_root,
         ),
         **receipts,
         "verifications": _directory_summaries(root, "verifications"),

@@ -179,6 +179,8 @@ def validate_external_pending_assertion(
     root: Path,
     prepare: dict[str, Any],
     prepare_binding: dict[str, str],
+    *,
+    require_current_projections: bool = True,
 ) -> dict[str, str]:
     """Validate the actual task-state owner's pending activation receipt."""
 
@@ -227,14 +229,17 @@ def validate_external_pending_assertion(
         or receipt.get("markdown_after_sha256") != markdown.get("after_sha256")
         or receipt.get("event_count") != ledger.get("event_count")
         or receipt.get("receipt_content_sha256") != _compact_sha256(body)
-        or _sha256_file(root / ".task/index.jsonl")
-        != receipt.get("ledger_after_sha256")
-        or _sha256_file(root / ".task/index.md")
-        != receipt.get("markdown_after_sha256")
     ):
         raise ValueError(
             "task-state pending receipt does not bind the publication prepare"
         )
+    if require_current_projections and (
+        _sha256_file(root / ".task/index.jsonl")
+        != receipt.get("ledger_after_sha256")
+        or _sha256_file(root / ".task/index.md")
+        != receipt.get("markdown_after_sha256")
+    ):
+        raise ValueError("task-state pending receipt projection has drifted")
     return binding
 
 
@@ -262,8 +267,10 @@ def validate_external_settlement_assertion(
     root: Path,
     publication_receipt: dict[str, Any],
     publication_binding_value: dict[str, str],
+    *,
+    phase: str = "current",
 ) -> dict[str, str]:
-    """Revalidate a settled task-state receipt and every exact projection."""
+    """Delegate append-aware settlement proof to the task-index owner."""
 
     from .selection_publication_v2 import normalize_prepare
 
@@ -302,7 +309,7 @@ def validate_external_settlement_assertion(
     if publication_receipt.get("external_settlement_plan_id") != plan_id:
         raise ValueError("selection publication settlement plan binding differs")
     expected_pending = validate_external_pending_assertion(
-        root, prepare, prepare_binding
+        root, prepare, prepare_binding, require_current_projections=False
     )
     if publication_receipt.get("owner_pending_receipt") != expected_pending:
         raise ValueError("selection publication pending owner binding differs")
@@ -330,11 +337,24 @@ def validate_external_settlement_assertion(
         or settlement.get("external_prepare") != prepare_binding
         or settlement.get("external_commit") != publication_binding
         or settlement.get("receipt_content_sha256") != _compact_sha256(body)
-        or _sha256_file(root / ".task/index.jsonl") != ledger.get("after_sha256")
-        or _sha256_file(root / ".task/index.md") != markdown.get("after_sha256")
-        or _sha256_file(root / "task.md") != task_source["sha256"]
     ):
         raise ValueError("task-state external settlement receipt is inconsistent")
+    try:
+        from manage_task_state_index.state.owner_validation import (
+            validate_external_transition_receipt,
+        )
+    except ImportError as exc:  # pragma: no cover - packaging failure, not fallback.
+        raise ValueError("task-state owner settlement validator is unavailable") from exc
+    owner_validation = validate_external_transition_receipt(
+        root, settlement_binding, phase=phase
+    )
+    if (
+        owner_validation.get("status") != "valid"
+        or owner_validation.get("plan_id") != plan_id
+        or owner_validation.get("receipt_binding") != settlement_binding
+        or owner_validation.get("selection_consumption_allowed") is not True
+    ):
+        raise ValueError("task-state owner settlement validation is inconsistent")
     return settlement_binding
 
 

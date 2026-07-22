@@ -1,4 +1,4 @@
 interface:
   display_name: "Render Cycle Dashboard"
-  short_description: "Render task-cycle dashboard artifacts"
-  default_prompt: "Use $render-cycle-dashboard to render a dashboard from the cycle ledger and validation evidence."
+  short_description: "Render task-cycle status dashboards"
+  default_prompt: "Use $render-cycle-dashboard to render a bounded human-readable dashboard from verified compact ledger events and exact result bindings."

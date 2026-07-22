@@ -157,6 +157,12 @@ def _selection_publication(argv: Sequence[str]) -> int:
     return main(list(argv))
 
 
+def _selected_successor(argv: Sequence[str]) -> int:
+    from .selected_successor_cli import main
+
+    return main(list(argv))
+
+
 def _terminal_wait_baseline(argv: Sequence[str]) -> int:
     from .terminal_wait_baseline_cli import main
 
@@ -236,6 +242,11 @@ COMMANDS = (
         "selection-publication",
         "publish one selected task with forward recovery",
         _selection_publication,
+    ),
+    CommandSpec(
+        "selected-successor",
+        "prepare one body-free selected-successor lifecycle",
+        _selected_successor,
     ),
     CommandSpec(
         "terminal-wait-baseline",

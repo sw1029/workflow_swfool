@@ -8,13 +8,36 @@ from typing import Any
 
 import pytest
 
+from selection_publication_legacy_support import (
+    prepare_legacy_publication as prepare_publication,
+)
+
 from manage_task_state_index import index as task_state
+from manage_task_state_index.state.selected_successor_guard import (
+    _SELECTED_SUCCESSOR_EXECUTION_TOKEN,
+)
+from manage_task_state_index.state.transition_plan import (
+    apply_transition_plan,
+    settle_transition_external,
+)
 from orchestrate_task_cycle import cycle_ledger
 from orchestrate_task_cycle import selection_publication as publication
 from orchestrate_task_cycle import selection_decision_receipt_cli
 from orchestrate_task_cycle import selection_publication_cli
+from orchestrate_task_cycle.selected_successor import (
+    load_selected_successor_bundle,
+    prepare_selected_successor_bundle,
+)
+from orchestrate_task_cycle.selected_successor_execution import (
+    execute_selected_successor_bundle,
+)
+from selected_successor_authority_support import (
+    AT as AUTHORITY_AT,
+    LATER as AUTHORITY_LATER,
+    SKILLS_ROOT,
+    prepare_authority_proofs,
+)
 from orchestrate_task_cycle.selection_publication import (
-    prepare_publication,
     publication_status,
     publish_prepared,
 )
@@ -227,6 +250,779 @@ def _selected_receipt(
     return result["receipt"]
 
 
+def test_selected_successor_prepare_renders_body_free_authority_bundle(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _initialize_active_task(tmp_path)
+    decision = _selected_receipt(tmp_path, capsys)
+    candidate = tmp_path / ".task/candidates/task-next.md"
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    candidate.write_text("# Task\n\n- Task ID: `task-next`\n", encoding="utf-8")
+    task_binding = _binding(tmp_path, candidate)
+
+    prepared = prepare_selected_successor_bundle(
+        tmp_path,
+        source_decision=decision,
+        task_source=task_binding,
+        at="2026-07-22T20:00:00+09:00",
+    )
+    replay = prepare_selected_successor_bundle(
+        tmp_path,
+        source_decision=decision,
+        task_source=task_binding,
+        at="2026-07-22T20:00:00+09:00",
+    )
+    bundle = load_selected_successor_bundle(tmp_path, prepared["bundle"])
+
+    assert prepared["storage_schema_version"] == 4
+    assert replay["bundle"] == prepared["bundle"]
+    assert replay["mutation_performed"] is False
+    assert [row["step"] for row in bundle["execution_order"]] == [1, 2, 3]
+    assert [
+        row["operation"]["operation_id"] for row in bundle["execution_order"]
+    ] == [
+        "mutate_task_state_index",
+        "publish_selected_successor_topology",
+        "settle_selected_successor_task_state",
+    ]
+    assert all(
+        set(row["expected_result"]) == {"ref", "sha256"}
+        and row["authority_bindings"][
+            "must_be_validated_before_first_effect"
+        ]
+        is True
+        for row in bundle["execution_order"]
+    )
+    serialized = json.dumps(bundle, sort_keys=True)
+    assert "events" not in serialized
+    assert "after_payload_b64" not in serialized
+    assert bundle["recovery"]["next_step"] == "apply_task_state_plan_pending"
+    assert "task-old" in (tmp_path / "task.md").read_text(encoding="utf-8")
+
+
+def test_selected_successor_rejects_self_sealed_forgery_before_plan_write(
+    tmp_path: Path,
+) -> None:
+    _initialize_active_task(tmp_path)
+    candidate = tmp_path / ".task/candidates/task-next.md"
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    candidate.write_text("# Task\n\n- Task ID: `task-next`\n", encoding="utf-8")
+    body = {
+        "schema_version": 2,
+        "artifact_kind": "selection_decision_receipt",
+        "outcome": "selected",
+        "selected_task_id": "task-next",
+        "receipt_id": "forged-selection",
+        "not_authority": True,
+        "mutation_performed": False,
+    }
+    canonical = (
+        json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        + "\n"
+    ).encode("utf-8")
+    forged = _write_json(
+        tmp_path / ".task/forged-selection-receipt.json",
+        {**body, "receipt_sha256": hashlib.sha256(canonical).hexdigest()},
+    )
+    plan_root = tmp_path / ".task/transition_plans"
+    before = set(plan_root.glob("*.json")) if plan_root.exists() else set()
+
+    with pytest.raises(ValueError):
+        prepare_selected_successor_bundle(
+            tmp_path,
+            source_decision=_binding(tmp_path, forged),
+            task_source=_binding(tmp_path, candidate),
+            at="2026-07-22T20:00:00+09:00",
+        )
+
+    after = set(plan_root.glob("*.json")) if plan_root.exists() else set()
+    assert after == before
+    assert not (tmp_path / ".task/selection_publication/successor_bundles").exists()
+
+
+def test_selected_successor_rejects_malformed_raw_cas_bundle_without_effect(
+    tmp_path: Path,
+) -> None:
+    from orchestrate_task_cycle.selection_publication_store import (
+        _canonical_json,
+        _sha256_bytes,
+        _successor_bundle_path,
+    )
+
+    tmp_path.mkdir(exist_ok=True)
+    body = {
+        "schema_version": 999,
+        "artifact_kind": "wrong_bundle_kind",
+        "extra": "workspace-controlled",
+        "execution_order": [
+            {
+                "step": index,
+                "action": action,
+                "operation": {"operation_id": "different"},
+            }
+            for index, action in enumerate(
+                (
+                    "apply_task_state_plan_pending",
+                    "publish_selected_successor_topology",
+                    "settle_selected_successor_task_state",
+                ),
+                start=1,
+            )
+        ],
+    }
+    content_sha256 = _sha256_bytes(_canonical_json(body))
+    value = {**body, "bundle_content_sha256": content_sha256}
+    path = _successor_bundle_path(tmp_path, content_sha256)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(_canonical_json(value))
+    binding = {
+        "ref": path.relative_to(tmp_path).as_posix(),
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }
+
+    with pytest.raises(ValueError):
+        load_selected_successor_bundle(tmp_path, binding)
+
+    assert not (tmp_path / "task.md").exists()
+    assert not list((tmp_path / ".task").glob("transition_*receipts/*.json"))
+    assert not (tmp_path / ".task/authorization").exists()
+
+
+def test_selected_successor_rejects_noncanonical_raw_bundle_even_when_rebound(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    prepared, bundle, _proofs = _authorized_successor(tmp_path, capsys)
+    path = tmp_path / prepared["bundle"]["ref"]
+    path.write_text(
+        json.dumps(bundle, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    adjusted_binding = {
+        "ref": prepared["bundle"]["ref"],
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }
+
+    with pytest.raises(ValueError, match="not canonical JSON"):
+        load_selected_successor_bundle(tmp_path, adjusted_binding)
+
+
+@pytest.mark.parametrize("forged_field", ("prepare", "receipt"))
+def test_selected_successor_intent_index_rejects_forged_artifact_path(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    forged_field: str,
+) -> None:
+    from orchestrate_task_cycle.selection_publication_intent_index import (
+        load_intent_index,
+    )
+    from orchestrate_task_cycle.selection_publication_store import _canonical_json
+
+    prepared, bundle, proofs = _authorized_successor(tmp_path, capsys)
+    if forged_field == "receipt":
+        execute_selected_successor_bundle(
+            tmp_path,
+            bundle_binding=prepared["bundle"],
+            authority_proofs=proofs,
+            settled_at=AUTHORITY_LATER,
+            skills_root=SKILLS_ROOT,
+        )
+    prepare = json.loads(
+        (tmp_path / bundle["selection_prepare"]["ref"]).read_text(encoding="utf-8")
+    )
+    intent_sha256 = prepare["intent_sha256"]
+    index_path = (
+        tmp_path
+        / ".task/selection_publication/intents/sha256"
+        / intent_sha256
+        / ("commit.json" if forged_field == "receipt" else "prepare.json")
+    )
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    original = tmp_path / index[forged_field]["ref"]
+    forged = tmp_path / ".task/selection_publication/forged" / original.name
+    forged.parent.mkdir(parents=True, exist_ok=True)
+    forged.write_bytes(original.read_bytes())
+    index[forged_field] = _binding(tmp_path, forged)
+    body = {
+        key: value
+        for key, value in index.items()
+        if key != "index_content_sha256"
+    }
+    index["index_content_sha256"] = hashlib.sha256(_canonical_json(body)).hexdigest()
+    index_path.write_bytes(_canonical_json(index))
+
+    with pytest.raises(ValueError, match=f"{forged_field} path differs"):
+        load_intent_index(
+            tmp_path, intent_sha256, committed=forged_field == "receipt"
+        )
+
+
+def _authorized_successor(
+    root: Path, capsys: pytest.CaptureFixture[str]
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, dict[str, Any]]]:
+    _initialize_active_task(root)
+    decision = _selected_receipt(root, capsys)
+    candidate = root / ".task/candidates/task-next.md"
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    candidate.write_text("# Task\n\n- Task ID: `task-next`\n", encoding="utf-8")
+    prepared = prepare_selected_successor_bundle(
+        root,
+        source_decision=decision,
+        task_source=_binding(root, candidate),
+        at=AUTHORITY_AT,
+    )
+    bundle = load_selected_successor_bundle(root, prepared["bundle"])
+    return prepared, bundle, prepare_authority_proofs(root, bundle)
+
+
+@pytest.mark.parametrize("checkpoint", ("before_effect", "after_step1", "complete"))
+def test_selected_successor_prepare_exact_replay_avoids_current_state_recompile(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    checkpoint: str,
+) -> None:
+    prepared, bundle, proofs = _authorized_successor(tmp_path, capsys)
+    if checkpoint == "after_step1":
+        import orchestrate_task_cycle.selected_successor_execution as execution
+
+        with monkeypatch.context() as crash:
+            crash.setattr(
+                execution,
+                "publish_prepared",
+                lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                    RuntimeError("stop after step1")
+                ),
+            )
+            with pytest.raises(RuntimeError, match="stop after step1"):
+                execute_selected_successor_bundle(
+                    tmp_path,
+                    bundle_binding=prepared["bundle"],
+                    authority_proofs=proofs,
+                    settled_at=AUTHORITY_LATER,
+                    skills_root=SKILLS_ROOT,
+                )
+    elif checkpoint == "complete":
+        execute_selected_successor_bundle(
+            tmp_path,
+            bundle_binding=prepared["bundle"],
+            authority_proofs=proofs,
+            settled_at=AUTHORITY_LATER,
+            skills_root=SKILLS_ROOT,
+        )
+
+    replay = prepare_selected_successor_bundle(
+        tmp_path,
+        source_decision=bundle["source_decision"],
+        task_source=bundle["task_source"],
+        at=bundle["created_at"],
+    )
+
+    assert replay["bundle"] == prepared["bundle"]
+    assert replay["task_state_plan"] == prepared["task_state_plan"]
+    assert replay["selection_prepare"] == prepared["selection_prepare"]
+    assert replay["transaction_id"] == prepared["transaction_id"]
+    assert replay["mutation_performed"] is False
+
+
+@pytest.mark.parametrize("entrypoint", ("prepare_replay", "execute"))
+def test_pristine_selected_successor_reopens_source_before_any_effect(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    entrypoint: str,
+) -> None:
+    import orchestrate_task_cycle.selected_successor_provenance as provenance
+
+    prepared, bundle, proofs = _authorized_successor(tmp_path, capsys)
+    before = {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    monkeypatch.setattr(
+        provenance,
+        "validate_selected_source_for_prepared_successor",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ValueError("forged prepared-source provenance")
+        ),
+    )
+
+    with pytest.raises(ValueError, match="forged prepared-source provenance"):
+        if entrypoint == "prepare_replay":
+            prepare_selected_successor_bundle(
+                tmp_path,
+                source_decision=bundle["source_decision"],
+                task_source=bundle["task_source"],
+                at=bundle["created_at"],
+            )
+        else:
+            execute_selected_successor_bundle(
+                tmp_path,
+                bundle_binding=prepared["bundle"],
+                authority_proofs=proofs,
+                settled_at=AUTHORITY_LATER,
+                skills_root=SKILLS_ROOT,
+            )
+
+    after = {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+    assert not list(
+        (tmp_path / ".task/selection_publication/successor_authority_gates").glob(
+            "**/*.json"
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("tamper", "message"),
+    (
+        ("content", "index integrity failed"),
+        ("bundle_path", "bundle integrity failed"),
+        ("canonical", "not canonical JSON"),
+    ),
+)
+def test_selected_successor_prepare_index_tamper_fails_before_recompile(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tamper: str,
+    message: str,
+) -> None:
+    from orchestrate_task_cycle.selected_successor_index import (
+        prepare_input_identity,
+    )
+    from orchestrate_task_cycle.selection_publication_store import (
+        _canonical_json,
+        _successor_prepare_index_path,
+    )
+    import manage_task_state_index.state.selected_successor as task_owner
+
+    prepared, bundle, _proofs = _authorized_successor(tmp_path, capsys)
+    _identity, input_sha256 = prepare_input_identity(
+        bundle["source_decision"], bundle["task_source"], bundle["created_at"]
+    )
+    index_path = _successor_prepare_index_path(tmp_path, input_sha256)
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    if tamper == "content":
+        index["created_at"] = "2026-07-22T20:00:01+09:00"
+        index_path.write_bytes(_canonical_json(index))
+    elif tamper == "bundle_path":
+        source = tmp_path / prepared["bundle"]["ref"]
+        forged = tmp_path / ".task/selection_publication/forged/bundle.json"
+        forged.parent.mkdir(parents=True, exist_ok=True)
+        forged.write_bytes(source.read_bytes())
+        index["bundle"] = _binding(tmp_path, forged)
+        body = {
+            key: value
+            for key, value in index.items()
+            if key != "index_content_sha256"
+        }
+        index["index_content_sha256"] = hashlib.sha256(
+            _canonical_json(body)
+        ).hexdigest()
+        index_path.write_bytes(_canonical_json(index))
+    else:
+        index_path.write_text(
+            json.dumps(index, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    before = {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for path in (tmp_path / ".task").rglob("*")
+        if path.is_file()
+    }
+    monkeypatch.setattr(
+        task_owner,
+        "prepare_selected_successor",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("tampered index reached current-state compilation")
+        ),
+    )
+
+    with pytest.raises(ValueError, match=message):
+        prepare_selected_successor_bundle(
+            tmp_path,
+            source_decision=bundle["source_decision"],
+            task_source=bundle["task_source"],
+            at=bundle["created_at"],
+        )
+
+    after = {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for path in (tmp_path / ".task").rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+
+
+def test_selected_successor_prepare_index_rechecks_exact_source_bytes(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    prepared, bundle, _proofs = _authorized_successor(tmp_path, capsys)
+    bundle_path = tmp_path / prepared["bundle"]["ref"]
+    bundle_bytes = bundle_path.read_bytes()
+    task_source = tmp_path / bundle["task_source"]["ref"]
+    task_source.write_bytes(task_source.read_bytes() + b"\n")
+
+    with pytest.raises(ValueError, match="raw SHA-256"):
+        prepare_selected_successor_bundle(
+            tmp_path,
+            source_decision=bundle["source_decision"],
+            task_source=bundle["task_source"],
+            at=bundle["created_at"],
+        )
+
+    assert bundle_path.read_bytes() == bundle_bytes
+
+
+@pytest.mark.parametrize(
+    "crash_state",
+    ("blob_only", "prepare_only", "prepare_index_only", "active_without_index"),
+)
+def test_selected_successor_exact_intent_repairs_prepare_crash_matrix_o1(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    crash_state: str,
+) -> None:
+    from orchestrate_task_cycle.selection_publication import (
+        prepare_publication_intent,
+    )
+    from orchestrate_task_cycle.selection_publication_state import write_empty_state
+
+    _initialize_active_task(tmp_path)
+    decision = _selected_receipt(tmp_path, capsys)
+    candidate = tmp_path / ".task/candidates/task-next.md"
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    candidate.write_text("# Task\n\n- Task ID: `task-next`\n", encoding="utf-8")
+    prepared = prepare_selected_successor_bundle(
+        tmp_path,
+        source_decision=decision,
+        task_source=_binding(tmp_path, candidate),
+        at="2026-07-22T20:00:00+09:00",
+    )
+    bundle = load_selected_successor_bundle(tmp_path, prepared["bundle"])
+    intent = {
+        "schema_version": 2,
+        "kind": "selection_publication_intent",
+        "source_decision": bundle["source_decision"],
+        "task_source": bundle["task_source"],
+        "task_state_plan": bundle["task_state_plan"],
+    }
+    prepare_path = tmp_path / bundle["selection_prepare"]["ref"]
+    prepare_value = json.loads(prepare_path.read_text(encoding="utf-8"))
+    index_path = (
+        tmp_path
+        / ".task/selection_publication/intents/sha256"
+        / prepare_value["intent_sha256"]
+        / "prepare.json"
+    )
+    if crash_state == "blob_only":
+        prepare_path.unlink()
+        index_path.unlink()
+        write_empty_state(tmp_path)
+    elif crash_state == "prepare_only":
+        index_path.unlink()
+        write_empty_state(tmp_path)
+    elif crash_state == "prepare_index_only":
+        write_empty_state(tmp_path)
+    else:
+        index_path.unlink()
+
+    with monkeypatch.context() as bounded:
+        bounded.setattr(
+            publication,
+            "_transactions_root",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("exact retry enumerated transaction history")
+            ),
+        )
+        repaired = prepare_publication_intent(tmp_path, intent)
+
+    assert repaired["transaction_id"] == bundle["transaction_id"]
+    assert repaired["mutation_performed"] is True
+    assert prepare_path.is_file()
+    assert index_path.is_file()
+    state = json.loads(
+        (tmp_path / ".task/selection_publication/state.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert state["active_transaction"]["transaction_id"] == bundle["transaction_id"]
+
+
+def test_selected_successor_incomplete_authority_gate_has_zero_effects(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    prepared, _bundle, proofs = _authorized_successor(tmp_path, capsys)
+    invalid = {
+        **proofs,
+        "settle_selected_successor_task_state": {
+            **proofs["settle_selected_successor_task_state"],
+            "pre_commit_verification": {
+                **proofs["settle_selected_successor_task_state"][
+                    "pre_commit_verification"
+                ],
+                "sha256": "0" * 64,
+            },
+        },
+    }
+
+    with pytest.raises(SystemExit, match="pre_commit_verification"):
+        execute_selected_successor_bundle(
+            tmp_path,
+            bundle_binding=prepared["bundle"],
+            authority_proofs=invalid,
+            settled_at=AUTHORITY_LATER,
+            skills_root=SKILLS_ROOT,
+        )
+
+    assert "task-old" in (tmp_path / "task.md").read_text(encoding="utf-8")
+    assert not list((tmp_path / ".task").glob("transition_pending_receipts/*.json"))
+    assert not list(
+        (tmp_path / ".task/selection_publication/receipts").glob("*.json")
+    )
+    assert not list(
+        (tmp_path / ".task/selection_publication/successor_authority_gates").glob(
+            "**/*.json"
+        )
+    )
+
+
+def test_selected_successor_recovers_after_publication_checkpoint(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared, bundle, proofs = _authorized_successor(tmp_path, capsys)
+    import manage_task_state_index.state.transition_plan as transition_plan
+
+    with monkeypatch.context() as crash:
+        crash.setattr(
+            transition_plan,
+            "settle_transition_external",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("crash after publication")
+            ),
+        )
+        with pytest.raises(RuntimeError, match="crash after publication"):
+            execute_selected_successor_bundle(
+                tmp_path,
+                bundle_binding=prepared["bundle"],
+                authority_proofs=proofs,
+                settled_at=AUTHORITY_LATER,
+                skills_root=SKILLS_ROOT,
+            )
+
+    assert (tmp_path / bundle["execution_order"][0]["expected_result"]["ref"]).is_file()
+    assert (tmp_path / bundle["execution_order"][1]["expected_result"]["ref"]).is_file()
+    assert not (tmp_path / bundle["execution_order"][2]["expected_result"]["ref"]).exists()
+    assert list(
+        (tmp_path / ".task/selection_publication/successor_authority_gates").glob(
+            "**/*.json"
+        )
+    )
+
+    recovered = execute_selected_successor_bundle(
+        tmp_path,
+        bundle_binding=prepared["bundle"],
+        authority_proofs=proofs,
+        settled_at=AUTHORITY_LATER,
+        skills_root=SKILLS_ROOT,
+    )
+    assert recovered["status"] == "complete"
+    assert recovered["initial_checkpoints"] == {
+        "apply_task_state_plan_pending": "exact",
+        "publish_selected_successor_topology": "exact",
+        "settle_selected_successor_task_state": "missing",
+    }
+    assert recovered["effect_actions"] == [
+        "settle_selected_successor_task_state"
+    ]
+
+
+@pytest.mark.parametrize("crash_target", ("record_committed", "write_commit_index"))
+def test_selected_successor_repairs_publication_commit_crash_points(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    crash_target: str,
+) -> None:
+    prepared, bundle, proofs = _authorized_successor(tmp_path, capsys)
+    original = getattr(publication, crash_target)
+    calls = 0
+
+    def crash_once(*args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError(f"crash at {crash_target}")
+        return original(*args, **kwargs)
+
+    with monkeypatch.context() as crash:
+        crash.setattr(publication, crash_target, crash_once)
+        with pytest.raises(RuntimeError, match=crash_target):
+            execute_selected_successor_bundle(
+                tmp_path,
+                bundle_binding=prepared["bundle"],
+                authority_proofs=proofs,
+                settled_at=AUTHORITY_LATER,
+                skills_root=SKILLS_ROOT,
+            )
+
+    receipt = bundle["execution_order"][1]["expected_result"]
+    assert _binding(tmp_path, tmp_path / receipt["ref"]) == receipt
+    prepare_value = json.loads(
+        (tmp_path / bundle["selection_prepare"]["ref"]).read_text(encoding="utf-8")
+    )
+    commit_index = (
+        tmp_path
+        / ".task/selection_publication/intents/sha256"
+        / prepare_value["intent_sha256"]
+        / "commit.json"
+    )
+    assert not commit_index.exists()
+
+    recovered = execute_selected_successor_bundle(
+        tmp_path,
+        bundle_binding=prepared["bundle"],
+        authority_proofs=proofs,
+        settled_at=AUTHORITY_LATER,
+        skills_root=SKILLS_ROOT,
+    )
+    assert recovered["status"] == "complete"
+    assert commit_index.is_file()
+    assert "publish_selected_successor_topology" in recovered["effect_actions"]
+    state = json.loads(
+        (tmp_path / ".task/selection_publication/state.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert state["head"]["transaction_id"] == bundle["transaction_id"]
+
+
+def test_historical_v3_intent_replay_does_not_roll_back_compact_head(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    prepared, bundle, proofs = _authorized_successor(tmp_path, capsys)
+    execute_selected_successor_bundle(
+        tmp_path,
+        bundle_binding=prepared["bundle"],
+        authority_proofs=proofs,
+        settled_at=AUTHORITY_LATER,
+        skills_root=SKILLS_ROOT,
+    )
+    historical_intent = {
+        "schema_version": 2,
+        "kind": "selection_publication_intent",
+        "source_decision": bundle["source_decision"],
+        "task_source": bundle["task_source"],
+        "task_state_plan": bundle["task_state_plan"],
+    }
+    current = (tmp_path / "task.md").read_bytes()
+    newer = b"# Task\n\n- Task ID: `task-newer`\n"
+    successor = prepare_publication(
+        tmp_path, _publication_plan(current, newer, "newer-head")
+    )
+    publish_prepared(tmp_path, successor["transaction_id"])
+    state_path = tmp_path / ".task/selection_publication/state.json"
+    before_state = state_path.read_bytes()
+
+    replay = publication.prepare_publication_intent(tmp_path, historical_intent)
+
+    assert replay["status"] == "already_committed"
+    assert replay["mutation_performed"] is False
+    assert state_path.read_bytes() == before_state
+    assert publication_status(tmp_path)["current_head"]["head_transaction_id"] == successor[
+        "transaction_id"
+    ]
+    assert (tmp_path / "task.md").read_bytes() == newer
+
+
+def test_selected_successor_replays_partial_authority_consumption(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared, _bundle, proofs = _authorized_successor(tmp_path, capsys)
+    import manage_agent_authority.settlement as authority_settlement
+
+    original = authority_settlement.settle_owner_result
+    calls = 0
+
+    def crash_on_second(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("crash during authority settlement")
+        return original(*args, **kwargs)
+
+    with monkeypatch.context() as crash:
+        crash.setattr(authority_settlement, "settle_owner_result", crash_on_second)
+        with pytest.raises(RuntimeError, match="crash during authority settlement"):
+            execute_selected_successor_bundle(
+                tmp_path,
+                bundle_binding=prepared["bundle"],
+                authority_proofs=proofs,
+                settled_at=AUTHORITY_LATER,
+                skills_root=SKILLS_ROOT,
+            )
+
+    states = []
+    for proof in proofs.values():
+        reservation = json.loads(
+            (tmp_path / proof["reservation"]["ref"]).read_text(encoding="utf-8")
+        )
+        states.append(
+            json.loads(
+                (
+                    tmp_path
+                    / ".task/authorization/state/reservations"
+                    / f"{reservation['reservation_id']}.json"
+                ).read_text(encoding="utf-8")
+            )["status"]
+        )
+    assert states == ["consumed", "reserved", "reserved"]
+
+    recovered = execute_selected_successor_bundle(
+        tmp_path,
+        bundle_binding=prepared["bundle"],
+        authority_proofs=proofs,
+        settled_at=AUTHORITY_LATER,
+        skills_root=SKILLS_ROOT,
+    )
+    assert recovered["status"] == "complete"
+    assert recovered["authority_preflight"][0][
+        "exact_v3_settlement_replayed"
+    ] is True
+    replay = execute_selected_successor_bundle(
+        tmp_path,
+        bundle_binding=prepared["bundle"],
+        authority_proofs=proofs,
+        settled_at=AUTHORITY_LATER,
+        skills_root=SKILLS_ROOT,
+    )
+    assert replay["idempotent_replay"] is True
+    publication_use = recovered["authority_settlements"][1]["use_receipt"]
+    use_value = json.loads(
+        (tmp_path / publication_use["ref"]).read_text(encoding="utf-8")
+    )
+    execution_binding = use_value["execution_result"]
+    execution = json.loads(
+        (tmp_path / execution_binding["ref"]).read_text(encoding="utf-8")
+    )
+    assert execution["schema_version"] == 3
+    assert execution["subject_after"] == {
+        "ref": "task.md",
+        "sha256": hashlib.sha256((tmp_path / "task.md").read_bytes()).hexdigest(),
+    }
+
+
 def test_normal_trigger_rejects_arbitrary_publication_head(tmp_path: Path) -> None:
     _initialize_active_task(tmp_path)
     inputs = _normal_cycle_inputs(tmp_path)
@@ -407,7 +1203,9 @@ def test_historical_predecessor_baseline_retires_while_legacy_head_is_current(
 
 
 def test_real_task_state_owner_applies_before_alias_and_settles_after_cas(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     task = tmp_path / "task.md"
     task.write_text("# Task\n\n- Task ID: `task-old`\n", encoding="utf-8")
@@ -520,21 +1318,60 @@ def test_real_task_state_owner_applies_before_alias_and_settles_after_cas(
     assert prepare_replay["transaction_id"] == prepare["transaction_id"]
     assert prepare_replay["prepare_sha256"] == prepare["prepare_sha256"]
     assert prepare_replay["mutation_performed"] is False
-    code = task_state.main(
-        [
-            "--root",
-            str(tmp_path),
-            "apply-plan",
-            "--plan",
-            planned["plan_ref"],
-            "--external-prepare-ref",
-            prepare["prepare_ref"],
-            "--external-prepare-sha256",
-            prepare["prepare_sha256"],
-        ]
+    assert prepare["storage_schema_version"] == 4
+    assert prepare_replay["storage_schema_version"] == 4
+    compact_state = json.loads(
+        (tmp_path / ".task/selection_publication/state.json").read_text()
     )
-    pending = json.loads(capsys.readouterr().out)
-    assert code == 0
+    assert set(compact_state) == {
+        "schema_version",
+        "storage_schema_version",
+        "kind",
+        "head",
+        "active_transaction",
+        "state_content_sha256",
+    }
+    assert "receipts" not in compact_state
+    prepare_value = json.loads((tmp_path / prepare["prepare_ref"]).read_text())
+    intent_digest = prepare_value["intent_sha256"]
+    assert (
+        tmp_path
+        / ".task/selection_publication/intents/sha256"
+        / intent_digest
+        / "prepare.json"
+    ).is_file()
+    apply_args = [
+        "--root",
+        str(tmp_path),
+        "apply-plan",
+        "--plan",
+        planned["plan_ref"],
+        "--external-prepare-ref",
+        prepare["prepare_ref"],
+        "--external-prepare-sha256",
+        prepare["prepare_sha256"],
+    ]
+    task_before = task.read_bytes()
+    ledger_before = (tmp_path / ".task/index.jsonl").read_bytes()
+    markdown_before = (tmp_path / ".task/index.md").read_bytes()
+    with pytest.raises(SystemExit, match="guarded all-three authority gate"):
+        task_state.main(apply_args)
+    assert task.read_bytes() == task_before
+    assert (tmp_path / ".task/index.jsonl").read_bytes() == ledger_before
+    assert (tmp_path / ".task/index.md").read_bytes() == markdown_before
+    assert not list(
+        (tmp_path / ".task/transition_pending_receipts").glob("*.json")
+    )
+
+    pending = apply_transition_plan(
+        tmp_path,
+        planned["plan_ref"],
+        external_prepare={
+            "ref": prepare["prepare_ref"],
+            "sha256": prepare["prepare_sha256"],
+        },
+        _selected_successor_execution_token=_SELECTED_SUCCESSOR_EXECUTION_TOKEN,
+    )
 
     assert pending["activation_status"] == "pending_external_settlement"
     assert "task-old" in task.read_text(encoding="utf-8")
@@ -558,30 +1395,78 @@ def test_real_task_state_owner_applies_before_alias_and_settles_after_cas(
             str(intent_path),
         ]
     )
-    committed = json.loads(capsys.readouterr().out)
-    assert code == 0
+    blocked = json.loads(capsys.readouterr().out)
+    assert code == 2
+    assert "guarded all-three authority gate" in blocked["error"]
+    assert task.read_bytes() == task_before
+    assert not (
+        tmp_path
+        / f".task/selection_publication/receipts/{prepare['transaction_id']}.json"
+    ).exists()
+
+    committed = publish_prepared(
+        tmp_path,
+        prepare["transaction_id"],
+        _selected_successor_execution_token=_SELECTED_SUCCESSOR_EXECUTION_TOKEN,
+    )
     assert committed["activation_status"] == "pending_external_settlement"
     assert task.read_bytes() == candidate.read_bytes()
     assert publication_status(tmp_path)["status"] == "settlement_required"
-    code = task_state.main(
-        [
-            "--root",
-            str(tmp_path),
-            "settle-plan-external",
-            "--plan",
-            planned["plan_ref"],
-            "--external-commit-ref",
-            committed["receipt_ref"],
-            "--external-commit-sha256",
-            committed["receipt_sha256"],
-        ]
+    settle_args = [
+        "--root",
+        str(tmp_path),
+        "settle-plan-external",
+        "--plan",
+        planned["plan_ref"],
+        "--external-commit-ref",
+        committed["receipt_ref"],
+        "--external-commit-sha256",
+        committed["receipt_sha256"],
+    ]
+    with pytest.raises(SystemExit, match="guarded all-three authority gate"):
+        task_state.main(settle_args)
+    assert not (
+        tmp_path / f".task/transition_receipts/{plan['plan_id']}.json"
+    ).exists()
+
+    settled = settle_transition_external(
+        tmp_path,
+        planned["plan_ref"],
+        {"ref": committed["receipt_ref"], "sha256": committed["receipt_sha256"]},
+        _selected_successor_execution_token=_SELECTED_SUCCESSOR_EXECUTION_TOKEN,
     )
-    settled = json.loads(capsys.readouterr().out)
-    assert code == 0
 
     assert settled["status"] == "settled"
     assert settled["selection_consumption_allowed"] is True
     assert publication_status(tmp_path)["selection_consumption_allowed"] is True
+    assert (
+        tmp_path
+        / ".task/selection_publication/intents/sha256"
+        / intent_digest
+        / "commit.json"
+    ).is_file()
+    task_state.append_event(
+        tmp_path,
+        {
+            "event": "link",
+            "id": old["id"],
+            "updated_at": "2026-07-22T20:00:01+09:00",
+            "links": [{"rel": "related_to", "id": "task-next"}],
+        },
+    )
+    task_state.rebuild_markdown(tmp_path)
+    from orchestrate_task_cycle.selection_publication_v2 import (
+        validate_external_settlement_assertion,
+    )
+
+    validate_external_settlement_assertion(
+        tmp_path,
+        json.loads((tmp_path / committed["receipt_ref"]).read_text()),
+        {"ref": committed["receipt_ref"], "sha256": committed["receipt_sha256"]},
+    )
+    descendant_status = publication_status(tmp_path)
+    assert descendant_status["status"] == "clear"
+    assert descendant_status["selection_consumption_allowed"] is True
 
     settlement_path = tmp_path / settled["receipt_ref"]
     settlement_bytes = settlement_path.read_bytes()
@@ -673,17 +1558,11 @@ def test_real_task_state_owner_applies_before_alias_and_settles_after_cas(
     assert task_state.verify_transition_plan(
         tmp_path, planned["plan_ref"]
     )["status"] == "already_applied"
-    code = selection_publication_cli.main(
-        [
-            "--root",
-            str(tmp_path),
-            "apply-intent",
-            "--intent",
-            str(intent_path),
-        ]
+    replay = publish_prepared(
+        tmp_path,
+        prepare["transaction_id"],
+        _selected_successor_execution_token=_SELECTED_SUCCESSOR_EXECUTION_TOKEN,
     )
-    replay = json.loads(capsys.readouterr().out)
-    assert code == 0
     assert replay["mutation_performed"] is False
 
     modified = {**intent, "task_state_plan": {**intent["task_state_plan"], "sha256": "0" * 64}}
@@ -703,18 +1582,21 @@ def test_real_task_state_owner_applies_before_alias_and_settles_after_cas(
 
     candidate_payload = candidate.read_bytes()
     candidate.write_bytes(b"tampered\n")
-    code = selection_publication_cli.main(
-        [
-            "--root",
-            str(tmp_path),
-            "apply-intent",
-            "--intent",
-            str(intent_path),
-        ]
-    )
-    tampered = json.loads(capsys.readouterr().out)
-    assert code == 2
-    assert tampered["status"] == "blocked"
+    with monkeypatch.context() as bounded:
+        bounded.setattr(
+            publication,
+            "_transactions_root",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("normal replay enumerated transaction history")
+            ),
+        )
+        replay_without_historical_body = publish_prepared(
+            tmp_path,
+            prepare["transaction_id"],
+            _selected_successor_execution_token=_SELECTED_SUCCESSOR_EXECUTION_TOKEN,
+        )
+    assert replay_without_historical_body["status"] == "committed"
+    assert replay_without_historical_body["mutation_performed"] is False
     candidate.write_bytes(candidate_payload)
 
     original_prepare = json.loads(
@@ -738,15 +1620,10 @@ def test_real_task_state_owner_applies_before_alias_and_settles_after_cas(
         / "prepare.json",
         competing,
     )
-    code = selection_publication_cli.main(
-        [
-            "--root",
-            str(tmp_path),
-            "apply-intent",
-            "--intent",
-            str(intent_path),
-        ]
+    bounded_replay = publish_prepared(
+        tmp_path,
+        prepare["transaction_id"],
+        _selected_successor_execution_token=_SELECTED_SUCCESSOR_EXECUTION_TOKEN,
     )
-    ambiguous = json.loads(capsys.readouterr().out)
-    assert code == 2
-    assert "ambiguous" in ambiguous["error"]
+    assert bounded_replay["mutation_performed"] is False
+    assert publication_status(tmp_path, deep=True)["status"] == "recovery_required"

@@ -13,6 +13,7 @@ PUBLICATION_KEYS = frozenset(
 UNINITIALIZED_HEAD_KEYS = frozenset(
     "status head_transaction_id head_count lineage_mode".split()
 )
+MIGRATION_HEAD_KEYS = UNINITIALIZED_HEAD_KEYS
 CURRENT_HEAD_KEYS = frozenset(
     "status head_transaction_id head_count expected_task_sha256 "
     "current_task_sha256 lineage_mode".split()
@@ -45,6 +46,13 @@ def _validate_current_head(value: object) -> str:
             and type(value["head_count"]) is int
             and value["head_count"] == 0
             and value["lineage_mode"] == "uninitialized"
+        )
+    elif status == "unknown_until_migrated":
+        valid = bool(
+            set(value) == MIGRATION_HEAD_KEYS
+            and value["head_transaction_id"] is None
+            and value["head_count"] == 0
+            and value["lineage_mode"] == "legacy_unscanned"
         )
     elif status in {"current", "drifted"}:
         expected = value.get("expected_task_sha256")
@@ -104,6 +112,18 @@ def validate_selection_publication(
         raise ValueError("selection publication status has non-contract fields")
     status = value["status"]
     head_status = _validate_current_head(value["current_head"])
+    if status == "migration_required":
+        if (
+            head_status != "unknown_until_migrated"
+            or value["pending_transaction_ids"]
+            or value["selection_journal_initialized"] is not False
+            or value["selection_consumption_allowed"] is not False
+            or value["selection_consumption_reason"]
+            != "explicit_selection_state_migration_required"
+            or value["mutation_performed"] is not False
+        ):
+            raise ValueError("selection publication migration projection is invalid")
+        return status
     if (
         not isinstance(status, str)
         or status not in {"clear", "recovery_required", "drift_blocked"}

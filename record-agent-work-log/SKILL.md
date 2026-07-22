@@ -43,7 +43,7 @@ Do not hardcode retention periods, packet-size thresholds, or archive locations.
 
      ```bash
      PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts" \
-     python3 -m record_agent_work_log write \
+     python3 -P -m record_agent_work_log write \
        --root . \
        --title "short title" \
        --status informational \
@@ -117,7 +117,7 @@ Keep entries factual. Do not make the record more successful than the evidence s
 - Require `.agent_log`, its date directories, lock, index, and Markdown files to remain regular non-symlink paths beneath the resolved workspace. Never follow a symlink component for writing or collection.
 - Treat `body_sha256`, `content_id`, and `record_id` as immutable bindings for current-version rows. Do not rewrite a bound Markdown body or repair an integrity mismatch by silently replacing index evidence; surface the duplicate, orphan, missing, or tampered record for governed resolution.
 - Require a valid migration marker, receipt, source snapshot, plan, exact status map, resolution manifest, and commit-boundary prefix hash for migration-derived rows. Standard appends after that boundary remain strict current rows. Never treat an unsealed malformed/legacy prefix as migrated.
-- Before using migration evidence as a governed trust-boundary pass, run the source-separated `python3 -m record_agent_work_log verify-migration` command described in [legacy-migration.md](references/legacy-migration.md). Producer/self-declared success and the producer's own `validate` result are not independent verification.
+- Before using migration evidence as a governed trust-boundary pass, run the source-separated `python3 -P -m record_agent_work_log verify-migration` command described in [legacy-migration.md](references/legacy-migration.md). Producer/self-declared success and the producer's own `validate` result are not independent verification.
 - Require context/completion collectors and `$manage-task-state-index` discovery to use the shared integrity inspector before reading Markdown. Any workflow that creates a handoff log, including external-advice retirement, must use the standard writer rather than creating orphan `.agent_log/*.md` directly.
 - Do not use `.agent_log` for secrets, credentials, private keys, raw tokens, or raw/slim transcript bodies. Store session capture only through `$audit-session-governance`; cite its validated privacy-safe packet rather than copying the packet or transcript body.
 - Do not let the normalization subagent write files; only the main agent runs the writer script.

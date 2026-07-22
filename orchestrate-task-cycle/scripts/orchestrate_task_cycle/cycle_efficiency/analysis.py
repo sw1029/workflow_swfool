@@ -13,6 +13,7 @@ from .common import (
     current_cycle_events,
     first_present,
 )
+from .compiler_metrics import compiler_efficiency_projection
 from .findings import append_budget_findings, base_findings, recommendations
 from .observations import observation_state
 from .scope import scope_state
@@ -73,6 +74,7 @@ def _result(
     obs: ObservationState,
     cost: CostProjection,
     findings: list[dict[str, Any]],
+    compiler_efficiency: dict[str, Any],
 ) -> dict[str, Any]:
     recommendation_values = recommendations(findings)
     event_task_id = (
@@ -101,6 +103,7 @@ def _result(
             if not scope.profile_scope_unverified
             else "current_cycle_available_evidence",
         },
+        "compiler_efficiency": compiler_efficiency,
         "profile_scope": scope.latest_scope,
         "profile_scope_unverified": scope.profile_scope_unverified,
         "family_scoped_event_count": len(scope.scoped_events),
@@ -163,4 +166,18 @@ def analyze(
     findings = base_findings(scope, observations, index_records)
     cost = _cost_projection(root, events, scope, observations)
     append_budget_findings(findings, cost)
-    return _result(events, task_id, scope, observations, cost, findings)
+    metric_events = (
+        scope.scoped_events
+        if not scope.profile_scope_unverified
+        else current_cycle_events(events)
+    )
+    compiler_efficiency = compiler_efficiency_projection(root, metric_events)
+    return _result(
+        events,
+        task_id,
+        scope,
+        observations,
+        cost,
+        findings,
+        compiler_efficiency,
+    )

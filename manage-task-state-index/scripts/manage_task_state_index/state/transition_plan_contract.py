@@ -174,6 +174,10 @@ def owned_transition_file(
     """Resolve one closed transition-owned file without following symlinks."""
 
     allowed = {
+        "scan_compilations",
+        "scan_projection_intents",
+        "scan_projection_receipts",
+        "scan_receipts",
         "transition_plans",
         "transition_intents",
         "transition_receipts",

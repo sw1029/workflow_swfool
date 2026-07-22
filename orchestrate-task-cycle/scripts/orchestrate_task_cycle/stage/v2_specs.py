@@ -138,12 +138,20 @@ LOG_TARGETS = frozenset(
 SESSION_TARGETS = frozenset(
     {"run", "qualitative_review", "loopback_audit", "validate", "report"}
 )
+GOAL_TARGETS = frozenset(
+    {"qualitative_review", "loopback_audit", "derive", "validate", "report"}
+)
+SELECTION_TARGETS = frozenset({"derive", "index", "dashboard", "report"})
 
 
 def dependency_selectors(target: str) -> tuple[str, ...]:
-    selectors = ["core"]
+    # Keep effect-capable state in atomic selectors.  A composite `core`
+    # fingerprint used to let an allowed task.md mutation hide an unrelated
+    # concurrent cycle/authority change under the same changed selector.
+    selectors = ["core", "task", "cycle", "authority", "pending_runs"]
     for name, targets in (
-        ("git", GIT_TARGETS),
+        ("git_head", GIT_TARGETS),
+        ("git_worktree", GIT_TARGETS),
         ("task_state", TASK_STATE_TARGETS),
         ("advice", ADVICE_TARGETS),
         ("validation", VALIDATION_TARGETS),
@@ -151,6 +159,8 @@ def dependency_selectors(target: str) -> tuple[str, ...]:
         ("issue", ISSUE_TARGETS),
         ("agent_log", LOG_TARGETS),
         ("session", SESSION_TARGETS),
+        ("goal", GOAL_TARGETS),
+        ("selection", SELECTION_TARGETS),
     ):
         if target in targets:
             selectors.append(name)
@@ -161,6 +171,8 @@ __all__ = [
     "DETERMINISTIC_TARGETS",
     "EXECUTOR_KINDS",
     "HYBRID_TARGETS",
+    "GOAL_TARGETS",
+    "SELECTION_TARGETS",
     "SEMANTIC_FIELDS",
     "SYSTEM_STEPS",
     "dependency_selectors",

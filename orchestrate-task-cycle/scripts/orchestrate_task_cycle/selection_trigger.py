@@ -57,6 +57,8 @@ def _validated_bindings(
     cycle_id: str,
     values: dict[str, Any],
     input_evidence_manifest_sha256: str,
+    *,
+    expected_active_prepare: Any = None,
 ) -> dict[str, dict[str, str]]:
     result: dict[str, dict[str, str]] = {}
     for field in BINDING_FIELDS:
@@ -80,6 +82,7 @@ def _validated_bindings(
         result["publication_head"],
         result["current_task"],
         result["task_index"],
+        expected_active_prepare=expected_active_prepare,
     )
     return result
 
@@ -131,7 +134,9 @@ def render_normal_cycle_trigger(
     return {**body, "trigger_sha256": canonical_sha256(body)}
 
 
-def validate_normal_cycle_trigger(root: Path, value: Any) -> dict[str, Any]:
+def validate_normal_cycle_trigger(
+    root: Path, value: Any, *, expected_active_prepare: Any = None
+) -> dict[str, Any]:
     trigger = closed_object(value, TRIGGER_KEYS, "normal-cycle selection trigger")
     if (
         trigger.get("schema_version") != 1
@@ -152,6 +157,7 @@ def validate_normal_cycle_trigger(root: Path, value: Any) -> dict[str, Any]:
         trigger["cycle_id"],
         trigger,
         trigger["input_evidence_manifest_sha256"],
+        expected_active_prepare=expected_active_prepare,
     )
     core = {
         "schema_version": 1,

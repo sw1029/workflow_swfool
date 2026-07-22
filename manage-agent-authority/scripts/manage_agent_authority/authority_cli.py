@@ -6,22 +6,17 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .artifact_store import AUTHORIZATION_ROOT
 from .artifact_store import register_grant
 from .artifact_store import snapshot_file
 from .artifact_store import transition_grants
 from .artifact_store import update_current_policy
 from .canonical import load_object
-from .canonical import object_sha256
-from .canonical import parse_time
-from .canonical import write_immutable_json
 from .composition import create_composition
-from .evaluator import evaluate
+from .decision_publication import evaluate_and_publish
 from .lifecycle import consume
 from .lifecycle import release
 from .reconciliation import reconcile_quarantine
 from .lifecycle import reserve
-from .lifecycle import verify_reservation_with_recovery
 from .operation_compiler import compilation_inputs
 from .operation_compiler import compile_operation
 from .operation_publication import publish_compilation
@@ -29,6 +24,10 @@ from .workflow_status import resolve_operation
 from .workflow_status import status_snapshot
 from .reconciliation_evidence import prepare_reconciliation_evidence
 from .source_recovery import prepare_source_recovery
+from .settlement import settle_owner_result
+from .recovery_materialization import materialize_approved_recovery
+from .verification_publication import verify_and_publish_precommit
+from .verification_publication import verify_and_publish_predispatch
 from .cli_errors import emit_error
 from .cli_parser import build_parser as _build_parser
 
@@ -129,21 +128,14 @@ def command_delegate(args: argparse.Namespace) -> int:
 def command_evaluate(args: argparse.Namespace) -> int:
     root = _root(args)
     request, context = _operation_inputs(args, root)
-    decision = evaluate(
-        root,
-        request,
-        context,
-        evaluated_at=args.at,
-        skills_root=_skills_root(args),
-    )
-    path = root / AUTHORIZATION_ROOT / "decisions" / f"{decision['decision_id']}.json"
-    digest = write_immutable_json(path, decision, "authority decision")
     return _emit(
-        {
-            **decision,
-            "decision_ref": path.relative_to(root).as_posix(),
-            "decision_sha256": digest,
-        }
+        evaluate_and_publish(
+            root,
+            request,
+            context,
+            evaluated_at=args.at,
+            skills_root=_skills_root(args),
+        )
     )
 
 
@@ -165,62 +157,20 @@ def command_reserve(args: argparse.Namespace) -> int:
 
 
 def command_verify(args: argparse.Namespace) -> int:
-    root = _root(args)
-    reservation, state, verification, state_sha256 = verify_reservation_with_recovery(
-        root,
-        args.reservation_ref,
-        args.reservation_sha256,
-        verified_at=args.at,
-        expected_version=args.expected_version,
-        skills_root=_skills_root(args),
+    publisher = (
+        verify_and_publish_precommit
+        if args.stage == "pre_commit"
+        else verify_and_publish_predispatch
     )
-    decision = verification["decision"]
-    state_path = (
-        root
-        / AUTHORIZATION_ROOT
-        / "state"
-        / "reservations"
-        / f"{reservation['reservation_id']}.json"
-    )
-    core = {
-        "schema_version": 2,
-        "artifact_kind": "authority_verification",
-        "stage": args.stage,
-        "reservation": {
-            "ref": args.reservation_ref,
-            "sha256": args.reservation_sha256,
-        },
-        "reservation_state": {
-            "ref": state_path.relative_to(root).as_posix(),
-            "sha256": state_sha256,
-            "version": state["version"],
-            "status": state["status"],
-        },
-        "grant_states": verification["grant_states"],
-        "request_id": decision["request"]["request_id"],
-        "effective_authority_fingerprint": reservation[
-            "effective_authority_fingerprint"
-        ],
-        "verified_at": parse_time(args.at, "at").isoformat(),
-    }
-    result = {
-        "verification_id": f"authv-{object_sha256(core)[:24]}",
-        **core,
-    }
-    path = (
-        root
-        / AUTHORIZATION_ROOT
-        / "verifications"
-        / f"{result['verification_id']}.json"
-    )
-    digest = write_immutable_json(path, result, "authority verification")
     return _emit(
-        {
-            "status": "verified",
-            **result,
-            "verification_ref": path.relative_to(root).as_posix(),
-            "verification_sha256": digest,
-        }
+        publisher(
+            _root(args),
+            args.reservation_ref,
+            args.reservation_sha256,
+            verified_at=args.at,
+            expected_version=args.expected_version,
+            skills_root=_skills_root(args),
+        )
     )
 
 
@@ -247,6 +197,21 @@ def command_consume(args: argparse.Namespace) -> int:
     return _emit({"status": "consumed", **result})
 
 
+def command_settle(args: argparse.Namespace) -> int:
+    result = settle_owner_result(
+        _root(args),
+        args.reservation_ref,
+        args.reservation_sha256,
+        _binding(args.owner_result, "owner_result"),
+        _binding(args.pre_commit_verification, "pre_commit_verification"),
+        settled_at=args.at,
+        expected_version=args.expected_version,
+        idempotency_key=args.idempotency_key,
+        skills_root=_skills_root(args),
+    )
+    return _emit(result)
+
+
 def command_release(args: argparse.Namespace) -> int:
     result = release(
         _root(args),
@@ -257,6 +222,7 @@ def command_release(args: argparse.Namespace) -> int:
         expected_version=args.expected_version,
         idempotency_key=args.idempotency_key,
         effect_status=args.effect_status,
+        skills_root=_skills_root(args),
     )
     return _emit(
         {
@@ -318,6 +284,17 @@ def command_prepare_source_recovery(args: argparse.Namespace) -> int:
     return _emit(result)
 
 
+def command_materialize_approved_recovery(args: argparse.Namespace) -> int:
+    return _emit(
+        materialize_approved_recovery(
+            _root(args),
+            _binding(args.recovery_recipe, "recovery_recipe"),
+            _binding(args.user_decision, "user_decision"),
+            skills_root=_skills_root(args),
+        )
+    )
+
+
 def command_transition(args: argparse.Namespace) -> int:
     root = _root(args)
     result = transition_grants(
@@ -370,10 +347,12 @@ def build_parser() -> argparse.ArgumentParser:
         "reserve": command_reserve,
         "verify": command_verify,
         "consume": command_consume,
+        "settle": command_settle,
         "release": command_release,
         "reconcile": command_reconcile,
         "prepare_reconciliation_evidence": command_prepare_reconciliation_evidence,
         "prepare_source_recovery": command_prepare_source_recovery,
+        "materialize_approved_recovery": command_materialize_approved_recovery,
         "transition": command_transition,
         "status": command_status,
         "resolve": command_resolve,

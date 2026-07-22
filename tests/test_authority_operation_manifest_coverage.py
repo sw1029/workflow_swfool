@@ -45,6 +45,7 @@ REQUIRED_WORKFLOW_OPERATIONS = {
         "delegate_grant",
         "evaluate_operation",
         "issue_grant",
+        "materialize_approved_source_authority_recovery",
         "prepare_source_authority_recovery",
         "release_use",
         "reserve_use",
@@ -135,7 +136,6 @@ BOUND_LIFECYCLE_MUTATIONS = {
     ("orchestrate-task-cycle", "activate_terminal_wait_baseline_settlement"),
     ("orchestrate-task-cycle", "activate_task_topology_settlement"),
     ("orchestrate-task-cycle", "retire_terminal_wait_baseline_successor"),
-    ("orchestrate-task-cycle", "settle_selected_successor_task_state"),
 }
 
 PROJECTION_ONLY_MUTATIONS = {

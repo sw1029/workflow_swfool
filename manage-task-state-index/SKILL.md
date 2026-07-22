@@ -52,9 +52,9 @@ Use stable IDs for all important artifacts:
 
 Use only the closed lifecycle vocabulary documented in [index-schema.md](references/index-schema.md). Keep `partially_resolved` active: it means evidence resolved part of the artifact while an explicit residual remains. Never collapse it to `resolved` because its text contains that substring.
 
-For an explicitly authorized malformed/legacy-ledger migration, read [legacy-migration.md](references/legacy-migration.md) and use `python3 -m manage_task_state_index migrate`. Keep repository-specific mappings outside the helper, preserve the source as a byte-identical sealed prefix, and require its committed receipt before normal mutation readers consume any quarantined prefix row. Review every observed token exactly: reject a mapping builder that uses prefix, substring, suffix, regex, or wildcard logic to decide lifecycle meaning even when its emitted JSON keys are exact tokens. Require `mapping_method: exact_token_review` and `pattern_inference_used: false`. Current migration plan, resolution-manifest, and receipt schema version 2 also requires lock-time safe task/pack anchor revalidation, exact original-token/reason preservation for mapped event/status/type values, correction ID/SHA bindings for every non-independent quarantine, a hash-bound final journal, and an immutable completion marker. Missing or tampered v2 bindings keep `scan|add|link|rebuild|audit` fail-closed.
+For an explicitly authorized malformed/legacy-ledger migration, read [legacy-migration.md](references/legacy-migration.md) and use `python3 -P -m manage_task_state_index migrate`. Keep repository-specific mappings outside the helper, preserve the source as a byte-identical sealed prefix, and require its committed receipt before normal mutation readers consume any quarantined prefix row. Review every observed token exactly: reject a mapping builder that uses prefix, substring, suffix, regex, or wildcard logic to decide lifecycle meaning even when its emitted JSON keys are exact tokens. Require `mapping_method: exact_token_review` and `pattern_inference_used: false`. Current migration plan, resolution-manifest, and receipt schema version 2 also requires lock-time safe task/pack anchor revalidation, exact original-token/reason preservation for mapped event/status/type values, correction ID/SHA bindings for every non-independent quarantine, a hash-bound final journal, and an immutable completion marker. Missing or tampered v2 bindings keep `scan|add|link|rebuild|audit` fail-closed.
 
-Use `python3 -m manage_task_state_index verify-migration` when a committed migration needs source-separated completion evidence. The verifier is read-only, does not import the migration producer as truth, and requires a caller-owned exact mapping manifest outside every `.task/migrations` tree that is byte-identical to, but neither the same file nor a hard link to, the published snapshot. It independently recomputes the sealed graph and reports immutable migration-boundary task/pack IDs and evidence refs separately from legitimate current-tail task/pack IDs and evidence refs. Its recovery evidence is limited to externally hash-bound observations over synthetic or copied fixtures: bind every observation field into the verification graph, prove the exact phase-specific owned transition, require the live projection and protected task/pack artifacts to be unchanged except for the phase's exact authorized publication, and never use verification to apply, recover, or replay the live ledger. See [Independent verifier](references/legacy-migration.md#independent-verifier).
+Use `python3 -P -m manage_task_state_index verify-migration` when a committed migration needs source-separated completion evidence. The verifier is read-only, does not import the migration producer as truth, and requires a caller-owned exact mapping manifest outside every `.task/migrations` tree that is byte-identical to, but neither the same file nor a hard link to, the published snapshot. It independently recomputes the sealed graph and reports immutable migration-boundary task/pack IDs and evidence refs separately from legitimate current-tail task/pack IDs and evidence refs. Its recovery evidence is limited to externally hash-bound observations over synthetic or copied fixtures: bind every observation field into the verification graph, prove the exact phase-specific owned transition, require the live projection and protected task/pack artifacts to be unchanged except for the phase's exact authorized publication, and never use verification to apply, recover, or replay the live ledger. See [Independent verifier](references/legacy-migration.md#independent-verifier).
 
 Validation artifacts may also record a separate progress status such as `advanced`, `safety_only`, `no_progress`, or `regressed` in their title, links, or concise metadata. Do not treat progress status as a replacement for validation status.
 
@@ -110,14 +110,28 @@ Minimal closed intent shape:
 targets use the same exact artifact ref/type plus `auto|current|new` identity.
 
 ```bash
-python3 -m manage_task_state_index index --root . compile-transition \
+python3 -P -m manage_task_state_index index --root . compile-transition \
   --intent transition-intent.json --at 2026-01-01T00:00:00Z
 
-python3 -m manage_task_state_index index --root . plan-transition \
+python3 -P -m manage_task_state_index index --root . plan-transition \
   --intent transition-intent.json --at 2026-01-01T00:00:00Z --dry-run
 ```
 
 Use the full `--request-json` path only for compatibility or contract diagnostics. Compilation is read-only and does not authorize `apply-plan`; subject or index drift requires recompilation rather than manual digest repair.
+
+For a governed full inventory scan, do not ask a model or coordinator to write owner-result JSON or call one `upsert_item` per artifact. Fix one timestamp, compile the whole inventory, authorize the exact published compilation/plan, then apply it once:
+
+```bash
+python3 -P -m manage_task_state_index index --root . prepare-scan \
+  --at 2026-01-01T00:00:00Z \
+  --focus-ref .agent_advice/active/example.md --focus-sha256 <sha256>
+
+python3 -P -m manage_task_state_index index --root . apply-scan \
+  --compilation-ref .task/scan_compilations/<scan-id>.json \
+  --compilation-sha256 <sha256>
+```
+
+`prepare-scan --dry-run` is zero-write. The compiler distinguishes logical artifact updates from the exact expanded event count, binds the event-batch digest and optional focused artifact, and publishes no artifact bodies in its command result. `apply-scan` rechecks the inventory and ledger, appends the complete batch once, renders at most once, and emits a canonical schema-v2 owner result under `.task/scan_receipts/`. A projection-only repair publishes an immutable `.task/scan_projection_intents/<scan-id>.json` before changing Markdown, derives the exact repaired bytes again from the compilation-bound ledger prefix and timestamp, then publishes `.task/scan_projection_receipts/<scan-id>.json` under the same ledger lock. An interrupted exact-after repair resumes receipt/result publication without rewriting Markdown; historical validation reopens both artifacts and re-renders the original prefix instead of trusting the result's after digest or the current descendant projection. The legacy `scan` CLI is a compatibility driver; new orchestration must use the explicit prepare/apply bindings.
 
 Selected-successor publication is the one intentional schema-v2 request path. It binds
 the exact prospective task Markdown in `artifact_sources`, declares
@@ -127,6 +141,19 @@ Follow the full transaction in [index-schema.md](references/index-schema.md#pros
 prepare, publication CAS of `task.md` last, then `settle-plan-external`. Do not use the
 ordinary schema-v1 compact intent to fake this cross-owner dependency.
 
+Render that request and its predecessor/successor events mechanically:
+
+```bash
+python3 -P -m manage_task_state_index index --root . prepare-selected-successor \
+  --source-decision-ref <selection-receipt-ref> --source-decision-sha256 <sha256> \
+  --task-source-ref <prospective-task-ref> --task-source-sha256 <sha256> \
+  --at 2026-01-01T00:00:00Z
+```
+
+The selection owner still validates the complete decision receipt; this renderer reopens the exact binding, checks its selected task ID against the prospective Markdown, and derives only task-index mechanics.
+
+Before authority consumes or releases a task-index reservation, run `validate-owner-result` with the exact owner-result, reservation, and pre-commit bindings. A canonical scan result or settled external receipt is validated against its immutable plan, contiguous event batch, legal descendant suffix, and current full Markdown projection. Use `--phase current` while the selected task must still be current and `--phase historical` after a later successor. Legacy ad hoc scan JSON is reported as `unknown_effect`, never upgraded to confirmed effect.
+
 1. Initialize or refresh the index.
    - Create `.task/` if missing.
    - Preserve existing `.task/index.jsonl`; never truncate it.
@@ -135,7 +162,7 @@ ordinary schema-v1 compact intent to fake this cross-owner dependency.
 
      ```bash
      PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts:${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts" \
-     python3 -m manage_task_state_index index --root . init
+     python3 -P -m manage_task_state_index index --root . init
      ```
 
 2. Discover current artifacts.
@@ -153,9 +180,9 @@ ordinary schema-v1 compact intent to fake this cross-owner dependency.
 
      ```bash
      PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts:${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts" \
-     python3 -m manage_task_state_index index --root . scan
+     python3 -P -m manage_task_state_index index --root . scan
      PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts:${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts" \
-     python3 -m manage_task_state_index index --root . scan --check
+     python3 -P -m manage_task_state_index index --root . scan --check
      ```
 
 3. Add or update a specific artifact when another workflow creates it.
@@ -165,7 +192,7 @@ ordinary schema-v1 compact intent to fake this cross-owner dependency.
 
      ```bash
      PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts:${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts" \
-     python3 -m manage_task_state_index index --root . add \
+     python3 -P -m manage_task_state_index index --root . add \
        --type task \
        --path task.md \
        --status active \
@@ -182,7 +209,7 @@ ordinary schema-v1 compact intent to fake this cross-owner dependency.
 
      ```bash
      PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts:${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts" \
-     python3 -m manage_task_state_index index --root . link \
+     python3 -P -m manage_task_state_index index --root . link \
        --source-id task-20260522-213000-example \
        --link produced:miss-20260522-214000-generalization-gap
      ```
@@ -208,14 +235,14 @@ ordinary schema-v1 compact intent to fake this cross-owner dependency.
 
      ```bash
      PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts:${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts" \
-     python3 -m manage_task_state_index index --root . audit
+     python3 -P -m manage_task_state_index index --root . audit
      ```
 
    - Use this command when the audit itself should become a durable artifact:
 
      ```bash
      PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts:${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts" \
-     python3 -m manage_task_state_index index --root . audit --write-report
+     python3 -P -m manage_task_state_index index --root . audit --write-report
      ```
 
    - Use `audit --summary-only --focus-path <path>` for cycle reports that need global counts and current-surface issues without dumping unrelated historical debt. The summary output is not a replacement for full audit evidence when deletion, issue closure, or completion depends on global consistency.
@@ -239,16 +266,16 @@ ordinary schema-v1 compact intent to fake this cross-owner dependency.
 
 ## Script Commands
 
-Use `python3 -m manage_task_state_index index` for deterministic updates:
+Use `python3 -P -m manage_task_state_index index` for deterministic updates:
 
 - `init`: create `.task/index.jsonl` if needed and rebuild `.task/index.md`.
 - `scan`: discover standard artifacts, append missing or changed index events, and publish the Markdown view only when its projection changes. Add `--dry-run` for a zero-write plan or `--check` for the same plan with CI-friendly `0`/`1` exit status.
 - `add`: append or update one artifact event; use `--replace` or a new explicit `--id` only for semantic replacement.
 - `link`: append a relationship from one indexed artifact to another.
 - `rebuild`: regenerate `.task/index.md` from `.task/index.jsonl`.
-- `audit`: inspect global ID consistency, broken links, duplicate active paths, stale digests, missing files, active task conflicts, and unindexed standard artifacts. Add `--write-report` to write `.task/id_audit/*.md` and index it as `audit-*`. Add `--summary-only --focus-path <path>` to emit compact counts and focused issues for report packets.
+- `audit`: inspect global ID consistency, broken links, duplicate active paths, stale digests, missing files, active task conflicts, and unindexed standard artifacts. Without `--write-report`, it shares an existing lock or verifies a stable lockless snapshot and creates no `.task` or lock. Add `--write-report` to write `.task/id_audit/*.md` and index it as `audit-*`. Add `--summary-only --focus-path <path>` to emit compact counts and focused issues for report packets.
 - `compile-transition`: compile a closed compact lifecycle intent into the existing event-batch request without writing task state. It derives artifact identity and digests from current workspace/index bytes and fails with `recompile_required` on stale state.
-- `plan-transition`: build one content-bound event batch from either `--intent <json-or-path>` plus explicit `--at`, or `--request-json <json-or-path>`. Schema-v1 requests use ordinary current/expected anchors. Schema-v2 is reserved for selected-successor external settlement and requires an exact prospective `task.md` source plus `external_settlement_kind: selection_publication`. Markdown rendering is mandatory. Use `--dry-run` for a zero-write plan or omit it to immutably publish reversible, non-canonical workflow metadata at the sole canonical `.task/transition_plans/<plan-id>.json` path. If `--output` is supplied it must equal that path exactly; aliases are rejected because intent and receipt sidecars are keyed by `plan_id`. This prepare operation is authority-free; it cannot authorize `apply-plan`.
+- `plan-transition`: build one content-bound event batch from the preferred `--intent <json-or-path>` plus explicit `--at`. The full `--request-json <json-or-path>` surface is legacy compatibility/contract diagnostics only and must not be used to make a coordinator author event arrays. Schema-v1 requests use ordinary current/expected anchors. Schema-v2 is reserved for selected-successor external settlement and requires an exact prospective `task.md` source plus `external_settlement_kind: selection_publication`. Markdown rendering is mandatory. Use `--dry-run` for a zero-write plan or omit it to immutably publish reversible, non-canonical workflow metadata at the sole canonical `.task/transition_plans/<plan-id>.json` path. If `--output` is supplied it must equal that path exactly; aliases are rejected because intent and receipt sidecars are keyed by `plan_id`. This prepare operation is authority-free; it cannot authorize `apply-plan`.
 - `verify-plan`: read-only verify the immutable plan digest, event bindings, ledger/Markdown/artifact CAS anchors, exact replay state, and receipt consistency. Use `--phase planning` before dependency owners publish prospective artifacts: ledger/Markdown must still match the plan prestate and every artifact must match `before_sha256`. Use `--phase apply` after dependencies finish: the same ledger/Markdown prestate must hold and artifacts must match `expected_sha256`. Do not emulate this distinction by ignoring artifact defects.
 - `apply-plan`: under `.task/index.lock`, CAS-apply every planned task/archive/supersede/advice/task-pack link event as one append batch and render once. Apply remains the separately authorized `mutate_task_state_index` operation. For schema v1 it publishes the settled apply receipt. For schema v2 require the exact selection-publication prepare through `--external-prepare-ref|sha256`, keep `task.md` at its before digest, and publish `activation_status: pending_external_settlement` under `.task/transition_pending_receipts/`; every normal writer remains blocked on that unfinished lifecycle. Exact replay appends zero events and returns the same pending or settled state.
 - `settle-plan-external`: for one schema-v2 plan, reopen its pending receipt and the exact committed schema-v3 selection-publication receipt, verify that publication wrote the prospective bytes to `task.md` and bound the same prepare/plan, then publish the settled schema-v2 apply receipt. Replay returns `already_settled`. The result alone opens `selection_consumption_allowed`; it cannot select another publication or serve as a new authority source.
@@ -260,30 +287,35 @@ Example:
 
 ```bash
 PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts:${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts" \
-python3 -m manage_task_state_index index --root . plan-transition \
-  --request-json .task/transition-request.json
+python3 -P -m manage_task_state_index index --root . plan-transition \
+  --intent transition-intent.json \
+  --at 2026-01-01T00:00:00Z
 PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts:${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts" \
-python3 -m manage_task_state_index index --root . verify-plan \
+python3 -P -m manage_task_state_index index --root . verify-plan \
   --phase planning \
   --plan .task/transition_plans/<plan-id>.json
 PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts:${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts" \
-python3 -m manage_task_state_index index --root . verify-plan \
+python3 -P -m manage_task_state_index index --root . verify-plan \
   --phase apply \
   --plan .task/transition_plans/<plan-id>.json
 PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts:${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts" \
-python3 -m manage_task_state_index index --root . apply-plan \
+python3 -P -m manage_task_state_index index --root . apply-plan \
   --plan .task/transition_plans/<plan-id>.json
 ```
 
-For a selected successor, supply the publication prepare to `apply-plan`, then settle
-from the committed publication receipt:
+For a selected successor, orchestration callers must use
+`orchestrate_task_cycle selected-successor execute|recover`; that guarded driver
+validates all three authority pre-commits and writes the immutable pre-effect gate
+before invoking this owner's effects. The following lower commands describe only the
+owner-internal boundary and are permitted for debugging or governed historical
+recovery, never as the normal first-effect route:
 
 ```bash
-python3 -m manage_task_state_index index --root . apply-plan \
+python3 -P -m manage_task_state_index index --root . apply-plan \
   --plan .task/transition_plans/<plan-id>.json \
   --external-prepare-ref <publication-prepare-ref> \
   --external-prepare-sha256 <publication-prepare-raw-sha256>
-python3 -m manage_task_state_index index --root . settle-plan-external \
+python3 -P -m manage_task_state_index index --root . settle-plan-external \
   --plan .task/transition_plans/<plan-id>.json \
   --external-commit-ref <publication-receipt-ref> \
   --external-commit-sha256 <publication-receipt-raw-sha256>
@@ -291,9 +323,9 @@ python3 -m manage_task_state_index index --root . settle-plan-external \
 
 If a foreign index write or a genuinely foreign artifact digest makes that exact plan stale before its intent is published, do not request the same semantic approval again. Verify `plan_effect_observed: false`, `plan_intent_observed: false`, and `no_effect_eligible: true`; publish the exact no-effect receipt; release the old reservation against that receipt; then prepare a new exact plan from the unchanged source decision. Artifacts that are all still at `before_sha256`, all at `expected_sha256`, or partially moving only between those two states are normal dependency states (`ready` or `materializing`), never no-effect. Only a changed semantic subject, effect, risk, or exclusion requires another user decision.
 
-Use `python3 -m manage_task_state_index migrate` only for the bounded `inspect` and `migrate plan|apply|validate|recover` transaction documented in [legacy-migration.md](references/legacy-migration.md). `plan` and `apply --dry-run` must leave canonical `.task` state unchanged. Never use migration as a general malformed-row ignore mode.
+Use `python3 -P -m manage_task_state_index migrate` only for the bounded `inspect` and `migrate plan|apply|validate|recover` transaction documented in [legacy-migration.md](references/legacy-migration.md). `plan` and `apply --dry-run` must leave canonical `.task` state unchanged. Never use migration as a general malformed-row ignore mode.
 
-Use `python3 -m manage_task_state_index verify-migration` only to verify a committed receipt with an external exact mapping manifest and caller-owned recovery expectation. It emits safe scalar, bounded opaque identity, evidence-ref, count, digest, and status evidence, with separate migration-boundary and current task/pack surfaces; failures expose only an allowlisted error code. A fixture recovery pass requires an exact, fully graph-bound pre-recovery observation and a phase-specific before/after transition; a path-name allowlist alone is not recovery ownership evidence. The verifier proves physical source separation, while the governing cycle must separately attest who selected the external expectation because equal bytes cannot prove human ownership. The verifier must not mutate the ledger, projection, transaction, task, pack, or local bytecode cache. Issue state and cycle-wide live-operation counts require external cycle evidence rather than relocated-fixture constants.
+Use `python3 -P -m manage_task_state_index verify-migration` only to verify a committed receipt with an external exact mapping manifest and caller-owned recovery expectation. It emits safe scalar, bounded opaque identity, evidence-ref, count, digest, and status evidence, with separate migration-boundary and current task/pack surfaces; failures expose only an allowlisted error code. A fixture recovery pass requires an exact, fully graph-bound pre-recovery observation and a phase-specific before/after transition; a path-name allowlist alone is not recovery ownership evidence. The verifier proves physical source separation, while the governing cycle must separately attest who selected the external expectation because equal bytes cannot prove human ownership. The verifier must not mutate the ledger, projection, transaction, task, pack, or local bytecode cache. Issue state and cycle-wide live-operation counts require external cycle evidence rather than relocated-fixture constants.
 
 Successful commands print JSON so the caller can capture IDs and changed paths.
 Contract or safety failures exit nonzero and may use concise stderr text; callers

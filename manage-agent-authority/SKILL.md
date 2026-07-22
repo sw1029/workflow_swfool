@@ -55,14 +55,35 @@ Route unsupplyable external input to a local-data alternative, descope, or an ex
 Prefer the non-authoritative operation compiler whenever a caller has a compact semantic intent. It derives the manifest floor, exact subject binding, IDs, request, and evaluation context, then revalidates those closed inputs through the existing evaluator.
 
 ```bash
-python3 -m manage_agent_authority authority compile-operation \
+python3 -P -m manage_agent_authority authority compile-operation \
   --root . --seed operation-seed.json --at 2026-01-01T00:00:00Z --publish
 
-python3 -m manage_agent_authority authority evaluate --root . \
+python3 -P -m manage_agent_authority authority evaluate --root . \
   --compiled-operation compiled-operation.json --at 2026-01-01T00:00:00Z
 ```
 
 Without `--publish`, the command preserves the legacy full-JSON stdout result. With `--publish`, it writes that same non-authoritative compilation once under its content-addressed workspace path and returns only `{ref, sha256, compilation_fingerprint}`; pass the referenced file to authority consumers, or pass the compact receipt directly to a task-doctor intent. Treat either form as preparation only. It cannot create a source approval, grant, decision, reservation, or settlement, and it cannot lower an operation manifest. Reuse the same compilation only while its subject and manifest bindings still rehash exactly. Use hand-authored full request/context JSON only for legacy compatibility or contract diagnostics.
+
+For an owner batch renderer such as `selected-successor prepare-authority`, keep
+compilation, evaluation, and lifecycle publication separate even when one command
+coordinates them. For every new selected-successor batch, accept request/evaluation
+contexts only from the exact producer-owned CAS bindings returned by
+`selected-successor prepare-authority-context`; a byte-identical arbitrary-path copy,
+hand-authored schema-v2 context, or hidden legacy-location flag cannot start new
+lifecycle work. That producer validates the caller's complete actual session ceiling
+and goal envelope against bundle requirements but never derives or widens either one.
+Historical embedded decisions and proofs remain audit/recovery evidence only. Accept
+explicit existing grant bindings; never create a source approval or grant. Derive
+requests mechanically, but let only the canonical evaluator decide `allowed`. Validate the whole
+batch before lifecycle writes. If canonical evaluation finds genuine no-covering
+authority or another non-allowed result, return one compact approval projection with
+the exact non-authoritative compilation bindings and publish no decision, reservation,
+or verification. Treat an absent declaration that evaluates allowed as an input conflict.
+After every result is allowed, publish the exact decisions, reserve each operation,
+verify `pre_commit`, and expose only a compact packet binding to the executor.
+An owner renderer may pass an immutable owner-derived idempotency key through the
+Python-only `trusted_request_idempotency_key` compiler argument. Do not expose that
+override in the semantic seed or CLI; ordinary compilations retain their derived key.
 
 The required seed shape is closed and intentionally separates derived request facts
 from asserted ceilings:
@@ -103,11 +124,11 @@ classification, and composition receipt.
 ```bash
 SKILLS_ROOT="${CODEX_HOME:-$HOME/.codex}/skills"
 PYTHONPATH="$SKILLS_ROOT/manage-agent-authority/scripts" \
-  python3 -m manage_agent_authority authority snapshot-policy \
+  python3 -P -m manage_agent_authority authority snapshot-policy \
   --root . --policy-ref .agent_goal/agent_authority.md --expected-version 0
 
 PYTHONPATH="$SKILLS_ROOT/manage-agent-authority/scripts" \
-  python3 -m manage_agent_authority authority snapshot-source \
+  python3 -P -m manage_agent_authority authority snapshot-source \
   --root . --source-ref .task/authorization/source-id.json
 ```
 
@@ -120,21 +141,21 @@ PYTHONPATH="$SKILLS_ROOT/manage-agent-authority/scripts" \
 
 ```bash
 PYTHONPATH="$SKILLS_ROOT/manage-agent-authority/scripts" \
-  python3 -m manage_agent_authority authority register-grant --root . --grant grant.json
+  python3 -P -m manage_agent_authority authority register-grant --root . --grant grant.json
 ```
 
 5. Evaluate and persist the decision.
 
 ```bash
 PYTHONPATH="$SKILLS_ROOT/manage-agent-authority/scripts" \
-  python3 -m manage_agent_authority authority evaluate --root . \
+  python3 -P -m manage_agent_authority authority evaluate --root . \
   --request request.json --context evaluation-context.json \
   --at 2026-01-01T00:00:00Z
 ```
 
 Use `effective_authority_fingerprint` for approval-wait wakeup and exact replay. It contains only operation-relevant projections and selected immutable grant/policy bindings. Do not substitute a hash of the mutable whole policy or goal context.
 
-Before prompting, run `authority resolve` or inspect `authority status`. For replayable diagnostics, pass `authority status --at <RFC3339>` and the same `--skills-root` used for evaluation; omission uses the current UTC time and default skills root, and every status result reports `evaluated_at`. Judge both the selected grant and every ancestor against that one time, including `not_before` and `expires_at`, while preserving each raw projection state separately from effective usability. Status and resolve must rehash and validate the bound operation manifest and fail closed if it is missing, changed, invalid for the exact operation identity, or if any decision, reservation, grant/reservation state, or lifecycle receipt is not a closed, deterministic, fully settled artifact. Reject symlinks in every component of authority-owned decision, source-snapshot, grant, state, and receipt directories; acquire inspected JSON as stable bytes and bind the reported digest to those same bytes. Publish authority-owned snapshots, immutable artifacts, and mutable state through stable directory descriptors with `O_NOFOLLOW` and pre/post parent-identity checks so an ancestor swap fails closed instead of redirecting a write.
+Before prompting, run `authority resolve` or inspect `authority status`. For replayable diagnostics, pass `authority status --at <RFC3339>` and the same `--skills-root` used for evaluation; omission uses the current UTC time and default skills root, and every status result reports `evaluated_at`. Judge both the selected grant and every ancestor against that one time, including `not_before` and `expires_at`, while preserving each raw projection state separately from effective usability. Status inventory is reader-first: always validate every historical decision, reservation, grant/reservation state, and lifecycle receipt as a closed, deterministic, structurally bound, fully settled artifact, but do not make historical decision readability depend on the current operation-manifest digest. Resolve the current manifest separately. A missing, changed, unreadable, or identity-incompatible current manifest makes an old allowed decision stale, makes an old approval wait historical rather than promptable, and blocks a reserved operation as `reserved_authority_recovery`; it must never produce `ready_to_reserve` or `ready_to_resume`. Reserve, verify, settlement replay, recovery application, and every new action remain strict: require the exact current manifest and identity before any write. Reject symlinks in every component of authority-owned decision, source-snapshot, grant, state, and receipt directories; acquire inspected JSON as stable bytes and bind the reported digest to those same bytes. Publish authority-owned snapshots, immutable artifacts, and mutable state through stable directory descriptors with `O_NOFOLLOW` and pre/post parent-identity checks so an ancestor swap fails closed instead of redirecting a write.
 
 Select workflow state in this order: unknown-effect quarantine; settled consumed or released reservation; usable reserved operation; reserved operation whose selected or ancestor authority is no longer usable; current exact allowed decision; exact source approval with a usable or cleanly materializable grant ID; source-authority defect; exhausted source authority; genuine approval wait. Return `should_prompt=false` for every system-recovery or reusable-authority state. A released reservation is terminal only with an exact release or reconciliation receipt proving no effect; return `already_released` and never redispatch it. Keep an unusable reserved projection reserved, preserve unknown-effect safety, return `reserved_authority_recovery`, and do not silently release it.
 
@@ -146,15 +167,20 @@ Treat recipe `prepared_at` as T1 preparation evidence, never as the later user-d
 
 After a valid recipe exists, `status` and `resolve` supersede the system repair state with exactly one `needs_user_approval` result whose action is `approve_exact_recovery_projection`. Use the recovery projection, replay key, and effective-authority fingerprint as its new wait identity. Never revive the old projection or reuse an exhausted request, attempt, source, grant, lineage, or replay identity.
 
-Preserve the machine-readable `post_approval_handoff` in prepare, status, and resolve output. After the exact user decision arrives, use the existing public commands in order: create a source artifact from that actual decision evidence and run `snapshot-source`; complete the grant requirements with that resulting binding and run `register-grant`; then run `evaluate` with the recipe's replacement request. From that point, poll `status` or `resolve` with `continuation_request_sha256`, not the exhausted original request digest. The handoff is guidance, not authority, and remains blocked until the actual user-decision evidence exists.
+Preserve the machine-readable `post_approval_handoff` in prepare, status, and resolve output. After the exact user decision arrives, bind a closed `authority_recovery_user_decision` that echoes the whole recipe projection, recipe binding, decision time, and external evidence ID. Pass it to `materialize-approved-recovery`; the registered renderer creates and validates the exact source approval, snapshot, grant, replacement request, and allowed decision. The command cannot create or infer the user decision. From that point, poll `status` or `resolve` with `continuation_request_sha256`, not the exhausted original request digest.
 
 Discover an existing recipe from its immutable historical decision/source/grant/state evidence before classifying a current generic approval wait. A later source expiry or other loss of current coverage must never revive the original approval projection or wait identity. If the recipe remains within its exact continuation window, preserve its one recovery prompt. If its expiry ceiling has closed, reuse `source_authority_exhausted` with reason `source_recovery_window_closed`, `should_prompt=false`, action `prepare_fresh_recovery_plan`, the exact recipe binding, and a non-authoritative closed-window handoff. Every non-prompt status or resolution exposes `approval_projection=null`.
 
 ```bash
 PYTHONPATH="$SKILLS_ROOT/manage-agent-authority/scripts" \
-  python3 -m manage_agent_authority authority prepare-source-recovery \
+  python3 -P -m manage_agent_authority authority prepare-source-recovery \
   --root . --decision-ref .task/authorization/decisions/authd-id.json \
   --decision-sha256 <sha256> --at 2026-01-01T00:00:00Z
+
+PYTHONPATH="$SKILLS_ROOT/manage-agent-authority/scripts" \
+  python3 -P -m manage_agent_authority authority materialize-approved-recovery \
+  --root . --recovery-recipe '{"ref":"...","sha256":"..."}' \
+  --user-decision '{"ref":"...","sha256":"..."}'
 ```
 
 When the decision is `approval_required`, present the deterministic `approval_projection`: typed intent, exact operation/subject/capabilities/effect, bounded scope and budget, excluded effects, safe alternative, reason codes, and replay key. An approval of that projection does not authorize any excluded effect or broader reuse.
@@ -167,8 +193,12 @@ When the decision is `approval_required`, present the deterministic `approval_pr
 
 7. Verify before commit, then consume or release.
    - Run `authority verify --stage pre_commit` before committing effects.
-   - Pass that exact verification binding, a typed owner-result binding, and the exact expected subject-after digest to `authority consume` after a known effect. Consume creates a closed `authority_execution_result`; it does not require the pre-effect subject digest to remain current after a legitimate mutation.
-   - Run `authority release` only with evidence of `not_started` or `verified_no_effect`.
+   - For a registered owner operation, pass the exact reservation, pre-commit verification, and owner-result bindings to `authority settle`. Authority selects a fixed validator by `(skill_id, skill_version, operation_id, operation_version)`; workspace manifests cannot name code or arguments. Registered validator imports are pinned to the installed skills root co-located with this package; an explicit `--skills-root` must resolve to that exact root and cannot redirect executable owner code. A confirmed effect consumes, confirmed no-effect releases, and unknown or legacy-opaque evidence quarantines without restoring budget.
+   - Before calling that validator or writing lifecycle state, `settle` must acquire and hash the exact owner-result bytes under a 1 MiB limit. Capture the fixed validator through bounded pipes (256 KiB stdout and 64 KiB stderr), and load canonical owner-validation receipts once under a 256 KiB limit. Apply the same 1 MiB exact-byte limit when status or recovery classifies registered release evidence. These limits apply to the registered settlement path; they do not change the legacy unregistered schema-v2 consume/release contract.
+   - `settle` first validates the current owner boundary, then writes the replay-stable historical owner-validation receipt and schema-v3 `authority_execution_result`. It derives effect status and the historical after boundary from owner evidence, permitting append-only descendants without accepting a forged current digest. Keep direct `consume --expected-subject-after-sha256` only for schema-v2 compatibility and operations not yet registered.
+   - Run direct `authority release` only for an unregistered compatibility operation with evidence of `not_started` or `verified_no_effect`. Registered operations must use `authority settle`; its private release branch reopens the canonical owner-validation receipt, revalidates the current pre-commit CAS boundary, and re-runs the fixed owner validator. Public consume and release reject registered operations before any write and expose no caller-settable settlement bypass.
+   - Replay and projection-intent recovery of a registered use or release must reopen reservation → decision, require the canonical historical owner-validation receipt, validate the typed pre-commit reservation/version binding without requiring the already-advanced current state, rerun the fixed owner validator, and require exact receipt equality before applying any projection.
+   - Preserve pre-registry schema-v2 receipts without rewriting history. Status/inventory may read a receipt for an operation that is registered now only when its closed paths, digests, schemas, deterministic IDs, grant accounting, and state changes validate and every current projection equals the exact terminal `after` object. Treat that evidence as historical and legacy-unattested, never as schema-v3 owner validation. Recovery may skip an already exact-settled receipt but must reject its `before` state, a pending/missing projection, a descendant, or a forged transition before any write; direct consume/release remain forbidden.
    - Quarantine `unknown_effect`; do not restore its reserved budget automatically.
    - Run `authority prepare-reconciliation-evidence` to deterministically bind the quarantined reservation, operation, observed subject, outcome, time, and typed owner result. Pass its exact binding to `authority reconcile`. Map `confirmed_effect` to consumed, `confirmed_no_effect` to released, and `still_unknown` to a versioned quarantined state. Do not ask the user to approve the original operation again.
 
@@ -200,7 +230,7 @@ Never let an adapter grant authority, lower a manifest requirement, manufacture 
 
 ## Legacy bridge
 
-Keep `python3 -m manage_agent_authority receipt issue|validate` compatible with schema v1. Preserve v1 validation against the exact current file binding; do not silently reinterpret old receipts. Issue schema-v2 receipts with immutable policy/source snapshots so later policy edits do not invalidate them. Treat an unprovable legacy decision as historical partial/unverified, not retroactively allowed.
+Keep `python3 -P -m manage_agent_authority receipt issue|validate` compatible with schema v1. Preserve v1 validation against the exact current file binding; do not silently reinterpret old receipts. Issue schema-v2 receipts with immutable policy/source snapshots so later policy edits do not invalidate them. Treat an unprovable legacy decision as historical partial/unverified, not retroactively allowed.
 
 ## Report contract
 

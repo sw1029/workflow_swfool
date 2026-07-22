@@ -4,6 +4,12 @@ version = "0.1.0"
 description = "Deterministic contracts and tests for the governed Codex skill workflow"
 requires-python = ">=3.10"
 
+[project.optional-dependencies]
+test = [
+  "pytest",
+  "PyYAML",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests", "audit-cycle-loopback/tests"]
 python_files = ["test_*.py"]

@@ -118,15 +118,60 @@ def validate_current_owner_bindings(
 
 def _publication_status(root: Path) -> dict[str, Any]:
     # Lazy import keeps trigger validation out of the publication compiler's
-    # module-import cycle.
+    # module-import cycle.  The schema-v4 compact state is the authoritative
+    # hot-path pointer; transaction-history enumeration is reserved for an
+    # explicit deep audit.  This also lets exact-intent retry repair a prepare
+    # that crashed before its compact-state/index publication.
     from .selection_publication import publication_status
 
-    return publication_status(root, deep=True)
+    return publication_status(root)
 
 
-def _assert_uninitialized_publication(root: Path) -> None:
+def _prepared_publication_state(
+    root: Path, prepare_value: Any
+) -> dict[str, Any]:
+    """Require the one active prepare expected during pre-effect revalidation."""
+
+    prepare = normalize_binding(
+        prepare_value, "selected-successor active publication prepare"
+    )
+    from .selection_publication_state import load_state
+
+    state = load_state(root)
+    active = state.get("active_transaction") if isinstance(state, dict) else None
+    if (
+        not isinstance(active, dict)
+        or active.get("prepare") != prepare
+        or active.get("receipt") is not None
+    ):
+        raise ValueError(
+            "normal-cycle publication state does not bind the expected active prepare"
+        )
+    return state
+
+
+def _assert_uninitialized_publication(
+    root: Path, expected_active_prepare: Any = None
+) -> None:
     status = _publication_status(root)
     head = status.get("current_head")
+    if expected_active_prepare is not None:
+        state = _prepared_publication_state(root, expected_active_prepare)
+        active = state["active_transaction"]
+        if (
+            state.get("head") is not None
+            or status.get("status") != "recovery_required"
+            or status.get("pending_transaction_ids")
+            != [active.get("transaction_id")]
+            or status.get("selection_journal_initialized") is not False
+            or not isinstance(head, dict)
+            or head.get("status") != "not_initialized"
+            or head.get("head_count") != 0
+        ):
+            raise ValueError(
+                "normal-cycle publication bootstrap does not precede the expected active prepare"
+            )
+        return
     if (
         status.get("status") != "clear"
         or status.get("pending_transaction_ids") != []
@@ -146,6 +191,7 @@ def render_publication_bootstrap(
     cycle_id: str,
     current_task: dict[str, str],
     task_index: dict[str, str],
+    _expected_active_prepare: Any = None,
 ) -> dict[str, Any]:
     """Render the sole compiler-owned substitute for an uninitialized head."""
 
@@ -153,7 +199,7 @@ def render_publication_bootstrap(
     task = normalize_binding(current_task, "current task")
     index = normalize_binding(task_index, "task index")
     validate_current_owner_bindings(root, task, index)
-    _assert_uninitialized_publication(root)
+    _assert_uninitialized_publication(root, _expected_active_prepare)
     core = {
         "schema_version": 1,
         "artifact_kind": "normal_cycle_selection_publication_bootstrap",
@@ -177,6 +223,8 @@ def validate_publication_bootstrap(
     current_task: dict[str, str],
     task_index: dict[str, str],
     value: Any,
+    *,
+    expected_active_prepare: Any = None,
 ) -> dict[str, Any]:
     bootstrap = closed_object(
         value, BOOTSTRAP_KEYS, "normal-cycle publication bootstrap"
@@ -186,6 +234,7 @@ def validate_publication_bootstrap(
         cycle_id=cycle_id,
         current_task=current_task,
         task_index=task_index,
+        _expected_active_prepare=expected_active_prepare,
     )
     if bootstrap != expected:
         raise ValueError("normal-cycle publication bootstrap integrity failed")
@@ -197,21 +246,40 @@ def _validate_committed_publication_head(
     binding: dict[str, str],
     current_task: dict[str, str],
     receipt: dict[str, Any],
+    *,
+    expected_active_prepare: Any = None,
 ) -> None:
     from .selection_publication import validate_receipt
 
     status = _publication_status(root)
     head = status.get("current_head")
     transaction_id = receipt.get("transaction_id")
+    expected_status = "clear"
+    expected_pending: list[str] = []
+    state_head: Any = None
+    if expected_active_prepare is not None:
+        state = _prepared_publication_state(root, expected_active_prepare)
+        active = state["active_transaction"]
+        state_head = state.get("head")
+        expected_status = "recovery_required"
+        expected_pending = [str(active.get("transaction_id"))]
     if (
-        status.get("status") != "clear"
-        or status.get("pending_transaction_ids") != []
+        status.get("status") != expected_status
+        or status.get("pending_transaction_ids") != expected_pending
         or not isinstance(head, dict)
         or head.get("status") != "current"
         or head.get("head_count") != 1
         or transaction_id != head.get("head_transaction_id")
         or head.get("current_task_sha256") != current_task["sha256"]
         or head.get("expected_task_sha256") != current_task["sha256"]
+        or (
+            expected_active_prepare is not None
+            and (
+                not isinstance(state_head, dict)
+                or state_head.get("transaction_id") != transaction_id
+                or state_head.get("receipt") != binding
+            )
+        )
     ):
         raise ValueError(
             "normal-cycle publication head is not the unique current committed head"
@@ -235,16 +303,29 @@ def validate_publication_head(
     binding: dict[str, str],
     current_task: dict[str, str],
     task_index: dict[str, str],
+    *,
+    expected_active_prepare: Any = None,
 ) -> None:
     _, value = read_bound_json(root, binding, "normal-cycle publication head")
     if value.get("artifact_kind") == "normal_cycle_selection_publication_bootstrap":
         _cycle_ref(cycle_id, binding["ref"], "publication bootstrap")
         validate_publication_bootstrap(
-            root, cycle_id, current_task, task_index, value
+            root,
+            cycle_id,
+            current_task,
+            task_index,
+            value,
+            expected_active_prepare=expected_active_prepare,
         )
         return
     if value.get("kind") == "selection_publication_receipt":
-        _validate_committed_publication_head(root, binding, current_task, value)
+        _validate_committed_publication_head(
+            root,
+            binding,
+            current_task,
+            value,
+            expected_active_prepare=expected_active_prepare,
+        )
         return
     raise ValueError(
         "normal-cycle publication head must be a committed receipt or compiler bootstrap"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 import stat
@@ -13,6 +14,17 @@ from typing import Any
 BINDING_KEYS = {"ref", "sha256"}
 SHA256 = re.compile(r"[0-9a-f]{64}")
 MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
+
+
+def _file_signature(value: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
 
 
 def canonical_bytes(value: object) -> bytes:
@@ -63,7 +75,11 @@ def normalize_binding(value: Any, label: str) -> dict[str, str]:
 
 
 def read_bound_bytes(
-    root: Path, binding: dict[str, str], label: str
+    root: Path,
+    binding: dict[str, str],
+    label: str,
+    *,
+    max_bytes: int = MAX_ARTIFACT_BYTES,
 ) -> tuple[Path, bytes]:
     root = root.expanduser().resolve(strict=True)
     normalized = normalize_binding(binding, label)
@@ -75,17 +91,51 @@ def read_bound_bytes(
         if current.is_symlink():
             raise ValueError(f"{label} cannot traverse a symlink")
     try:
-        mode = path.lstat().st_mode
+        before = path.lstat()
     except OSError as exc:
         raise ValueError(f"{label} does not exist") from exc
-    if not stat.S_ISREG(mode) or path.resolve(strict=True) != path:
+    if not stat.S_ISREG(before.st_mode) or path.resolve(strict=True) != path:
         raise ValueError(f"{label} must be a workspace-local regular file")
-    if path.stat().st_size > MAX_ARTIFACT_BYTES:
+    if max_bytes < 1 or max_bytes > MAX_ARTIFACT_BYTES:
+        raise ValueError(f"{label} byte limit is invalid")
+    if before.st_size > max_bytes:
         raise ValueError(f"{label} exceeds the artifact size limit")
-    with path.open("rb") as handle:
-        body = handle.read(MAX_ARTIFACT_BYTES + 1)
-    if len(body) > MAX_ARTIFACT_BYTES:
-        raise ValueError(f"{label} exceeds the artifact size limit")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError(f"{label} changed during acquisition") from exc
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or _file_signature(opened) != _file_signature(before)
+            or opened.st_size > max_bytes
+        ):
+            raise ValueError(f"{label} changed during acquisition")
+        chunks: list[bytes] = []
+        total = 0
+        while total <= max_bytes:
+            chunk = os.read(descriptor, min(1024 * 1024, max_bytes + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+        if total > max_bytes:
+            raise ValueError(f"{label} exceeds the artifact size limit")
+        after = os.fstat(descriptor)
+        try:
+            current = path.lstat()
+        except OSError as exc:
+            raise ValueError(f"{label} changed during acquisition") from exc
+        if (
+            _file_signature(opened) != _file_signature(after)
+            or _file_signature(after) != _file_signature(current)
+        ):
+            raise ValueError(f"{label} changed during acquisition")
+        body = b"".join(chunks)
+    finally:
+        os.close(descriptor)
     if hashlib.sha256(body).hexdigest() != normalized["sha256"]:
         raise ValueError(f"{label} raw SHA-256 does not match persisted bytes")
     return path, body

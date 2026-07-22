@@ -33,7 +33,7 @@ stale, unsafe, extra-field, or hash-shaped-only binding fails closed.
 For a normal cycle, use the same deterministic pipeline with an explicit trigger kind:
 
 ```bash
-python3 -m orchestrate_task_cycle selection-decision-receipt --root . pipeline \
+python3 -P -m orchestrate_task_cycle selection-decision-receipt --root . pipeline \
   --cycle-id <cycle-id> \
   --trigger-kind normal_cycle \
   --source-result-ref <derive-result-ref> \
@@ -63,7 +63,7 @@ known candidate ID.
 Run a read-only tick before assigning proposal agents while the current task is completed and non-executable:
 
 ```bash
-python3 -m orchestrate_task_cycle selection-tick --root .
+python3 -P -m orchestrate_task_cycle selection-tick --root .
 ```
 
 When an authority-settled current terminal-wait baseline exists, the command resolves and re-verifies `.task/terminal_wait_baseline/current.json` and uses its bound selection packet. Add `--previous-json <prior-tick.json>` only for initial publication, recovery, testing, or a caller that already owns the exact packet. Absence of both a current pointer and an explicit prior packet means an initial baseline observation, not permission to fan out.
@@ -90,7 +90,7 @@ Exact-premise and effective-authority watch rows are sticky. If a later tick omi
 For unattended or repeatable re-entry, initialize the baseline with:
 
 ```bash
-python3 -m orchestrate_task_cycle selection-tick --root . \
+python3 -P -m orchestrate_task_cycle selection-tick --root . \
   --premise-input-contract validated_exact_subject_premise_receipt_v2 \
   --wake-predicate <policy-label> \
   --watched-evidence-class exact_subject \
@@ -102,7 +102,7 @@ The premise-input contract is locked for the life of that baseline. `raw_exact_f
 Build and validate a premise through the `exact-subject-premise` command family, which first produces the deterministic v1 semantic decision and then seals a consumed decision as a path-free artifact-verified v2 receipt. Pass that persisted v2 receipt as the paired `--premise-path <receipt.json> --premise-id <opaque-id>`. The receipt contract requires all of the following:
 
 ```bash
-python3 -m orchestrate_task_cycle exact-subject-premise \
+python3 -P -m orchestrate_task_cycle exact-subject-premise \
   --root . \
   --context <workspace-relative-context.json> \
   --submission <workspace-relative-submission.json> \
@@ -159,51 +159,24 @@ three lens receipt projections + one canonical synthesis-output projection
 
 The first four files are the existing durable runtime artifacts under `.task/cycle/<cycle-id>/agent_receipts/`: three closed lens projections and one canonical synthesis-output projection. `derive_selection_synthesis` reopens those exact regular non-symlink files through the direct derive-selection source object and validates the complete three-lens analysis before sealing its own projection. The preliminary decision reopens that synthesis and binds its outcome, selected task, evidence digest, synthesis receipt ID, and exact trigger `B`. The selection-decision receipt then reopens both persisted `B` and the preliminary decision. These artifacts are non-GT, non-authority, and non-completion evidence; the preliminary decision is never the terminal baseline owner's `source_derive`.
 
-Use the `selection-decision-receipt` CLI in four persisted stages. Each `<sha256>` is the raw digest of the exact workspace-relative file emitted by the previous stage; do not substitute an internal canonical digest or an arbitrary 64-hex value.
+Use the content-addressed `selection-decision-receipt pipeline` for the complete persisted chain. Supply the exact derive source and trigger bindings; the compiler reopens them, renders every mechanical envelope, writes each immutable artifact, computes its raw SHA-256, validates the finished chain, and returns body-free bindings:
 
 ```bash
-# 1. Reopen the four durable runtime artifacts and seal their selection synthesis.
-python3 -m orchestrate_task_cycle selection-decision-receipt --root . \
-  render-synthesis \
+python3 -P -m orchestrate_task_cycle selection-decision-receipt --root . pipeline \
+  --cycle-id CYCLE_ID \
+  --trigger-kind terminal_wait \
   --source-result-ref SOURCE_RESULT_REF \
   --source-result-sha256 SOURCE_RESULT_RAW_SHA256 \
-  > DERIVE_SELECTION_SYNTHESIS_JSON
-
-# 2. Bind the durable synthesis to the exact selection-required trigger B.
-python3 -m orchestrate_task_cycle selection-decision-receipt --root . \
-  render-decision \
-  --trigger-tick-ref SELECTION_REQUIRED_B_JSON \
-  --trigger-tick-sha256 B_RAW_SHA256 \
-  --selection-synthesis-ref DERIVE_SELECTION_SYNTHESIS_JSON \
-  --selection-synthesis-sha256 SELECTION_SYNTHESIS_RAW_SHA256 \
-  > PRELIMINARY_SELECTION_DECISION_JSON
-
-# 3. Bind persisted B and the preliminary decision into the decision receipt.
-python3 -m orchestrate_task_cycle selection-decision-receipt --root . \
-  render \
-  --trigger-tick-ref SELECTION_REQUIRED_B_JSON \
-  --trigger-tick-sha256 B_RAW_SHA256 \
-  --selection-decision-ref PRELIMINARY_SELECTION_DECISION_JSON \
-  --selection-decision-sha256 PRELIMINARY_DECISION_RAW_SHA256 \
-  > SELECTION_DECISION_RECEIPT_JSON
-
-# 4. Reopen and validate the complete persisted receipt chain before rebase.
-python3 -m orchestrate_task_cycle selection-decision-receipt --root . \
-  validate \
-  --receipt-ref SELECTION_DECISION_RECEIPT_JSON \
-  --receipt-sha256 SELECTION_DECISION_RECEIPT_RAW_SHA256 \
   --trigger-tick-ref SELECTION_REQUIRED_B_JSON \
   --trigger-tick-sha256 B_RAW_SHA256
 ```
 
-Uppercase values are placeholders for normalized workspace-relative refs or exact lowercase raw SHA-256 values; replace them before execution. These are four serialization/verification stages inside the existing derive boundary, not four new workflow phases. Persist each output before the next command because every downstream stage reopens exact bytes from `--root`.
-
-Every `*-ref` argument in this chain must be a normalized workspace-relative path. Absolute paths, parent traversal, backslash aliases, symlink traversal, non-regular files, uppercase or non-hex digests, and oversized artifacts fail closed. CLI stdout is not durable merely because it was emitted: write it to a workspace file, compute the raw digest of those exact bytes, and only then pass its binding to the next stage.
+Uppercase values are placeholders for normalized workspace-relative refs or exact lowercase raw SHA-256 values; replace them before execution. The returned `synthesis`, `decision`, and `receipt` bindings identify the immutable artifacts under `.task/cycle/<cycle-id>/agent_receipts/selection/`; pass those bindings directly to the next owner. Exact replay returns the same bindings and `mutation_performed: false`. Every input ref must remain a normalized regular non-symlink path inside `--root`; absolute paths, traversal aliases, malformed digests, and oversized artifacts fail closed. The lower `render-synthesis`, `render-decision`, `render`, and `validate` commands remain compatibility/audit primitives only. They are not the normal workflow and must not be connected with shell redirection, coordinator-authored JSON, or coordinator-computed digests.
 
 Rebase `B` into `C` with the trigger tick ID plus the validated selection-decision receipt ref and raw digest:
 
 ```bash
-python3 -m orchestrate_task_cycle selection-tick --root . \
+python3 -P -m orchestrate_task_cycle selection-tick --root . \
   --previous-json <selection-required-tick.json> \
   --acknowledge-selection-tick-id <exact-trigger-packet-id> \
   --selection-receipt-ref <workspace-relative-receipt.json> \
@@ -225,22 +198,22 @@ After the direct full terminal-wait derive result exists, publish `C` through th
 The bounded command family is:
 
 ```bash
-python3 -m orchestrate_task_cycle terminal-wait-baseline --root . materialize-subject \
+python3 -P -m orchestrate_task_cycle terminal-wait-baseline --root . materialize-subject \
   --subject <terminal-wait-authority-subject.json> --dry-run
-python3 -m orchestrate_task_cycle terminal-wait-baseline --root . materialize-subject \
+python3 -P -m orchestrate_task_cycle terminal-wait-baseline --root . materialize-subject \
   --subject <terminal-wait-authority-subject.json>
-python3 -m orchestrate_task_cycle terminal-wait-baseline --root . prepare \
+python3 -P -m orchestrate_task_cycle terminal-wait-baseline --root . prepare \
   --plan <terminal-wait-baseline-plan.json> --dry-run
-python3 -m orchestrate_task_cycle terminal-wait-baseline --root . prepare \
+python3 -P -m orchestrate_task_cycle terminal-wait-baseline --root . prepare \
   --plan <terminal-wait-baseline-plan.json>
-python3 -m orchestrate_task_cycle terminal-wait-baseline --root . activate \
+python3 -P -m orchestrate_task_cycle terminal-wait-baseline --root . activate \
   --completion-ref <ref> --completion-sha256 <sha256> \
   --use-receipt-ref <ref> --use-receipt-sha256 <sha256>
-python3 -m orchestrate_task_cycle terminal-wait-baseline --root . retire-successor \
+python3 -P -m orchestrate_task_cycle terminal-wait-baseline --root . retire-successor \
   --publication-ref <selection-publication-receipt-ref> \
   --publication-sha256 <selection-publication-receipt-sha256>
-python3 -m orchestrate_task_cycle terminal-wait-baseline --root . resolve
-python3 -m orchestrate_task_cycle terminal-wait-baseline --root . audit
+python3 -P -m orchestrate_task_cycle terminal-wait-baseline --root . resolve
+python3 -P -m orchestrate_task_cycle terminal-wait-baseline --root . audit
 ```
 
 `--subject` and `--plan` accept only normalized workspace-relative regular non-symlink files under `--root`; they never authorize an external absolute input. `materialize-subject` creates only the content-addressed, non-active subject that the authority preflight can hash exactly; it excludes the later authority packet and pre-commit verification to avoid a circular digest. Its dry run computes the same binding without writing. `prepare --dry-run` performs validation and CAS preflight without mutation. A normal prepare returns the exact completion binding and authority-consume inputs while keeping `current_pointer_exposed: false`. `activate` requires normalized ref/raw-digest bindings for the matching completion and settled use receipt, revalidates all bound artifacts, and is idempotent only for the exact same activation. `retire-successor` binds one current, settled selection-publication receipt and preserves an immutable inactive pointer/history; it cannot delete or silently abandon a stale baseline. `resolve` is read-only and returns body-free bindings. `audit` checks bounded append-only subjects, prepares, snapshots, completions, activations, settlement cardinality, orphans, and the current pointer; resolving an inactive pointer also reopens its retirement history. A category beyond the owner-defined artifact-count bound fails closed instead of being materialized without limit. Never hand-edit, copy forward, or select a current pointer by filename order.
@@ -253,7 +226,7 @@ Once activated, ordinary `selection-tick --root .` auto-discovers this verified 
 2. Publish that packet as the authority-settled current terminal-wait baseline.
 3. On later invocations, resolve the current pointer and run only `selection-tick`. Unchanged inputs produce `no_op`; do not initialize a cycle or fan out agents.
 4. A new consumed exact-subject receipt or a changed row in a bound evidence class produces `selection_required`; open only derive selection.
-5. If selection produces a successor, use recoverable selected-task publication, settle its prospective task-state plan, and retire predecessor `A` to a verified inactive pointer. If it produces another wait, persist the four runtime artifacts, durable selection synthesis, preliminary decision, and selection-decision receipt; acknowledge `B` into `C`; write the direct full final derive result; then materialize, authority-settle, and activate the new baseline against predecessor `A`.
+5. If selection produces a successor, use recoverable selected-task publication, settle its prospective task-state plan, and retire predecessor `A` to a verified inactive pointer. If it produces another wait, run the decision pipeline over the four runtime artifacts so it persists the durable synthesis, preliminary decision, and receipt; acknowledge `B` into `C`; write the direct full final derive result; then materialize, authority-settle, and activate the new baseline against predecessor `A`.
 6. Replaying the same premise receipt, omitting sticky inputs, or rerunning with unchanged workflow inputs produces `no_op`. Only a new semantic receipt or another bound-class change can reopen selection.
 
 ## Recoverable selected-task publication
@@ -261,7 +234,7 @@ Once activated, ordinary `selection-tick --root .` auto-discovers this verified 
 The derive owner must first produce one authoritative, digest-bound selection decision. Persist the deterministic synthesis/decision/receipt chain without asking the coordinator to write or hash JSON envelopes. Use `--trigger-kind normal_cycle` plus the six exact normal-cycle bindings above for a normal cycle; use the terminal-wait trigger pair only for a re-entry:
 
 ```bash
-python3 -m orchestrate_task_cycle selection-decision-receipt --root . pipeline \
+python3 -P -m orchestrate_task_cycle selection-decision-receipt --root . pipeline \
   --cycle-id <cycle-id> \
   --trigger-kind terminal_wait \
   --source-result-ref <derive-result-ref> \
@@ -278,7 +251,180 @@ For new selected successors, first build and immutably publish one schema-v2
 task and superseded predecessor events before `task.md` changes because it binds the
 prospective source bytes, not a false current-alias precondition.
 
-Then supply a schema-v2 `selection_publication_intent`. It binds the validated
+For the normal path, do not author the prospective events or intent JSON. Render both
+owners' preparation artifacts and the three-step authority contract from the two exact
+semantic bindings:
+
+```bash
+python3 -P -m orchestrate_task_cycle selected-successor --root . prepare \
+  --source-decision-ref <receipt-ref> \
+  --source-decision-sha256 <raw-sha256> \
+  --task-source-ref <prospective-task-ref> \
+  --task-source-sha256 <raw-sha256> \
+  --at <RFC3339>
+```
+
+The immutable body-free bundle contains the task-state plan and publication-prepare
+bindings, the exact three operation identities and subjects, deterministic idempotency
+keys, exact predicted pending/publication/settlement receipt bindings, execution order,
+and recovery checkpoints. A canonical immutable
+`successor_prepare_indexes/sha256/<input-sha256>.json` binds the exact decision, task
+source, and timestamp inputs to that bundle. Exact prepare replay rechecks both source
+files and the complete bundle contract through this O(1) index before consulting current
+task state, so the same prepare remains stable after pending apply or full settlement.
+A missing bundle index falls back to the ordinary prepare/recovery path: a new owner
+prepare still requires full source validation, while only an exact existing owner
+prepare index may replay historical validated work. The missing index alone cannot turn
+a self-sealed decision into a write. The bundle does not execute an effect. Before the
+first effect, an
+executor must validate all three exact reservation and `pre_commit` bindings plus their
+expected reservation versions; a missing, stale, consumed-as-current, or cross-bound
+proof blocks the whole sequence with zero effects. `selected-successor execute` and
+`selected-successor recover` are the only supported first-effect entrypoints. Both
+reopen the canonical bundle, re-render its closed contract, validate all three authority
+proofs, and publish one immutable pre-effect authority gate before step 1. `recover`
+uses the same proof set and executor; the separate name makes crash-resumption intent
+explicit rather than weakening the gate.
+
+Compile the two semantic context artifacts before preparing authority. Supply the
+complete actual session ceiling and goal-autonomy envelope; do not ask the model to
+author either JSON body, its schema markers, CAS path, content seal, or raw digest:
+
+```bash
+python3 -P -m orchestrate_task_cycle selected-successor --root . \
+  prepare-authority-context \
+  --bundle-ref <bundle-ref> --bundle-sha256 <raw-sha256> \
+  --actor-rank <S0-S4> \
+  --external-input-status <status> \
+  --goal-truth-status <status> \
+  --risk-acceptance-status <status> \
+  --design-selection-status <status> \
+  --session-capability <actual-capability-1> \
+  --session-capability <actual-capability-N> \
+  --session-risk-ceiling <R0-R3> \
+  --session-mutation-class <actual-mutation-class-1> \
+  --session-mutation-class <actual-mutation-class-N> \
+  --session-evidence-id <exact-session-evidence-id> \
+  --goal-envelope-id <exact-goal-envelope-id> \
+  --goal-capability <actual-capability-1> \
+  --goal-capability <actual-capability-N> \
+  --goal-risk-ceiling <R0-R3> \
+  --goal-decision-class <actual-decision-class-1> \
+  --goal-decision-class <actual-decision-class-N> \
+  --goal-subject-digest <actual-subject-digest-1> \
+  --goal-subject-digest <actual-subject-digest-N> \
+  --goal-operation <skill:version:operation:version> \
+  --goal-operation <additional-actual-operation> \
+  --goal-source-ref <goal-source-ref> \
+  --goal-source-sha256 <goal-source-raw-sha256> \
+  --skills-root <skills-root>
+```
+
+Repeat every list flag for every value in the caller's real ceiling or envelope,
+including values unrelated to this one bundle. The compiler normalizes and preserves
+that caller-supplied scope. It opens the exact bundle and registered manifests only to
+verify that all three required capabilities, risks, mutation classes, decision classes,
+subjects, and operations are covered; it never derives a ceiling from manifest minima,
+drops unrelated scope, or widens a supplied scope. `actor_rank`, session evidence ID,
+envelope ID, risk ceilings, goal-source binding, and all four status axes are likewise
+caller-owned semantic inputs.
+
+Add `--external-input-evidence-ref` with its matching `--...-sha256` when external
+status is `available`, `missing_supplyable`, or `missing_unsupplyable`. Add the paired
+`--risk-acceptance-evidence-*` or `--design-selection-evidence-*` flags only when the
+corresponding status is `resolved`; those evidence bindings must be absent for every
+status that does not require them. A missing half, missing file, digest drift, symlink,
+or evidence/status mismatch fails before either context is published.
+
+Open each goal-envelope source and optional request-evidence artifact through the
+no-follow bounded reader with a 1 MiB per-artifact limit. This bound applies before
+digest acceptance and is independent of the 64 KiB cap on each generated context CAS
+artifact. A new payload is rejected before resolving its store path; an oversized
+existing CAS target is rejected from file metadata before its content is hashed.
+
+The result is body-free: it returns the exact canonical
+`successor_authority_request_contexts/sha256/` and
+`successor_authority_evaluation_contexts/sha256/` bindings, registered manifest
+bindings, scalar replay/mutation flags, and `model_authored_mechanical_bytes: 0`.
+Both generated payloads are size-checked and both immutable targets are conflict-checked
+before the first write, so an oversized evaluation context or a conflict in either CAS
+cannot leave a half-published pair. Exact replay returns the same bindings with
+`idempotent_replay: true`; store symlinks and immutable-content conflicts fail closed.
+Neither artifact is authority evidence or an allow decision.
+
+The mutation-capable `prepare-authority` and packet paths accept only those exact
+producer-owned CAS locations. Copying canonical, digest-matching bytes to another
+workspace ref does not make a valid input. There is no legacy flag, alternate directory,
+or hidden loader opt-out. Existing audit/recovery validation may reopen the evaluation
+context already embedded in a historical decision/proof chain; that read-only historical
+proof path does not accept a standalone legacy context ref and cannot bootstrap a new
+decision, reservation, packet, or effect.
+
+Prepare the proof set and its compact packet from those two returned bindings through
+the deterministic authority renderer, not by asking the coordinator to assemble three
+requests or proof arguments:
+
+```bash
+python3 -P -m orchestrate_task_cycle selected-successor --root . prepare-authority \
+  --bundle-ref <bundle-ref> --bundle-sha256 <raw-sha256> \
+  --request-context-ref <request-context-ref> \
+  --request-context-sha256 <raw-sha256> \
+  --evaluation-context-ref <evaluation-context-ref> \
+  --evaluation-context-sha256 <raw-sha256> \
+  --index-grant-ref <grant-ref> --index-grant-sha256 <raw-sha256> \
+  --publication-grant-ref <grant-ref> --publication-grant-sha256 <raw-sha256> \
+  --settlement-grant-ref <grant-ref> --settlement-grant-sha256 <raw-sha256> \
+  --at <RFC3339> --skills-root <skills-root>
+```
+
+The request context is a closed
+`selected_successor_authority_request_context` artifact that binds the exact successor
+bundle, the exact semantic `actor_rank`, and only the shared semantic request fields. The evaluation context is
+an exact schema-v2 `authority_evaluation` artifact describing the actual session
+ceiling and goal-autonomy envelope. Neither context is authority evidence. For each
+action, supply exactly one branch of the closed union: the `--<prefix>-grant-ref` and
+`--<prefix>-grant-sha256` pair, or the corresponding `--index-grant-absent`,
+`--publication-grant-absent`, or `--settlement-grant-absent` flag. Never use a dummy
+grant, omit one half of a binding, copy manifest requirements into a ceiling, or let
+the renderer synthesize capability, subject, operation, decision-axis, source, or
+grant facts.
+
+Reopen the self-sealed request-context `actor_rank` and require every present grant's
+`holder_rank` to equal it. An absent grant never permits rank inference from an operation
+floor, another identity, or the strongest available grant. Rank disagreement fails
+closed before compilation or lifecycle publication.
+
+With three existing exact grant bindings, the renderer reopens the bundle, contexts,
+subjects, manifests, grants, and grant states; derives the three requests with the
+bundle's exact idempotency keys; and invokes the canonical evaluator for each
+request. Only three `allowed` evaluator results may proceed. It then publishes the
+three decisions, reserves the exact operations, produces their exact `pre_commit`
+verifications, and finally publishes one immutable
+`selected_successor_authority_packet`. The success result contains only the packet
+binding and closed `execute_argv` / `recover_argv` projections. The renderer never
+creates a source approval or grant and never treats the request or evaluation context,
+selection receipt, compilation, packet, or CLI success as an allow decision.
+
+If genuine no-covering authority or another evaluator result is not `allowed`, publish one compact
+`selected_successor_authority_approval_projection` binding and stop. This fail-closed
+path may publish the three non-authoritative compilation bindings, but publishes zero decisions, reservations, or pre-commit verifications and performs
+zero selected-successor effects. Present only that exact projection to the authority
+owner; do not expose three model-authored request bodies, invent a replacement grant,
+or continue with a mixed subset. If an action is declared absent but evaluation finds
+covering authority, or a supplied binding differs from the selected grant, treat the
+input as a conflict rather than misreporting approval-required. Exact replay reopens
+the indexed inputs and returns
+the same packet or approval-projection binding. Any bundle, context, grant, manifest,
+subject, or state drift requires a fresh evaluation and cannot reuse the old packet.
+
+The input identity, immutable index, and pre-index packet locator bind all three exact
+operation-manifest digests. Publish the locator before the packet and the final index
+last, so a packet/index crash can repair the index in O(1), even after exact execution
+consumes the reservations. A present but invalid located packet fails closed; only a
+truly absent packet may resume preparation. Generated execute/recover argv preserve an
+explicit custom `--skills-root` used for compilation.
+
+The compiler-internal schema-v2 `selection_publication_intent` binds the validated
 selection-decision receipt, exact prospective task Markdown, and the immutable
 prospective task-state plan:
 
@@ -292,34 +438,52 @@ prospective task-state plan:
 }
 ```
 
+Execute the guarded sequence from the successful packet binding. Use the same arguments
+with `recover` after an interrupted attempt:
+
 ```bash
-# 1. Compile and publish a schema-v2 prospective task-state plan.
-python3 -m manage_task_state_index index --root . plan-transition \
-  --request-json <prospective-transition-request.json>
-
-# 2. Prepare publication without changing task.md.
-python3 -m orchestrate_task_cycle selection-publication --root . prepare-intent \
-  --intent <selection-publication-intent.json>
-
-# 3. Apply index/render state and publish a pending-external owner receipt.
-python3 -m manage_task_state_index index --root . apply-plan \
-  --plan <task-state-plan-ref> \
-  --external-prepare-ref <publication-prepare-ref> \
-  --external-prepare-sha256 <publication-prepare-raw-sha256>
-
-# 4. Reopen the same intent, validate the pending owner receipt, and CAS task.md last.
-python3 -m orchestrate_task_cycle selection-publication --root . apply-intent \
-  --intent <selection-publication-intent.json>
-
-# 5. Settle task state from the exact committed publication receipt.
-python3 -m manage_task_state_index index --root . settle-plan-external \
-  --plan <task-state-plan-ref> \
-  --external-commit-ref <publication-receipt-ref> \
-  --external-commit-sha256 <publication-receipt-raw-sha256>
-
-# 6. Verify the consumption gate before downstream selection use.
-python3 -m orchestrate_task_cycle selection-publication --root . status
+python3 -P -m orchestrate_task_cycle selected-successor --root . execute \
+  --authority-packet-ref <packet-ref> \
+  --authority-packet-sha256 <raw-sha256> --at <RFC3339>
 ```
+
+As a legacy-compatible path for already-issued proof sets, `execute` and `recover`
+continue to accept the exact bundle plus all three explicit owner-issued proof triples:
+
+```bash
+python3 -P -m orchestrate_task_cycle selected-successor --root . execute \
+  --bundle-ref <bundle-ref> --bundle-sha256 <raw-sha256> \
+  --index-reservation-ref <ref> --index-reservation-sha256 <raw-sha256> \
+  --index-pre-commit-ref <ref> --index-pre-commit-sha256 <raw-sha256> \
+  --index-expected-version <version> \
+  --publication-reservation-ref <ref> --publication-reservation-sha256 <raw-sha256> \
+  --publication-pre-commit-ref <ref> --publication-pre-commit-sha256 <raw-sha256> \
+  --publication-expected-version <version> \
+  --settlement-reservation-ref <ref> --settlement-reservation-sha256 <raw-sha256> \
+  --settlement-pre-commit-ref <ref> --settlement-pre-commit-sha256 <raw-sha256> \
+  --settlement-expected-version <version> --at <RFC3339>
+```
+
+The executor checks the legal checkpoint prefix, then applies the compiled plan as
+pending, publishes `task.md` by CAS, and settles task state from the exact publication
+receipt. It consumes the three authority reservations only after all effects are exact.
+Packet mode reopens the packet, bundle, decisions, reservations, pre-commit
+verifications, expected versions, contexts, manifests, and grants and recovers the same
+closed proof map used by the legacy arguments. The packet is a compact transport and
+replay binding, not new authority. The two input forms are mutually exclusive and
+neither can omit, union, replace, or weaken one of the three proofs.
+On replay, an already consumed reservation is accepted only by reproducing and
+validating its exact schema-v3 use receipt and owner validation; `partial` or unknown
+state is never treated as no effect. Exact receipt/state/index crash points are repaired
+through immutable intent bindings without transaction-history enumeration.
+
+The lower-level `apply-plan`, `selection-publication apply-intent`, and
+`settle-plan-external` commands describe owner internals and remain available for
+prepare/debug or explicitly governed historical recovery. They are not a supported
+selected-successor first-effect path, must not be invoked directly for this route, and
+do not themselves establish or retroactively create the immutable
+all-three-pre-commit gate. Verify downstream consumption with
+`selection-publication status` after the guarded executor completes.
 
 The publication compiler emits schema-v3 prepare material, reopens the complete decision,
 task-source, and prospective-plan chains, derives all IDs, lineage, paths, before/after
@@ -328,7 +492,7 @@ digests, and transaction identity, and stores the exact task bytes once under
 task body, or task-index body. Task-state index bytes remain owned by
 `$manage-task-state-index`.
 
-`apply-plan` appends the task-state event batch and renders the index, but publishes
+Internally, `apply-plan` appends the task-state event batch and renders the index, but publishes
 `task_state_transition_pending_receipt` with
 `activation_status: pending_external_settlement`; `task.md` must still match its before
 digest and other task-state writers remain blocked behind the pending intent.
@@ -341,11 +505,15 @@ idempotent at every boundary.
 Until settlement validates, `selection-publication status` returns
 `settlement_required`, `selection_consumption_allowed: false`, and the exact task-state
 settlement reason. A committed alias alone is therefore not a completed activation
-lifecycle. After settlement, the gate becomes true. If this successor exits an active
+lifecycle. Settlement validation is delegated to the task-index owner and accepts a
+verified original event batch followed by legitimate append-only descendants; it does
+not compare the current whole ledger hash to the historical plan-after hash. The current
+Markdown projection must still match the complete current ledger. After settlement, the
+gate becomes true. If this successor exits an active
 terminal wait, retire the exact predecessor only after that gate opens:
 
 ```bash
-python3 -m orchestrate_task_cycle terminal-wait-baseline --root . retire-successor \
+python3 -P -m orchestrate_task_cycle terminal-wait-baseline --root . retire-successor \
   --publication-ref <publication-receipt-ref> \
   --publication-sha256 <publication-receipt-raw-sha256>
 ```
@@ -364,23 +532,36 @@ This exception applies only when the owner verifies the existing current head, i
 settlement gate, and the exact baseline-before/current-task-after transition; it is not
 permission to retire from a noncurrent or merely digest-shaped receipt.
 
-Use `status` for the compact normal path, `status --deep` for historical prepare/blob audit, and `migrate-state` to create the compact projection only after validating existing history. Missing state may use the legacy scan; malformed or stale state fails closed. Historical v1/v2 artifacts are neither rewritten nor garbage-collected. A crash before alias publication remains publication recovery; a crash after alias publication but before task-state settlement remains `settlement_required` and must replay `settle-plan-external`, not re-publish or invent a new task.
+Storage schema v4 keeps only one bounded committed head and at most one active
+transaction in `state.json`. Schema-v2 intents have immutable
+`intents/sha256/<intent-sha256>/prepare.json` and `commit.json` lookup records, so normal
+status and exact intent replay never enumerate transaction history or reopen historical
+source bodies. Use `status --deep` for historical audit and `migrate-state` to validate
+legacy history, build the bounded state, and populate lookup records. Missing or schema-v1
+state with existing journals reports `migration_required`; it never silently falls back
+to a normal-path scan. Historical artifacts are neither rewritten nor garbage-collected.
+A crash before alias publication remains publication recovery; a crash after alias
+publication but before task-state settlement remains `settlement_required` and must
+replay `selected-successor recover` with the same exact authority proof set, not invent
+a new task or bypass the pre-effect gate with an individual owner command.
 
 When one unique legacy committed head has independently authorized `task.md` drift,
 compile compatibility reconciliation from the exact settled task-state transition
 receipt rather than authoring another target payload:
 
 ```bash
-python3 -m orchestrate_task_cycle selection-publication --root . reconcile-current \
+python3 -P -m orchestrate_task_cycle selection-publication --root . reconcile-current \
   --source-ref <task-state-receipt-ref> --source-sha256 <raw-sha256>
 ```
 
 ### Legacy v1 plan and recovery
 
-When recovering or replaying an existing v1 transaction, retain its caller-owned plan and Base64 wire shape:
+When recovering or replaying an existing v1 transaction, retain its caller-owned plan
+and Base64 wire shape. The exact prepare journal must already exist; this command may
+only replay/recover that transaction:
 
 ```bash
-python3 -m orchestrate_task_cycle selection-publication --root . apply \
+python3 -P -m orchestrate_task_cycle selection-publication --root . apply \
   --plan <selection-publication-plan.json>
 ```
 
@@ -406,30 +587,31 @@ The plan is caller-owned and has this shape:
 
 Allowed roles are `past_task_archive`, `agent_log_index_jsonl`, `task_pack_state`, `task_pack_render`, `advice_index_jsonl`, `advice_index_markdown`, `task_index_jsonl`, `task_index_markdown`, and the required `task_alias`. The archive and its append-only `.agent_log/index.jsonl` projection must be supplied together. `past_task_archive`, `agent_log_index_jsonl`, and both pack roles are owner-committed projections: create them first through `$record-agent-work-log` or the task-pack helper, then supply identical before/after bytes. Publication binds and verifies those projections but cannot bypass their journals or mutate them. Paths are role-bounded, workspace-relative, non-symlink regular files or absent targets. Physical deletion is not representable. A pack removal therefore uses the task-pack owner's typed retirement state, not a missing after-payload.
 
-The helper:
+The legacy recovery reader:
 
 1. validates bounded roles, paths, payload size, source-decision binding, and exact before digests;
-2. writes an immutable prepare journal;
+2. reopens the existing immutable prepare journal and explicit transaction lineage;
 3. preflights every target before writing any target;
 4. writes archives and projections before the authoritative `task.md` pointer;
 5. verifies all after digests;
 6. writes a committed receipt only after every target is verified.
 
+All public v1 `prepare`, `apply`, and `reconcile --plan` surfaces reject a plan that does
+not already match the bounded active or current committed transaction with
+`legacy selection-publication v1 new write is forbidden`. New Base64 journals cannot be
+created. Exact `recover --transaction-id` remains available, and multiple legacy pending
+journals require explicit repair before `migrate-state`.
+
 If a process stops after some targets reach their after-state, consumers must treat the pending journal as `recovery_required`. Forward-complete it with:
 
 ```bash
-python3 -m orchestrate_task_cycle selection-publication --root . recover
+python3 -P -m orchestrate_task_cycle selection-publication --root . recover
 ```
 
 Use `status` for a read-only pending/head check and `prepare` only when an explicit prepare-only boundary is required. At most one transaction may be pending: exact prepare/publish replay for that transaction is allowed, but any different prepare or uncommitted publish must fail before mutation until recovery completes. Multiple legacy pending journals are ambiguous and automatic recovery must not choose one by sort order. The status projection follows task-alias before/after links to the unique committed head: historical receipts may be superseded, but current unjournaled `task.md` drift or multiple heads blocks selection consumption. A target outside its exact before/after states blocks recovery and preserves the pending evidence; it never overwrites the foreign bytes. Replaying the same committed plan returns the existing receipt.
 
-When `status` reports one unique `drift_blocked` head and the unjournaled `task.md` bytes are independently authorized, reconcile only that exact task-alias transition with:
-
-```bash
-python3 -m orchestrate_task_cycle selection-publication --root . reconcile \
-  --plan <selection-publication-drift-reconciliation-plan.json>
-```
-
-The reconciliation plan must contain exactly one `task_alias` target. Its before digest must equal the unique head's expected task digest, and its after payload must reproduce the current regular, non-symlink `task.md` bytes exactly. Reconciliation records a successor journal and receipt without rewriting `task.md`; it rejects extra projections, stale or noncurrent payloads, pending publication, and ambiguous heads.
+Do not create a new v1 drift-reconciliation journal. Use the body-free
+`reconcile-current` intent path shown above after independent authorization. The former
+`reconcile --plan` form is recovery-only and rejects a new Base64 plan.
 
 The publication receipt proves logical atomicity of workflow projections only. It does not prove that the proposed task is correct. Downstream selection consumers must still verify the three-agent receipt contract, adapter seal, authority, exact subject, task-pack state, and derive result contract.

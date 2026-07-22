@@ -1,4 +1,4 @@
 interface:
   display_name: "Maintain Cycle Ledger"
-  short_description: "Maintain task-cycle stage ledgers"
-  default_prompt: "Use $maintain-cycle-ledger to initialize or append cycle evidence, atomically finalize a validated attempt revision, verify its receipt, or render a ledger snapshot."
+  short_description: "Maintain compact task-cycle ledgers"
+  default_prompt: "Use $maintain-cycle-ledger to append compact content-bound cycle events, hydrate exact result artifacts, and finalize validated cycle state."

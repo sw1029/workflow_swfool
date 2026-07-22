@@ -51,9 +51,9 @@ Use the package entry point directly or route it through the orchestrator's
 `workflow task-doctor` launcher. The representative sequence is:
 
 ```bash
-python3 -m task_doctor_workflow_lib compile-intent \
+python3 -P -m task_doctor_workflow_lib compile-intent \
   --root . --intent compact-intent.json --at '<rfc3339>'
-python3 -m task_doctor_workflow_lib prepare-intent \
+python3 -P -m task_doctor_workflow_lib prepare-intent \
   --root . --intent compact-intent.json --at '<rfc3339>'
 ```
 
@@ -67,7 +67,7 @@ After the actual user decision has been represented by pre-existing closed autho
 source-approval snapshots, accept the exact review binding:
 
 ```bash
-python3 -m task_doctor_workflow_lib accept-review \
+python3 -P -m task_doctor_workflow_lib accept-review \
   --root . --review-ref '<workspace-ref>' --review-sha256 '<sha256>' \
   --decision review-decision.json
 ```
@@ -85,11 +85,11 @@ For an existing journal, derive a small resolution bundle and advance only acros
 deterministic system-owned transitions:
 
 ```bash
-python3 -m task_doctor_workflow_lib build-resolution-bundle \
+python3 -P -m task_doctor_workflow_lib build-resolution-bundle \
   --root . --workflow-id '<workflow-id>' --publish
-python3 -m task_doctor_workflow_lib advance \
+python3 -P -m task_doctor_workflow_lib advance \
   --root . --workflow-id '<workflow-id>' --max-steps 8
-python3 -m task_doctor_workflow_lib advance \
+python3 -P -m task_doctor_workflow_lib advance \
   --root . --workflow-id '<workflow-id>' --max-steps 8 --apply --at '<rfc3339>'
 ```
 

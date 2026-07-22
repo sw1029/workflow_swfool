@@ -20,7 +20,7 @@ Use this contract at the existing `authority` phase. `$manage-agent-authority` r
 Validate `schema_version: 2`, `artifact_kind: orchestrator_authority_packet`, and `step: authority` with:
 
 ```bash
-python3 -m orchestrate_task_cycle result-contract \
+python3 -P -m orchestrate_task_cycle result-contract \
   --target authority --mode block --result <authority-packet.json> \
   --context '{"workspace_root":"<workspace>"}'
 ```
@@ -50,7 +50,7 @@ The owner decision fingerprint and orchestrator fingerprint have different scope
 Construct the packet from owner bindings instead of copying fields by hand:
 
 ```bash
-python3 -m orchestrate_task_cycle authority-packet --root . \
+python3 -P -m orchestrate_task_cycle authority-packet --root . \
   --decision-binding '{"ref":".task/authorization/decisions/<id>.json","sha256":"<sha>"}' \
   --reservation-binding '{"ref":".task/authorization/reservations/<id>.json","sha256":"<sha>"}' \
   --verification-binding '{"ref":".task/authorization/verifications/<id>.json","sha256":"<sha>"}'
@@ -144,15 +144,17 @@ the exact registered operations:
 
 - `materialize_selection_publication_subject`: authority-free, non-active subject preparation only;
 - `publish_selected_successor_topology`: ordinary grant-authorized publication of the selected successor topology;
-- `settle_selected_successor_task_state`: bound-lifecycle settlement of the exact prospective task-state plan from the committed publication;
+- `settle_selected_successor_task_state`: ordinary grant-authorized settlement of the exact prospective task-state plan from the committed publication;
 - `retire_terminal_wait_baseline_successor`: bound-lifecycle retirement of the exact predecessor baseline after settlement.
 
 The task-state event batch remains separately governed by its ordinary
 `mutate_task_state_index` operation. None of the low-level decision, task-state,
 publication, status, or retirement helpers grants authority or mints an authority
-packet. Do not share or infer a grant across these operations. The two bound-lifecycle
-operations are not new authority sources; they accept only artifacts from the already
-authorized exact subject and cannot widen the selected task, prospective bytes, index
+packet. Do not share or infer a grant across these operations. The three effect grants
+for task-state mutation, topology publication, and task-state settlement must all pass
+the exact all-three gate. Predecessor retirement is the sole bound-lifecycle operation
+in this route; it accepts only artifacts from the already authorized exact subject.
+Neither grants nor retirement may widen the selected task, prospective bytes, index
 events, publication target, predecessor, effect, or consume key.
 
 Use this order:
@@ -197,7 +199,7 @@ An unchanged approval request or external waiting state is not a new task or cyc
 Create and compare terminal-wait baselines with exact authority phase packets:
 
 ```bash
-python3 -m orchestrate_task_cycle selection-tick --root . \
+python3 -P -m orchestrate_task_cycle selection-tick --root . \
   --authority-packet <authority-packet.json> \
   --previous-json <prior-tick.json>
 ```

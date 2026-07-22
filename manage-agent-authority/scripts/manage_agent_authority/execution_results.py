@@ -33,6 +33,7 @@ EXECUTION_RESULT_KEYS = {
     "expected_subject_after_sha256",
     "completed_at",
 }
+EXECUTION_RESULT_V3_KEYS = EXECUTION_RESULT_KEYS | {"owner_validation"}
 
 
 def _closed(value: Any, keys: set[str], label: str) -> dict[str, Any]:
@@ -144,36 +145,66 @@ def create_execution_result(
     *,
     completed_at: str,
     expected_subject_after_sha256: str | None,
+    owner_validation: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, str]]:
     owner_path = _verify_binding(root, owner_result, "owner execution_result")
     # The owner artifact remains opaque because each effect owner has its own
     # closed schema. Authority supplies the cross-owner typed settlement wrapper.
     read_object(owner_path, "owner execution_result")
     subject_before = decision["request"]["subject"]
-    subject_path = resolve_workspace_path(
-        root,
-        subject_before["ref"],
-        "post-effect authority subject",
-        must_exist=True,
-        regular_file=True,
-    )
-    actual_after = sha256_file(subject_path)
-    if expected_subject_after_sha256 is None:
-        raise SystemExit(
-            "Consume requires expected_subject_after_sha256 for the exact effect target."
+    if owner_validation is None:
+        subject_path = resolve_workspace_path(
+            root,
+            subject_before["ref"],
+            "post-effect authority subject",
+            must_exist=True,
+            regular_file=True,
         )
-    expected_after = expected_subject_after_sha256
-    if actual_after != expected_after:
-        raise SystemExit("Post-effect authority subject does not match expected after digest.")
+        actual_after = sha256_file(subject_path)
+        if expected_subject_after_sha256 is None:
+            raise SystemExit(
+                "Consume requires expected_subject_after_sha256 for the exact effect target."
+            )
+        expected_after = expected_subject_after_sha256
+        if actual_after != expected_after:
+            raise SystemExit(
+                "Post-effect authority subject does not match expected after digest."
+            )
+        schema_version = 2
+        validation_fields: dict[str, Any] = {}
+    else:
+        from .owner_validators import load_owner_validation_receipt
+
+        validation = load_owner_validation_receipt(
+            root,
+            owner_validation,
+            request=decision["request"],
+            owner_result=owner_result,
+            reservation=reservation_binding,
+            pre_commit_verification=verification_binding,
+            phase="historical",
+        )
+        if validation["outcome"] != "confirmed_effect":
+            raise SystemExit(
+                "Authority execution result requires confirmed-effect owner validation."
+            )
+        actual_after = validation["subject"]["after_sha256"]
+        actual_after_ref = validation["subject"]["ref"]
+        expected_after = actual_after
+        schema_version = 3
+        validation_fields = {"owner_validation": owner_validation}
+    if owner_validation is None:
+        actual_after_ref = subject_before["ref"]
     core = {
-        "schema_version": 2,
+        "schema_version": schema_version,
         "artifact_kind": "authority_execution_result",
         "reservation": reservation_binding,
         "pre_commit_verification": verification_binding,
         "owner_result": owner_result,
+        **validation_fields,
         "effect_status": "confirmed_effect",
         "subject_before": subject_before,
-        "subject_after": {"ref": subject_before["ref"], "sha256": actual_after},
+        "subject_after": {"ref": actual_after_ref, "sha256": actual_after},
         "expected_subject_after_sha256": expected_after,
         "completed_at": parse_time(completed_at, "completed_at").isoformat(),
     }
@@ -197,9 +228,13 @@ def validate_execution_result(
     expected_subject_before: dict[str, Any],
 ) -> dict[str, Any]:
     path = _verify_binding(root, binding, "authority execution_result")
+    raw = read_object(path, "authority execution result")
+    schema_version = raw.get("schema_version")
     result = _closed(
-        read_object(path, "authority execution result"),
-        EXECUTION_RESULT_KEYS,
+        raw,
+        EXECUTION_RESULT_V3_KEYS
+        if schema_version == 3
+        else EXECUTION_RESULT_KEYS,
         "authority execution result",
     )
     core = {key: value for key, value in result.items() if key != "result_id"}
@@ -208,7 +243,7 @@ def validate_execution_result(
         AUTHORIZATION_ROOT / "execution_results" / f"{expected_id}.json"
     ).as_posix()
     if (
-        result["schema_version"] != 2
+        result["schema_version"] not in {2, 3}
         or result["artifact_kind"] != "authority_execution_result"
         or result["result_id"] != expected_id
         or binding["ref"] != expected_ref
@@ -221,11 +256,41 @@ def validate_execution_result(
         raise SystemExit("Authority execution result subject binding is invalid.")
     if (
         not isinstance(result["subject_after"], dict)
-        or result["subject_after"].get("ref") != result["subject_before"].get("ref")
         or result["subject_after"].get("sha256")
         != result["expected_subject_after_sha256"]
+        or (
+            result["schema_version"] == 2
+            and result["subject_after"].get("ref")
+            != result["subject_before"].get("ref")
+        )
     ):
         raise SystemExit("Authority execution result after-state is invalid.")
     _verify_binding(root, result["owner_result"], "owner execution_result")
+    if result["schema_version"] == 3:
+        from .owner_validators import load_owner_validation_receipt
+
+        decision_path = _verify_binding(
+            root, reservation["decision"], "authority reservation decision"
+        )
+        decision = read_object(decision_path, "authority reservation decision")
+        request = decision.get("request")
+        if not isinstance(request, dict):
+            raise SystemExit("Authority reservation decision request is invalid.")
+        validation = load_owner_validation_receipt(
+            root,
+            result["owner_validation"],
+            request=request,
+            owner_result=result["owner_result"],
+            reservation=reservation_binding,
+            pre_commit_verification=verification_binding,
+            phase="historical",
+        )
+        if (
+            validation["outcome"] != "confirmed_effect"
+            or validation["subject"]["after_sha256"]
+            != result["expected_subject_after_sha256"]
+            or validation["subject"]["ref"] != result["subject_after"].get("ref")
+        ):
+            raise SystemExit("Authority execution result owner validation is invalid.")
     parse_time(result["completed_at"], "execution_result.completed_at")
     return result

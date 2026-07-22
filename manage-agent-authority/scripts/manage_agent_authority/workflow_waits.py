@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .projection_reservations import current_operation_manifest_blockers
 from .source_recovery import discover_source_recovery
 from .workflow_candidates import current_allowed_decision
 from .workflow_interaction import wait_identity
@@ -112,6 +113,14 @@ def _classify_wait(
     ]
     if allowed:
         return "historical", wait, [{**wait, "superseded_by": allowed[0]}], []
+    manifest_blockers = current_operation_manifest_blockers(decision, skills_root)
+    if manifest_blockers:
+        return (
+            "historical",
+            wait,
+            [{**wait, "current_blocker_codes": manifest_blockers}],
+            [],
+        )
     recipe = discover_source_recovery(
         root,
         decision["request_sha256"],

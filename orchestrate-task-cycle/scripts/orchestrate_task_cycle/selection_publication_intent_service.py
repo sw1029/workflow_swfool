@@ -13,17 +13,25 @@ from .selection_publication_prepare import (
 )
 from .selection_publication_status import current_head_status
 from .selection_publication_store import (
-    TRANSACTION_ID,
     _canonical_json,
     _display_json,
     _lock,
     _prepare_path,
     _sha256_bytes,
     _sha256_file,
-    _transactions_root,
     _write_once,
 )
-from .selection_decision_store import read_bound_bytes
+from .selection_publication_intent_index import (
+    load_intent_index,
+    write_commit_index,
+    write_prepare_index,
+)
+from .selection_publication_state import (
+    STORAGE_SCHEMA_VERSION,
+    head_receipts,
+    record_committed,
+    record_prepared,
+)
 from .selection_publication_v2 import (
     compile_intent,
     external_intent_identity,
@@ -112,76 +120,129 @@ def _committed_intent_replay(
 
 
 def _prepared_external_intent_replay(
-    root: Path, intent_value: dict[str, Any]
+    root: Path, intent_value: dict[str, Any], state: dict[str, Any]
 ) -> dict[str, Any] | None:
-    """Reopen one exact v3 journal without revalidating stale trigger dependencies."""
+    """Reopen one exact v3 journal through its immutable O(1) indexes."""
 
     if intent_value.get("schema_version") != 2:
         return None
     intent, intent_sha256 = external_intent_identity(intent_value)
-    for field, label in (
-        ("source_decision", "selection publication source decision"),
-        ("task_source", "selection task source"),
-        ("task_state_plan", "prospective task-state transition plan"),
-    ):
-        read_bound_bytes(root, intent[field], label)
-
-    directory = _transactions_root(root)
-    identifiers = (
-        sorted(
-            child.name
-            for child in directory.iterdir()
-            if child.is_dir()
-            and not child.is_symlink()
-            and TRANSACTION_ID.fullmatch(child.name)
-            and (child / "prepare.json").is_file()
-            and not (child / "prepare.json").is_symlink()
-        )
-        if directory.is_dir()
-        else []
+    indexed = load_intent_index(root, intent_sha256, committed=False)
+    repaired = False
+    active = state.get("active_transaction")
+    head = state.get("head")
+    state_record = next(
+        (
+            record
+            for record in (active, head)
+            if isinstance(record, dict)
+            and record.get("intent_sha256") == intent_sha256
+        ),
+        None,
     )
-    matches: list[tuple[str, Path, str]] = []
-    for transaction_id in identifiers:
+    if indexed is None and isinstance(state_record, dict):
+        transaction_id = str(state_record["transaction_id"])
         prepare, path, digest = publication._load_prepare(root, transaction_id)
-        targets = prepare.get("targets")
-        target = targets[0] if isinstance(targets, list) and len(targets) == 1 else {}
-        if prepare.get("schema_version") == 3 and prepare.get(
-            "intent_sha256"
-        ) == intent_sha256:
-            if (
-                prepare.get("source_decision") != intent["source_decision"]
-                or prepare.get("task_state_plan") != intent["task_state_plan"]
-                or target.get("payload_sha256") != intent["task_source"]["sha256"]
-                or target.get("after_sha256") != intent["task_source"]["sha256"]
-            ):
-                raise ValueError(
-                    "selection-publication prepared intent identity is inconsistent"
-                )
-            matches.append((transaction_id, path, digest))
-    if len(matches) > 1:
-        raise ValueError("selection-publication prepared intent replay is ambiguous")
-    if not matches:
+        write_prepare_index(root, intent_sha256, transaction_id, path, digest)
+        indexed = load_intent_index(root, intent_sha256, committed=False)
+        repaired = True
+    if indexed is None:
         return None
-
-    pending = publication.pending_transaction_ids(root)
-    transaction_id, path, digest = matches[0]
-    if pending and pending != [transaction_id]:
-        raise ValueError(
-            "selection-publication has a competing pending transaction; exact intent replay cannot choose it"
+    transaction_id = str(indexed["transaction_id"])
+    prepare, path, digest = publication._load_prepare(root, transaction_id)
+    targets = prepare.get("targets")
+    target = targets[0] if isinstance(targets, list) and len(targets) == 1 else {}
+    if (
+        indexed.get("prepare")
+        != {"ref": path.relative_to(root).as_posix(), "sha256": digest}
+        or prepare.get("schema_version") != 3
+        or prepare.get("intent_sha256") != intent_sha256
+        or prepare.get("source_decision") != intent["source_decision"]
+        or prepare.get("task_state_plan") != intent["task_state_plan"]
+        or target.get("payload_sha256") != intent["task_source"]["sha256"]
+        or target.get("after_sha256") != intent["task_source"]["sha256"]
+    ):
+        raise ValueError("selection-publication prepared intent identity is inconsistent")
+    committed = load_intent_index(root, intent_sha256, committed=True)
+    receipt_path = publication._receipt_path(root, transaction_id)
+    if committed is None and receipt_path.is_file():
+        verified = publication.validate_receipt(
+            root, transaction_id, require_current_targets=False
         )
-    committed = _sha256_file(
-        root / f".task/selection_publication/receipts/{transaction_id}.json"
-    )
-    if not pending and committed is None:
-        raise ValueError("selection-publication prepared intent lifecycle is incomplete")
+        receipt_sha256 = str(verified["receipt_sha256"])
+        active = state.get("active_transaction")
+        current_head = state.get("head")
+        if isinstance(active, dict) and active.get("transaction_id") == transaction_id:
+            state = record_committed(
+                root, state, prepare, digest, receipt_sha256
+            )
+            repaired = True
+        elif (
+            isinstance(current_head, dict)
+            and current_head.get("transaction_id") == transaction_id
+            and current_head.get("receipt")
+            != {
+                "ref": receipt_path.relative_to(root).as_posix(),
+                "sha256": receipt_sha256,
+            }
+        ):
+            raise ValueError("selection-publication compact head receipt differs")
+        elif current_head is None:
+            raise ValueError(
+                "selection-publication committed intent is absent from compact state"
+            )
+        write_commit_index(
+            root,
+            intent_sha256,
+            transaction_id,
+            path,
+            digest,
+            receipt_path,
+            receipt_sha256,
+        )
+        committed = load_intent_index(root, intent_sha256, committed=True)
+        repaired = True
+    active = state.get("active_transaction")
+    head = state.get("head")
+    if committed is not None:
+        if (
+            committed.get("transaction_id") != transaction_id
+            or committed.get("prepare") != indexed.get("prepare")
+        ):
+            raise ValueError("selection-publication intent commit index differs")
+        receipt_binding = committed.get("receipt")
+        if not isinstance(receipt_binding, dict):
+            raise ValueError("selection-publication intent commit receipt is invalid")
+        if isinstance(active, dict) and active.get("transaction_id") == transaction_id:
+            state = record_committed(
+                root, state, prepare, digest, receipt_binding["sha256"]
+            )
+            repaired = True
+        elif (
+            isinstance(head, dict)
+            and head.get("transaction_id") == transaction_id
+            and head.get("receipt") != receipt_binding
+        ):
+            raise ValueError("selection-publication compact head receipt differs")
+        elif head is None:
+            raise ValueError(
+                "selection-publication committed intent is absent from compact state"
+            )
+    elif not isinstance(active, dict) or active.get("transaction_id") != transaction_id:
+        if active is not None:
+            raise ValueError(
+                "selection-publication prepared intent differs from bounded active transaction"
+            )
+        state = record_prepared(root, state, prepare, digest)
+        repaired = True
     return prepare_response(
         root,
         transaction_id,
         path,
         digest,
-        status="prepared" if pending else "already_committed",
-        mutation_performed=False,
-        recovery_required=bool(pending),
+        status="already_committed" if committed is not None else "prepared",
+        mutation_performed=repaired,
+        recovery_required=committed is None,
     )
 
 
@@ -192,19 +253,14 @@ def prepare_publication_intent(
 
     root = root.expanduser().resolve(strict=True)
     with _lock(root):
-        replay = _prepared_external_intent_replay(root, intent)
+        state = publication._load_or_initialize_state(root)
+        replay = _prepared_external_intent_replay(root, intent, state)
         if replay is not None:
-            if publication._repair_state_if_needed(root):
-                replay = {
-                    **replay,
-                    "mutation_performed": True,
-                    "compact_state_repaired": True,
-                }
-            return {**replay, "storage_schema_version": 3}
+            return {**replay, "storage_schema_version": STORAGE_SCHEMA_VERSION}
         normalized, task_payload = compile_intent(root, intent)
-        receipts = publication._committed_receipts(root)
+        receipts = head_receipts(state)
         current_task_sha256 = _sha256_file(root / "task.md")
-        pending = publication.pending_transaction_ids(root)
+        pending = publication._state_pending_ids(state)
         replay = pending_replay(
             root,
             normalized,
@@ -212,24 +268,12 @@ def prepare_publication_intent(
             load_prepare=publication._load_prepare,
         )
         if replay is not None:
-            if publication._repair_state_if_needed(root):
-                replay = {
-                    **replay,
-                    "mutation_performed": True,
-                    "compact_state_repaired": True,
-                }
-            return {**replay, "storage_schema_version": 2}
+            return {**replay, "storage_schema_version": STORAGE_SCHEMA_VERSION}
         replay = _committed_intent_replay(
             root, normalized, receipts, current_task_sha256
         )
         if replay is not None:
-            if publication._repair_state_if_needed(root):
-                replay = {
-                    **replay,
-                    "mutation_performed": True,
-                    "compact_state_repaired": True,
-                }
-            return {**replay, "storage_schema_version": 2}
+            return {**replay, "storage_schema_version": STORAGE_SCHEMA_VERSION}
 
         if normalized["publication_mode"] == "task_state_reconciliation":
             head = current_head_status(receipts, current_task_sha256)
@@ -265,7 +309,10 @@ def prepare_publication_intent(
             path, _display_json(prepare), "selection-publication prepare journal"
         )
         publication._load_prepare(root, transaction_id)
-        publication._refresh_state(root)
+        intent_sha256 = prepare.get("intent_sha256")
+        if isinstance(intent_sha256, str):
+            write_prepare_index(root, intent_sha256, transaction_id, path, digest)
+        record_prepared(root, state, prepare, digest)
     return {
         **prepare_response(
             root,
@@ -276,7 +323,7 @@ def prepare_publication_intent(
             mutation_performed=True,
             recovery_required=True,
         ),
-        "storage_schema_version": 2,
+        "storage_schema_version": STORAGE_SCHEMA_VERSION,
         "task_blob_created": blob_created,
         "task_payload_bytes": len(task_payload),
         "inline_payload_bytes": 0,

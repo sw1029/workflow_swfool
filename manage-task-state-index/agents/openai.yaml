@@ -1,4 +1,4 @@
 interface:
   display_name: "Manage Task State Index"
-  short_description: "Compile and reconcile task-state changes"
-  default_prompt: "Use $manage-task-state-index to compile, verify, and settle exact task-state transitions without hand-authoring ledger JSON."
+  short_description: "Compile and validate task-state changes"
+  default_prompt: "Use $manage-task-state-index to compile, apply, and owner-validate exact task-state transitions without hand-authoring ledger JSON."

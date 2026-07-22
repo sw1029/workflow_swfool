@@ -14,6 +14,7 @@ from .projection_io import load_grant_artifact
 from .projection_io import safe_json
 from .projection_io import safe_owned_directory
 from .projection_io import validate_grant_state
+from .projection_reservations import current_operation_manifest_blockers
 
 
 GrantRecord = tuple[dict[str, Any], str, dict[str, Any], dict[str, str]]
@@ -259,6 +260,9 @@ def current_allowed_decision(
 ) -> tuple[bool, list[str]]:
     if decision["decision"] != "allowed":
         return False, ["persisted_decision_not_allowed"]
+    manifest_blockers = current_operation_manifest_blockers(decision, skills_root)
+    if manifest_blockers:
+        return False, manifest_blockers
     try:
         current = evaluate(
             root,

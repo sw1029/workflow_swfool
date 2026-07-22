@@ -86,7 +86,7 @@ Issue v2 prospectively:
 
 ```bash
 PYTHONPATH="<skills-root>/manage-agent-authority/scripts" \
-  python3 -m manage_agent_authority receipt issue \
+  python3 -P -m manage_agent_authority receipt issue \
   --root . --plan receipt-plan.json \
   --output .task/authority_receipts/authr-R.json
 ```

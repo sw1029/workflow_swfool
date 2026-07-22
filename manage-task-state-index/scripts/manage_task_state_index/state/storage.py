@@ -19,6 +19,7 @@ except ImportError:  # pragma: no cover - Windows fallback keeps thread safety o
 
 _THREAD_LOCKS: dict[str, threading.RLock] = {}
 _THREAD_LOCKS_GUARD = threading.Lock()
+_LOCK_STATE = threading.local()
 
 
 def now_iso() -> str:
@@ -81,6 +82,54 @@ def lock_path(root: Path) -> Path:
     return task_dir(root) / "index.lock"
 
 
+class StableReadRaceError(ValueError):
+    """A read-only task-index snapshot overlapped a filesystem mutation."""
+
+
+def stable_file_token(path: Path) -> tuple[int, int, int, int, int, str] | None:
+    """Hash one regular file only when its identity and metadata remain stable."""
+
+    if not path.exists() and not path.is_symlink():
+        return None
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except FileNotFoundError as exc:
+        raise StableReadRaceError("task-index snapshot input disappeared") from exc
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError("Task-index snapshot input must be a regular file")
+        digest = hashlib.sha256()
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    fields_before = (
+        before.st_dev, before.st_ino, before.st_size,
+        before.st_mtime_ns, before.st_ctime_ns,
+    )
+    fields_after = (
+        after.st_dev, after.st_ino, after.st_size,
+        after.st_mtime_ns, after.st_ctime_ns,
+    )
+    try:
+        current = path.stat(follow_symlinks=False)
+    except FileNotFoundError as exc:
+        raise StableReadRaceError("task-index snapshot input disappeared") from exc
+    current_fields = (
+        current.st_dev, current.st_ino, current.st_size,
+        current.st_mtime_ns, current.st_ctime_ns,
+    )
+    if fields_before != fields_after or fields_after != current_fields:
+        raise StableReadRaceError("task-index snapshot input changed while hashing")
+    return (*fields_after, digest.hexdigest())
+
+
 def immutable_snapshot_path(root: Path, item_id: str, source_path: Path) -> Path:
     suffix = source_path.suffix or ".txt"
     return task_dir(root) / "snapshots" / f"{item_id}{suffix}"
@@ -90,6 +139,33 @@ def _thread_lock(root: Path) -> threading.RLock:
     key = str(root.resolve())
     with _THREAD_LOCKS_GUARD:
         return _THREAD_LOCKS.setdefault(key, threading.RLock())
+
+
+def _lock_depths() -> dict[str, dict[str, int]]:
+    depths = getattr(_LOCK_STATE, "depths", None)
+    if depths is None:
+        depths = {}
+        _LOCK_STATE.depths = depths
+    return depths
+
+
+def _lock_depth(root: Path, mode: str) -> int:
+    return _lock_depths().get(str(root.resolve()), {}).get(mode, 0)
+
+
+def _change_lock_depth(root: Path, mode: str, delta: int) -> None:
+    key = str(root.resolve())
+    depths = _lock_depths()
+    state = depths.setdefault(key, {})
+    updated = state.get(mode, 0) + delta
+    if updated < 0:
+        raise RuntimeError("task-state lock depth underflow")
+    if updated:
+        state[mode] = updated
+    else:
+        state.pop(mode, None)
+    if not state:
+        depths.pop(key, None)
 
 
 def _ensure_owned_task_directory(root: Path) -> Path:
@@ -143,12 +219,78 @@ def _owned_lock_handle(root: Path) -> Iterator[object]:
 def index_lock(root: Path) -> Iterator[None]:
     root = root.resolve()
     with _thread_lock(root):
-        with _owned_lock_handle(root) as handle:
-            if fcntl is not None:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        if _lock_depth(root, "writer"):
+            _change_lock_depth(root, "writer", 1)
             try:
                 yield
             finally:
+                _change_lock_depth(root, "writer", -1)
+            return
+        if _lock_depth(root, "reader"):
+            raise ValueError("Cannot upgrade a task-state read lock to a writer lock")
+        with _owned_lock_handle(root) as handle:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            _change_lock_depth(root, "writer", 1)
+            try:
+                yield
+            finally:
+                _change_lock_depth(root, "writer", -1)
+                if fcntl is not None:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextlib.contextmanager
+def existing_index_read_lock(root: Path) -> Iterator[bool]:
+    """Share an existing writer lock without creating `.task` or `index.lock`."""
+
+    root = root.resolve()
+    with _thread_lock(root):
+        if _lock_depth(root, "writer") or _lock_depth(root, "reader"):
+            _change_lock_depth(root, "reader", 1)
+            try:
+                yield True
+            finally:
+                _change_lock_depth(root, "reader", -1)
+            return
+        directory = task_dir(root)
+        if not directory.exists() and not directory.is_symlink():
+            yield False
+            return
+        mode = directory.lstat().st_mode
+        if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+            raise ValueError("Task-state root must be a regular owned directory")
+        path = lock_path(root)
+        if not path.exists() and not path.is_symlink():
+            yield False
+            return
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+        try:
+            descriptor = os.open(path, flags)
+        except FileNotFoundError:
+            yield False
+            return
+        with os.fdopen(descriptor, "rb", closefd=True) as handle:
+            opened = os.fstat(handle.fileno())
+            if not stat.S_ISREG(opened.st_mode):
+                raise ValueError("Task-state lock must be a regular file")
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
+            _change_lock_depth(root, "reader", 1)
+            try:
+                yield True
+                try:
+                    current = path.stat(follow_symlinks=False)
+                except FileNotFoundError as exc:
+                    raise StableReadRaceError(
+                        "task-index lock changed during read"
+                    ) from exc
+                if (opened.st_dev, opened.st_ino) != (
+                    current.st_dev, current.st_ino
+                ):
+                    raise StableReadRaceError("task-index lock changed during read")
+            finally:
+                _change_lock_depth(root, "reader", -1)
                 if fcntl is not None:
                     fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 

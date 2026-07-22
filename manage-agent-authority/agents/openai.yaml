@@ -1,4 +1,4 @@
 interface:
   display_name: "Manage Agent Authority"
   short_description: "Compile and settle exact authority safely"
-  default_prompt: "Use $manage-agent-authority to compile a compact operation intent, resume reusable authority, and request only a genuinely missing exact decision."
+  default_prompt: "Use $manage-agent-authority to compile exact authority operations, materialize approved recovery, and settle registered owner results."

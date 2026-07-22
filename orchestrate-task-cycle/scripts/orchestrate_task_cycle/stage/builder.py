@@ -5,7 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .contracts import PREPARATION_SCHEMA_VERSION_V2, validate_preparation
+from .contracts import (
+    PREPARATION_SCHEMA_VERSION_V2,
+    PREPARATION_SCHEMA_VERSION_V3,
+    validate_preparation,
+)
 from .specs import (
     DERIVED_FIELD_NAMES,
     LEGACY_TARGET_COMPILE_SPECS,
@@ -46,7 +50,8 @@ class ResultBuilder:
         target = str(preparation["target"])
         registry = (
             TARGET_COMPILE_SPECS
-            if preparation["schema_version"] == PREPARATION_SCHEMA_VERSION_V2
+            if preparation["schema_version"]
+            in {PREPARATION_SCHEMA_VERSION_V2, PREPARATION_SCHEMA_VERSION_V3}
             else LEGACY_TARGET_COMPILE_SPECS
         )
         spec = registry[target]

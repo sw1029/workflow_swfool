@@ -441,10 +441,10 @@ Before consuming a promoted item or promoting its successor, compare the existin
 
 ## Pack Transactions
 
-`$derive-improvement-task` owns the decision. `python3 -m orchestrate_task_cycle task-pack` owns deterministic queue mutation when available. Prefer:
+`$derive-improvement-task` owns the decision. `python3 -P -m orchestrate_task_cycle task-pack` owns deterministic queue mutation when available. Prefer:
 
 ```text
-python3 -m orchestrate_task_cycle task-pack --root . apply-mutation --plan <derive-pack-plan.json> --render --language <user-language>
+python3 -P -m orchestrate_task_cycle task-pack --root . apply-mutation --plan <derive-pack-plan.json> --render --language <user-language>
 ```
 
 Before publication, inspect the helper contract with `capabilities` and require `findings: []` from the create/replace dry-run for the exact in-memory candidate body. Use `validate --pack <workspace-relative-pack.json> --strict-findings` only to audit an already-existing pack artifact; create/replace requires the final successor JSON path to remain absent, so an existing canonical-path candidate is debt/input rather than a publishable successor at that ref. Historical findings in unrelated inactive packs are separate debt: they do not authorize publishing a candidate with findings, and global debt must not be misreported as a defect in a clean exact candidate.
@@ -460,16 +460,16 @@ Do not rewrite, normalize, delete, or silently ignore a historical pack merely b
 The closed retirement plan binds the raw file and canonical hashes, root `task.md` hash with `Executable: false` and `Task Pack: none`, the orchestrator authority packet, a distinct pre-commit verification, an operation-specific consume key, fixed non-retroactive reason code, and deterministic timestamp. Run:
 
 ```text
-python3 -m orchestrate_task_cycle task-pack --root . retire-legacy \
+python3 -P -m orchestrate_task_cycle task-pack --root . retire-legacy \
   --plan <exact-per-pack-retirement-plan.json> --dry-run
-python3 -m orchestrate_task_cycle task-pack --root . retire-legacy \
+python3 -P -m orchestrate_task_cycle task-pack --root . retire-legacy \
   --plan <same-exact-plan.json>
 ```
 
 The apply command writes an immutable prepare first, reopens the current owner artifacts and pre-commit verification, then writes a content-bound raw snapshot, overlay, and completion receipt. It never edits the canonical pack. Its result is `pending_settlement`, not operational success. Pass the exact completion binding and the plan's same consume key to `$manage-agent-authority consume`; then activate only that settled result:
 
 ```text
-python3 -m orchestrate_task_cycle task-pack --root . activate-legacy-retirement \
+python3 -P -m orchestrate_task_cycle task-pack --root . activate-legacy-retirement \
   --completion-ref <completion-ref> --completion-sha256 <completion-sha256> \
   --use-receipt-ref <owner-use-ref> --use-receipt-sha256 <owner-use-sha256>
 ```

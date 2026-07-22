@@ -28,7 +28,6 @@ from .transition_plan_contract import (
     RESULT_SCHEMA_VERSION,
     canonical_bytes as _canonical_bytes,
     canonical_plan_output_path,
-    load_transition_plan,
     publish_immutable as _publish_immutable,
     regular_payload as _regular_payload,
     sha256_bytes as _sha256_bytes,
@@ -291,6 +290,7 @@ def apply_transition_plan(
     path_value: str | Path,
     *,
     external_prepare: dict[str, str] | None = None,
+    _selected_successor_execution_token: object | None = None,
 ) -> dict[str, Any]:
     from .transition_apply import apply_transition_plan as apply
 
@@ -298,6 +298,7 @@ def apply_transition_plan(
         root,
         path_value,
         external_prepare=external_prepare,
+        _selected_successor_execution_token=_selected_successor_execution_token,
         rebuild_markdown=_rebuild_markdown_unlocked,
     )
 
@@ -324,10 +325,17 @@ def settle_transition_external(
     root: Path,
     path_value: str | Path,
     external_commit: dict[str, str],
+    *,
+    _selected_successor_execution_token: object | None = None,
 ) -> dict[str, Any]:
     from .transition_external import settle_external_transition
 
-    return settle_external_transition(root, path_value, external_commit)
+    return settle_external_transition(
+        root,
+        path_value,
+        external_commit,
+        _selected_successor_execution_token=_selected_successor_execution_token,
+    )
 
 
 def load_request_json(value: str) -> dict[str, Any]:

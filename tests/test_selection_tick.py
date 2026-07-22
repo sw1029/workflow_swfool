@@ -7,6 +7,10 @@ from pathlib import Path
 
 import pytest
 
+from selection_publication_legacy_support import (
+    prepare_legacy_publication as prepare_publication,
+)
+
 from orchestrate_task_cycle.selection_decision_receipt import (
     render_preliminary_selection_decision,
     render_selection_decision_receipt,
@@ -15,7 +19,6 @@ from orchestrate_task_cycle.selection_tick import build_selection_tick
 from orchestrate_task_cycle.selection_tick_contract import validate_selection_tick_v2
 from orchestrate_task_cycle.selection_tick_policy import EVIDENCE_CLASSES
 from orchestrate_task_cycle.selection_publication import (
-    prepare_publication,
     publish_prepared,
 )
 from selection_synthesis_support import persisted_selection_synthesis

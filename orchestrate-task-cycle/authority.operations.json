@@ -93,7 +93,7 @@
     },
     {
       "authority_applicability": "required",
-      "authorization_mechanism": "bound_lifecycle_artifact",
+      "authorization_mechanism": "grant",
       "data_classes": ["task_topology"],
       "decision_class": "D2",
       "effect_classes": ["settle_selected_successor_task_state"],

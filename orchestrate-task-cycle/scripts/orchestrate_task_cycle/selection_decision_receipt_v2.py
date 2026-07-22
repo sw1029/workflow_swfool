@@ -6,7 +6,6 @@ import re
 from typing import Any
 
 from .selection_decision_store import (
-    SHA256,
     canonical_sha256,
     closed_object,
     normalize_binding,
@@ -57,11 +56,13 @@ RECEIPT_KEYS = {
 
 
 def _trigger(
-    root: Path, value: Any
+    root: Path, value: Any, *, expected_active_prepare: Any = None
 ) -> tuple[dict[str, str], dict[str, Any]]:
     binding = normalize_binding(value, "normal-cycle selection trigger")
     _, raw = read_bound_json(root, binding, "normal-cycle selection trigger")
-    return binding, validate_normal_cycle_trigger(root, raw)
+    return binding, validate_normal_cycle_trigger(
+        root, raw, expected_active_prepare=expected_active_prepare
+    )
 
 
 def _synthesis(
@@ -115,10 +116,14 @@ def render_preliminary_selection_decision_v2(
 
 
 def validate_preliminary_selection_decision_v2(
-    root: Path, value: Any
+    root: Path, value: Any, *, expected_active_prepare: Any = None
 ) -> dict[str, Any]:
     decision = closed_object(value, DECISION_KEYS, "selection decision v2")
-    trigger_binding, trigger = _trigger(root, decision.get("selection_trigger"))
+    trigger_binding, trigger = _trigger(
+        root,
+        decision.get("selection_trigger"),
+        expected_active_prepare=expected_active_prepare,
+    )
     synthesis_binding, synthesis = _synthesis(
         root, decision.get("selection_synthesis")
     )
@@ -186,15 +191,21 @@ def render_selection_decision_receipt_v2(
 
 
 def validate_selection_decision_receipt_v2(
-    root: Path, value: Any
+    root: Path, value: Any, *, expected_active_prepare: Any = None
 ) -> dict[str, Any]:
     receipt = closed_object(value, RECEIPT_KEYS, "selection decision receipt v2")
-    trigger_binding, trigger = _trigger(root, receipt.get("selection_trigger"))
+    trigger_binding, trigger = _trigger(
+        root,
+        receipt.get("selection_trigger"),
+        expected_active_prepare=expected_active_prepare,
+    )
     decision_binding = normalize_binding(
         receipt.get("selection_decision"), "selection decision v2"
     )
     _, raw = read_bound_json(root, decision_binding, "selection decision v2")
-    decision = validate_preliminary_selection_decision_v2(root, raw)
+    decision = validate_preliminary_selection_decision_v2(
+        root, raw, expected_active_prepare=expected_active_prepare
+    )
     core = {
         "schema_version": 2,
         "artifact_kind": "selection_decision_receipt",

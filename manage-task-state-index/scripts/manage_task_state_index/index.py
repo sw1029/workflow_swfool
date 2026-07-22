@@ -134,6 +134,7 @@ from .state.transition_compiler import (
     load_transition_intent,
     verify_transition_compilation,
 )
+from .state.compiler_cli import register_compiler_parsers, run_scan_command
 
 
 def _rebuild_markdown_unlocked(
@@ -202,12 +203,7 @@ def cmd_init(args: argparse.Namespace) -> None:
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
-    root = Path(args.root).resolve()
-    read_only = bool(getattr(args, "dry_run", False) or getattr(args, "check", False))
-    result = scan_artifacts(root, dry_run=read_only)
-    result["mode"] = "check" if getattr(args, "check", False) else result["mode"]
-    print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 1 if getattr(args, "check", False) and result.get("would_change") else 0
+    return run_scan_command(args, scan_artifacts)
 
 
 def cmd_add(args: argparse.Namespace) -> None:
@@ -416,11 +412,14 @@ def build_parser() -> argparse.ArgumentParser:
     plan_input = plan_parser.add_mutually_exclusive_group(required=True)
     plan_input.add_argument(
         "--request-json",
-        help="JSON text or path with schema_version, events, and optional render/updated_at.",
+        help=(
+            "Legacy compatibility/contract diagnostics only: full mechanical event "
+            "request JSON. New workflows must use --intent."
+        ),
     )
     plan_input.add_argument(
         "--intent",
-        help="Compact lifecycle intent JSON text, '-', or a regular input file.",
+        help="Preferred compact lifecycle intent JSON text, '-', or regular input file.",
     )
     plan_parser.add_argument(
         "--output",
@@ -480,6 +479,7 @@ def build_parser() -> argparse.ArgumentParser:
     settle_parser.add_argument("--at", help="Fixed receipt timestamp for deterministic runs.")
     settle_parser.set_defaults(func=cmd_settle_plan_no_effect)
     register_external_settlement_parser(subparsers)
+    register_compiler_parsers(subparsers)
     return parser
 
 

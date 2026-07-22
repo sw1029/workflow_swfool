@@ -6,22 +6,12 @@ from pathlib import Path
 from typing import Any
 
 from ..result_contract.api import validate as validate_result
-from .artifact_store import (
-    compiler_artifact_binding,
-    load_compiler_artifact,
-    load_stage_input,
-    load_usage_observation,
-)
+from .artifact_store import load_routing_receipt, load_stage_input, load_usage_observation
 from .builder import ResultBuilder
 from .contracts import (
-    PREPARATION_KIND,
-    PREPARATION_SCHEMA_VERSION_V2,
     canonical_bytes,
     canonical_sha256,
     leaf_count,
-    preparation_identity,
-    require_expected_preparation,
-    stale_preparation_result,
 )
 from .gates import validate_submission_transition
 from .publication import (
@@ -31,11 +21,13 @@ from .publication import (
     replay_mismatch,
 )
 from .specs import TARGET_COMPILE_SPECS
-from .v2_context import (
-    collect_selected_context,
-    render_work_order,
-    selected_state_fingerprint,
+from .executor_registry import executor_spec
+from .freshness import (
+    evaluate_preparation_freshness,
+    load_bound_material,
+    validate_owner_post_effect_claims,
 )
+from .preparation_v3 import prepare_v2
 
 
 OUTPUT_SCALARS = (
@@ -49,176 +41,6 @@ OUTPUT_SCALARS = (
     "commit_status",
     "completion_status",
 )
-
-
-def _stable_binding(value: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: value[key]
-        for key in ("artifact_type", "ref", "sha256", "size_bytes")
-    }
-
-
-def prepare_v2(
-    root: Path,
-    cycle_id: str,
-    target: str,
-    workflow_mode: str,
-    task_id: str | None,
-    *,
-    max_files: int,
-    max_paths: int,
-    persist_compiler_artifacts: bool = False,
-) -> dict[str, Any]:
-    spec = TARGET_COMPILE_SPECS[target]
-    _full, model, context_metrics = collect_selected_context(
-        root, cycle_id, spec, max_files=max_files, max_paths=max_paths
-    )
-    fingerprint = selected_state_fingerprint(model, spec.dependency_selectors)
-    advice = model.get("advice") if isinstance(model.get("advice"), dict) else {}
-    candidates: dict[str, Any] = {
-        "step": target,
-        "cycle_id": cycle_id,
-        "task_id": task_id,
-        "used_goal_truth": list(
-            (model.get("goal_truth") or {}).get("used_goal_truth") or []
-        ),
-        "used_advice": [
-            item.get("advice_id")
-            for item in advice.get("items") or []
-            if isinstance(item, dict) and item.get("advice_id")
-        ],
-    }
-    derived_values = {
-        field: candidates[field]
-        for field in spec.derived_fields
-        if candidates.get(field) is not None
-    }
-    context = {
-        "schema_version": 1,
-        "artifact_kind": "orchestrate_stage_context",
-        "cycle_id": cycle_id,
-        "target": target,
-        "dependency_selectors": list(spec.dependency_selectors),
-        "state_fingerprint": fingerprint,
-        "model_context": model,
-    }
-    context_binding = _stable_binding(
-        compiler_artifact_binding(
-            root,
-            cycle_id,
-            "context",
-            context,
-            persist=persist_compiler_artifacts,
-        )
-    )
-    work_order = render_work_order(
-        cycle_id,
-        target,
-        workflow_mode,
-        spec,
-        model,
-        fingerprint,
-        context_binding,
-    )
-    work_order_binding = _stable_binding(
-        compiler_artifact_binding(
-            root,
-            cycle_id,
-            "work_order",
-            work_order,
-            persist=persist_compiler_artifacts,
-        )
-    )
-    blocked = model.get("projection_status") == "block"
-    preparation: dict[str, Any] = {
-        "schema_version": PREPARATION_SCHEMA_VERSION_V2,
-        "artifact_kind": PREPARATION_KIND,
-        "cycle_id": cycle_id,
-        "target": target,
-        "workflow_mode": workflow_mode,
-        "executor_kind": spec.executor_kind,
-        "model_call_required": bool(spec.semantic_fields),
-        "state_fingerprint": fingerprint,
-        "fingerprint_roles": list(spec.dependency_selectors),
-        "context_binding": context_binding,
-        "work_order_binding": work_order_binding,
-        "derived_values": derived_values,
-        "result_contract": {
-            "required_fields": list(spec.required_fields),
-            "derived_fields": list(spec.derived_fields),
-            "semantic_fields": list(spec.semantic_fields),
-            "optional_semantic_fields": list(spec.optional_semantic_fields),
-            "owner_receipt_fields": list(spec.owner_receipt_fields),
-            "optional_owner_fields": list(spec.optional_owner_fields),
-            "reasoned_not_applicable_fields": list(
-                spec.reasoned_not_applicable_fields
-            ),
-            "forbidden_derived_overrides": list(spec.derived_fields),
-        },
-        "next_action": (
-            {"kind": "stop", "reason": model.get("stop_reason")}
-            if blocked
-            else {
-                "kind": "submit_exact_inputs",
-                "command": "stage submit",
-                "owner_result_required": bool(spec.owner_receipt_fields),
-                "semantic_required": bool(spec.semantic_fields),
-            }
-        ),
-    }
-    preparation["preparation_id"] = (
-        "stageprep-" + canonical_sha256(preparation_identity(preparation))[:32]
-    )
-    preparation["compiler_metrics"] = {
-        **context_metrics,
-        "executor_kind": spec.executor_kind,
-        "model_call_required": bool(spec.semantic_fields),
-        "semantic_field_count": len(spec.semantic_fields),
-        "owner_field_count": len(spec.owner_receipt_fields),
-        "context_bytes": context_binding["size_bytes"],
-        "work_order_bytes": work_order_binding["size_bytes"],
-        "model_authored_mechanical_bytes": 0,
-        "inline_payload_bytes": 0,
-    }
-    return preparation
-
-
-def _load_bound_material(
-    root: Path, preparation: dict[str, Any]
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    cycle_id = str(preparation["cycle_id"])
-    context = load_compiler_artifact(
-        root, cycle_id, preparation["context_binding"], "context"
-    )
-    work_order = load_compiler_artifact(
-        root, cycle_id, preparation["work_order_binding"], "work_order"
-    )
-    for value, label in ((context, "context"), (work_order, "work_order")):
-        if value.get("cycle_id") != cycle_id or value.get("target") != preparation["target"]:
-            raise ValueError(f"{label} binding scope does not match preparation")
-        if value.get("state_fingerprint") != preparation["state_fingerprint"]:
-            raise ValueError(f"{label} state fingerprint does not match preparation")
-    if work_order.get("context_binding") != preparation["context_binding"]:
-        raise ValueError("work_order context binding does not match preparation")
-    return context, work_order
-
-
-def current_v2_context(
-    root: Path,
-    preparation: dict[str, Any],
-    *,
-    max_files: int,
-    max_paths: int,
-) -> tuple[dict[str, Any], dict[str, Any], str]:
-    spec = TARGET_COMPILE_SPECS[str(preparation["target"])]
-    full, model, _metrics = collect_selected_context(
-        root,
-        str(preparation["cycle_id"]),
-        spec,
-        max_files=max_files,
-        max_paths=max_paths,
-    )
-    return full, model, selected_state_fingerprint(model, spec.dependency_selectors)
 
 
 def _pair(ref: str | None, digest: str | None, label: str) -> tuple[str, str] | None:
@@ -245,17 +67,24 @@ def _exact_judgment(
     owner_result_sha256: str | None,
     semantic_ref: str | None,
     semantic_sha256: str | None,
-) -> tuple[dict[str, Any], dict[str, Any]]:
+    routing_ref: str | None,
+    routing_sha256: str | None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
     target, cycle_id = str(preparation["target"]), str(preparation["cycle_id"])
     spec = TARGET_COMPILE_SPECS[target]
     owner_pair = _pair(owner_result_ref, owner_result_sha256, "owner-result")
     semantic_pair = _pair(semantic_ref, semantic_sha256, "semantic")
+    routing_pair = _pair(routing_ref, routing_sha256, "routing")
+    registered = executor_spec(target)
     if bool(spec.owner_receipt_fields) != bool(owner_pair):
         raise ValueError("v2 stage requires one exact owner result binding")
     if bool(spec.semantic_fields) != bool(semantic_pair):
         raise ValueError("v2 semantic binding presence does not match field origin contract")
+    if registered.routing_required != bool(routing_pair):
+        raise ValueError("stage routing receipt presence does not match executor contract")
     judgment: dict[str, Any] = {}
     bindings: dict[str, Any] = {}
+    routing: dict[str, Any] | None = None
     if owner_pair:
         loaded, binding = load_stage_input(
             root,
@@ -281,7 +110,49 @@ def _exact_judgment(
         )
         judgment.update(loaded)
         bindings["semantic_binding"] = binding
-    return judgment, bindings
+    if routing_pair:
+        routing, binding = load_routing_receipt(
+            root,
+            *routing_pair,
+            cycle_id=cycle_id,
+            target=target,
+            preparation_id=str(preparation["preparation_id"]),
+            state_fingerprint=str(preparation["state_fingerprint"]),
+        )
+        if (
+            routing.get("policy_id") != registered.routing_policy_id
+            or routing.get("profile_id") not in registered.allowed_routing_profiles
+        ):
+            raise ValueError(
+                "stage routing receipt is outside the registered policy/profile set"
+            )
+        owner = judgment.setdefault("owner_result", {})
+        if not isinstance(owner, dict):
+            raise ValueError("routing requires an owner result object")
+        owner.update(
+            {
+                "agent_routing_applicability": "delegated",
+                "policy_id": routing["policy_id"],
+                "profile_id": routing["profile_id"],
+                "routing_tier": routing["routing_tier"],
+                "requested_model_ref": routing["requested_model_ref"],
+                "requested_model": routing["requested_model"],
+                "model_configuration_status": "reference_only",
+                "requested_reasoning_effort": routing[
+                    "requested_reasoning_effort"
+                ],
+                "routing_reason_codes": routing["routing_reason_codes"],
+                "routing_signals": {},
+                "routing_signal_evidence": {},
+                "routing_violations": [],
+                "routing_enforcement": "prompt_only",
+                "routing_limitation": (
+                    "preparation-bound request receipt does not prove runtime enforcement"
+                ),
+            }
+        )
+        bindings["routing_binding"] = binding
+    return judgment, bindings, routing
 
 
 def _usage(
@@ -293,11 +164,74 @@ def _usage(
     pair = _pair(ref, digest, "usage")
     if pair is None:
         return {}, None
+    if preparation.get("executor_kind") == "deterministic":
+        raise ValueError("deterministic stage executors must not supply model usage")
     return load_usage_observation(
         root,
         *pair,
         cycle_id=str(preparation["cycle_id"]),
         target=str(preparation["target"]),
+    )
+
+
+def _submission_prestate(
+    root: Path,
+    preparation: dict[str, Any],
+    *,
+    max_files: int,
+    max_paths: int,
+) -> dict[str, Any]:
+    replay = published_preparation(
+        root, str(preparation["cycle_id"]), preparation
+    )
+    if replay:
+        _material, work_order = load_bound_material(root, preparation)
+        return {
+            "status": "ok",
+            "replay": True,
+            "preparation": preparation,
+            "full_context": None,
+            "work_order": work_order,
+            "freshness": None,
+        }
+    freshness = evaluate_preparation_freshness(
+        root,
+        preparation,
+        max_files=max_files,
+        max_paths=max_paths,
+        allow_post_effect=True,
+    )
+    if freshness["status"] == "block":
+        return freshness
+    return {
+        "status": "ok",
+        "replay": False,
+        "preparation": freshness["preparation"],
+        "full_context": freshness["full_context"],
+        "work_order": freshness["work_order"],
+        "freshness": freshness,
+    }
+
+
+def _record_precondition_metrics(
+    output: dict[str, Any],
+    validation: dict[str, Any],
+    freshness: dict[str, Any],
+) -> None:
+    changed = list(freshness["changed_precondition_selectors"])
+    status = str(freshness["freshness_status"])
+    if changed:
+        status = (
+            "owner_validated_post_effect"
+            if validation["status"] != "block"
+            else "post_effect_owner_validation_failed"
+        )
+    output["compiler_metrics"].update(
+        {
+            "precondition_validation_status": status,
+            "post_effect_changed_selector_count": len(changed),
+            "post_effect_changed_selectors_sha256": canonical_sha256(changed),
+        }
     )
 
 
@@ -310,6 +244,8 @@ def submit_v2(
     owner_result_sha256: str | None,
     semantic_ref: str | None,
     semantic_sha256: str | None,
+    routing_ref: str | None,
+    routing_sha256: str | None,
     usage_ref: str | None,
     usage_sha256: str | None,
     mode: str,
@@ -318,34 +254,32 @@ def submit_v2(
     max_paths: int,
 ) -> dict[str, Any]:
     cycle_id, target = str(preparation["cycle_id"]), str(preparation["target"])
-    _context_artifact, work_order = _load_bound_material(root, preparation)
-    replay = published_preparation(root, cycle_id, preparation)
-    full, _model, current_fingerprint = current_v2_context(
+    prestate = _submission_prestate(
         root, preparation, max_files=max_files, max_paths=max_paths
     )
-    if current_fingerprint != preparation["state_fingerprint"]:
-        return stale_preparation_result(preparation, current_fingerprint)
-    if not replay:
-        preparation = require_expected_preparation(
-            preparation,
-            prepare_v2(
-                root,
-                cycle_id,
-                target,
-                str(preparation["workflow_mode"]),
-                task_id,
-                max_files=max_files,
-                max_paths=max_paths,
-            ),
-        )
-    judgment, input_bindings = _exact_judgment(
+    if prestate["status"] == "block":
+        return prestate
+    replay = bool(prestate["replay"])
+    preparation = prestate["preparation"]
+    full = prestate["full_context"]
+    work_order = prestate["work_order"]
+    freshness = prestate["freshness"]
+    judgment, input_bindings, routing = _exact_judgment(
         root,
         preparation,
         owner_result_ref=owner_result_ref,
         owner_result_sha256=owner_result_sha256,
         semantic_ref=semantic_ref,
         semantic_sha256=semantic_sha256,
+        routing_ref=routing_ref,
+        routing_sha256=routing_sha256,
     )
+    if freshness is not None:
+        claim_block = validate_owner_post_effect_claims(
+            preparation, freshness, judgment.get("owner_result")
+        )
+        if claim_block is not None:
+            return claim_block
     usage, usage_binding = _usage(
         root, preparation, usage_ref, usage_sha256
     )
@@ -353,7 +287,16 @@ def submit_v2(
         input_bindings["usage_binding"] = usage_binding
     result = ResultBuilder().build(preparation, judgment)
     digest = canonical_sha256(result)
-    existing = existing_publication(root, cycle_id, target, preparation, result, digest)
+    existing = existing_publication(
+        root,
+        cycle_id,
+        target,
+        preparation,
+        result,
+        digest,
+        input_bindings,
+        repair_projection=apply,
+    )
     if existing is not None:
         return _output(
             preparation,
@@ -366,13 +309,21 @@ def submit_v2(
         )
     if replay:
         return replay_mismatch(preparation)
-    transition = validate_submission_transition(full, preparation, work_order)
+    if full is None:
+        raise RuntimeError("current stage context was not collected")
+    transition = validate_submission_transition(
+        full, preparation, routing if routing is not None else work_order
+    )
     if transition["status"] == "block":
         return {
             "status": "block",
             "stop_reason": "blocked_transition",
             "preparation_id": preparation["preparation_id"],
             "transition_validation": transition,
+            "freshness_status": freshness["freshness_status"],
+            "changed_precondition_selectors": freshness[
+                "changed_precondition_selectors"
+            ],
             "applied": False,
         }
     validation = validate_result(target, result, mode, full)
@@ -385,9 +336,18 @@ def submit_v2(
         usage=usage,
         validation=validation,
     )
+    _record_precondition_metrics(output, validation, freshness)
     if not apply or validation["status"] == "block":
         return output
-    publication = publish_result(root, cycle_id, preparation, result, digest)
+    publication = publish_result(
+        root,
+        cycle_id,
+        preparation,
+        result,
+        digest,
+        output["compiler_metrics"],
+        input_bindings,
+    )
     output.update(
         {
             "applied": True,
@@ -396,6 +356,10 @@ def submit_v2(
             "ledger_path": publication["ledger_path"],
         }
     )
+    output["compiler_metrics"].update(publication["compiler_metrics"])
+    output["compiler_metrics"]["ledger_event_bytes"] = publication[
+        "ledger_event_bytes"
+    ]
     return output
 
 
@@ -406,7 +370,7 @@ def _output(
     digest: str,
     input_bindings: dict[str, Any],
     *,
-    usage: dict[str, int] | None = None,
+    usage: dict[str, Any] | None = None,
     validation: dict[str, Any] | None = None,
     existing: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -427,6 +391,13 @@ def _output(
             and len(result.get(key).encode("utf-8")) <= 256
         )
     }
+    preparation_metrics = preparation.get("compiler_metrics") or {}
+    if not isinstance(preparation_metrics, dict):
+        preparation_metrics = {}
+    opened_inputs = len(
+        [binding for binding in input_bindings.values() if isinstance(binding, dict)]
+    ) + (1 if preparation.get("machine_input_binding") else 2)
+    usage_binding = input_bindings.get("usage_binding") or {}
     root_fields = {
         "status": validation["status"],
         "stop_reason": "rejected_result" if validation["status"] == "block" else None,
@@ -437,15 +408,60 @@ def _output(
         "applied": existing is not None,
         "input_bindings": input_bindings,
         "compiler_metrics": {
+            **preparation_metrics,
             "semantic_leaf_count": leaf_count(judgment.get("semantic") or {}),
             "owner_result_leaf_count": leaf_count(judgment.get("owner_result") or {}),
             "compiled_result_leaf_count": leaf_count(result),
             "model_authored_mechanical_bytes": 0,
+            "model_authored_mechanical_bytes_origin": "field_origin_registry",
             "inline_payload_bytes": 0,
+            "owner_result_bytes": int(
+                (input_bindings.get("owner_result_binding") or {}).get(
+                    "size_bytes", 0
+                )
+            ),
+            "semantic_bytes": int(
+                (input_bindings.get("semantic_binding") or {}).get("size_bytes", 0)
+            ),
+            "raw_bytes_read": sum(
+                int(binding.get("size_bytes") or 0)
+                for binding in input_bindings.values()
+                if isinstance(binding, dict)
+            ),
+            "files_opened_count": int(
+                preparation_metrics.get("files_opened_count") or 0
+            )
+            + opened_inputs,
+            "files_written_count": int(
+                preparation_metrics.get("files_written_count") or 0
+            ),
+            "preparation_bytes": len(canonical_bytes(preparation)) + 1,
+            "model_visible_bytes": (
+                0
+                if preparation.get("executor_kind") == "deterministic"
+                else int(preparation_metrics.get("model_visible_bytes") or 0)
+                + int(
+                    (input_bindings.get("semantic_binding") or {}).get(
+                        "size_bytes", 0
+                    )
+                )
+            ),
+            "model_call_count": (
+                1
+                if input_bindings.get("routing_binding")
+                or input_bindings.get("semantic_binding")
+                else 0
+            ),
+            "usage_receipt_ref": usage_binding.get("ref"),
+            "usage_receipt_sha256": usage_binding.get("sha256"),
+            "usage_receipt_schema_version": usage_binding.get("schema_version"),
             **(usage or {}),
         },
     }
     if existing:
+        stored_metrics = existing["event"].get("compiler_metrics")
+        if isinstance(stored_metrics, dict):
+            root_fields["compiler_metrics"] = dict(stored_metrics)
         root_fields.update(
             {
                 "result_artifact_ref": existing["result_artifact_ref"],

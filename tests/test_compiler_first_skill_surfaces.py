@@ -24,6 +24,7 @@ REQUIRED_COMPILER_TOKENS = {
         "stage submit",
         "stage advance",
         "prepare-intent",
+        "prepare-authority",
         "semantic_field_count",
         "compiler-first-efficiency.md",
     ),
@@ -79,3 +80,60 @@ def test_target_skill_docs_prefer_the_public_compiler_surfaces() -> None:
         body = (ROOT / skill_name / "SKILL.md").read_text(encoding="utf-8")
         for token in tokens:
             assert token in body, (skill_name, token)
+
+
+def test_selected_successor_docs_sanction_guarded_route_without_api_overclaim() -> None:
+    skill = (ROOT / "orchestrate-task-cycle/SKILL.md").read_text(encoding="utf-8")
+    reference = (
+        ROOT
+        / "orchestrate-task-cycle/references/selection-reentry-and-publication.md"
+    ).read_text(encoding="utf-8")
+
+    assert "Use only `selected-successor execute|recover`" in skill
+    assert "Do not invoke the lower owner commands directly" in skill
+    assert "they do not themselves establish the all-three gate" in skill
+    assert "the only supported first-effect entrypoints" in reference
+    assert "must not be invoked directly for this route" in reference
+    assert "do not themselves establish or retroactively create" in reference
+
+
+def test_selected_successor_docs_define_compiled_authority_packet_boundary() -> None:
+    skill = (ROOT / "orchestrate-task-cycle/SKILL.md").read_text(encoding="utf-8")
+    reference = (
+        ROOT
+        / "orchestrate-task-cycle/references/selection-reentry-and-publication.md"
+    ).read_text(encoding="utf-8")
+    efficiency = (
+        ROOT / "orchestrate-task-cycle/references/compiler-first-efficiency.md"
+    ).read_text(encoding="utf-8")
+    authority_skill = (ROOT / "manage-agent-authority/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    authority_contract = (
+        ROOT / "manage-agent-authority/references/authority-v2-contract.md"
+    ).read_text(encoding="utf-8")
+
+    for text in (skill, reference, efficiency, authority_skill, authority_contract):
+        assert "prepare-authority" in text
+        assert "canonical evaluator" in text
+        assert "source approval or grant" in text
+
+    for token in (
+        "selected_successor_authority_request_context",
+        "selected_successor_authority_packet",
+        "selected_successor_authority_approval_projection",
+        "--index-grant-absent",
+        "--publication-grant-absent",
+        "--settlement-grant-absent",
+        "--authority-packet-ref",
+        "legacy-compatible",
+    ):
+        assert token in reference, token
+
+    assert "zero decisions, reservations, or pre-commit verifications" in reference
+    assert "The packet is a compact transport and" in reference
+    assert "not new authority" in reference
+    assert "trusted_request_idempotency_key" in authority_skill
+    assert "trusted_request_idempotency_key" in authority_contract
+    assert "evaluate_and_publish" in authority_contract
+    assert "verify_and_publish_precommit" in authority_contract

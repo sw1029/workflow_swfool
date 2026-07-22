@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 from orchestrate_task_cycle import render_cycle_dashboard as dashboard
+from orchestrate_task_cycle.cycle_ledger import append_event, init_cycle
 from orchestrate_task_cycle.result_contract import api as result_contract
+from orchestrate_task_cycle.stage.service import advance_stage
 
 
 def events() -> list[dict[str, Any]]:
@@ -72,6 +75,62 @@ def test_dashboard_loader_fails_closed_on_malformed_json(tmp_path: Path) -> None
 
     with pytest.raises(dashboard.DashboardDataError, match="line 2"):
         dashboard.load_events(ledger)
+
+
+def test_dashboard_loader_keeps_canonical_versionless_ledger_readable(
+    tmp_path: Path,
+) -> None:
+    cycle_dir = tmp_path / ".task/cycle/cycle-legacy"
+    ledger = cycle_dir / "stage.jsonl"
+    ledger.parent.mkdir(parents=True)
+    legacy = {"step": "validate", "status": "complete", "reason": "historical"}
+    ledger.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
+    current_value = {"event_count": 1, "latest_event": legacy}
+    current_path = cycle_dir / "current_stage.json"
+    current_path.write_text(json.dumps(current_value) + "\n", encoding="utf-8")
+
+    assert dashboard.load_events(ledger) == [{**legacy, "_ledger_line": 1}]
+    assert dashboard.load_current(current_path) == (current_value, "loaded")
+
+
+def test_dashboard_hydrates_compiled_format_v2_ledger_and_current_projection(
+    tmp_path: Path,
+) -> None:
+    cycle_id = "cycle-dashboard-compact"
+    (tmp_path / "task.md").write_text("# Task\n\nCompact dashboard.\n", encoding="utf-8")
+    init_cycle(tmp_path, cycle_id, "task-dashboard", "compact dashboard")
+    advance_stage(tmp_path, cycle_id, apply=True, max_steps=1)
+    append_event(
+        tmp_path,
+        cycle_id,
+        {
+            "step": "authority",
+            "status": "completed",
+            "event_id": "authority-dashboard-compact",
+            "task_id": "task-dashboard",
+            "reason": "authority fixture",
+        },
+    )
+    advance_stage(tmp_path, cycle_id, apply=True, max_steps=2)
+    cycle_dir = tmp_path / ".task/cycle" / cycle_id
+
+    rows = dashboard.load_events(cycle_dir / "stage.jsonl")
+    compact = [event for event in rows if event.get("format_version") == 2]
+    assert compact
+    assert all(
+        "unsupported_format_version"
+        not in dashboard.event_malformed_reasons(event, cycle_id)
+        for event in compact
+    )
+    current, status = dashboard.load_current(cycle_dir / "current_stage.json")
+    assert status == "loaded"
+    assert current["latest_event"]["event_id"] == rows[-1]["event_id"]
+    summary = dashboard.summarize(rows, current, status, cycle_id, tmp_path)
+    assert not any(
+        "unsupported_format_version"
+        in event.get("_dashboard_malformed_reasons", [])
+        for event in summary["malformed_events"]
+    )
 
 
 def test_noncanonical_event_and_stale_snapshot_remain_visible() -> None:

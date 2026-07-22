@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, TypeVar
 
 from .artifact_evidence import annotate_artifact_refs
 from .constants import CURRENT_STAGE_PROJECTION_VERSION
@@ -18,16 +18,21 @@ from .event_model import (
     validate_event_envelope,
     validate_stored_event,
 )
+from .result_hydration import hydrate_result_event
 from .support import (
     atomic_write_text,
     current_stage_path,
     cycle_dir,
     durable_append_json,
+    existing_ledger_read_lock,
     initialization_path,
     ledger_lock,
+    ledger_lock_path,
     ledger_path,
     read_initialization_metadata,
     rel_path,
+    StableReadRaceError,
+    stable_file_token,
     validate_cycle_id,
 )
 from .terminal import (
@@ -39,6 +44,52 @@ from .terminal import (
 
 AtomicTextWriter = Callable[[Path, str], None]
 JsonAppender = Callable[[Path, dict[str, Any]], None]
+ReadResult = TypeVar("ReadResult")
+READ_SNAPSHOT_ATTEMPTS = 3
+
+
+def read_cycle_files_stable(
+    root: Path,
+    cycle_id: str,
+    reader: Callable[[], ReadResult],
+    paths: list[Path],
+) -> ReadResult:
+    """Read under an existing shared lock or prove a lockless stable snapshot."""
+
+    root = root.resolve()
+    cycle_id = validate_cycle_id(cycle_id)
+    directory = cycle_dir(root, cycle_id)
+    checked_paths: list[Path] = []
+    for path in paths:
+        candidate = path if path.is_absolute() else root / path
+        try:
+            candidate.resolve(strict=False).relative_to(directory)
+        except ValueError as exc:
+            raise ValueError("cycle read snapshot path escapes its cycle directory") from exc
+        checked_paths.append(candidate)
+    lock_path = ledger_lock_path(root, cycle_id)
+    for _attempt in range(READ_SNAPSHOT_ATTEMPTS):
+        try:
+            with existing_ledger_read_lock(root, cycle_id) as locked:
+                if locked:
+                    return reader()
+                before = [stable_file_token(path) for path in checked_paths]
+                error: OSError | UnicodeError | ValueError | None = None
+                result: ReadResult | None = None
+                try:
+                    result = reader()
+                except (OSError, UnicodeError, ValueError) as exc:
+                    error = exc
+                after = [stable_file_token(path) for path in checked_paths]
+                lock_appeared = lock_path.exists() or lock_path.is_symlink()
+                if before != after or lock_appeared:
+                    continue
+                if error is not None:
+                    raise error
+                return result  # type: ignore[return-value]
+        except StableReadRaceError:
+            continue
+    raise ValueError("cycle files changed during read-only snapshot")
 
 
 def read_events_unlocked(root: Path, cycle_id: str) -> list[dict[str, Any]]:
@@ -67,10 +118,28 @@ def read_events_unlocked(root: Path, cycle_id: str) -> list[dict[str, Any]]:
 def read_events(root: Path, cycle_id: str) -> list[dict[str, Any]]:
     cycle_id = validate_cycle_id(cycle_id)
     path = ledger_path(root, cycle_id)
-    if not path.is_file():
-        return []
-    with ledger_lock(root, cycle_id, exclusive=False):
-        return read_events_unlocked(root, cycle_id)
+    def load() -> list[dict[str, Any]]:
+        if not path.is_file():
+            return []
+        return [
+            hydrate_result_event(root, cycle_id, event)
+            for event in read_events_unlocked(root, cycle_id)
+        ]
+
+    return read_cycle_files_stable(root, cycle_id, load, [path])
+
+
+def read_events_raw(root: Path, cycle_id: str) -> list[dict[str, Any]]:
+    """Read authoritative ledger envelopes without opening result CAS bodies."""
+
+    cycle_id = validate_cycle_id(cycle_id)
+    path = ledger_path(root, cycle_id)
+    return read_cycle_files_stable(
+        root,
+        cycle_id,
+        lambda: read_events_unlocked(root, cycle_id) if path.is_file() else [],
+        [path],
+    )
 
 
 def read_all_cycle_events(root: Path) -> list[dict[str, Any]]:
@@ -141,7 +210,11 @@ def read_current_expanded(root: Path, cycle_id: str) -> dict[str, Any]:
     """
 
     cycle_id = validate_cycle_id(cycle_id)
-    with ledger_lock(root, cycle_id, exclusive=False):
+    current_path = current_stage_path(root, cycle_id)
+    stage_path = ledger_path(root, cycle_id)
+    init_path = initialization_path(root, cycle_id)
+
+    def load() -> dict[str, Any]:
         current = load_cycle_current_file(root, cycle_id)
         if not current:
             return {}
@@ -160,7 +233,39 @@ def read_current_expanded(root: Path, cycle_id: str) -> dict[str, Any]:
             raise ValueError(
                 "current_stage projection does not match the initialized compiler protocol"
             )
-        return expand_current_projection(current, events, cycle_id=cycle_id)
+        expanded = expand_current_projection(current, events, cycle_id=cycle_id)
+        if protocol_version != 2:
+            return expanded
+        hydrated = dict(expanded)
+        hydrated["latest_event"] = (
+            hydrate_result_event(root, cycle_id, events[-1]) if events else {}
+        )
+        latest_by_step = {
+            str(event.get("step") or "unknown"): hydrate_result_event(
+                root, cycle_id, event
+            )
+            for event in events
+            if str(event.get("step") or "unknown") in {
+                str(step) for step in (expanded.get("steps") or {})
+            }
+        }
+        hydrated["steps"] = {
+            step: latest_by_step[step] for step in sorted(latest_by_step)
+        }
+        hydrated["malformed_events"] = [
+            hydrate_result_event(root, cycle_id, event)
+            for event in events
+            if str(event.get("step") or "unknown")
+            not in {str(step) for step in (expanded.get("steps") or {})}
+        ][-10:]
+        return hydrated
+
+    return read_cycle_files_stable(
+        root,
+        cycle_id,
+        load,
+        [stage_path, current_path, init_path],
+    )
 
 
 def duplicate_event(
@@ -242,6 +347,7 @@ def append_event(
 ) -> dict[str, Any]:
     cycle_id = validate_cycle_id(cycle_id)
     event = validate_event_envelope(cycle_id, event, allow_noncanonical_step)
+    hydrate_result_event(root, cycle_id, event)
     fingerprint = request_fingerprint(cycle_id, event)
     path = ledger_path(root, cycle_id)
     with ledger_lock(root, cycle_id, exclusive=True):

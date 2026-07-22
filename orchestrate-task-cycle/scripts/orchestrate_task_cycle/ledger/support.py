@@ -4,13 +4,20 @@ import fcntl
 import hashlib
 import json
 import os
+import stat
 import sys
+import threading
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
 from .constants import CYCLE_ID_PATTERN, EVENT_ID_PATTERN, SHA256_PATTERN
+
+
+_THREAD_LOCKS: dict[str, threading.RLock] = {}
+_THREAD_LOCKS_GUARD = threading.Lock()
+_LOCK_STATE = threading.local()
 
 
 def validate_cycle_id(cycle_id: str) -> str:
@@ -101,6 +108,100 @@ def ledger_lock_path(root: Path, cycle_id: str) -> Path:
     return cycle_dir(root, cycle_id) / ".ledger.lock"
 
 
+class StableReadRaceError(ValueError):
+    """A supposedly stable read overlapped a filesystem mutation."""
+
+
+def _cycle_lock_key(root: Path, cycle_id: str) -> str:
+    return f"{root.resolve()}\0{validate_cycle_id(cycle_id)}"
+
+
+def _cycle_thread_lock(root: Path, cycle_id: str) -> threading.RLock:
+    key = _cycle_lock_key(root, cycle_id)
+    with _THREAD_LOCKS_GUARD:
+        return _THREAD_LOCKS.setdefault(key, threading.RLock())
+
+
+def _lock_depths() -> dict[str, dict[str, int]]:
+    depths = getattr(_LOCK_STATE, "depths", None)
+    if depths is None:
+        depths = {}
+        _LOCK_STATE.depths = depths
+    return depths
+
+
+def _lock_depth(root: Path, cycle_id: str, mode: str) -> int:
+    return _lock_depths().get(_cycle_lock_key(root, cycle_id), {}).get(mode, 0)
+
+
+def _change_lock_depth(root: Path, cycle_id: str, mode: str, delta: int) -> None:
+    key = _cycle_lock_key(root, cycle_id)
+    depths = _lock_depths()
+    state = depths.setdefault(key, {})
+    updated = state.get(mode, 0) + delta
+    if updated < 0:
+        raise RuntimeError("cycle ledger lock depth underflow")
+    if updated:
+        state[mode] = updated
+    else:
+        state.pop(mode, None)
+    if not state:
+        depths.pop(key, None)
+
+
+def stable_file_token(path: Path) -> tuple[int, int, int, int, int, str] | None:
+    """Hash one regular file while proving its identity and metadata stayed fixed."""
+
+    if not path.exists() and not path.is_symlink():
+        return None
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except FileNotFoundError as exc:
+        raise StableReadRaceError("read-only snapshot input disappeared") from exc
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError(f"read-only snapshot input must be a regular file: {path}")
+        digest = hashlib.sha256()
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    fields_before = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    fields_after = (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    )
+    try:
+        current = path.stat(follow_symlinks=False)
+    except FileNotFoundError as exc:
+        raise StableReadRaceError("read-only snapshot input disappeared") from exc
+    current_fields = (
+        current.st_dev,
+        current.st_ino,
+        current.st_size,
+        current.st_mtime_ns,
+        current.st_ctime_ns,
+    )
+    if fields_before != fields_after or fields_after != current_fields:
+        raise StableReadRaceError("read-only snapshot input changed while hashing")
+    return (*fields_after, digest.hexdigest())
+
+
 def fsync_directory(path: Path) -> None:
     try:
         descriptor = os.open(path, os.O_RDONLY)
@@ -114,16 +215,94 @@ def fsync_directory(path: Path) -> None:
 
 @contextmanager
 def ledger_lock(root: Path, cycle_id: str, *, exclusive: bool) -> Iterator[None]:
+    root = root.resolve()
+    cycle_id = validate_cycle_id(cycle_id)
+    if not exclusive:
+        with existing_ledger_read_lock(root, cycle_id) as locked:
+            if locked:
+                yield
+                return
+            lock_path = ledger_lock_path(root, cycle_id)
+            try:
+                yield
+            finally:
+                # A cooperating writer creates this persistent lock before its
+                # first mutation. Do not mask an exception already raised by
+                # the reader, but reject an otherwise successful racing read.
+                if sys.exc_info()[0] is None and (
+                    lock_path.exists() or lock_path.is_symlink()
+                ):
+                    raise StableReadRaceError(
+                        "cycle ledger lock appeared during read-only snapshot"
+                    )
+        return
     directory = cycle_dir(root, cycle_id)
-    directory.mkdir(parents=True, exist_ok=True)
-    lock_path = ledger_lock_path(root, cycle_id)
-    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-    with os.fdopen(descriptor, "a+b", closefd=True) as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+    with _cycle_thread_lock(root, cycle_id):
+        if _lock_depth(root, cycle_id, "writer"):
+            _change_lock_depth(root, cycle_id, "writer", 1)
+            try:
+                yield
+            finally:
+                _change_lock_depth(root, cycle_id, "writer", -1)
+            return
+        if _lock_depth(root, cycle_id, "reader"):
+            raise ValueError("Cannot upgrade a cycle ledger read lock to a writer lock")
+        directory.mkdir(parents=True, exist_ok=True)
+        lock_path = ledger_lock_path(root, cycle_id)
+        descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        with os.fdopen(descriptor, "a+b", closefd=True) as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            _change_lock_depth(root, cycle_id, "writer", 1)
+            try:
+                yield
+            finally:
+                _change_lock_depth(root, cycle_id, "writer", -1)
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def existing_ledger_read_lock(root: Path, cycle_id: str) -> Iterator[bool]:
+    """Share an existing writer lock without creating directories or lock files."""
+
+    root = root.resolve()
+    cycle_id = validate_cycle_id(cycle_id)
+    with _cycle_thread_lock(root, cycle_id):
+        if _lock_depth(root, cycle_id, "writer") or _lock_depth(
+            root, cycle_id, "reader"
+        ):
+            _change_lock_depth(root, cycle_id, "reader", 1)
+            try:
+                yield True
+            finally:
+                _change_lock_depth(root, cycle_id, "reader", -1)
+            return
+        path = ledger_lock_path(root, cycle_id)
+        if not path.exists() and not path.is_symlink():
+            yield False
+            return
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
         try:
-            yield
-        finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            descriptor = os.open(path, flags)
+        except FileNotFoundError:
+            yield False
+            return
+        with os.fdopen(descriptor, "rb", closefd=True) as handle:
+            opened = os.fstat(handle.fileno())
+            if not stat.S_ISREG(opened.st_mode):
+                raise ValueError("cycle ledger lock must be a regular file")
+            fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
+            _change_lock_depth(root, cycle_id, "reader", 1)
+            try:
+                yield True
+                try:
+                    current = path.stat(follow_symlinks=False)
+                except FileNotFoundError as exc:
+                    raise StableReadRaceError("cycle ledger lock changed during read") from exc
+                if (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino):
+                    raise StableReadRaceError("cycle ledger lock changed during read")
+            finally:
+                _change_lock_depth(root, cycle_id, "reader", -1)
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def atomic_write_text(path: Path, content: str) -> None:
@@ -157,10 +336,11 @@ def canonical_sha256(value: Any) -> str:
     return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
 
 
-def immutable_write_bytes(path: Path, content: bytes) -> None:
-    """Publish one content-addressed object without replacing an existing object."""
+def immutable_write_bytes(path: Path, content: bytes) -> bool:
+    """Publish one content-addressed object and report an actual new link."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}")
+    mutation_performed = False
     try:
         with temporary.open("xb") as handle:
             handle.write(content)
@@ -169,6 +349,7 @@ def immutable_write_bytes(path: Path, content: bytes) -> None:
         try:
             os.link(temporary, path)
             fsync_directory(path.parent)
+            mutation_performed = True
         except FileExistsError:
             if path.read_bytes() != content:
                 raise ValueError(f"immutable finalization object already exists with different content: {path}")
@@ -177,6 +358,7 @@ def immutable_write_bytes(path: Path, content: bytes) -> None:
             temporary.unlink()
         except FileNotFoundError:
             pass
+    return mutation_performed
 
 
 def durable_append_json(path: Path, value: dict[str, Any]) -> None:

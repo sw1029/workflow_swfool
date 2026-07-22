@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import inspect
 from pathlib import Path
 import sys
 
@@ -12,11 +13,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "manage-agent-authority" / "scripts"))
 
 from manage_agent_authority import authority_cli  # noqa: E402
+from manage_agent_authority.decision_publication import (  # noqa: E402
+    evaluate_and_publish,
+)
 from manage_agent_authority.operation_compiler import (  # noqa: E402
     compilation_inputs,
     compile_operation,
     validate_compilation,
 )
+from manage_agent_authority.operation_request import build_request  # noqa: E402
 
 
 AT = "2026-07-19T10:00:00+09:00"
@@ -80,6 +85,109 @@ def test_compiler_derives_closed_inputs_deterministically(tmp_path: Path) -> Non
     request, context = compilation_inputs(tmp_path, first, skills_root=ROOT)
     assert request == first["request"]
     assert context == first["evaluation_context"]
+
+
+def test_compiler_legacy_idempotency_contract_is_unchanged(tmp_path: Path) -> None:
+    seed = _seed(tmp_path)
+    compiled = compile_operation(tmp_path, seed, compiled_at=AT, skills_root=ROOT)
+
+    assert compiled["request"]["idempotency_key"] == (
+        f"request-{compiled['seed_fingerprint'][:24]}"
+    )
+    assert compiled["field_provenance"]["seed_bound"] == [
+        "operation identity",
+        "subject.ref",
+        "subject.revision",
+        "scope",
+        "independent decision axes",
+        "session and goal ceilings",
+    ]
+
+    seed["trusted_request_idempotency_key"] = "selected-successor-exact"
+    with pytest.raises(SystemExit, match="unknown fields"):
+        compile_operation(tmp_path, seed, compiled_at=AT, skills_root=ROOT)
+
+
+def test_compiler_accepts_only_trusted_exact_idempotency_override(
+    tmp_path: Path,
+) -> None:
+    assert inspect.signature(compile_operation).parameters[
+        "trusted_request_idempotency_key"
+    ].kind is inspect.Parameter.KEYWORD_ONLY
+    assert inspect.signature(build_request).parameters[
+        "trusted_request_idempotency_key"
+    ].kind is inspect.Parameter.KEYWORD_ONLY
+    seed = _seed(tmp_path)
+    legacy = compile_operation(tmp_path, seed, compiled_at=AT, skills_root=ROOT)
+    arguments = {
+        "compiled_at": AT,
+        "trusted_request_idempotency_key": "selected-successor-exact",
+        "skills_root": ROOT,
+    }
+
+    first = compile_operation(tmp_path, seed, **arguments)
+    second = compile_operation(tmp_path, seed, **arguments)
+
+    assert first == second
+    assert first["request"]["idempotency_key"] == "selected-successor-exact"
+    assert first["seed_fingerprint"] != legacy["seed_fingerprint"]
+    assert first["compilation_fingerprint"] != legacy["compilation_fingerprint"]
+    assert "request.idempotency_key (trusted owner binding)" in first[
+        "field_provenance"
+    ]["seed_bound"]
+    with pytest.raises(SystemExit, match="trusted request idempotency key"):
+        compile_operation(
+            tmp_path,
+            seed,
+            compiled_at=AT,
+            trusted_request_idempotency_key="wild*",
+            skills_root=ROOT,
+        )
+
+
+def test_evaluate_and_publish_derives_decision_and_replays(tmp_path: Path) -> None:
+    compiled = compile_operation(
+        tmp_path, _seed(tmp_path), compiled_at=AT, skills_root=ROOT
+    )
+
+    first = evaluate_and_publish(
+        tmp_path,
+        compiled["request"],
+        compiled["evaluation_context"],
+        evaluated_at=AT,
+        skills_root=ROOT,
+    )
+    second = evaluate_and_publish(
+        tmp_path,
+        compiled["request"],
+        compiled["evaluation_context"],
+        evaluated_at=AT,
+        skills_root=ROOT,
+    )
+
+    assert first == second
+    assert first["decision"] == "approval_required"
+    assert hashlib.sha256((tmp_path / first["decision_ref"]).read_bytes()).hexdigest() == (
+        first["decision_sha256"]
+    )
+    assert len(list((tmp_path / ".task/authorization/decisions").glob("*.json"))) == 1
+
+
+def test_evaluate_and_publish_cannot_accept_caller_decision(tmp_path: Path) -> None:
+    compiled = compile_operation(
+        tmp_path, _seed(tmp_path), compiled_at=AT, skills_root=ROOT
+    )
+
+    assert "decision" not in inspect.signature(evaluate_and_publish).parameters
+    with pytest.raises(TypeError, match="decision"):
+        evaluate_and_publish(
+            tmp_path,
+            compiled["request"],
+            compiled["evaluation_context"],
+            evaluated_at=AT,
+            skills_root=ROOT,
+            **{"decision": {"decision": "allowed"}},
+        )
 
 
 def test_compiler_rejects_manifest_downgrades_and_stale_subject(tmp_path: Path) -> None:

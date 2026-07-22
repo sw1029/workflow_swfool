@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,7 @@ sys.path.insert(0, str(ROOT / "manage-agent-authority" / "scripts"))
 from manage_agent_authority import authority_receipt  # noqa: E402
 from manage_agent_authority import artifact_store as artifact_store_module  # noqa: E402
 from manage_agent_authority import lifecycle as lifecycle_module  # noqa: E402
+from manage_agent_authority import settlement as settlement_module  # noqa: E402
 from manage_agent_authority import authority_cli  # noqa: E402
 from manage_agent_authority.artifact_store import load_grant  # noqa: E402
 from manage_agent_authority.artifact_store import register_grant  # noqa: E402
@@ -28,6 +30,7 @@ from manage_agent_authority.canonical import write_immutable_json  # noqa: E402
 from manage_agent_authority.composition import create_composition  # noqa: E402
 from manage_agent_authority.contracts import validate_grant  # noqa: E402
 from manage_agent_authority.evaluator import evaluate  # noqa: E402
+from manage_agent_authority.execution_results import create_execution_result  # noqa: E402
 from manage_agent_authority.lifecycle import consume as _consume  # noqa: E402
 from manage_agent_authority.lifecycle import release  # noqa: E402
 from manage_agent_authority.reconciliation import reconcile_quarantine  # noqa: E402
@@ -35,14 +38,30 @@ from manage_agent_authority.reconciliation_evidence import (  # noqa: E402
     prepare_reconciliation_evidence,
 )
 from manage_agent_authority.source_recovery import prepare_source_recovery  # noqa: E402
+from manage_agent_authority.settlement import settle_owner_result  # noqa: E402
 from manage_agent_authority.source_approval import validate_source_approval  # noqa: E402
 from manage_agent_authority.lifecycle import reserve  # noqa: E402
 from manage_agent_authority.lifecycle import verify_reservation_with_recovery  # noqa: E402
 from manage_agent_authority.operations import load_operation  # noqa: E402
+from manage_agent_authority.owner_validators import (  # noqa: E402
+    invoke_registered_owner_validator,
+    publish_owner_validation_receipt,
+)
+from manage_agent_authority.owner_validation_io import (  # noqa: E402
+    MAX_REGISTERED_OWNER_RESULT_BYTES,
+)
 from manage_agent_authority.projection_recovery import MAX_INTENT_BYTES  # noqa: E402
 from manage_agent_authority.projection_recovery import recover_projection_intents  # noqa: E402
 from manage_agent_authority.workflow_status import resolve_operation  # noqa: E402
 from manage_agent_authority.workflow_status import status_snapshot  # noqa: E402
+from manage_agent_authority.verification_publication import (  # noqa: E402
+    verify_and_publish_precommit,
+)
+from manage_task_state_index import index as task_state_index  # noqa: E402
+from manage_task_state_index.state.scan_transition import (  # noqa: E402
+    apply_scan,
+    prepare_scan,
+)
 
 
 AT = "2026-07-17T10:00:00+09:00"
@@ -727,6 +746,45 @@ def test_single_use_reserve_consume_is_idempotent_and_cannot_double_spend(
     assert after["decision"] == "approval_required"
 
 
+def test_precommit_publication_matches_cli_and_replays(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    reserved = reserve_default_operation(tmp_path, idempotency_key="verify-reserve")
+    arguments = {
+        "verified_at": LATER,
+        "expected_version": 0,
+        "skills_root": ROOT,
+    }
+    first = verify_and_publish_precommit(
+        tmp_path,
+        reserved["reservation_ref"],
+        reserved["reservation_sha256"],
+        **arguments,
+    )
+    second = verify_and_publish_precommit(
+        tmp_path,
+        reserved["reservation_ref"],
+        reserved["reservation_sha256"],
+        **arguments,
+    )
+
+    assert first == second
+    assert first["stage"] == "pre_commit"
+    assert authority_cli.main(
+        [
+            "verify",
+            "--root", str(tmp_path),
+            "--at", LATER,
+            "--skills-root", str(ROOT),
+            "--reservation-ref", reserved["reservation_ref"],
+            "--reservation-sha256", reserved["reservation_sha256"],
+            "--expected-version", "0",
+            "--stage", "pre_commit",
+        ]
+    ) == 0
+    assert json.loads(capsys.readouterr().out) == first
+
+
 def test_consume_accepts_exact_mutable_subject_after_precommit(tmp_path: Path) -> None:
     workspace = setup_workspace(tmp_path)
     request = request_for(workspace)
@@ -1383,13 +1441,52 @@ def test_exhausted_exact_source_prepares_one_closed_recovery_approval(
     handoff = status_after["post_approval_handoff"]
     assert handoff == prepared["post_approval_handoff"]
     assert handoff == resolved_after["post_approval_handoff"]
-    assert handoff["commands"] == [
-        "snapshot-source",
-        "register-grant",
-        "evaluate",
-    ]
+    assert handoff["commands"] == ["materialize-approved-recovery"]
     assert handoff["continuation_request_sha256"] == recipe[
         "replacement_request_sha256"
+    ]
+
+    exact_recipe_binding = {
+        key: prepared["recovery_recipe"][key] for key in ("ref", "sha256")
+    }
+    user_decision_body = {
+        "schema_version": 1,
+        "artifact_kind": "authority_recovery_user_decision",
+        "decision": "approved",
+        "recovery_recipe": exact_recipe_binding,
+        "approval_projection": projection,
+        "decided_at": APPROVAL_AT,
+        "evidence_id": "explicit-user-decision-recovery-1",
+    }
+    user_decision_path = write(
+        tmp_path / ".task/authorization/approved-recovery-user-decision.json",
+        json.dumps(user_decision_body, indent=2, sort_keys=True) + "\n",
+    )
+    user_decision_binding = {
+        "ref": str(user_decision_path.relative_to(tmp_path)),
+        "sha256": sha256_file(user_decision_path),
+    }
+    assert (
+        authority_cli.main(
+            [
+                "materialize-approved-recovery",
+                "--root",
+                str(tmp_path),
+                "--recovery-recipe",
+                json.dumps(exact_recipe_binding),
+                "--user-decision",
+                json.dumps(user_decision_binding),
+                "--skills-root",
+                str(ROOT),
+            ]
+        )
+        == 0
+    )
+    materialized = json.loads(capsys.readouterr().out)
+    assert materialized["status"] == "materialized"
+    assert materialized["authority_status"] == "allowed"
+    assert materialized["decision"]["request_sha256"] == handoff[
+        "continuation_request_sha256"
     ]
 
     actual_source_body = {
@@ -1415,10 +1512,13 @@ def test_exhausted_exact_source_prepares_one_closed_recovery_approval(
         "evidence_id": "explicit-user-decision-recovery-1",
         "integrity_status": "verified",
     }
-    actual_source_path = write(
-        tmp_path / ".task/authorization/approved-recovery-source.json",
-        json.dumps(actual_source_body, indent=2, sort_keys=True) + "\n",
+    actual_source_path = (
+        tmp_path
+        / ".task/authorization/recovery_materializations"
+        / recipe["recovery_identity"]
+        / "source_approval.json"
     )
+    assert json.loads(actual_source_path.read_text(encoding="utf-8")) == actual_source_body
     assert (
         authority_cli.main(
             [
@@ -1697,7 +1797,9 @@ def test_status_rejects_symlinked_owned_directory_ancestor(tmp_path: Path) -> No
         status_snapshot(tmp_path, evaluated_at=LATER, skills_root=ROOT)
 
 
-def test_status_rehashes_bound_operation_manifest(tmp_path: Path) -> None:
+def test_status_reads_historical_decision_when_operation_manifest_disappears(
+    tmp_path: Path,
+) -> None:
     workspace = setup_workspace(tmp_path)
     request = request_for(workspace)
     context = context_for(workspace, request)
@@ -1713,8 +1815,17 @@ def test_status_rehashes_bound_operation_manifest(tmp_path: Path) -> None:
     manifest = skills_root / request["skill_id"] / "authority.operations.json"
     manifest.unlink()
 
-    with pytest.raises(SystemExit, match="operation manifest binding is stale"):
-        status_snapshot(tmp_path, evaluated_at=LATER, skills_root=skills_root)
+    status = status_snapshot(tmp_path, evaluated_at=LATER, skills_root=skills_root)
+
+    assert status["workflow_state"] == "idle"
+    assert status["pending_waits"] == []
+    assert status["historical_waits"][0]["decision"]["request_sha256"] == decision[
+        "request_sha256"
+    ]
+    assert status["historical_waits"][0]["current_blocker_codes"] == [
+        "operation_manifest_binding_stale",
+        "operation_identity_missing",
+    ]
 
 
 def test_exact_request_filter_ignores_only_unrelated_stale_manifest(
@@ -1737,8 +1848,18 @@ def test_exact_request_filter_ignores_only_unrelated_stale_manifest(
     persist_decision(tmp_path, current)
     assert unrelated["request_sha256"] != current["request_sha256"]
 
-    with pytest.raises(SystemExit, match="operation manifest binding is stale"):
-        status_snapshot(tmp_path, evaluated_at=LATER, skills_root=skills_root)
+    unfiltered = status_snapshot(
+        tmp_path, evaluated_at=LATER, skills_root=skills_root
+    )
+    unrelated_history = next(
+        item
+        for item in unfiltered["historical_waits"]
+        if item["decision"]["request_sha256"] == unrelated["request_sha256"]
+    )
+    assert unfiltered["workflow_state"] == "source_approval_ready_for_grant"
+    assert unrelated_history["current_blocker_codes"] == [
+        "operation_manifest_binding_stale"
+    ]
 
     filtered = status_snapshot(
         tmp_path,
@@ -1761,7 +1882,7 @@ def test_exact_request_filter_ignores_only_unrelated_stale_manifest(
     assert resolved["workflow_basis"]["request_sha256"] == current["request_sha256"]
 
 
-def test_exact_request_filter_rejects_same_request_stale_manifest(
+def test_exact_request_filter_classifies_same_request_stale_manifest(
     tmp_path: Path,
 ) -> None:
     workspace = setup_workspace(tmp_path)
@@ -1781,13 +1902,18 @@ def test_exact_request_filter_rejects_same_request_stale_manifest(
         manifest.read_text(encoding="utf-8") + "\n", encoding="utf-8"
     )
 
-    with pytest.raises(SystemExit, match="operation manifest binding is stale"):
-        status_snapshot(
-            tmp_path,
-            request_sha256=decision["request_sha256"],
-            evaluated_at=LATER,
-            skills_root=skills_root,
-        )
+    status = status_snapshot(
+        tmp_path,
+        request_sha256=decision["request_sha256"],
+        evaluated_at=LATER,
+        skills_root=skills_root,
+    )
+
+    assert status["workflow_state"] == "idle"
+    assert status["pending_waits"] == []
+    assert status["historical_waits"][0]["current_blocker_codes"] == [
+        "operation_manifest_binding_stale"
+    ]
 
 
 def test_exact_request_filter_rejects_unrelated_malformed_decision(
@@ -1970,7 +2096,9 @@ def test_exact_request_filter_preserves_current_lifecycle_precedence_and_basis(
         assert f"/{settlement_directory}/" in f"/{settlement['ref']}"
 
 
-def test_resolve_rejects_tampered_bound_operation_manifest(tmp_path: Path) -> None:
+def test_resolve_uses_fresh_evaluation_after_bound_manifest_changes(
+    tmp_path: Path,
+) -> None:
     workspace = setup_workspace(tmp_path)
     request = request_for(workspace)
     context = context_for(workspace, request)
@@ -1988,17 +2116,19 @@ def test_resolve_rejects_tampered_bound_operation_manifest(tmp_path: Path) -> No
         manifest.read_text(encoding="utf-8") + "\n", encoding="utf-8"
     )
 
-    with pytest.raises(SystemExit, match="operation manifest binding is stale"):
-        resolve_operation(
-            tmp_path,
-            request,
-            context,
-            evaluated_at=LATER,
-            skills_root=skills_root,
-        )
+    resolved = resolve_operation(
+        tmp_path,
+        request,
+        context,
+        evaluated_at=LATER,
+        skills_root=skills_root,
+    )
+
+    assert resolved["workflow_state"] == "source_approval_ready_for_grant"
+    assert resolved["next_action"]["code"] == "materialize_grant"
 
 
-def test_status_rejects_allowed_decision_when_operation_identity_disappears(
+def test_status_classifies_allowed_decision_when_operation_identity_disappears(
     tmp_path: Path,
 ) -> None:
     workspace = setup_workspace(tmp_path)
@@ -2025,8 +2155,16 @@ def test_status_rejects_allowed_decision_when_operation_identity_disappears(
     decision["decision_id"] = f"authd-{object_sha256(core)[:24]}"
     persist_decision(tmp_path, decision)
 
-    with pytest.raises(SystemExit, match="operation identity is no longer valid"):
-        status_snapshot(tmp_path, evaluated_at=LATER, skills_root=skills_root)
+    status = status_snapshot(tmp_path, evaluated_at=LATER, skills_root=skills_root)
+
+    assert status["workflow_state"] == "idle"
+    assert status["current_allowed_decisions"] == []
+    assert status["stale_allowed_decisions"][0]["request_sha256"] == decision[
+        "request_sha256"
+    ]
+    assert status["stale_allowed_decisions"][0]["current_blocker_codes"] == [
+        "operation_identity_missing"
+    ]
 
 
 def test_status_suppresses_superseded_wait_and_reports_full_lifecycle(
@@ -2206,6 +2344,51 @@ def test_status_does_not_resume_reserved_operation_after_expiry(tmp_path: Path) 
         "reservation_ref"
     ]
     assert status["workflow_basis"]["reservation_state"]["sha256"]
+
+
+def test_status_does_not_resume_reserved_operation_after_manifest_changes(
+    tmp_path: Path,
+) -> None:
+    workspace = setup_workspace(tmp_path)
+    request = request_for(workspace)
+    skills_root = isolated_skills_root(tmp_path)
+    register_grant(tmp_path, grant_for(workspace, request))
+    decision = evaluate(
+        tmp_path,
+        request,
+        context_for(workspace, request),
+        evaluated_at=AT,
+        skills_root=skills_root,
+    )
+    decision_ref, decision_sha = persist_decision(tmp_path, decision)
+    reserved = reserve(
+        tmp_path,
+        decision_ref,
+        decision_sha,
+        reserved_at=LATER,
+        idempotency_key="manifest-change-reserve",
+        skills_root=skills_root,
+    )
+    manifest = skills_root / request["skill_id"] / "authority.operations.json"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8") + "\n", encoding="utf-8"
+    )
+
+    status = status_snapshot(
+        tmp_path,
+        request_sha256=decision["request_sha256"],
+        evaluated_at=LATER,
+        skills_root=skills_root,
+    )
+
+    assert status["workflow_state"] == "reserved_authority_recovery"
+    assert status["resumable_reservations"] == []
+    assert status["blocked_reservations"][0]["reservation"]["ref"] == reserved[
+        "reservation_ref"
+    ]
+    assert status["blocked_reservations"][0]["authority_blocker_codes"] == [
+        "operation_manifest_binding_stale"
+    ]
 
 
 def test_status_does_not_resume_when_reserved_ancestor_is_suspended(
@@ -4362,3 +4545,1019 @@ def test_delegated_s2_can_transition_exact_s0_grant_but_not_unrelated(
             source_approval=delegated_source,
             transitioned_at=LATER,
         )
+
+
+def _reserved_task_index_operation(
+    root: Path,
+    *,
+    settle_inventory_before_reservation: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, str]]:
+    workspace = setup_workspace(root)
+    task_state_index.upsert_item(
+        root,
+        "task",
+        ".task/task.md",
+        "active",
+        item_id="task-index-active",
+    )
+    if settle_inventory_before_reservation:
+        initial = prepare_scan(root, at=AT, publish=True)
+        apply_scan(root, initial["compilation_binding"])
+    index_path = root / ".task/index.jsonl"
+    subject = {
+        "kind": "task_index",
+        "ref": ".task/index.jsonl",
+        "digest": sha256_file(index_path),
+        "revision": "task-index-revision-1",
+    }
+    source_body = json.loads(workspace["approval"].read_text(encoding="utf-8"))
+    source_body.update(
+        {
+            "approval_id": "task-index-approval",
+            "capabilities": ["authority.grant.issue", "task.index.mutate"],
+            "subjects": [subject],
+            "operations": [
+                {
+                    "skill_id": "manage-task-state-index",
+                    "skill_version": "2.0.0",
+                    "operation_id": "mutate_task_state_index",
+                    "operation_version": "1",
+                }
+            ],
+            "risk_ceiling": "R3",
+            "decision_classes": ["D2"],
+            "cardinalities": ["single_use"],
+            "max_uses": 1,
+            "grant_ids": ["task-index-grant"],
+            "lineage_ids": ["task-index-lineage"],
+        }
+    )
+    source_path = write(
+        root / ".task/authorization/task-index-source.json",
+        json.dumps(source_body, indent=2, sort_keys=True) + "\n",
+    )
+    workspace["source_binding"] = snapshot_file(
+        root, str(source_path.relative_to(root)), "source_approval"
+    )
+    request = request_for(
+        workspace,
+        skill_id="manage-task-state-index",
+        operation_id="mutate_task_state_index",
+        task_id=None,
+        subject=subject,
+        required_capabilities=["task.index.mutate"],
+        effect_class="append_or_project_task_lifecycle",
+        data_class="task_state_index",
+        risk_tier="R2",
+        decision_class="D2",
+        idempotency_key="task-index-request",
+    )
+    register_grant(
+        root,
+        grant_for(
+            workspace,
+            request,
+            grant_id="task-index-grant",
+            lineage_id="task-index-lineage",
+        ),
+    )
+    decision = evaluate(
+        root,
+        request,
+        context_for(workspace, request),
+        evaluated_at=AT,
+        skills_root=ROOT,
+    )
+    decision_ref, decision_sha = persist_decision(root, decision)
+    reserved = reserve(
+        root,
+        decision_ref,
+        decision_sha,
+        reserved_at=LATER,
+        idempotency_key="task-index-reserve",
+        skills_root=ROOT,
+    )
+    precommit = precommit_binding(
+        root,
+        reserved["reservation_ref"],
+        reserved["reservation_sha256"],
+        expected_version=0,
+    )
+    return workspace, request, reserved, precommit
+
+
+def _registered_state_changes(
+    root: Path,
+    reserved: dict[str, Any],
+    event_id: str,
+    *,
+    consume_units: bool,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    reservation = reserved["reservation"]
+    changes: list[dict[str, Any]] = []
+    versions: dict[str, int] = {}
+    for use in reservation["grant_uses"]:
+        state_file = (
+            root
+            / ".task/authorization/state/grants"
+            / f"{use['grant_id']}.json"
+        )
+        before = json.loads(state_file.read_text(encoding="utf-8"))
+        after = {
+            **before,
+            "reserved_uses": before["reserved_uses"] - use["units"],
+            "version": before["version"] + 1,
+            "last_event_id": event_id,
+        }
+        if consume_units:
+            remaining = before["remaining_uses"]
+            after.update(
+                {
+                    "remaining_uses": (
+                        remaining - use["units"] if remaining is not None else None
+                    ),
+                    "consumed_uses": before["consumed_uses"] + use["units"],
+                }
+            )
+            after["status"] = (
+                "exhausted" if after["remaining_uses"] == 0 else "active"
+            )
+        versions[use["grant_id"]] = after["version"]
+        changes.append(
+            {
+                "ref": state_file.relative_to(root).as_posix(),
+                "before": before,
+                "after": after,
+            }
+        )
+    reservation_file = (
+        root
+        / ".task/authorization/state/reservations"
+        / f"{reservation['reservation_id']}.json"
+    )
+    before_reservation = json.loads(
+        reservation_file.read_text(encoding="utf-8")
+    )
+    changes.append(
+        {
+            "ref": reservation_file.relative_to(root).as_posix(),
+            "before": before_reservation,
+            "after": {
+                **before_reservation,
+                "status": "consumed" if consume_units else "released",
+                "version": before_reservation["version"] + 1,
+                "last_event_id": event_id,
+            },
+        }
+    )
+    return changes, versions
+
+
+def _authority_projection_bytes(root: Path) -> dict[str, bytes]:
+    state_root = root / ".task/authorization/state"
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in state_root.rglob("*.json")
+    }
+
+
+def _historical_registered_v2_use(
+    root: Path,
+    reserved: dict[str, Any],
+    precommit: dict[str, str],
+    *,
+    settle_projection: bool,
+    forge_reservation_version: bool = False,
+) -> tuple[Path, dict[str, Any]]:
+    """Create the exact schema-v2 shape emitted before owner registry rollout."""
+
+    owner_path = write(
+        root / ".task/authorization/20260722-task-index-owner-result.json",
+        json.dumps({"status": "historical_owner_result"}, sort_keys=True) + "\n",
+    )
+    owner_binding = {
+        "ref": owner_path.relative_to(root).as_posix(),
+        "sha256": sha256_file(owner_path),
+    }
+    reservation_binding = {
+        "ref": reserved["reservation_ref"],
+        "sha256": reserved["reservation_sha256"],
+    }
+    decision = json.loads(
+        (root / reserved["reservation"]["decision"]["ref"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    _, execution_binding = create_execution_result(
+        root,
+        reserved["reservation"],
+        decision,
+        reservation_binding,
+        precommit,
+        owner_binding,
+        completed_at=LATER,
+        expected_subject_after_sha256=sha256_file(root / ".task/index.jsonl"),
+    )
+    key = "historical-registered-v2-use"
+    receipt_id = "authu-" + object_sha256(
+        {"reservation": reserved["reservation_sha256"], "key": key}
+    )[:24]
+    changes, versions = _registered_state_changes(
+        root, reserved, receipt_id, consume_units=True
+    )
+    if forge_reservation_version:
+        changes[-1]["after"] = {**changes[-1]["after"], "version": 2}
+    receipt = {
+        "schema_version": 2,
+        "artifact_kind": "authority_use_receipt",
+        "receipt_id": receipt_id,
+        "reservation": reservation_binding,
+        "execution_result": execution_binding,
+        "owner_execution_result": owner_binding,
+        "pre_commit_verification": precommit,
+        "consumed_at": parse_time(LATER, "consumed_at").isoformat(),
+        "grant_versions_after": versions,
+        "state_changes": changes,
+        "idempotency_key": key,
+    }
+    path = root / ".task/authorization/use_receipts" / f"{receipt_id}.json"
+    write_immutable_json(path, receipt, "historical registered schema-v2 use receipt")
+    if settle_projection:
+        lifecycle_module.apply_projection_changes(root, changes)
+    return path, receipt
+
+
+def _historical_registered_v2_release(
+    root: Path,
+    reserved: dict[str, Any],
+    *,
+    settle_projection: bool,
+) -> tuple[Path, dict[str, Any]]:
+    """Create the exact unknown-effect release shape used by the existing repository."""
+
+    evidence = write(
+        root / ".task/cycle/historical/packets/index_pre_validate.json",
+        json.dumps({"status": "legacy_unattested"}, sort_keys=True) + "\n",
+    )
+    evidence_binding = {
+        "ref": evidence.relative_to(root).as_posix(),
+        "sha256": sha256_file(evidence),
+    }
+    key = "historical-registered-v2-release"
+    receipt_id = "authx-" + object_sha256(
+        {"reservation": reserved["reservation_sha256"], "key": key}
+    )[:24]
+    state_path = (
+        root
+        / ".task/authorization/state/reservations"
+        / f"{reserved['reservation']['reservation_id']}.json"
+    )
+    before = json.loads(state_path.read_text(encoding="utf-8"))
+    changes = [
+        {
+            "ref": state_path.relative_to(root).as_posix(),
+            "before": before,
+            "after": {
+                **before,
+                "status": "quarantined_unknown_effect",
+                "version": before["version"] + 1,
+                "last_event_id": receipt_id,
+            },
+        }
+    ]
+    receipt = {
+        "schema_version": 2,
+        "artifact_kind": "authority_release_receipt",
+        "receipt_id": receipt_id,
+        "reservation": {
+            "ref": reserved["reservation_ref"],
+            "sha256": reserved["reservation_sha256"],
+        },
+        "no_effect_evidence": evidence_binding,
+        "effect_status": "unknown_effect",
+        "release_applied": False,
+        "released_at": parse_time(LATER, "released_at").isoformat(),
+        "idempotency_key": key,
+        "state_changes": changes,
+    }
+    path = root / ".task/authorization/release_receipts" / f"{receipt_id}.json"
+    write_immutable_json(
+        path, receipt, "historical registered schema-v2 release receipt"
+    )
+    if settle_projection:
+        lifecycle_module.apply_projection_changes(root, changes)
+    return path, receipt
+
+
+def test_status_reads_exact_settled_historical_registered_v2_use_without_rewrite(
+    tmp_path: Path,
+) -> None:
+    _workspace, request, reserved, precommit = _reserved_task_index_operation(tmp_path)
+    receipt_path, _ = _historical_registered_v2_use(
+        tmp_path, reserved, precommit, settle_projection=True
+    )
+    before = {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+
+    status = status_snapshot(
+        tmp_path,
+        request_sha256=object_sha256(request),
+        evaluated_at=LATER,
+        skills_root=ROOT,
+    )
+
+    after = {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    assert status["workflow_state"] == "already_consumed"
+    assert status["workflow_basis"]["settlement_receipt"]["ref"] == str(
+        receipt_path.relative_to(tmp_path)
+    )
+    assert recover_projection_intents(tmp_path, skills_root=ROOT) == []
+    assert after == before
+
+
+def test_historical_registered_v2_use_pending_or_forged_projection_fails_closed(
+    tmp_path: Path,
+) -> None:
+    _workspace, request, reserved, precommit = _reserved_task_index_operation(tmp_path)
+    _historical_registered_v2_use(
+        tmp_path, reserved, precommit, settle_projection=False
+    )
+    before = _authority_projection_bytes(tmp_path)
+
+    with pytest.raises(SystemExit, match="not already settled at its exact after-state"):
+        status_snapshot(
+            tmp_path,
+            request_sha256=object_sha256(request),
+            evaluated_at=LATER,
+            skills_root=ROOT,
+        )
+    with pytest.raises(SystemExit, match="not already settled at its exact after-state"):
+        recover_projection_intents(tmp_path, skills_root=ROOT)
+
+    assert _authority_projection_bytes(tmp_path) == before
+
+
+def test_historical_registered_v2_use_exact_forged_transition_fails_closed(
+    tmp_path: Path,
+) -> None:
+    _workspace, request, reserved, precommit = _reserved_task_index_operation(tmp_path)
+    _historical_registered_v2_use(
+        tmp_path,
+        reserved,
+        precommit,
+        settle_projection=True,
+        forge_reservation_version=True,
+    )
+    before = _authority_projection_bytes(tmp_path)
+
+    with pytest.raises(SystemExit, match="reservation transition is forged"):
+        status_snapshot(
+            tmp_path,
+            request_sha256=object_sha256(request),
+            evaluated_at=LATER,
+            skills_root=ROOT,
+        )
+
+    assert _authority_projection_bytes(tmp_path) == before
+
+
+def test_historical_registered_v2_release_is_read_only_and_pending_never_applies(
+    tmp_path: Path,
+) -> None:
+    _workspace, request, reserved, _precommit = _reserved_task_index_operation(tmp_path)
+    receipt_path, receipt = _historical_registered_v2_release(
+        tmp_path, reserved, settle_projection=True
+    )
+    before = {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    status = status_snapshot(
+        tmp_path,
+        request_sha256=object_sha256(request),
+        evaluated_at=LATER,
+        skills_root=ROOT,
+    )
+    assert any(
+        item["ref"] == receipt_path.relative_to(tmp_path).as_posix()
+        for item in status["release_receipts"]
+    )
+    assert status["workflow_state"] == "effect_reconciliation"
+    assert recover_projection_intents(tmp_path, skills_root=ROOT) == []
+    assert {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    } == before
+
+    pending_root = tmp_path / "pending"
+    _workspace, pending_request, pending_reserved, _ = _reserved_task_index_operation(
+        pending_root
+    )
+    _historical_registered_v2_release(
+        pending_root, pending_reserved, settle_projection=False
+    )
+    pending_before = _authority_projection_bytes(pending_root)
+    with pytest.raises(SystemExit, match="not already settled at its exact after-state"):
+        status_snapshot(
+            pending_root,
+            request_sha256=object_sha256(pending_request),
+            evaluated_at=LATER,
+            skills_root=ROOT,
+        )
+    with pytest.raises(SystemExit, match="not already settled at its exact after-state"):
+        recover_projection_intents(pending_root, skills_root=ROOT)
+    assert _authority_projection_bytes(pending_root) == pending_before
+    assert receipt["release_applied"] is False
+
+
+def test_registered_owner_settlement_accepts_append_only_descendants(
+    tmp_path: Path,
+) -> None:
+    _workspace, _request, reserved, precommit = _reserved_task_index_operation(
+        tmp_path
+    )
+    candidate = write(tmp_path / ".task/issues/index-owner.md", "# Owner issue\n")
+    prepared = prepare_scan(
+        tmp_path,
+        at=LATER,
+        focus={
+            "ref": str(candidate.relative_to(tmp_path)),
+            "sha256": sha256_file(candidate),
+        },
+        publish=True,
+    )
+    applied = apply_scan(tmp_path, prepared["compilation_binding"])
+    later = write(tmp_path / ".task/issues/later.md", "# Later issue\n")
+    task_state_index.upsert_item(
+        tmp_path,
+        "issue",
+        str(later.relative_to(tmp_path)),
+        "open",
+        item_id="issue-later-descendant",
+    )
+    settled = settle_owner_result(
+        tmp_path,
+        reserved["reservation_ref"],
+        reserved["reservation_sha256"],
+        applied["owner_result_binding"],
+        precommit,
+        settled_at=LATER,
+        expected_version=0,
+        idempotency_key="task-index-settle",
+        skills_root=ROOT,
+    )
+    assert settled["status"] == "consumed"
+    assert settled["owner_validation_receipt"]["phase"] == "historical"
+    assert settled["owner_validation_receipt"]["descendant_event_count"] == 0
+    typed_binding = settled["settlement"]["use_receipt"]["execution_result"]
+    typed = json.loads((tmp_path / typed_binding["ref"]).read_text(encoding="utf-8"))
+    assert typed["schema_version"] == 3
+    assert typed["owner_validation"] == settled["owner_validation"]
+
+
+def test_registered_owner_settlement_rejects_oversize_before_validator_or_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _workspace, _request, reserved, precommit = _reserved_task_index_operation(
+        tmp_path
+    )
+    owner_path = tmp_path / ".task/results/oversized-owner-result.bin"
+    owner_path.parent.mkdir(parents=True, exist_ok=True)
+    owner_path.write_bytes(b"x" * (MAX_REGISTERED_OWNER_RESULT_BYTES + 1))
+    owner_binding = {
+        "ref": owner_path.relative_to(tmp_path).as_posix(),
+        "sha256": sha256_file(owner_path),
+    }
+    before = {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for path in (tmp_path / ".task/authorization").rglob("*")
+        if path.is_file()
+    }
+    validator_calls = 0
+
+    def forbidden_validator(*_args: object, **_kwargs: object) -> dict[str, Any]:
+        nonlocal validator_calls
+        validator_calls += 1
+        raise AssertionError("oversized owner result must not invoke its validator")
+
+    monkeypatch.setattr(
+        settlement_module, "invoke_registered_owner_validator", forbidden_validator
+    )
+    with pytest.raises(SystemExit, match="safety limit"):
+        settle_owner_result(
+            tmp_path,
+            reserved["reservation_ref"],
+            reserved["reservation_sha256"],
+            owner_binding,
+            precommit,
+            settled_at=LATER,
+            expected_version=0,
+            idempotency_key="oversized-owner-result",
+            skills_root=ROOT,
+        )
+
+    after = {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for path in (tmp_path / ".task/authorization").rglob("*")
+        if path.is_file()
+    }
+    assert validator_calls == 0
+    assert after == before
+
+
+def test_registered_legacy_release_evidence_is_bounded_in_status_and_recovery(
+    tmp_path: Path,
+) -> None:
+    _workspace, request, reserved, _precommit = _reserved_task_index_operation(
+        tmp_path
+    )
+    receipt_path, receipt = _historical_registered_v2_release(
+        tmp_path, reserved, settle_projection=True
+    )
+    evidence_path = tmp_path / receipt["no_effect_evidence"]["ref"]
+    evidence_path.write_bytes(b"e" * (MAX_INTENT_BYTES + 1))
+    receipt["no_effect_evidence"]["sha256"] = sha256_file(evidence_path)
+    receipt_path.write_text(
+        json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    projection_before = _authority_projection_bytes(tmp_path)
+    receipt_before = receipt_path.read_bytes()
+
+    with pytest.raises(SystemExit, match="safety limit"):
+        status_snapshot(
+            tmp_path,
+            request_sha256=object_sha256(request),
+            evaluated_at=LATER,
+            skills_root=ROOT,
+        )
+    with pytest.raises(SystemExit, match="safety limit"):
+        recover_projection_intents(tmp_path, skills_root=ROOT)
+
+    assert _authority_projection_bytes(tmp_path) == projection_before
+    assert receipt_path.read_bytes() == receipt_before
+
+
+def test_recovery_rejects_manual_registered_schema_v3_use_chain_without_state_change(
+    tmp_path: Path,
+) -> None:
+    _workspace, request, reserved, precommit = _reserved_task_index_operation(
+        tmp_path
+    )
+    owner_path = write(
+        tmp_path / ".task/authorization/manual-owner-result.json", "{}\n"
+    )
+    owner_binding = {
+        "ref": owner_path.relative_to(tmp_path).as_posix(),
+        "sha256": sha256_file(owner_path),
+    }
+    reservation_binding = {
+        "ref": reserved["reservation_ref"],
+        "sha256": reserved["reservation_sha256"],
+    }
+    forged_validation = {
+        "schema_version": 1,
+        "artifact_kind": "owner_validation_receipt",
+        "validation_status": "valid",
+        "outcome": "confirmed_effect",
+        "operation": "mutate_task_state_index",
+        "owner_result": owner_binding,
+        "reservation": reservation_binding,
+        "pre_commit_verification": precommit,
+        "phase": "historical",
+        "subject": {
+            "kind": "task_index",
+            "ref": ".task/index.jsonl",
+            "before_sha256": request["subject"]["digest"],
+            "after_sha256": "b" * 64,
+        },
+        "event_batch": {
+            "plan_id": "forged-owner-plan",
+            "before_event_count": 0,
+            "event_count": 1,
+            "event_payload_sha256": "c" * 64,
+        },
+        "descendant_event_count": 0,
+        "validated_at": LATER,
+    }
+    forged_validation["receipt_sha256"] = object_sha256(forged_validation)
+    owner_validation = publish_owner_validation_receipt(
+        tmp_path, forged_validation
+    )
+    decision = json.loads(
+        (
+            tmp_path / reserved["reservation"]["decision"]["ref"]
+        ).read_text(encoding="utf-8")
+    )
+    _, execution_binding = create_execution_result(
+        tmp_path,
+        reserved["reservation"],
+        decision,
+        reservation_binding,
+        precommit,
+        owner_binding,
+        completed_at=LATER,
+        expected_subject_after_sha256=None,
+        owner_validation=owner_validation,
+    )
+    key = "manual-registered-use"
+    receipt_id = "authu-" + object_sha256(
+        {"reservation": reserved["reservation_sha256"], "key": key}
+    )[:24]
+    changes, versions = _registered_state_changes(
+        tmp_path, reserved, receipt_id, consume_units=True
+    )
+    receipt = {
+        "schema_version": 2,
+        "artifact_kind": "authority_use_receipt",
+        "receipt_id": receipt_id,
+        "reservation": reservation_binding,
+        "execution_result": execution_binding,
+        "owner_execution_result": owner_binding,
+        "pre_commit_verification": precommit,
+        "consumed_at": parse_time(LATER, "consumed_at").isoformat(),
+        "grant_versions_after": versions,
+        "state_changes": changes,
+        "idempotency_key": key,
+    }
+    write_immutable_json(
+        tmp_path / ".task/authorization/use_receipts" / f"{receipt_id}.json",
+        receipt,
+        "manual unsupported registered use receipt",
+    )
+    before = _authority_projection_bytes(tmp_path)
+
+    with pytest.raises(SystemExit, match="not reproducible by its fixed validator"):
+        recover_projection_intents(tmp_path, skills_root=ROOT)
+
+    assert _authority_projection_bytes(tmp_path) == before
+
+
+def test_recovery_rejects_manual_registered_release_chain_without_state_change(
+    tmp_path: Path,
+) -> None:
+    _workspace, request, reserved, precommit = _reserved_task_index_operation(
+        tmp_path
+    )
+    owner_result = write(
+        tmp_path / ".task/authorization/manual-release-owner.json", "{}\n"
+    )
+    owner_binding = {
+        "ref": owner_result.relative_to(tmp_path).as_posix(),
+        "sha256": sha256_file(owner_result),
+    }
+    reservation_binding = {
+        "ref": reserved["reservation_ref"],
+        "sha256": reserved["reservation_sha256"],
+    }
+    forged_validation = {
+        "schema_version": 1,
+        "artifact_kind": "owner_validation_receipt",
+        "validation_status": "valid",
+        "outcome": "confirmed_no_effect",
+        "operation": "mutate_task_state_index",
+        "owner_result": owner_binding,
+        "reservation": reservation_binding,
+        "pre_commit_verification": precommit,
+        "phase": "historical",
+        "subject": {
+            "kind": "task_index",
+            "ref": ".task/index.jsonl",
+            "before_sha256": request["subject"]["digest"],
+            "after_sha256": request["subject"]["digest"],
+        },
+        "event_batch": {
+            "plan_id": "forged-release-plan",
+            "before_event_count": 0,
+            "event_count": 0,
+            "event_payload_sha256": "d" * 64,
+        },
+        "descendant_event_count": 0,
+        "validated_at": LATER,
+    }
+    forged_validation["receipt_sha256"] = object_sha256(forged_validation)
+    evidence_binding = publish_owner_validation_receipt(
+        tmp_path, forged_validation
+    )
+    key = "manual-registered-release"
+    receipt_id = "authx-" + object_sha256(
+        {"reservation": reserved["reservation_sha256"], "key": key}
+    )[:24]
+    changes, _ = _registered_state_changes(
+        tmp_path, reserved, receipt_id, consume_units=False
+    )
+    receipt = {
+        "schema_version": 2,
+        "artifact_kind": "authority_release_receipt",
+        "receipt_id": receipt_id,
+        "reservation": reservation_binding,
+        "no_effect_evidence": evidence_binding,
+        "effect_status": "verified_no_effect",
+        "release_applied": True,
+        "released_at": parse_time(LATER, "released_at").isoformat(),
+        "idempotency_key": key,
+        "state_changes": changes,
+    }
+    write_immutable_json(
+        tmp_path / ".task/authorization/release_receipts" / f"{receipt_id}.json",
+        receipt,
+        "manual unsupported registered release receipt",
+    )
+    before = _authority_projection_bytes(tmp_path)
+
+    with pytest.raises(SystemExit, match="not reproducible by its fixed validator"):
+        recover_projection_intents(tmp_path, skills_root=ROOT)
+
+    assert _authority_projection_bytes(tmp_path) == before
+
+
+def test_registered_consume_settlement_recovers_crash_and_exact_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _workspace, _request, reserved, precommit = _reserved_task_index_operation(
+        tmp_path
+    )
+    candidate = write(tmp_path / ".task/issues/recovery-owner.md", "# Issue\n")
+    prepared = prepare_scan(
+        tmp_path,
+        at=LATER,
+        focus={
+            "ref": candidate.relative_to(tmp_path).as_posix(),
+            "sha256": sha256_file(candidate),
+        },
+        publish=True,
+    )
+    applied = apply_scan(tmp_path, prepared["compilation_binding"])
+    real_apply = lifecycle_module.apply_projection_changes
+
+    def crash(_root: Path, _changes: list[dict[str, Any]]) -> None:
+        raise RuntimeError("injected registered consume crash")
+
+    monkeypatch.setattr(
+        lifecycle_module, "apply_projection_changes", crash
+    )
+    with pytest.raises(RuntimeError, match="registered consume crash"):
+        settle_owner_result(
+            tmp_path,
+            reserved["reservation_ref"],
+            reserved["reservation_sha256"],
+            applied["owner_result_binding"],
+            precommit,
+            settled_at=LATER,
+            expected_version=0,
+            idempotency_key="registered-consume-crash",
+            skills_root=ROOT,
+        )
+    monkeypatch.setattr(
+        lifecycle_module, "apply_projection_changes", real_apply
+    )
+
+    recovered = recover_projection_intents(tmp_path, skills_root=ROOT)
+    assert any("use_receipts" in ref for ref in recovered)
+    assert load_grant(tmp_path, "task-index-grant")[2]["status"] == "exhausted"
+    replay = settle_owner_result(
+        tmp_path,
+        reserved["reservation_ref"],
+        reserved["reservation_sha256"],
+        applied["owner_result_binding"],
+        precommit,
+        settled_at=LATER,
+        expected_version=0,
+        idempotency_key="registered-consume-crash",
+        skills_root=ROOT,
+    )
+    assert replay["status"] == "consumed"
+    assert replay["owner_validation_receipt"]["phase"] == "historical"
+
+
+def test_registered_release_settlement_recovers_crash_and_exact_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _workspace, _request, reserved, precommit = _reserved_task_index_operation(
+        tmp_path, settle_inventory_before_reservation=True
+    )
+    prepared = prepare_scan(tmp_path, at=LATER, publish=True)
+    assert prepared["effect_mode"] == "no_effect"
+    applied = apply_scan(tmp_path, prepared["compilation_binding"])
+    real_apply = lifecycle_module.apply_projection_changes
+
+    def crash(_root: Path, _changes: list[dict[str, Any]]) -> None:
+        raise RuntimeError("injected registered release crash")
+
+    monkeypatch.setattr(
+        lifecycle_module, "apply_projection_changes", crash
+    )
+    with pytest.raises(RuntimeError, match="registered release crash"):
+        settle_owner_result(
+            tmp_path,
+            reserved["reservation_ref"],
+            reserved["reservation_sha256"],
+            applied["owner_result_binding"],
+            precommit,
+            settled_at=LATER,
+            expected_version=0,
+            idempotency_key="registered-release-crash",
+            skills_root=ROOT,
+        )
+    monkeypatch.setattr(
+        lifecycle_module, "apply_projection_changes", real_apply
+    )
+
+    recovered = recover_projection_intents(tmp_path, skills_root=ROOT)
+    assert any("release_receipts" in ref for ref in recovered)
+    assert load_grant(tmp_path, "task-index-grant")[2]["reserved_uses"] == 0
+    replay = settle_owner_result(
+        tmp_path,
+        reserved["reservation_ref"],
+        reserved["reservation_sha256"],
+        applied["owner_result_binding"],
+        precommit,
+        settled_at=LATER,
+        expected_version=0,
+        idempotency_key="registered-release-crash",
+        skills_root=ROOT,
+    )
+    assert replay["status"] == "released"
+    assert replay["owner_validation_receipt"]["phase"] == "historical"
+
+
+def test_registered_owner_operation_rejects_new_direct_v2_consume(
+    tmp_path: Path,
+) -> None:
+    _workspace, _request, reserved, precommit = _reserved_task_index_operation(
+        tmp_path
+    )
+    owner_path = write(
+        tmp_path / ".task/authorization/direct-v2-owner.json",
+        json.dumps({"status": "claimed"}, sort_keys=True) + "\n",
+    )
+
+    with pytest.raises(SystemExit, match="require authority settle"):
+        _consume(
+            tmp_path,
+            reserved["reservation_ref"],
+            reserved["reservation_sha256"],
+            {
+                "ref": str(owner_path.relative_to(tmp_path)),
+                "sha256": sha256_file(owner_path),
+            },
+            pre_commit_verification=precommit,
+            expected_subject_after_sha256=sha256_file(
+                tmp_path / ".task/index.jsonl"
+            ),
+            consumed_at=LATER,
+            expected_version=0,
+            idempotency_key="task-index-direct-v2-forbidden",
+            skills_root=ROOT,
+        )
+
+    assert load_grant(tmp_path, "task-index-grant")[2]["reserved_uses"] == 1
+
+
+def test_public_lifecycle_signatures_expose_no_registered_settlement_switches() -> None:
+    consume_parameters = inspect.signature(lifecycle_module.consume).parameters
+    release_parameters = inspect.signature(lifecycle_module.release).parameters
+    assert "owner_validation" not in consume_parameters
+    assert "_owner_settlement" not in release_parameters
+    assert not any(name.startswith("_owner") for name in consume_parameters)
+    assert not any(name.startswith("_owner") for name in release_parameters)
+
+
+@pytest.mark.parametrize("effect_status", ("not_started", "verified_no_effect"))
+def test_registered_owner_operation_rejects_direct_release_without_owner_validation(
+    tmp_path: Path, effect_status: str,
+) -> None:
+    _workspace, _request, reserved, _precommit = _reserved_task_index_operation(
+        tmp_path
+    )
+    evidence = write(
+        tmp_path / ".task/authorization/direct-release-evidence.json",
+        json.dumps({"claimed": "no effect"}, sort_keys=True) + "\n",
+    )
+    before = {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+
+    with pytest.raises(SystemExit, match="authority settle|owner validation receipt"):
+        release(
+            tmp_path,
+            reserved["reservation_ref"],
+            reserved["reservation_sha256"],
+            {"ref": str(evidence.relative_to(tmp_path)), "sha256": sha256_file(evidence)},
+            released_at=LATER,
+            expected_version=0,
+            idempotency_key=f"task-index-direct-release-{effect_status}",
+            effect_status=effect_status,
+            skills_root=ROOT,
+        )
+
+    after = {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+    assert load_grant(tmp_path, "task-index-grant")[2]["reserved_uses"] == 1
+
+
+def test_registered_owner_operation_rejects_direct_release_with_valid_owner_receipt(
+    tmp_path: Path,
+) -> None:
+    _workspace, request, reserved, precommit = _reserved_task_index_operation(
+        tmp_path, settle_inventory_before_reservation=True
+    )
+    prepared = prepare_scan(tmp_path, at=LATER, publish=True)
+    assert prepared["effect_mode"] == "no_effect"
+    applied = apply_scan(tmp_path, prepared["compilation_binding"])
+    reservation_binding = {
+        "ref": reserved["reservation_ref"],
+        "sha256": reserved["reservation_sha256"],
+    }
+    validation = invoke_registered_owner_validator(
+        tmp_path,
+        request,
+        applied["owner_result_binding"],
+        reservation_binding,
+        precommit,
+        phase="current",
+        skills_root=ROOT,
+    )
+    assert validation["outcome"] == "confirmed_no_effect"
+    validation_binding = publish_owner_validation_receipt(tmp_path, validation)
+    before = {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+
+    with pytest.raises(SystemExit, match="direct release is forbidden"):
+        release(
+            tmp_path,
+            reserved["reservation_ref"],
+            reserved["reservation_sha256"],
+            validation_binding,
+            released_at=LATER,
+            expected_version=0,
+            idempotency_key="task-index-valid-direct-release-forbidden",
+            effect_status="verified_no_effect",
+            skills_root=ROOT,
+        )
+
+    after = {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+    assert load_grant(tmp_path, "task-index-grant")[2]["reserved_uses"] == 1
+
+
+def test_registered_owner_settlement_quarantines_legacy_opaque_result(
+    tmp_path: Path,
+) -> None:
+    _workspace, request, reserved, precommit = _reserved_task_index_operation(tmp_path)
+    legacy_path = write(
+        tmp_path / ".task/authorization/legacy-task-index-owner.json",
+        json.dumps(
+            {
+                "schema_version": 1,
+                "artifact_kind": "task_state_index_scan_result",
+                "effect_status": "confirmed_effect",
+                "completed_at": LATER,
+                "subject": {
+                    "kind": "task_index",
+                    "ref": ".task/index.jsonl",
+                    "before_sha256": request["subject"]["digest"],
+                    "after_sha256": "f" * 64,
+                },
+            },
+            sort_keys=True,
+        )
+        + "\n",
+    )
+    settled = settle_owner_result(
+        tmp_path,
+        reserved["reservation_ref"],
+        reserved["reservation_sha256"],
+        {"ref": str(legacy_path.relative_to(tmp_path)), "sha256": sha256_file(legacy_path)},
+        precommit,
+        settled_at=LATER,
+        expected_version=0,
+        idempotency_key="task-index-legacy-settle",
+        skills_root=ROOT,
+    )
+    assert settled["status"] == "quarantined"
+    assert settled["outcome"] == "unknown_effect"
+    assert settled["owner_validation_receipt"]["validation_status"] == "legacy_opaque"
+    assert load_grant(tmp_path, "task-index-grant")[2]["reserved_uses"] == 1

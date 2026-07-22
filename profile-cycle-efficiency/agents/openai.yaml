@@ -1,4 +1,4 @@
 interface:
   display_name: "Profile Cycle Efficiency"
-  short_description: "Profile cycle cost and repeated work"
-  default_prompt: "Use $profile-cycle-efficiency to identify repeated micro-cycles, vacuous untried repairs, root-cause exhaustion, and validation inefficiency."
+  short_description: "Measure task-cycle workflow efficiency"
+  default_prompt: "Use $profile-cycle-efficiency to measure structural cycle cost, compiler I/O, trusted usage evidence, and repeated workflow overhead."

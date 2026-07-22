@@ -48,6 +48,32 @@ def _validate_operation_manifest(
         raise SystemExit("Authority decision operation identity is no longer valid.")
 
 
+def current_operation_manifest_blockers(
+    decision: dict[str, Any], skills_root: Path | None
+) -> list[str]:
+    """Classify current-manifest drift without invalidating historical evidence."""
+
+    request = decision.get("request")
+    if not isinstance(request, dict):
+        return ["operation_manifest_request_invalid"]
+    try:
+        operation, current_binding = load_operation(
+            request["skill_id"],
+            request["skill_version"],
+            request["operation_id"],
+            request["operation_version"],
+            skills_root=skills_root,
+        )
+    except (KeyError, SystemExit):
+        return ["operation_manifest_current_unreadable"]
+    blockers: list[str] = []
+    if decision.get("operation_manifest") != current_binding:
+        blockers.append("operation_manifest_binding_stale")
+    if decision.get("decision") in {"allowed", "approval_required"} and operation is None:
+        blockers.append("operation_identity_missing")
+    return blockers
+
+
 def validate_decision_artifact(
     root: Path,
     artifact: dict[str, Any],

@@ -150,7 +150,14 @@ def _base_context() -> dict:
 def _initialized_workspace(root: Path) -> str:
     (root / "task.md").write_text("# Task\n\nDo bounded work.\n", encoding="utf-8")
     cycle_id = "cycle-stage-test"
-    init_cycle(root, cycle_id, "task-stage", "stage compiler test")
+    init_cycle(
+        root,
+        cycle_id,
+        "task-stage",
+        "stage compiler test",
+        stage_compiler_protocol_version=1,
+        stage_preparation_schema_version=1,
+    )
     advance = advance_stage(root, cycle_id, apply=True, max_steps=2)
     assert advance["stop_reason"] == "awaiting_authority"
     assert read_events(root, cycle_id)[0]["step"] == "context"

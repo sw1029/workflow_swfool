@@ -13,6 +13,7 @@ from .constants import (
     STAGE_STATUS_NORMALIZATION,
     SUPPORTED_LEDGER_FORMAT_VERSIONS,
 )
+from .result_hydration import validate_compact_result_envelope
 from .support import normalize_list, validate_cycle_id, validate_event_id
 
 
@@ -79,13 +80,13 @@ def complete_event(cycle_id: str, event: dict[str, Any]) -> dict[str, Any]:
     if supplied_version is not None and (
         isinstance(supplied_version, bool)
         or not isinstance(supplied_version, int)
-        or supplied_version not in (0, LEDGER_FORMAT_VERSION)
+        or supplied_version not in SUPPORTED_LEDGER_FORMAT_VERSIONS
     ):
         raise ValueError(f"unsupported ledger format_version: {supplied_version}")
     created_at = str(event.get("created_at") or now_iso())
     step = str(event.get("step") or "unknown")
     raw_status = event.get("status")
-    event["format_version"] = LEDGER_FORMAT_VERSION
+    event["format_version"] = supplied_version or LEDGER_FORMAT_VERSION
     event["cycle_id"] = cycle_id
     event["created_at"] = created_at
     if event.get("event_id") is None:
@@ -108,7 +109,7 @@ def complete_event(cycle_id: str, event: dict[str, Any]) -> dict[str, Any]:
     event.setdefault("authority_policy_source", None)
     for field in MIN_FIELDS:
         event.setdefault(field, None)
-    return event
+    return validate_compact_result_envelope(event, cycle_id)
 
 
 def validate_event_envelope(
@@ -125,7 +126,7 @@ def validate_event_envelope(
     if supplied_version is not None and (
         isinstance(supplied_version, bool)
         or not isinstance(supplied_version, int)
-        or supplied_version not in (0, LEDGER_FORMAT_VERSION)
+        or supplied_version not in SUPPORTED_LEDGER_FORMAT_VERSIONS
     ):
         raise ValueError(f"unsupported ledger format_version: {supplied_version}")
     raw_status = event.get("status")
@@ -143,7 +144,7 @@ def validate_event_envelope(
         event["noncanonical_step"] = True
     if event.get("event_id") is not None:
         event["event_id"] = validate_event_id(event.get("event_id"))
-    return event
+    return validate_compact_result_envelope(event, cycle_id)
 
 
 def validate_stored_event(value: Any, cycle_id: str, line_no: int) -> dict[str, Any]:
@@ -159,4 +160,4 @@ def validate_stored_event(value: Any, cycle_id: str, line_no: int) -> dict[str, 
     if not str(value.get("status") or "").strip():
         raise ValueError(f"ledger line {line_no} lacks a non-empty status")
     validate_event_id(value.get("event_id"))
-    return value
+    return validate_compact_result_envelope(value, cycle_id)

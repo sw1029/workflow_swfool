@@ -17,7 +17,7 @@ Configure an optional Stop hook to pass its JSON object on stdin and invoke:
 ```bash
 SKILLS_ROOT="${CODEX_HOME:-$HOME/.codex}/skills"
 PYTHONPATH="$SKILLS_ROOT/audit-session-governance/scripts" \
-python3 -m audit_session_governance capture \
+python3 -P -m audit_session_governance capture \
   --root /absolute/path/to/repo --tool codex
 ```
 
@@ -46,7 +46,7 @@ any index removal as a separate, explicitly reviewed operation.
 
    ```bash
    PYTHONPATH="$SKILLS_ROOT/audit-session-governance/scripts" \
-   python3 -m audit_session_governance audit inspect \
+   python3 -P -m audit_session_governance audit inspect \
      --root /path/to/repo --source logs/codex/session.jsonl --tool codex
    ```
 
@@ -62,10 +62,10 @@ packet or fall back to raw transcript storage.
 
 ```bash
 PYTHONPATH="$SKILLS_ROOT/audit-session-governance/scripts" \
-python3 -m audit_session_governance audit validate \
+python3 -P -m audit_session_governance audit validate \
   --root /path/to/repo --packet .task/session_audit/audit-....json
 PYTHONPATH="$SKILLS_ROOT/audit-session-governance/scripts" \
-python3 -m audit_session_governance audit rebuild-index --root /path/to/repo
+python3 -P -m audit_session_governance audit rebuild-index --root /path/to/repo
 ```
 
 `rebuild-index` is the explicit/manual path. For unattended reconstruction, first
@@ -74,7 +74,7 @@ activation, save that body-free resolution inside the repository, then run:
 
 ```bash
 PYTHONPATH="$SKILLS_ROOT/audit-session-governance/scripts:$SKILLS_ROOT/orchestrate-task-cycle/scripts" \
-python3 -m audit_session_governance audit auto-rebuild-index \
+python3 -P -m audit_session_governance audit auto-rebuild-index \
   --root /path/to/repo --mode-resolution .task/mode-resolution.json
 ```
 

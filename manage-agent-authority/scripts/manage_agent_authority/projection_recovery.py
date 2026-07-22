@@ -25,7 +25,13 @@ StateGraph = dict[str, dict[bytes, bytes]]
 
 
 def _validate_intent(
-    root: Path, directory: str, artifact: dict[str, Any], path: Path
+    root: Path,
+    directory: str,
+    artifact: dict[str, Any],
+    path: Path,
+    *,
+    skills_root: Path | None,
+    allow_settled_registered_legacy: bool,
 ) -> list[dict[str, Any]]:
     expected_kind = INTENT_DIRECTORIES[directory]
     if artifact.get("artifact_kind") != expected_kind:
@@ -35,9 +41,21 @@ def _validate_intent(
     if directory == "reservations":
         return validate_reservation(root, artifact, path)[2]
     if directory == "use_receipts":
-        return validate_use_receipt(root, artifact, path)
+        return validate_use_receipt(
+            root,
+            artifact,
+            path,
+            skills_root=skills_root,
+            allow_settled_registered_legacy=allow_settled_registered_legacy,
+        )
     if directory == "release_receipts":
-        return validate_release_receipt(root, artifact, path)
+        return validate_release_receipt(
+            root,
+            artifact,
+            path,
+            skills_root=skills_root,
+            allow_settled_registered_legacy=allow_settled_registered_legacy,
+        )
     if directory == "reconciliation_receipts":
         return validate_reconciliation_receipt(root, artifact, path)
     return validate_transition(root, artifact, path)
@@ -114,7 +132,12 @@ def _intent_directory(root: Path, directory: str) -> Path | None:
     return resolved
 
 
-def _load_intents(root: Path) -> list[Intent]:
+def _load_intents(
+    root: Path,
+    *,
+    skills_root: Path | None,
+    allow_settled_registered_legacy: bool = False,
+) -> list[Intent]:
     root = root.resolve()
     intents: list[Intent] = []
     for directory in INTENT_DIRECTORIES:
@@ -127,7 +150,14 @@ def _load_intents(root: Path) -> list[Intent]:
             artifact, _ = safe_json(
                 root, artifact_path, f"authority recovery intent {artifact_path.name}"
             )
-            changes = _validate_intent(root, directory, artifact, artifact_path)
+            changes = _validate_intent(
+                root,
+                directory,
+                artifact,
+                artifact_path,
+                skills_root=skills_root,
+                allow_settled_registered_legacy=allow_settled_registered_legacy,
+            )
             intents.append((artifact_path, artifact, changes))
     return intents
 
@@ -197,21 +227,70 @@ def _changes_settled(
     return True
 
 
-def validated_settled_intent(root: Path, artifact_path: Path) -> dict[str, Any]:
+def validated_settled_intent(
+    root: Path,
+    artifact_path: Path,
+    *,
+    skills_root: Path | None = None,
+) -> dict[str, Any]:
     """Return a validated intent after each projection reached it or a descendant."""
+    root = root.resolve()
     target = artifact_path.resolve(strict=False)
-    for path, artifact in validated_settled_intents(root):
+    for path, artifact in _validated_settled_intents(
+        root,
+        skills_root=skills_root,
+        allow_settled_registered_legacy=True,
+    ):
         if path.resolve(strict=False) == target:
+            _validate_intent(
+                root,
+                path.parent.name,
+                artifact,
+                path,
+                skills_root=skills_root,
+                allow_settled_registered_legacy=False,
+            )
             return artifact
     raise SystemExit(
         "Authority intent replay artifact is not a validated owner intent."
     )
 
 
-def validated_settled_intents(root: Path) -> list[tuple[Path, dict[str, Any]]]:
+def validated_settled_intents(
+    root: Path, *, skills_root: Path | None = None
+) -> list[tuple[Path, dict[str, Any]]]:
     """Return all closed intents after proving their projections are settled."""
+    return _validated_settled_intents(
+        root,
+        skills_root=skills_root,
+        allow_settled_registered_legacy=False,
+    )
+
+
+def validated_inventory_intents(
+    root: Path, *, skills_root: Path | None = None
+) -> list[tuple[Path, dict[str, Any]]]:
+    """Read exact-settled historical registered schema-v2 receipts for status only."""
+
+    return _validated_settled_intents(
+        root,
+        skills_root=skills_root,
+        allow_settled_registered_legacy=True,
+    )
+
+
+def _validated_settled_intents(
+    root: Path,
+    *,
+    skills_root: Path | None,
+    allow_settled_registered_legacy: bool,
+) -> list[tuple[Path, dict[str, Any]]]:
     root = root.resolve()
-    intents = _load_intents(root)
+    intents = _load_intents(
+        root,
+        skills_root=skills_root,
+        allow_settled_registered_legacy=allow_settled_registered_legacy,
+    )
     graph = _state_graph(intents)
     settled: list[tuple[Path, dict[str, Any]]] = []
     for path, artifact, changes in intents:
@@ -223,10 +302,19 @@ def validated_settled_intents(root: Path) -> list[tuple[Path, dict[str, Any]]]:
     return settled
 
 
-def recover_projection_intents(root: Path) -> list[str]:
+def recover_projection_intents(
+    root: Path, *, skills_root: Path | None = None
+) -> list[str]:
     """Validate, then finish every immutable authority intent before a new action."""
     root = root.resolve()
-    intents = _load_intents(root)
+    intents = _load_intents(
+        root,
+        skills_root=skills_root,
+        # Historical registered schema-v2 receipts may be observed only when
+        # their projections already equal every exact after-state. The receipt
+        # validator rejects a before-state here, so recovery can never apply it.
+        allow_settled_registered_legacy=True,
+    )
     graph = _state_graph(intents)
     pending = list(intents)
     recovered: list[str] = []
@@ -273,6 +361,7 @@ __all__ = [
     "apply_projection_changes",
     "projection_change",
     "recover_projection_intents",
+    "validated_inventory_intents",
     "validated_settled_intent",
     "validated_settled_intents",
 ]

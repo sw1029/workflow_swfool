@@ -4,7 +4,11 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
-from .constants import LEDGER_FORMAT_VERSION, STAGE_COMPILER_PROTOCOL_VERSION
+from .constants import (
+    LEDGER_FORMAT_VERSION,
+    STAGE_COMPILER_PROTOCOL_VERSION,
+    STAGE_PREPARATION_SCHEMA_VERSION,
+)
 from .current_projection import stage_compiler_protocol_version as _protocol_version
 from .event_model import default_cycle_id, now_iso
 from .repository import AtomicTextWriter, read_all_cycle_events, read_events_unlocked, write_current_unlocked
@@ -105,17 +109,11 @@ def init_cycle(
     terminal_state: dict[str, Any] | None = None,
     allow_missing_task_for_bootstrap: bool = False,
     stage_compiler_protocol_version: int | None = None,
+    stage_preparation_schema_version: int | None = None,
     *,
     atomic_writer: AtomicTextWriter = atomic_write_text,
     append_event: EventAppender,
 ) -> dict[str, Any]:
-    requested_protocol = (
-        None
-        if stage_compiler_protocol_version is None
-        else _protocol_version(
-            {"stage_compiler_protocol_version": stage_compiler_protocol_version}
-        )
-    )
     terminal_reopen_result: dict[str, Any] | None = None
     if terminal_state:
         latch = _validate_terminal_state(root, terminal_state)
@@ -130,6 +128,37 @@ def init_cycle(
     directory = cycle_dir(root, cycle_id)
     (directory / "packets").mkdir(parents=True, exist_ok=True)
     metadata_path = initialization_path(root, cycle_id)
+    metadata_exists = metadata_path.is_file()
+    requested_protocol = (
+        None
+        if metadata_exists and stage_compiler_protocol_version is None
+        else _protocol_version(
+            {
+                "stage_compiler_protocol_version": (
+                    stage_compiler_protocol_version
+                    if stage_compiler_protocol_version is not None
+                    else STAGE_COMPILER_PROTOCOL_VERSION
+                )
+            }
+        )
+    )
+    requested_preparation = stage_preparation_schema_version
+    if not metadata_exists and requested_preparation is None:
+        requested_preparation = (
+            STAGE_PREPARATION_SCHEMA_VERSION if requested_protocol == 2 else 1
+        )
+    if requested_preparation is not None:
+        if isinstance(requested_preparation, bool) or requested_preparation not in {
+            1,
+            2,
+            STAGE_PREPARATION_SCHEMA_VERSION,
+        }:
+            raise ValueError("unsupported stage_preparation_schema_version")
+        effective_protocol = requested_protocol or 1
+        if effective_protocol == 1 and requested_preparation != 1:
+            raise ValueError("protocol v1 requires preparation schema v1")
+        if effective_protocol == 2 and requested_preparation not in {2, 3}:
+            raise ValueError("protocol v2 requires preparation schema v2 or v3")
     expected_reason = str(reason or "cycle ledger initialized")
     with ledger_lock(root, cycle_id, exclusive=True):
         existing_metadata = _load_existing_metadata(metadata_path)
@@ -142,6 +171,16 @@ def init_cycle(
                 or (
                     requested_protocol is not None
                     and _protocol_version(existing_metadata) != requested_protocol
+                )
+                or (
+                    requested_preparation is not None
+                    and existing_metadata.get(
+                        "stage_preparation_schema_version",
+                        2
+                        if existing_metadata.get("stage_compiler_protocol_version") == 2
+                        else 1,
+                    )
+                    != requested_preparation
                 )
             ):
                 raise ValueError(f"cycle `{cycle_id}` is already initialized with different task or reason")
@@ -160,6 +199,8 @@ def init_cycle(
             }
             if requested_protocol is not None:
                 metadata["stage_compiler_protocol_version"] = requested_protocol
+            if requested_preparation is not None:
+                metadata["stage_preparation_schema_version"] = requested_preparation
             atomic_writer(metadata_path, json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
             cycle_existing = False
         events = read_events_unlocked(root, cycle_id)

@@ -1,6 +1,6 @@
 # Legacy Agent-Log Migration
 
-Use `python3 -m record_agent_work_log migrate` only for a legacy or malformed `.agent_log`
+Use `python3 -P -m record_agent_work_log migrate` only for a legacy or malformed `.agent_log`
 store that the normal writer correctly refuses to extend. Do not relax the
 normal reader or hand-edit `index.jsonl`.
 
@@ -11,18 +11,18 @@ Run the commands in this order:
 ```bash
 RECORD_LOG_SCRIPTS="${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts"
 
-PYTHONPATH="$RECORD_LOG_SCRIPTS" python3 -m record_agent_work_log migrate inspect --root ROOT --json
-PYTHONPATH="$RECORD_LOG_SCRIPTS" python3 -m record_agent_work_log migrate plan --root ROOT \
+PYTHONPATH="$RECORD_LOG_SCRIPTS" python3 -P -m record_agent_work_log migrate inspect --root ROOT --json
+PYTHONPATH="$RECORD_LOG_SCRIPTS" python3 -P -m record_agent_work_log migrate plan --root ROOT \
   --expected-index-sha256 SHA --status-map STATUS-MAP.json --output PLAN.json
-PYTHONPATH="$RECORD_LOG_SCRIPTS" python3 -m record_agent_work_log migrate apply --root ROOT --plan PLAN.json \
+PYTHONPATH="$RECORD_LOG_SCRIPTS" python3 -P -m record_agent_work_log migrate apply --root ROOT --plan PLAN.json \
   --expected-plan-sha256 SHA --expected-index-sha256 SHA \
   --expected-inventory-sha256 SHA --dry-run
-PYTHONPATH="$RECORD_LOG_SCRIPTS" python3 -m record_agent_work_log migrate apply --root ROOT --plan PLAN.json \
+PYTHONPATH="$RECORD_LOG_SCRIPTS" python3 -P -m record_agent_work_log migrate apply --root ROOT --plan PLAN.json \
   --expected-plan-sha256 SHA --expected-index-sha256 SHA \
   --expected-inventory-sha256 SHA
-PYTHONPATH="$RECORD_LOG_SCRIPTS" python3 -m record_agent_work_log migrate validate --root ROOT \
+PYTHONPATH="$RECORD_LOG_SCRIPTS" python3 -P -m record_agent_work_log migrate validate --root ROOT \
   --receipt .agent_log/migrations/ID/receipt.json --require-appendable
-PYTHONPATH="$RECORD_LOG_SCRIPTS" python3 -m record_agent_work_log verify-migration --root ROOT \
+PYTHONPATH="$RECORD_LOG_SCRIPTS" python3 -P -m record_agent_work_log verify-migration --root ROOT \
   --receipt .agent_log/migrations/ID/receipt.json \
   --expected-status-map STATUS-MAP.json \
   --expected-recovery-status not_needed

@@ -100,9 +100,9 @@ task-doctor scope owner declares capability `task.scope.mutate` and operation
 identity `task-doctor:2.2.0:mutate_task_scope:1`.
 
 ```bash
-python3 -m task_doctor_workflow_lib compile-intent \
+python3 -P -m task_doctor_workflow_lib compile-intent \
   --root . --intent task-doctor-intent.json --at 2026-01-01T00:00:00Z
-python3 -m task_doctor_workflow_lib prepare-intent \
+python3 -P -m task_doctor_workflow_lib prepare-intent \
   --root . --intent task-doctor-intent.json --at 2026-01-01T00:00:00Z
 ```
 

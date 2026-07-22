@@ -109,7 +109,9 @@ def _verify_parent(path: Path, expected: tuple[tuple[int, int], ...]) -> None:
             os.close(descriptor)
 
 
-def _read_leaf(parent: int, name: str, label: str) -> bytes | None:
+def _read_leaf(
+    parent: int, name: str, label: str, *, max_bytes: int | None = None
+) -> bytes | None:
     flags = (
         os.O_RDONLY
         | getattr(os, "O_NOFOLLOW", 0)
@@ -125,12 +127,25 @@ def _read_leaf(parent: int, name: str, label: str) -> bytes | None:
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode):
             raise SystemExit(f"{label} must be a regular non-symlink file.")
+        if max_bytes is not None and (max_bytes < 1 or before.st_size > max_bytes):
+            raise SystemExit(f"{label} exceeds the {max_bytes}-byte safety limit.")
         chunks: list[bytes] = []
+        total = 0
         while True:
-            chunk = os.read(descriptor, 1024 * 1024)
+            read_size = 1024 * 1024
+            if max_bytes is not None:
+                read_size = min(read_size, max_bytes + 1 - total)
+                if read_size <= 0:
+                    raise SystemExit(
+                        f"{label} exceeds the {max_bytes}-byte safety limit."
+                    )
+            chunk = os.read(descriptor, read_size)
             if not chunk:
                 break
             chunks.append(chunk)
+            total += len(chunk)
+            if max_bytes is not None and total > max_bytes:
+                raise SystemExit(f"{label} exceeds the {max_bytes}-byte safety limit.")
         after = os.fstat(descriptor)
         try:
             path_after = os.stat(name, dir_fd=parent, follow_symlinks=False)
@@ -151,7 +166,13 @@ def _race_hook(stage: str, path: Path) -> None:
     _ = stage, path
 
 
-def read_regular(path: Path, *, required: bool = True, label: str = "artifact") -> bytes | None:
+def read_regular(
+    path: Path,
+    *,
+    required: bool = True,
+    label: str = "artifact",
+    max_bytes: int | None = None,
+) -> bytes | None:
     """Read exact bytes without following a replaced ancestor or leaf symlink."""
 
     with _parent_descriptor(path, create=False) as (target, parent, identities):
@@ -159,7 +180,7 @@ def read_regular(path: Path, *, required: bool = True, label: str = "artifact") 
             if required:
                 raise SystemExit(f"Required {label} is missing: {target}")
             return None
-        payload = _read_leaf(parent, target.name, label)
+        payload = _read_leaf(parent, target.name, label, max_bytes=max_bytes)
         _race_hook("after_read", target)
         _verify_parent(target, identities)
         if payload is None and required:

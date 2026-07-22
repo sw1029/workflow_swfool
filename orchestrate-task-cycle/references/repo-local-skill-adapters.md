@@ -40,7 +40,7 @@ During `repo_skill_adapter_scan`, inspect only compact metadata and contract bin
 Use the deterministic scanner when callable adapters are registered:
 
 ```bash
-python3 -m orchestrate_task_cycle repo-adapter scan \
+python3 -P -m orchestrate_task_cycle repo-adapter scan \
   --root . --cycle-id <cycle-id> --output <cycle-packet-path>
 ```
 
@@ -94,7 +94,7 @@ Prefer deterministic phase packets:
 python3 .codex/skills/<skill-name>/scripts/render_adapter_packet.py --phase <phase>
 ```
 
-Use a rendered packet only for the phase it names. If no renderer exists, assemble a compact manual packet from metadata and safe summaries.
+Use a rendered packet only for the phase it names. If no renderer exists, consume only the bounded metadata projection already validated and emitted by the generic scanner/handoff. Never reconstruct a packet in coordinator or model context; if the phase requires fields absent from that projection, mark the adapter packet unavailable or blocked until a deterministic renderer exists.
 
 An adapter may declare typed hook signatures, phase-scoped consumer probes, or a requested tracked mode-profile ID. For manifest v3, consume only a fresh handoff carrying the exact component registry, recursive runtime closure, hook/convention bindings, and adapter revision from the scan. The coordinator resolves a mode-profile request through the global registry and independent activation provenance. An ignored repo-local override may only disable capture, lower consumption/reaction authority, remove repairs, or add probes; adapter observations and packets are never activation sources.
 
@@ -116,7 +116,7 @@ Adapters may expose `code_convention_contract` as compact data. Keep project-spe
 Loopback and validation adapters may expose Part F hooks as compact data:
 
 - `quality_delta_policy(**context)`: return `{"keys": [<canonical metric ids>], "aliases": {<canonical id>: [<accepted source-field ids>]}}`. Only listed keys participate in G-COV/high-water updates. Missing or malformed policy leaves G-COV `not_evaluated`; it never activates repository-independent metric defaults.
-- `gt_constraint_policy(**context)`: optionally return `action_specs` plus a `generalization` object. The generalization object owns scope regexes, single-unit regexes, behavior field paths for selected/target counts, unit IDs, flags and streaks, and an optional reason/action ID. Pass the normalized result to `python3 -m orchestrate_task_cycle gt-conflict --policy-json`; missing policy disables domain-unit/generalization inference while generic provider/credential conflicts remain available.
+- `gt_constraint_policy(**context)`: optionally return `action_specs` plus a `generalization` object. The generalization object owns scope regexes, single-unit regexes, behavior field paths for selected/target counts, unit IDs, flags and streaks, and an optional reason/action ID. Pass the normalized result to `python3 -P -m orchestrate_task_cycle gt-conflict --policy-json`; missing policy disables domain-unit/generalization inference while generic provider/credential conflicts remain available.
 - `verifier_source_paths(gate, **context)`: map an abstract gate/verifier key to repository-owned verifier source paths. If the current change set touches a mapped verifier source, the affected pass is `pass_with_coupled_verifier` and is not consumable as a pass until a later non-coupled run or independent recalculation.
 - `evidence_provenance(metric, **context)`: label each metric or improved field as `independently_verified` or `producer_attested`. Missing per-field provenance is producer-attested when the hook is present; if the hook is absent, keep legacy accounting.
 - `residual_gap_policy(target, **context)`: provide abstract residual-gap comparison inputs such as ratio, threshold, and basis. Keep thresholds and metric definitions inside the adapter; generic workflow skills only consume `marginal_repair`, explicit descope, and next-rung hints.
@@ -171,7 +171,7 @@ If a repository also registers a loopback domain adapter, pass its declared path
 Resolve the registered adapter for each consumer before invocation:
 
 ```bash
-python3 -m orchestrate_task_cycle repo-adapter handoff \
+python3 -P -m orchestrate_task_cycle repo-adapter handoff \
   --root . --scan-json <scan-packet> \
   --phase loopback_audit --consumer-id audit-cycle-loopback
 ```
@@ -328,6 +328,6 @@ If adapter scan fails, record the invalid adapter path/status and continue witho
 
 If adapter validation fails, preserve the adapter files and logs, mark the adapter as not consumable for future routing, and derive a correction task or blocker.
 
-If adapter packet rendering fails, fall back to metadata-only manual packets when safe. Otherwise mark the adapter phase packet as blocked and keep downstream decisions conservative.
+If adapter packet rendering fails, reopen the scanner/handoff's validated bounded metadata projection when that projection alone satisfies the phase contract. Do not author a metadata-only replacement packet. When the projection is insufficient, mark the adapter phase packet blocked and keep downstream decisions conservative.
 
 If an adapter conflicts with `.agent_goal`, authority, active advice lifecycle, validation-set source-class rules, task-pack rules, or result-contract gates, ignore or reject the adapter packet for that phase and record the reason.

@@ -12,7 +12,7 @@
 
 ## Authority and scope
 
-Use `python3 -m manage_task_state_index migrate` only for an explicitly authorized legacy-ledger migration. Keep normal `init|scan|add|link|rebuild|audit` behavior strict. A plan is not authority to mutate: bind apply to the exact plan file SHA, source prefix SHA, mapping SHA, root identity, and caller-designated task and pack identities.
+Use `python3 -P -m manage_task_state_index migrate` only for an explicitly authorized legacy-ledger migration. Keep normal `init|scan|add|link|rebuild|audit` behavior strict. A plan is not authority to mutate: bind apply to the exact plan file SHA, source prefix SHA, mapping SHA, root identity, and caller-designated task and pack identities.
 
 Preserve the complete source `.task/index.jsonl` as a byte-identical prefix and immutable snapshot. Never normalize, delete, reorder, or edit a historical prefix line. Keep repository-specific event, status, and type tokens in the caller-owned mapping manifest; do not add them to the helper.
 
@@ -21,32 +21,32 @@ Preserve the complete source `.task/index.jsonl` as a byte-identical prefix and 
 ```bash
 TASK_STATE_SCRIPTS="${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts"
 
-PYTHONPATH="$TASK_STATE_SCRIPTS" python3 -m manage_task_state_index migrate --root ROOT inspect
+PYTHONPATH="$TASK_STATE_SCRIPTS" python3 -P -m manage_task_state_index migrate --root ROOT inspect
 
-PYTHONPATH="$TASK_STATE_SCRIPTS" python3 -m manage_task_state_index migrate --root ROOT migrate plan \
+PYTHONPATH="$TASK_STATE_SCRIPTS" python3 -P -m manage_task_state_index migrate --root ROOT migrate plan \
   --expected-index-sha256 SHA \
   --current-task-id ID --current-task-path task.md --current-task-sha256 SHA \
   --current-pack-id ID --current-pack-path PATH --current-pack-sha256 SHA \
   --mapping-manifest MAP.json --output-plan /tmp/PLAN.json
 
-PYTHONPATH="$TASK_STATE_SCRIPTS" python3 -m manage_task_state_index migrate --root ROOT migrate apply \
+PYTHONPATH="$TASK_STATE_SCRIPTS" python3 -P -m manage_task_state_index migrate --root ROOT migrate apply \
   --plan /tmp/PLAN.json --expected-plan-sha256 SHA \
   --expected-index-sha256 SHA [--dry-run]
 
-PYTHONPATH="$TASK_STATE_SCRIPTS" python3 -m manage_task_state_index migrate --root ROOT migrate validate \
+PYTHONPATH="$TASK_STATE_SCRIPTS" python3 -P -m manage_task_state_index migrate --root ROOT migrate validate \
   --receipt RECEIPT.json --require-current-projection-evaluated \
   --require-single-active-task --require-single-active-pack --require-appendable
 
-PYTHONPATH="$TASK_STATE_SCRIPTS" python3 -m manage_task_state_index migrate --root ROOT migrate recover \
+PYTHONPATH="$TASK_STATE_SCRIPTS" python3 -P -m manage_task_state_index migrate --root ROOT migrate recover \
   --transaction-id tsm-...
 
-PYTHONPATH="$TASK_STATE_SCRIPTS" python3 -m manage_task_state_index verify-migration \
+PYTHONPATH="$TASK_STATE_SCRIPTS" python3 -P -m manage_task_state_index verify-migration \
   --root ROOT \
   --receipt .task/migrations/tsm-.../receipt.json \
   --expected-mapping-manifest /caller-owned/exact-mapping.json \
   --expected-recovery-status not_required
 
-PYTHONPATH="$TASK_STATE_SCRIPTS" python3 -m manage_task_state_index verify-migration \
+PYTHONPATH="$TASK_STATE_SCRIPTS" python3 -P -m manage_task_state_index verify-migration \
   --root COPIED_FIXTURE_ROOT \
   --receipt .task/migrations/tsm-.../receipt.json \
   --expected-mapping-manifest /caller-owned/exact-mapping.json \

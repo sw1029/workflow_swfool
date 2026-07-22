@@ -13,6 +13,8 @@ def build_request(
     seed_core: dict[str, Any],
     classification: dict[str, Any],
     seed_fingerprint: str,
+    *,
+    trusted_request_idempotency_key: str | None = None,
 ) -> dict[str, Any]:
     scope = seed_core["scope"]
     return validate_request({
@@ -40,7 +42,11 @@ def build_request(
         "cardinality_requested": seed_core["cardinality_requested"],
         "use_budget_requested": seed_core["use_budget_requested"],
         "reservation_units": seed_core["reservation_units"],
-        "idempotency_key": f"request-{seed_fingerprint[:24]}",
+        "idempotency_key": (
+            trusted_request_idempotency_key
+            if trusted_request_idempotency_key is not None
+            else f"request-{seed_fingerprint[:24]}"
+        ),
         "context": seed_core["request_context"],
         "composition_receipt": seed_core["composition_receipt"],
     })

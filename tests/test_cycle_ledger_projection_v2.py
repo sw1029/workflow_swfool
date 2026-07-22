@@ -37,8 +37,11 @@ def test_legacy_cycle_preserves_full_current_stage_shape(tmp_path: Path) -> None
         cycle_id,
         "task-1",
         "legacy projection",
+        stage_compiler_protocol_version=1,
+        stage_preparation_schema_version=1,
     )
-    assert "stage_compiler_protocol_version" not in initialized["initialization"]
+    assert initialized["initialization"]["stage_compiler_protocol_version"] == 1
+    assert initialized["initialization"]["stage_preparation_schema_version"] == 1
 
     _append_context(tmp_path, cycle_id, sentinel="legacy-full-sentinel")
     stored = json.loads(_current_path(tmp_path, cycle_id).read_text(encoding="utf-8"))
@@ -196,6 +199,8 @@ def test_cli_defaults_new_cycles_to_v2_but_preserves_existing_v1(
         "cycle-cli-v1",
         "task-1",
         "cli v1",
+        stage_compiler_protocol_version=1,
+        stage_preparation_schema_version=1,
     )
     assert (
         cycle_ledger.main(
@@ -214,5 +219,6 @@ def test_cli_defaults_new_cycles_to_v2_but_preserves_existing_v1(
         == 0
     )
     replayed = json.loads(capsys.readouterr().out)
-    assert "stage_compiler_protocol_version" not in replayed["initialization"]
+    assert replayed["initialization"]["stage_compiler_protocol_version"] == 1
+    assert replayed["initialization"]["stage_preparation_schema_version"] == 1
     assert "projection_version" not in replayed["current_stage"]

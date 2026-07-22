@@ -212,17 +212,17 @@ def _post_approval_handoff(
     original_request_sha256: str, replacement: dict[str, Any]
 ) -> dict[str, Any]:
     return {
-        "handoff_kind": "existing_public_authority_commands",
+        "handoff_kind": "registered_recovery_materializer",
         "authority_status": "non_authoritative_until_actual_user_decision",
         "blocked_until": "exact_explicit_user_decision_evidence",
-        "commands": ["snapshot-source", "register-grant", "evaluate"],
+        "commands": ["materialize-approved-recovery"],
         "requirements": ["source_approval_requirements", "grant_requirements"],
         "original_request_sha256": original_request_sha256,
         "continuation_request_id": replacement["request_id"],
         "continuation_request_sha256": object_sha256(replacement),
         "continuation_rule": (
-            "after exact approval and artifact materialization, evaluate and poll "
-            "the replacement request digest instead of the exhausted original digest"
+            "after an exact external approval receipt, render and evaluate the "
+            "replacement request, then poll its digest instead of the exhausted original"
         ),
     }
 

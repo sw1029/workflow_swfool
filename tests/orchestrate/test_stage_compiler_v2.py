@@ -24,6 +24,7 @@ def _init_v2(root: Path) -> str:
         "task-stage-v2",
         "stage compiler v2 test",
         stage_compiler_protocol_version=2,
+        stage_preparation_schema_version=2,
     )
     output = advance_stage(root, cycle_id, apply=True)
     assert output["stop_reason"] == "awaiting_authority"

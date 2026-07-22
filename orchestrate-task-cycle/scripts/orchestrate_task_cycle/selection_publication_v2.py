@@ -9,7 +9,6 @@ from typing import Any
 
 from .selection_decision_receipt import validate_selection_decision_receipt
 from .selection_decision_store import (
-    canonical_bytes,
     normalize_binding,
     read_bound_bytes,
     read_bound_json,
@@ -28,7 +27,6 @@ from .selection_publication_external import (
     validate_external_settlement_assertion,
 )
 from .selection_publication_store import (
-    _canonical_json,
     _sha256_bytes,
     _sha256_file,
 )
@@ -226,7 +224,10 @@ def validate_owner_assertion(root: Path, assertion_value: Any) -> dict[str, Any]
 
 
 def _selected_source(
-    root: Path, source_binding_value: Any
+    root: Path,
+    source_binding_value: Any,
+    *,
+    expected_active_prepare: Any = None,
 ) -> tuple[dict[str, str], dict[str, Any]]:
     binding = normalize_binding(source_binding_value, "selection decision receipt")
     _, raw = read_bound_json(root, binding, "selection decision receipt")
@@ -235,7 +236,9 @@ def _selected_source(
             validate_selection_decision_receipt_v2,
         )
 
-        receipt = validate_selection_decision_receipt_v2(root, raw)
+        receipt = validate_selection_decision_receipt_v2(
+            root, raw, expected_active_prepare=expected_active_prepare
+        )
     else:
         trigger_binding = normalize_binding(
             raw.get("trigger_selection_tick"), "selection trigger tick"
@@ -246,6 +249,15 @@ def _selected_source(
         )
     if receipt.get("outcome") != "selected":
         raise ValueError("selection publication intent requires a selected decision")
+    return binding, receipt
+
+
+def validate_selected_source(root: Path, source_binding_value: Any) -> tuple[dict[str, str], dict[str, Any]]:
+    """Fully validate one selection receipt before any dependent artifact write."""
+
+    binding, receipt = _selected_source(root, source_binding_value)
+    if receipt.get("outcome") != "selected":
+        raise ValueError("selection publication requires a selected decision")
     return binding, receipt
 
 
@@ -482,4 +494,5 @@ __all__ = (
     "validate_external_pending_assertion",
     "validate_external_settlement_assertion",
     "validate_owner_assertion",
+    "validate_selected_source",
 )

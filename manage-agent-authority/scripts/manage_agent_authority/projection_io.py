@@ -32,21 +32,21 @@ def _stable_file_bytes(root: Path, path: Path, label: str, *, max_bytes: int) ->
     except ValueError as exc:
         raise SystemExit(f"{label} escapes the workspace.") from exc
     resolved = resolve_workspace_path(root, ref, label)
-    data = read_regular(resolved, label=label)
+    data = read_regular(resolved, label=label, max_bytes=max_bytes)
     assert data is not None
-    if len(data) > max_bytes:
-        raise SystemExit(f"{label} exceeds the {max_bytes}-byte safety limit.")
     return data
 
 
-def _stable_file_digest(root: Path, path: Path, label: str) -> str:
+def _stable_file_digest(
+    root: Path, path: Path, label: str, *, max_bytes: int | None = None
+) -> str:
     root = root.resolve()
     try:
         ref = path.relative_to(root).as_posix()
     except ValueError as exc:
         raise SystemExit(f"{label} escapes the workspace.") from exc
     resolved = resolve_workspace_path(root, ref, label)
-    data = read_regular(resolved, label=label)
+    data = read_regular(resolved, label=label, max_bytes=max_bytes)
     assert data is not None
     return hashlib.sha256(data).hexdigest()
 
@@ -89,13 +89,35 @@ def binding(value: Any, label: str) -> dict[str, str]:
 
 
 def verify_file_binding(
-    root: Path, value: Any, label: str
+    root: Path,
+    value: Any,
+    label: str,
+    *,
+    max_bytes: int | None = None,
 ) -> tuple[dict[str, str], Path]:
     normalized = binding(value, label)
     path = resolve_workspace_path(root, normalized["ref"], f"{label}.ref")
-    if _stable_file_digest(root, path, f"{label}.ref") != normalized["sha256"]:
+    if (
+        _stable_file_digest(
+            root, path, f"{label}.ref", max_bytes=max_bytes
+        )
+        != normalized["sha256"]
+    ):
         raise SystemExit(f"{label} digest does not match its bound artifact.")
     return normalized, path
+
+
+def read_bound_bytes(
+    root: Path, value: Any, label: str, *, max_bytes: int
+) -> tuple[dict[str, str], Path, bytes]:
+    """Acquire one exact bound artifact once under a pre-read byte limit."""
+
+    normalized = binding(value, label)
+    path = resolve_workspace_path(root, normalized["ref"], f"{label}.ref")
+    payload = _stable_file_bytes(root, path, f"{label}.ref", max_bytes=max_bytes)
+    if hashlib.sha256(payload).hexdigest() != normalized["sha256"]:
+        raise SystemExit(f"{label} digest does not match its bound artifact.")
+    return normalized, path, payload
 
 
 def expected_path(root: Path, path: Path, relative: Path, label: str) -> None:

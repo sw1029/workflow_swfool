@@ -30,23 +30,43 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", default=".")
     commands = parser.add_subparsers(dest="command", required=True)
-    prepare = commands.add_parser("prepare")
+    prepare = commands.add_parser(
+        "prepare", help="Replay/recover an existing legacy v1 plan; never create v1."
+    )
     prepare.add_argument("--plan", required=True)
-    apply = commands.add_parser("apply")
+    apply = commands.add_parser(
+        "apply", help="Apply/replay an existing legacy v1 recovery plan only."
+    )
     apply.add_argument("--plan", required=True)
-    reconcile = commands.add_parser("reconcile")
+    reconcile = commands.add_parser(
+        "reconcile", help="Reconcile an existing legacy v1 drift plan only."
+    )
     reconcile.add_argument("--plan", required=True)
-    recover = commands.add_parser("recover")
+    recover = commands.add_parser(
+        "recover", help="Resume the one exact pending publication transaction."
+    )
     recover.add_argument("--transaction-id")
-    prepare_intent = commands.add_parser("prepare-intent")
+    prepare_intent = commands.add_parser(
+        "prepare-intent",
+        help="Compile a canonical intent; normally called by selected-successor.",
+    )
     prepare_intent.add_argument("--intent", required=True)
-    apply_intent = commands.add_parser("apply-intent")
+    apply_intent = commands.add_parser(
+        "apply-intent",
+        help="Apply a canonical intent; selected-successor is the normal guarded route.",
+    )
     apply_intent.add_argument("--intent", required=True)
-    reconcile_current = commands.add_parser("reconcile-current")
+    reconcile_current = commands.add_parser(
+        "reconcile-current", help="Compile and apply current-state drift reconciliation."
+    )
     reconcile_current.add_argument("--source-ref", required=True)
     reconcile_current.add_argument("--source-sha256", required=True)
-    commands.add_parser("migrate-state")
-    status = commands.add_parser("status")
+    commands.add_parser(
+        "migrate-state", help="Validate and migrate legacy state to compact storage v4."
+    )
+    status = commands.add_parser(
+        "status", help="Read compact pending/head state without enumerating history."
+    )
     status.add_argument("--deep", action="store_true")
     args = parser.parse_args(list(argv) if argv is not None else None)
     root = Path(args.root)

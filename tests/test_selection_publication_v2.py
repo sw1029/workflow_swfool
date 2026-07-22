@@ -306,7 +306,7 @@ def test_reconciliation_uses_drifted_head_as_before_digest(
     assert publication_status(tmp_path)["current_head"]["status"] == "current"
 
 
-def test_exact_replay_repairs_missing_compact_state(
+def test_exact_replay_requires_explicit_missing_state_migration(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     receipt, _ = _selected_inputs(tmp_path, capsys)
@@ -323,14 +323,19 @@ def test_exact_replay_repairs_missing_compact_state(
     state = tmp_path / ".task/selection_publication/state.json"
     state.unlink()
 
+    with pytest.raises(ValueError, match="migrate-state explicitly"):
+        prepare_publication_intent(tmp_path, intent)
+    migrate_publication_state(tmp_path)
     replay = prepare_publication_intent(tmp_path, intent)
 
     assert replay["transaction_id"] == prepared["transaction_id"]
     assert state.is_file()
     publish_prepared(tmp_path, prepared["transaction_id"])
     state.unlink()
+    assert publication_status(tmp_path)["status"] == "migration_required"
+    migrate_publication_state(tmp_path)
     replay_receipt = publish_prepared(tmp_path, prepared["transaction_id"])
-    assert replay_receipt["compact_state_repaired"] is True
+    assert replay_receipt["mutation_performed"] is False
     assert state.is_file()
 
 
@@ -357,7 +362,7 @@ def test_v2_blob_tamper_fails_before_task_alias_write(
     assert "task-old" in (tmp_path / "task.md").read_text()
 
 
-def test_v2_recover_and_compact_status_do_not_decode_prepare(
+def test_v2_compact_status_reopens_only_exact_head_contracts(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
@@ -376,12 +381,24 @@ def test_v2_recover_and_compact_status_do_not_decode_prepare(
     recovered = recover_publications(tmp_path, prepared["transaction_id"])
     assert recovered["remaining_pending_transaction_ids"] == []
 
-    def blocked_prepare(*_args: object, **_kwargs: object) -> object:
-        raise AssertionError("compact status reopened a prepare")
+    original = publication._load_prepare
+    opened: list[str] = []
 
-    monkeypatch.setattr(publication, "_load_prepare", blocked_prepare)
+    def tracked_prepare(root: Path, transaction_id: str) -> object:
+        opened.append(transaction_id)
+        return original(root, transaction_id)
+
+    monkeypatch.setattr(publication, "_load_prepare", tracked_prepare)
+    monkeypatch.setattr(
+        publication,
+        "_transactions_root",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("compact status enumerated history")
+        ),
+    )
     assert publication_status(tmp_path)["current_head"]["status"] == "current"
-    with pytest.raises(AssertionError, match="reopened a prepare"):
+    assert opened == [prepared["transaction_id"]]
+    with pytest.raises(AssertionError, match="enumerated history"):
         publication_status(tmp_path, deep=True)
 
 

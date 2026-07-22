@@ -84,14 +84,41 @@ def _apply_external_settlement_gate(
 
 
 def publication_status(root: Path, *, deep: bool = False) -> dict[str, Any]:
-    from .selection_publication import _committed_receipts, pending_transaction_ids
+    from .selection_publication import (
+        _committed_receipts,
+        _deep_pending_transaction_ids,
+    )
 
     root = root.expanduser().resolve(strict=True)
     if not deep:
-        state = load_state(root)
+        try:
+            state = load_state(root)
+        except ValueError as exc:
+            if "migration required" not in str(exc):
+                raise
+            state = None
         if state is not None:
             return _apply_external_settlement_gate(root, status_from_state(root, state))
-    pending = pending_transaction_ids(root)
+        if (root / ".task/selection_publication").exists():
+            return {
+                "status": "migration_required",
+                "pending_transaction_ids": [],
+                "selection_journal_initialized": False,
+                "selection_consumption_allowed": False,
+                "selection_consumption_reason": "explicit_selection_state_migration_required",
+                "current_head": {
+                    "status": "unknown_until_migrated",
+                    "head_transaction_id": None,
+                    "head_count": 0,
+                    "lineage_mode": "legacy_unscanned",
+                },
+                "mutation_performed": False,
+            }
+        return status_from_state(
+            root,
+            {"head": None, "active_transaction": None},
+        )
+    pending = _deep_pending_transaction_ids(root)
     head = current_head_status(
         _committed_receipts(root), _sha256_file(root / "task.md")
     )

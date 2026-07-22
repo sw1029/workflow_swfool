@@ -5,6 +5,7 @@
 - [JSONL event fields](#jsonl-event-fields)
 - [Stable path and replacement contract](#stable-path-and-replacement-contract)
 - [Durability contract](#durability-contract)
+- [Compiler-first scan and owner validation](#compiler-first-scan-and-owner-validation)
 - [Immutable transition plan contract](#immutable-transition-plan-contract)
 - [Prospective selected-successor settlement](#prospective-selected-successor-settlement)
 - [Link relationships](#link-relationships)
@@ -94,6 +95,27 @@ Before a mutating scan appends its first event, complete the same read-only plan
 
 A committed legacy migration is the sole exception to ordinary whole-file current-row parsing. It preserves the original bytes at offset zero, then appends correction, seal, and receipt-anchor events. Before allowing any exact prefix quarantine, run the two-pass receipt graph validation in [legacy-migration.md](legacy-migration.md), including the hash-bound final journal, immutable completion marker, and quarantine-to-correction bindings. A missing or invalid receipt graph retains ordinary fail-closed mutation behavior.
 
+### Compiler-first scan and owner validation
+
+New governed scans use `prepare-scan` followed by `apply-scan`. Preparation inventories each standard artifact exactly once, fixes one timestamp, derives stable IDs and expanded event rows, and publishes immutable schema-v1 `task_state_index_scan_compilation` at `.task/scan_compilations/<scan-id>.json`. It records:
+
+- the exact ledger and Markdown prestate bindings;
+- an inventory fingerprint plus bounded source bindings;
+- `logical_update_count` independently from `event_count`;
+- the closed transition request and its immutable plan binding;
+- snapshot materializations and optional exact `focus_results`;
+- `effect_mode: event_batch|projection_repair|no_effect`.
+
+Preparation with `--dry-run` creates no directory, lock, snapshot, plan, or render. Published preparation is reversible metadata and is not mutation authority. `apply-scan` reopens the compilation by raw-file hash, repeats the inventory fingerprint and ledger CAS checks, materializes exact snapshots idempotently, and delegates an event batch to the ordinary transition-plan apply path. Thus one logical update may expand to several retirement/link/upsert rows, but the owner appends the complete event list in one ledger replacement and renders once. Projection-only repair appends no row; no-effect changes neither canonical projection.
+
+The canonical owner result is schema-v2 `task_state_index_scan_result` at `.task/scan_receipts/<scan-id>.json`. It includes `logical_update_count`, exact `event_batch {plan_id,before_event_count,event_count,event_payload_sha256}`, compilation/plan/transition-receipt bindings, subject and projection before/after digests, focused results, and a zero-change post-check. Artifact bodies are never in the compilation result, authority packet, or owner receipt.
+
+For `projection_repair`, the published compilation is the immutable root intent. Apply additionally publishes `.task/scan_projection_intents/<scan-id>.json` before the first Markdown effect. While holding the task-index ledger lock, the owner reopens the exact compilation boundary, renders its prefix state with `created_at`, verifies the exact repaired SHA, and publishes `.task/scan_projection_receipts/<scan-id>.json`; the owner result binds that receipt in `transition_receipt`. If execution stops after the Markdown replace, a retry accepts exact-after only when the intent already exists and the ledger is still the compilation boundary, then completes the repair receipt and scan result without another replace. With later legal descendants, validation reconstructs the original prefix bytes and reopens the intent/receipt chain. A result-authored after digest, a current descendant render, or a receipt without its exact pre-effect intent cannot establish the historical repair.
+
+`validate-owner-result` emits a deterministic schema-v1 `owner_validation_receipt`. Its `receipt_sha256` is the SHA-256 of compact canonical JSON excluding only that digest field, and `validated_at` comes from the immutable owner artifact rather than wall-clock time. For canonical effects it reopens the plan and receipt, proves the exact contiguous batch with the plan's `before_size`/prefix digest, accepts only a suffix that passes the shared event-batch validator, and checks `.task/index.md` against the current full ledger. The receipt reports `confirmed_effect`, `confirmed_no_effect`, or `unknown_effect`; schema-v1 ad hoc scan output is `legacy_opaque` plus `unknown_effect`.
+
+Current and historical validation differ only at mutable-owner boundaries. `current` requires a selected-successor `task.md` to retain the prospective source digest. `historical` permits a later selected successor while preserving the original plan/receipt/batch and a valid descendant suffix. Neither phase compares the current whole ledger or Markdown digest to a historical plan-after digest.
+
 ### Immutable transition plan contract
 
 `compile-transition` accepts a closed schema-v1 lifecycle intent containing exactly `schema_version`, `expected_index_revision`, and ordered `actions`. Each action uses `action=set_lifecycle` and supplies `artifact_ref`, `artifact_type`, `identity=auto|current|new`, `status`, plus optional `note` and `relationships`. Each relationship contains `rel`, `target_ref`, and optional `target_type` / `target_identity=auto|current|new`. `expected_index_revision` is `current`, null for an absent ledger, or the exact lowercase SHA-256 observed by the caller. The compiler reopens regular workspace files, resolves current identities from the ledger, derives new stable IDs and content hashes, resolves relationship targets exactly, and emits the existing transition-request schema. The compilation is read-only, content-bound, and non-authoritative. It cannot choose task meaning or apply the index mutation. Exact replay with the same explicit time is byte-stable; index or artifact drift requires recompilation.
@@ -170,8 +192,9 @@ ahead of publication or by manufacturing an apply receipt.
 
 The settled receipt sets `selection_consumption_allowed: true`. The pending receipt and
 committed publication without settlement keep that value false. External settlement is
-a bound-lifecycle finalization of the already authorized exact task-state/publication
-subject, not a second authority source.
+the third independently grant-authorized effect in the selected-successor all-three
+gate. It must bind the exact task-state plan and committed publication; neither of the
+other grants nor a lifecycle artifact can substitute for it or widen its subject.
 
 Relationship object:
 
@@ -235,7 +258,7 @@ Use these relationship names consistently:
 
 ## Global ID Audit
 
-Use `PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts:${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts" python3 -m manage_task_state_index index --root . audit` for deterministic checks before completion, deletion, miss resolution, or `task.md` replacement. The audit checks:
+Use `PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scripts:${CODEX_HOME:-$HOME/.codex}/skills/record-agent-work-log/scripts" python3 -P -m manage_task_state_index index --root . audit` for deterministic checks before completion, deletion, miss resolution, or `task.md` replacement. The audit checks:
 
 - ID prefix/type mismatches,
 - missing paths for non-deleted artifacts,

@@ -319,9 +319,10 @@ def compile_operation(
     seed: dict[str, Any],
     *,
     compiled_at: str,
+    trusted_request_idempotency_key: str | None = None,
     skills_root: Path | None = None,
 ) -> dict[str, Any]:
-    """Return one deterministic, validated, non-authoritative compilation."""
+    """Compile inputs; only trusted owner adapters may supply the exact override."""
 
     root = root.resolve()
     seed = _closed(copy.deepcopy(seed), SEED_KEYS, "operation seed")
@@ -340,6 +341,9 @@ def compile_operation(
         "operation seed",
     )
     at = normalized_time(compiled_at, "compiled_at")
+    trusted_key = None if trusted_request_idempotency_key is None else _exact_id(
+        trusted_request_idempotency_key, "trusted request idempotency key"
+    )
     selected_skills_root = (skills_root or default_skills_root()).resolve()
     manifest, operation, manifest_binding = _select_manifest(seed, selected_skills_root)
     subject_seed = _closed(seed["subject"], SUBJECT_SEED_KEYS, "subject")
@@ -383,11 +387,12 @@ def compile_operation(
         "use_budget_requested": seed.get("use_budget_requested", 1),
         "reservation_units": seed.get("reservation_units", 1),
         "composition_receipt": seed.get("composition_receipt"),
+        **({"trusted_request_idempotency_key": trusted_key} if trusted_key else {}),
     }
     seed_fingerprint = object_sha256(seed_core)
-    request = build_request(
-        manifest, operation, seed_core, classification, seed_fingerprint
-    )
+    request = build_request(manifest, operation, seed_core, classification,
+                            seed_fingerprint,
+                            trusted_request_idempotency_key=trusted_key)
     context = validate_evaluation_context(root, context)
     body = {
         "schema_version": 1,
@@ -424,6 +429,7 @@ def compile_operation(
                 "scope",
                 "independent decision axes",
                 "session and goal ceilings",
+                *(["request.idempotency_key (trusted owner binding)"] if trusted_key else []),
             ],
             "asserted_untrusted": [
                 "session_ceiling",

@@ -17,6 +17,21 @@
       "subject_kinds": ["authority_recovery_recipe"]
     },
     {
+      "authority_applicability": "required",
+      "authorization_mechanism": "typed_source_approval",
+      "data_classes": ["authority_recovery_recipe", "authority_grant"],
+      "decision_class": "D1",
+      "effect_classes": ["materialize_approved_recovery_authority"],
+      "mutation_class": "local_mutation",
+      "operation_id": "materialize_approved_source_authority_recovery",
+      "operation_version": "1",
+      "required_capabilities": ["authority.recovery.materialize", "authority.grant.issue"],
+      "reversibility": "conditionally_reversible",
+      "risk_floor": "R3",
+      "source_rank_floor": "S3",
+      "subject_kinds": ["authority_recovery_recipe"]
+    },
+    {
       "authority_applicability": "none",
       "authorization_mechanism": "none",
       "data_classes": ["authority_metadata"],

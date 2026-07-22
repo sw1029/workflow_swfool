@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 from typing import Any, Iterable
+
+from .git_worktree_identity import (
+    bind_git_worktree_identity,
+    legacy_git_changed_paths,
+)
 
 
 MAX_ESSENTIAL_ITEMS = 5_000
@@ -228,25 +234,6 @@ def _advice_projection(context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _git_paths(context: dict[str, Any]) -> list[str]:
-    git = context.get("git") if isinstance(context.get("git"), dict) else {}
-    paths: set[str] = set()
-    for line in git.get("diff_name_status") or []:
-        parts = str(line).split("\t")
-        paths.update(part for part in parts[1:] if part)
-    paths.update(str(item) for item in git.get("untracked") or [] if str(item))
-    for line in git.get("status_short_branch") or []:
-        text = str(line)
-        if text.startswith("## "):
-            continue
-        candidate = text[3:].strip() if len(text) > 3 else ""
-        if " -> " in candidate:
-            candidate = candidate.rsplit(" -> ", 1)[1]
-        if candidate:
-            paths.add(candidate)
-    return sorted(paths)
-
-
 def _diagnostic_bindings(value: Any) -> list[dict[str, Any]]:
     bindings: dict[tuple[str, str | None], dict[str, Any]] = {}
     stack = [value]
@@ -341,6 +328,9 @@ def project_model_context(
     context: dict[str, Any],
     *,
     max_paths: int = 40,
+    worktree_root: Path | None = None,
+    collect_git_worktree_identity: bool = True,
+    require_exact_git_worktree: bool = False,
 ) -> dict[str, Any]:
     """Return a bounded view without changing the legacy full context."""
 
@@ -361,7 +351,23 @@ def project_model_context(
             )
         }
     )
-    git_paths = _git_paths(context)
+    effective_root = worktree_root
+    if effective_root is None:
+        workspace = context.get("workspace")
+        if isinstance(workspace, str) and workspace:
+            candidate = Path(workspace)
+            if candidate.is_dir():
+                effective_root = candidate
+    git = context.get("git") if isinstance(context.get("git"), dict) else None
+    git_paths = legacy_git_changed_paths(git)
+    worktree_identity = None
+    if collect_git_worktree_identity:
+        git_paths, worktree_identity = bind_git_worktree_identity(
+            git,
+            effective_root,
+            max_paths,
+            git_paths,
+        )
     cycle_projection = _cycle_projection(context)
     goal_projection = _goal_projection(context)
     task_projection = _task_projection(context)
@@ -391,6 +397,11 @@ def project_model_context(
         stop_reason = "awaiting_advice_normalization"
     elif essential_count > MAX_ESSENTIAL_ITEMS or essential_bytes > MAX_ESSENTIAL_BYTES:
         stop_reason = "model_context_budget_exceeded"
+    elif require_exact_git_worktree and (
+        not isinstance(worktree_identity, dict)
+        or worktree_identity.get("binding_status") != "exact"
+    ):
+        stop_reason = "git_worktree_binding_incomplete"
     projection: dict[str, Any] = {
         "schema_version": 1,
         "artifact_kind": "orchestrate_model_context",
@@ -419,6 +430,8 @@ def project_model_context(
         },
         "diagnostic_artifacts": _bounded(diagnostics, max_paths),
     }
+    if worktree_identity is not None:
+        projection["git"]["worktree_identity"] = worktree_identity
     semantic_bytes = _canonical_bytes(projection)
     projection["semantic_context_binding"] = {
         "binding_scope": "model_projection_without_binding_and_metrics",
@@ -435,6 +448,16 @@ def project_model_context(
         "essential_projected_bytes": essential_bytes,
         "diagnostic_path_count": len(diagnostics),
         "git_changed_path_count": len(git_paths),
+        "git_worktree_binding_status": (
+            worktree_identity.get("binding_status")
+            if isinstance(worktree_identity, dict)
+            else "not_selected"
+        ),
+        "git_worktree_identity_count": (
+            worktree_identity.get("total_count")
+            if isinstance(worktree_identity, dict)
+            else 0
+        ),
     }
     return projection
 

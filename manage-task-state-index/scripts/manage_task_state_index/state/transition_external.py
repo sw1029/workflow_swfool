@@ -7,6 +7,7 @@ from typing import Any
 
 from .events import load_events_read_only, merge_state
 from .render import _markdown_projection_matches
+from .selected_successor_guard import require_selected_successor_execution
 from .storage import index_lock, rel_path, sha256_file
 from .transition_plan_contract import (
     canonical_bytes,
@@ -198,6 +199,33 @@ def _settled_receipt(
     return {**body, "receipt_content_sha256": sha256_bytes(canonical_bytes(body))}
 
 
+def settled_receipt_for_plan(
+    plan: dict[str, Any],
+    plan_ref: str,
+    plan_file_sha256: str,
+    pending: dict[str, str],
+    external_prepare: dict[str, str],
+    external_commit: dict[str, str],
+) -> dict[str, Any]:
+    """Pure public renderer for an exact externally settled receipt."""
+
+    return _settled_receipt(
+        plan, plan_ref, plan_file_sha256, pending, external_prepare, external_commit
+    )
+
+
+def external_receipt_binding(
+    plan: dict[str, Any], receipt: dict[str, Any], *, pending: bool = False
+) -> dict[str, str]:
+    """Predict the canonical raw-file binding for a rendered external receipt."""
+
+    directory = "transition_pending_receipts" if pending else "transition_receipts"
+    return {
+        "ref": f".task/{directory}/{plan['plan_id']}.json",
+        "sha256": sha256_bytes(canonical_bytes(receipt) + b"\n"),
+    }
+
+
 def settled_receipt_status(
     root: Path,
     plan: dict[str, Any],
@@ -266,8 +294,13 @@ def _validate_publication_commit(
 
 
 def settle_external_transition(
-    root: Path, path_value: str | Path, external_commit_value: Any
+    root: Path,
+    path_value: str | Path,
+    external_commit_value: Any,
+    *,
+    _selected_successor_execution_token: object | None = None,
 ) -> dict[str, Any]:
+    require_selected_successor_execution(_selected_successor_execution_token)
     root = root.resolve()
     plan_path, plan, plan_file_sha256 = load_transition_plan(root, path_value)
     if not is_external_plan(plan):
@@ -327,6 +360,8 @@ __all__ = (
     "load_pending_receipt",
     "pending_receipt_for_plan",
     "publish_pending_receipt",
+    "external_receipt_binding",
+    "settled_receipt_for_plan",
     "settled_receipt_status",
     "settle_external_transition",
     "validate_external_prepare",

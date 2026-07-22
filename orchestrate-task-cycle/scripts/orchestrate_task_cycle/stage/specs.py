@@ -109,6 +109,8 @@ ROUTING_OWNER_FIELDS = (
     "model_configuration_status",
     "requested_reasoning_effort",
     "routing_reason_codes",
+    "routing_signals",
+    "routing_signal_evidence",
     "routing_violations",
     "routing_enforcement",
     "routing_limitation",
@@ -248,6 +250,7 @@ OPTIONAL_OWNER_FIELDS: dict[str, tuple[str, ...]] = {
         "validation_set_root_path",
         "premise_receipts",
     ),
+    "cycle_efficiency_profile": ("compiler_efficiency",),
     "derive": (
         "finalization_receipt",
         "finalization_consumption",
@@ -363,7 +366,7 @@ def _v2_spec(target: str) -> TargetCompileSpec:
         optional_owner.extend(ROUTING_OWNER_FIELDS)
     selectors = dependency_selectors(target)
     roles = ["core"]
-    if "git" in selectors:
+    if {"git_head", "git_worktree"} & set(selectors):
         roles.append("git")
     if len(selectors) > len(roles):
         roles.append("diagnostics")

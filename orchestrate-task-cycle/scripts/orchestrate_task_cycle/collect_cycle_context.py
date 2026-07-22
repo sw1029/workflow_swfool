@@ -7,7 +7,7 @@ from typing import Any
 
 from record_agent_work_log.integrity import inspect_agent_log_store
 
-from .cycle_ledger import read_current_expanded
+from .cycle_ledger import read_current_expanded, read_events
 from .result_contract.session_audit import collect_session_audit_directory
 from .selection_publication import publication_status
 from .task_pack.context_projection import collect_task_pack_projection
@@ -34,6 +34,20 @@ GT_FILES = [
 ]
 
 
+def _read_cycle_events_for_context(
+    root: Path, cycle_id: str, ledger: Path, max_files: int
+) -> list[dict[str, Any]]:
+    try:
+        return read_events(root, cycle_id)[-max_files:]
+    except ValueError:
+        legacy = read_jsonl_file(ledger, limit=max_files)
+        if not legacy or any("format_version" in event for event in legacy):
+            raise
+        # Historical/versionless packets predate the strict ledger envelope.
+        # Keep them readable as opaque context; never hydrate or rewrite them.
+        return legacy
+
+
 def collect_cycle_state(
     root: Path,
     max_files: int,
@@ -43,7 +57,9 @@ def collect_cycle_state(
     requested = root / ".task" / "cycle" / str(cycle_id) if cycle_id else None
     latest = requested or (dirs[0] if dirs else root / ".task" / "cycle" / "none")
     events = (
-        read_jsonl_file(latest / "stage.jsonl", limit=max_files)
+        _read_cycle_events_for_context(
+            root, latest.name, latest / "stage.jsonl", max_files
+        )
         if latest.is_dir()
         else []
     )
@@ -373,7 +389,7 @@ def collect_validation_assets(root: Path, max_files: int) -> dict[str, Any]:
 def run_git(root: Path, args: list[str]) -> dict[str, Any]:
     try:
         result = subprocess.run(
-            ["git", *args],
+            ["git", "--no-optional-locks", *args],
             cwd=root,
             text=True,
             stdout=subprocess.PIPE,

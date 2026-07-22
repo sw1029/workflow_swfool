@@ -20,7 +20,7 @@ Run the registry from any working directory with both owning package roots becau
 ```bash
 SKILLS_ROOT="${CODEX_HOME:-$HOME/.codex}/skills"
 PYTHONPATH="$SKILLS_ROOT/manage-external-advice/scripts:$SKILLS_ROOT/record-agent-work-log/scripts" \
-python3 -m manage_external_advice registry --root . audit
+python3 -P -m manage_external_advice registry --root . audit
 ```
 
 ## Storage Model
@@ -66,16 +66,16 @@ Do not infer blocker families, hook wiring, or verification success from advice 
 Before retiring an advice container, compile the mechanical disposition rows from a small clause decision map. Render the exact actionable-ID template, decide only each clause's semantic disposition and evidence ref, and let the script reopen the evidence and derive its digest.
 
 ```bash
-python3 -m manage_external_advice registry --root . \
+python3 -P -m manage_external_advice registry --root . \
   render-disposition-template --advice-id <id>
-python3 -m manage_external_advice registry --root . \
+python3 -P -m manage_external_advice registry --root . \
   compile-dispositions --advice-id <id> --decision-map decisions.json
 ```
 
 Prefer `mark-applied --decision-map decisions.json` over hand-authoring full disposition rows. Compilation never decides whether advice is incorporated, retired, or residual and never upgrades clause consumption state.
 
 1. Intake raw advice.
-   - Use `python3 -m manage_external_advice registry --root . intake --source <path.md> --title <title>` with the module path above when a local Markdown file is provided.
+   - Use `python3 -P -m manage_external_advice registry --root . intake --source <path.md> --title <title>` with the module path above when a local Markdown file is provided.
    - For deterministic review/apply separation, add `--plan .agent_advice/journal/intake/<name>.plan.json`; this authority-free prepare operation publishes a reversible, non-canonical body-safe plan plus one opaque content-addressed source snapshot. It freezes the advice ID, timestamp, registry-owned raw/active paths, source/raw/normalized/event digests, and registry/Markdown CAS anchors without writing canonical raw, active, registry, or Markdown artifacts. It cannot authorize apply. Apply later under the separately authorized `mutate_advice_lifecycle` operation with `intake --apply-plan <plan-path>`.
    - Plan construction is read-only. Plan publication copies the already validated bytes to `.agent_advice/journal/intake/source_snapshots/src-sha256-<full-raw-sha256>.md` and binds that opaque path. The plan JSON remains body-safe: it stores only this workspace-relative regular non-symlink snapshot reference, its raw SHA-256, fixed metadata/IDs/timestamp/paths, normalized SHA-256, and event SHA-256. It does not embed raw text, normalized Markdown, the caller locator, or the registry event. Apply reopens the snapshot, verifies exact UTF-8 bytes, deterministically normalizes again, and verifies both normalized and event digests before canonical publication.
    - Prefer `advice_intake_plan` as the authority subject for planned intake. Preserve `external_advice` as the compatibility subject for existing direct lifecycle calls. Apply returns `execution_result_binding: {ref, sha256}` using the exact immutable receipt file SHA-256; body digests are reported separately. A prepared plan that loses a concurrent CAS race, encounters a safely observed changed/missing source or conflicting regular destination before intent publication, or discovers an exact duplicate may publish a plan-bound `external_advice_intake_no_effect_receipt`. This receipt is a journal settlement only: it proves that this plan published no intent, plan-tagged event, raw artifact, or active artifact; it is not a canonical advice effect.
@@ -104,7 +104,7 @@ Prefer `mark-applied --decision-map decisions.json` over hand-authoring full dis
    - If the advice is too ambiguous to normalize, create a rejected or deferred record with the reason.
 
 3. Inject advice into workflow packets.
-   - Use `python3 -m manage_external_advice registry --root . render-packet --format markdown|json` with the module path above.
+   - Use `python3 -P -m manage_external_advice registry --root . render-packet --format markdown|json` with the module path above.
    - Pass active advice packet summaries to `$orchestrate-task-cycle`, `$task-doctor`, `$derive-improvement-task`, `$task-md-agent-governance`, `$validate-task-completion`, and `.agent_goal` management skills when they use goal context.
    - Preserve the rendered `canonical_clause_ids`, `canonical_actionable_clause_ids`, per-clause/source SHA-256 bindings, `advice_packet_digest_basis`, and `advice_packet_digest` unchanged in the orchestrator context. Grouping-only and deferred-by-default owners are not active expected clauses; an explicit pending `actionable_child` is. The packet digest binds each advice ID, raw-source digest, normalized-content digest, declared owner set, and active actionable set.
    - Require every consuming result to emit exactly one `advice_consumption_states` row for each active expected clause and no other clause. Each row echoes the packet digest and its assigned source digest. An absent packet, an empty non-applicable packet, or explicit `applicability: not_applicable` fails quiet; an applicable packet with zero, missing, duplicate, external, or digest-mismatched rows remains blocking/pending debt and cannot support positive successor consumption.
@@ -123,7 +123,7 @@ Prefer `mark-applied --decision-map decisions.json` over hand-authoring full dis
    - Use `reject` when a conflict makes the advice unsuitable; record the conflict source and keep the raw artifact.
 
 5. Audit and index.
-   - Run `python3 -m manage_external_advice registry --root . audit` with the module path above after intake, apply, or reject.
+   - Run `python3 -P -m manage_external_advice registry --root . audit` with the module path above after intake, apply, or reject.
    - When an adapter or loopback packet has a current output fingerprint, add `--current-output-fingerprint <fingerprint>` or `--current-output-fingerprint-json <packet.json>` so audit emits `advice_freshness_gate` and `advice_metrics_stale` findings.
    - When a root-cause ledger exists, audit also emits `re_advised_dead_hypothesis` and `dead_hypothesis_claims`; downstream workflows must refresh, defer, reject, or require a new input delta before treating that advice as untried root-cause provenance.
    - Only when a later cycle packet supplies finalized recurrence/clause state (`recurrence_id`, `clause_id`, `finalized_clause_state`, and explicit `recurrence_observed`) and the named recurring clause is not `verified`, emit `unconsumed_advice_regression` debt. Without that finalized state, fail quiet. Keep dependent judgment clauses marked `unenforced` when applicable and preserve a derive backlog item to consume or retire the clause. This is visibility only: do not fail-close the underlying judgment and do not create a new detector/report/phase.

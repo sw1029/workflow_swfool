@@ -292,7 +292,7 @@ def test_malformed_or_unsupported_jsonl_fails_closed_without_append(
     assert ledger.read_bytes() == before
 
     ledger.write_text(
-        json.dumps({**valid, "format_version": cycle_ledger.LEDGER_FORMAT_VERSION + 1})
+        json.dumps({**valid, "format_version": 3})
         + "\n",
         encoding="utf-8",
     )

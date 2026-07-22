@@ -9,6 +9,10 @@ import stat
 
 
 OWNED_DIRECTORIES = {
+    "scan_compilations",
+    "scan_projection_intents",
+    "scan_projection_receipts",
+    "scan_receipts",
     "transition_plans",
     "transition_intents",
     "transition_receipts",

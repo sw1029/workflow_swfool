@@ -390,7 +390,9 @@ def collect_events(root: Path, cycle_id: str | None) -> list[dict[str, Any]]:
             raise ValueError(
                 "cycle profile path escapes .task/cycle through a symlink"
             ) from exc
-        return read_jsonl(cycle_path / "stage.jsonl")
+        from ..cycle_ledger import read_events
+
+        return read_events(resolved_root, cycle_id)
     events: list[dict[str, Any]] = []
     for path in sorted(cycle_root.glob("*/stage.jsonl")) if cycle_root.is_dir() else []:
         try:
@@ -399,7 +401,9 @@ def collect_events(root: Path, cycle_id: str | None) -> list[dict[str, Any]]:
             raise ValueError(
                 "cycle profile ledger path escapes .task/cycle through a symlink"
             ) from exc
-        events.extend(read_jsonl(path))
+        from ..cycle_ledger import read_events
+
+        events.extend(read_events(resolved_root, path.parent.name))
     return events
 
 

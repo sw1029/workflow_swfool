@@ -85,7 +85,7 @@ def event_malformed_reasons(event: dict[str, Any], cycle_id: str) -> list[str]:
     if (
         isinstance(version, bool)
         or not isinstance(version, int)
-        or version not in {0, 1}
+        or version not in {0, 1, 2}
     ):
         reasons.append("unsupported_format_version")
     step = event.get("step")
@@ -98,8 +98,10 @@ def event_malformed_reasons(event: dict[str, Any], cycle_id: str) -> list[str]:
     event_cycle_id = event.get("cycle_id")
     if event_cycle_id is not None and str(event_cycle_id) != cycle_id:
         reasons.append("cycle_id_mismatch")
-    if version == 1 and event_cycle_id is None:
+    if version in {1, 2} and event_cycle_id is None:
         reasons.append("missing_cycle_id")
-    if version == 1 and not str(event.get("event_id") or "").strip():
+    if version in {1, 2} and not str(event.get("event_id") or "").strip():
         reasons.append("missing_event_id")
+    if version == 2 and event.get("event_kind") != "compiled_stage_result_ref":
+        reasons.append("unsupported_compact_event_kind")
     return reasons

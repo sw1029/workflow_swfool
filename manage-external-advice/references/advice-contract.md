@@ -199,7 +199,7 @@ Record advice in `.agent_advice/index.jsonl` and `$manage-task-state-index`:
 
 ## Audit Freshness Gate
 
-When `python3 -m manage_external_advice registry audit` receives `--current-output-fingerprint` or `--current-output-fingerprint-json`, it must compare active advice fingerprint claims to the supplied current fingerprint and emit:
+When `python3 -P -m manage_external_advice registry audit` receives `--current-output-fingerprint` or `--current-output-fingerprint-json`, it must compare active advice fingerprint claims to the supplied current fingerprint and emit:
 
 - `advice_freshness_gate.current_output_fingerprint`
 - `advice_freshness_gate.declared_fingerprint_claims`

@@ -8,7 +8,12 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence
 
-from .service import advance_stage, prepare_stage, submit_stage
+from .service import (
+    advance_stage,
+    execute_deterministic_stage,
+    prepare_stage,
+    submit_stage,
+)
 from .preparation_store import load_published_preparation, publish_preparation
 from .specs import TARGET_COMPILE_SPECS
 
@@ -32,7 +37,9 @@ def _parser() -> argparse.ArgumentParser:
         description="Prepare, validate, and boundedly advance compiled cycle stages."
     )
     sub = parser.add_subparsers(dest="stage_command", required=True)
-    prepare = sub.add_parser("prepare")
+    prepare = sub.add_parser(
+        "prepare", help="Compile a stage preparation; new cycles default to schema v3."
+    )
     prepare.add_argument("--root", default=".")
     prepare.add_argument("--cycle-id", required=True)
     prepare.add_argument(
@@ -44,21 +51,30 @@ def _parser() -> argparse.ArgumentParser:
     prepare.add_argument("--max-files", type=int, default=12)
     prepare.add_argument("--model-max-paths", type=int, default=40)
     prepare.add_argument(
-        "--preparation-schema-version", type=int, choices=(1, 2)
+        "--preparation-schema-version",
+        type=int,
+        choices=(1, 2, 3),
+        help="Use 1/2 only when replaying a cycle initialized with that legacy protocol.",
     )
     prepare.add_argument("--publish", action="store_true")
 
-    submit = sub.add_parser("submit")
+    submit = sub.add_parser(
+        "submit", help="Submit exact owner/semantic bindings to a compiled preparation."
+    )
     submit.add_argument("--root", default=".")
     preparation_input = submit.add_mutually_exclusive_group(required=True)
     preparation_input.add_argument("--preparation")
     preparation_input.add_argument("--preparation-ref")
     submit.add_argument("--preparation-sha256")
-    submit.add_argument("--judgment")
+    submit.add_argument(
+        "--judgment", help="Inline judgment for schema-v1 compatibility only."
+    )
     submit.add_argument("--owner-result-ref")
     submit.add_argument("--owner-result-sha256")
     submit.add_argument("--semantic-ref")
     submit.add_argument("--semantic-sha256")
+    submit.add_argument("--routing-ref")
+    submit.add_argument("--routing-sha256")
     submit.add_argument("--usage-ref")
     submit.add_argument("--usage-sha256")
     submit.add_argument("--mode", choices=("block", "warn"), default="block")
@@ -66,7 +82,9 @@ def _parser() -> argparse.ArgumentParser:
     submit.add_argument("--max-files", type=int, default=12)
     submit.add_argument("--model-max-paths", type=int, default=40)
 
-    advance = sub.add_parser("advance")
+    advance = sub.add_parser(
+        "advance", help="Advance deterministic stages until an owner boundary."
+    )
     advance.add_argument("--root", default=".")
     advance.add_argument("--cycle-id", required=True)
     advance.add_argument(
@@ -77,7 +95,27 @@ def _parser() -> argparse.ArgumentParser:
     advance.add_argument("--max-files", type=int, default=12)
     advance.add_argument("--model-max-paths", type=int, default=40)
     advance.add_argument(
-        "--preparation-schema-version", type=int, choices=(1, 2)
+        "--preparation-schema-version",
+        type=int,
+        choices=(1, 2, 3),
+        help="Use 1/2 only for a cycle already initialized with that protocol.",
+    )
+    execute = sub.add_parser(
+        "execute", help="Run one allowlisted deterministic schema-v3 target only."
+    )
+    execute.add_argument("--root", default=".")
+    execute.add_argument("--cycle-id", required=True)
+    execute.add_argument(
+        "--target", required=True, choices=sorted(TARGET_COMPILE_SPECS)
+    )
+    execute.add_argument(
+        "--workflow-mode", choices=("normal", "bootstrap"), default="normal"
+    )
+    execute.add_argument("--apply", action="store_true")
+    execute.add_argument("--max-files", type=int, default=12)
+    execute.add_argument("--model-max-paths", type=int, default=40)
+    execute.add_argument(
+        "--preparation-schema-version", type=int, choices=(3,), default=3
     )
     return parser
 
@@ -121,8 +159,21 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             owner_result_sha256=args.owner_result_sha256,
             semantic_ref=args.semantic_ref,
             semantic_sha256=args.semantic_sha256,
+            routing_ref=args.routing_ref,
+            routing_sha256=args.routing_sha256,
             usage_ref=args.usage_ref,
             usage_sha256=args.usage_sha256,
+        )
+    if args.stage_command == "execute":
+        return execute_deterministic_stage(
+            args.root,
+            args.cycle_id,
+            args.target,
+            workflow_mode=args.workflow_mode,
+            apply=args.apply,
+            max_files=max(1, args.max_files),
+            max_paths=max(1, args.model_max_paths),
+            preparation_schema_version=args.preparation_schema_version,
         )
     return advance_stage(
         args.root,

@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from selection_publication_legacy_support import prepare_legacy_publication
+
 from orchestrate_task_cycle import selection_publication as publication
 from orchestrate_task_cycle.selection_publication import (
     pending_transaction_ids,
@@ -16,6 +18,10 @@ from orchestrate_task_cycle.selection_publication import (
     publish_prepared,
     recover_publications,
 )
+
+
+public_prepare_publication = prepare_publication
+prepare_publication = prepare_legacy_publication
 
 
 def _sha(payload: bytes) -> str:
@@ -102,6 +108,21 @@ def _write_legacy_receipt(
     receipt_path = publication._receipt_path(root, transaction_id)
     receipt_path.parent.mkdir(parents=True, exist_ok=True)
     receipt_path.write_bytes(publication._display_json(receipt))
+
+
+def test_public_v1_prepare_rejects_new_inline_write_without_journal(
+    tmp_path: Path,
+) -> None:
+    task = b"# task-a\n"
+    (tmp_path / "task.md").write_bytes(task)
+
+    with pytest.raises(ValueError, match="v1 new write is forbidden"):
+        public_prepare_publication(
+            tmp_path, _named_plan(task, b"# task-b\n", "forbidden")
+        )
+
+    transactions = tmp_path / ".task/selection_publication/transactions"
+    assert not transactions.exists()
 
 
 def test_selection_publication_commits_all_targets_and_replays(tmp_path: Path) -> None:
@@ -247,6 +268,50 @@ def test_selection_publication_forward_recovers_partial_after_state(
     assert recovered["remaining_pending_transaction_ids"] == []
 
 
+def test_compact_head_rejects_self_sealed_malformed_receipt(
+    tmp_path: Path,
+) -> None:
+    task_a = b"# task-a\n"
+    task_b = b"# task-b\n"
+    (tmp_path / "task.md").write_bytes(task_a)
+    prepared = prepare_publication(
+        tmp_path, _named_plan(task_a, task_b, "malformed-head")
+    )
+    publish_prepared(tmp_path, prepared["transaction_id"])
+    receipt_path = publication._receipt_path(tmp_path, prepared["transaction_id"])
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["schema_version"] = 999
+    receipt["extra"] = "self-sealed"
+    receipt_path.write_bytes(publication._display_json(receipt))
+    state_path = tmp_path / ".task/selection_publication/state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["head"]["receipt"]["sha256"] = _sha(receipt_path.read_bytes())
+    state_body = {
+        key: value for key, value in state.items() if key != "state_content_sha256"
+    }
+    state["state_content_sha256"] = _sha(publication._canonical_json(state_body))
+    state_path.write_bytes(publication._canonical_json(state))
+
+    with pytest.raises(ValueError, match="receipt fields are invalid"):
+        publication_status(tmp_path)
+
+
+def test_compact_state_rejects_noncanonical_raw_bytes(tmp_path: Path) -> None:
+    task_a = b"# task-a\n"
+    task_b = b"# task-b\n"
+    (tmp_path / "task.md").write_bytes(task_a)
+    prepared = prepare_publication(
+        tmp_path, _named_plan(task_a, task_b, "raw-state")
+    )
+    publish_prepared(tmp_path, prepared["transaction_id"])
+    state_path = tmp_path / ".task/selection_publication/state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state_path.write_bytes(publication._display_json(state))
+
+    with pytest.raises(ValueError, match="state is non-canonical"):
+        publication_status(tmp_path)
+
+
 def test_pending_publication_blocks_competing_prepare_without_mutation(
     tmp_path: Path,
 ) -> None:
@@ -293,12 +358,13 @@ def test_legacy_competing_prepares_cannot_publish_or_auto_recover(
         path.write_bytes(publication._display_json(prepare))
         transaction_ids.append(transaction_id)
 
-    with pytest.raises(ValueError, match="different pending transaction"):
+    with pytest.raises(ValueError, match="multiple pending transactions"):
         publish_prepared(tmp_path, transaction_ids[1])
-    with pytest.raises(ValueError, match="automatic recovery cannot choose"):
+    with pytest.raises(ValueError, match="state migration required"):
         recover_publications(tmp_path)
 
-    assert sorted(pending_transaction_ids(tmp_path)) == sorted(transaction_ids)
+    with pytest.raises(ValueError, match="state migration required"):
+        pending_transaction_ids(tmp_path)
     assert (tmp_path / "task.md").read_bytes() == old_task
 
 
@@ -385,7 +451,7 @@ def test_selection_publication_status_blocks_unjournaled_current_task_drift(
     assert status["current_head"]["status"] == "drifted"
 
 
-def test_selection_publication_reconciles_exact_current_task_drift(
+def test_legacy_v1_drift_reconciliation_new_write_is_forbidden(
     tmp_path: Path,
 ) -> None:
     task_a = b"# task-a\n"
@@ -399,17 +465,11 @@ def test_selection_publication_reconciles_exact_current_task_drift(
     publish_prepared(tmp_path, first["transaction_id"])
     (tmp_path / "task.md").write_bytes(task_c)
 
-    prepared = prepare_drift_reconciliation(
-        tmp_path,
-        _named_plan(task_b, task_c, "reconcile"),
-    )
-    receipt = publish_prepared(tmp_path, prepared["transaction_id"])
-
-    status = publication_status(tmp_path)
-    assert receipt["predecessor_transaction_id"] == first["transaction_id"]
-    assert status["status"] == "clear"
-    assert status["current_head"]["status"] == "current"
-    assert status["current_head"]["head_transaction_id"] == prepared["transaction_id"]
+    with pytest.raises(ValueError, match="v1 new write is forbidden"):
+        prepare_drift_reconciliation(
+            tmp_path,
+            _named_plan(task_b, task_c, "reconcile"),
+        )
     assert (tmp_path / "task.md").read_bytes() == task_c
 
 
@@ -429,7 +489,7 @@ def test_selection_publication_reconciliation_rejects_noncurrent_or_extra_target
     publish_prepared(tmp_path, first["transaction_id"])
     (tmp_path / "task.md").write_bytes(task_c)
 
-    with pytest.raises(ValueError, match="exact current task.md bytes"):
+    with pytest.raises(ValueError, match="v1 new write is forbidden"):
         prepare_drift_reconciliation(
             tmp_path,
             _named_plan(task_b, b"# foreign\n", "wrong-current"),
@@ -594,7 +654,7 @@ def test_lineage_fields_are_helper_owned_and_tampering_fails_closed(
     body = json.loads(prepare_path.read_text(encoding="utf-8"))
     body["predecessor_transaction_id"] = "selection-" + "1" * 64
     prepare_path.write_bytes(publication._display_json(body))
-    with pytest.raises(ValueError, match="binding is invalid"):
+    with pytest.raises(ValueError, match="binding has drifted"):
         publish_prepared(tmp_path, prepared["transaction_id"])
     assert (tmp_path / "task.md").read_bytes() == task_a
 
@@ -609,7 +669,7 @@ def test_lineage_fields_are_helper_owned_and_tampering_fails_closed(
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     receipt["predecessor_transaction_id"] = "selection-" + "2" * 64
     receipt_path.write_bytes(publication._display_json(receipt))
-    with pytest.raises(ValueError, match="receipt contract is invalid"):
+    with pytest.raises(ValueError, match="receipt binding has drifted"):
         publish_prepared(receipt_root, committed["transaction_id"])
     assert (receipt_root / "task.md").read_bytes() == task_b
 
@@ -657,7 +717,7 @@ def test_legacy_committed_head_can_be_extended_once_with_explicit_lineage(
     status = publication_status(tmp_path)
     assert status["current_head"]["status"] == "current"
     assert status["current_head"]["head_transaction_id"] == successor["transaction_id"]
-    assert status["current_head"]["lineage_mode"] == "mixed"
+    assert status["current_head"]["lineage_mode"] == "explicit"
 
 
 def test_ambiguous_legacy_heads_block_new_prepare_without_choosing_one(
@@ -679,10 +739,10 @@ def test_ambiguous_legacy_heads_block_new_prepare_without_choosing_one(
         ).iterdir()
     )
 
-    with pytest.raises(ValueError, match="drifted or ambiguous"):
+    with pytest.raises(ValueError, match="migration required"):
         prepare_publication(tmp_path, _named_plan(task_b, b"# task-d\n", "new"))
 
-    assert publication_status(tmp_path)["current_head"]["status"] == "ambiguous"
+    assert publication_status(tmp_path)["status"] == "migration_required"
     assert (
         sorted(
             path.name

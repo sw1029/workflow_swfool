@@ -1665,10 +1665,11 @@ def test_cycle_ledger_records_unchanged_ref_for_duplicate_artifact() -> None:
             "cycle-1",
             {"step": "validate", "status": "complete", "artifacts": ["packet.json"]},
         )
+        expanded = cycle_ledger.read_current_expanded(root, "cycle-1")
 
     assert first["event"]["artifact_refs"][0]["sha256"]
     assert second["event"]["unchanged_refs"][0]["path"] == "packet.json"
-    assert second["current_stage"]["latest_event"]["unchanged_refs"][0]["sha256"] == first["event"]["artifact_refs"][0]["sha256"]
+    assert expanded["latest_event"]["unchanged_refs"][0]["sha256"] == first["event"]["artifact_refs"][0]["sha256"]
 
 
 def long_run_packet(**overrides: Any) -> dict[str, Any]:
