@@ -7,6 +7,7 @@ from typing import Any
 
 from record_agent_work_log.integrity import inspect_agent_log_store
 
+from .cycle_ledger import read_current_expanded
 from .result_contract.session_audit import collect_session_audit_directory
 from .selection_publication import publication_status
 from .task_pack.context_projection import collect_task_pack_projection
@@ -19,7 +20,6 @@ from .context_support import (
     latest_cycle_dirs,
     limited_files,
     now_iso,
-    read_json_file,
     read_jsonl_file,
 )
 
@@ -47,7 +47,11 @@ def collect_cycle_state(
         if latest.is_dir()
         else []
     )
-    current = read_json_file(latest / "current_stage.json") if latest.is_dir() else None
+    current = (
+        read_current_expanded(root, latest.name)
+        if latest.is_dir() and (latest / "current_stage.json").is_file()
+        else None
+    )
     packets = (
         sorted((latest / "packets").glob("*")) if (latest / "packets").is_dir() else []
     )

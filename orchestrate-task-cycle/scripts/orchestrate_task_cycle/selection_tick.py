@@ -44,6 +44,7 @@ from .selection_tick_premise import (
     premise_input_contract,
     validate_premise_watch_row,
 )
+from .task_pack.legacy_retirement_contract import task_fields
 
 
 DEFAULT_WATCH_PATHS = (
@@ -94,18 +95,43 @@ def _adapter_paths(root: Path) -> list[str]:
     return paths
 
 
-def _pack_paths(root: Path) -> list[str]:
+def _current_task_pack_id(root: Path) -> tuple[bool, str | None]:
+    try:
+        task_path, _normalized = _safe_path(root, "task.md", explicit=False)
+        if not task_path.is_file() or task_path.stat().st_size > MAX_FILE_BYTES:
+            return False, None
+        value = task_fields(task_path.read_bytes()).get("task_pack", "").strip()
+    except (OSError, ValueError):
+        return False, None
+    return True, None if value.lower() == "none" else value
+
+
+def _pack_paths(root: Path) -> dict[str, str]:
     pack_root = root / ".task" / "task_pack"
-    paths: list[str] = []
+    paths: dict[str, str] = {}
     if not pack_root.is_dir():
         return paths
+    pointer_valid, current_pack_id = _current_task_pack_id(root)
     for path in _bounded_paths(
         pack_root.glob("*.json"), MAX_TASK_PACK_FILES, "task-pack state"
     ):
-        _value, normalized = _safe_json_object(
+        value, normalized = _safe_json_object(
             root, path.relative_to(root).as_posix(), "task-pack state"
         )
-        paths.append(normalized)
+        status = str(value.get("status") or "").strip().lower()
+        pack_id = str(value.get("pack_id") or "").strip()
+        current = (
+            pack_id == current_pack_id
+            if pointer_valid
+            else status not in {
+                "archived",
+                "completed",
+                "consumed",
+                "retired",
+                "superseded",
+            }
+        )
+        paths[normalized] = "task_pack" if current else "task_state"
     return paths
 
 
@@ -133,6 +159,12 @@ def _retirement_paths(root: Path) -> list[str]:
 def _workflow_evidence_class(normalized: str) -> str:
     if normalized == "task.md":
         return "task_state"
+    if normalized in {".task/index.json", ".task/index.jsonl", ".task/index.md"}:
+        return "task_state"
+    if normalized.startswith(
+        (".task/archive/", ".task/task_pack_retirement/", ".task/cycle/")
+    ):
+        return "task_state"
     if normalized == ".agent_goal/agent_authority.md":
         return "authority"
     if normalized.startswith(".agent_goal/"):
@@ -149,8 +181,6 @@ def _workflow_evidence_class(normalized: str) -> str:
         return "adapter"
     if normalized.startswith(".task/task_pack/"):
         return "task_pack"
-    if normalized.startswith(".task/task_pack_retirement/"):
-        return "task_pack"
     return "custom_watch"
 
 
@@ -160,6 +190,7 @@ def _entry(
     *,
     explicit: bool,
     premise_id: str | None = None,
+    evidence_class_override: str | None = None,
 ) -> dict[str, Any]:
     path, normalized = _safe_path(root, raw, explicit=explicit)
     exists = path.is_file()
@@ -169,6 +200,7 @@ def _entry(
         watch_identity = f"exact_subject:{premise_id}"
     else:
         watch_identity = normalized
+    evidence_class = evidence_class_override or _workflow_evidence_class(normalized)
     row: dict[str, Any] = {
         "watch_id": "watch-"
         + hashlib.sha256(watch_identity.encode("utf-8")).hexdigest()[:24],
@@ -176,7 +208,7 @@ def _entry(
         "kind": "exact_premise" if premise_id is not None else "workflow_input",
         "evidence_class": "exact_subject"
         if premise_id is not None
-        else _workflow_evidence_class(normalized),
+        else evidence_class,
     }
     if premise_id is None:
         row["path"] = normalized
@@ -229,12 +261,15 @@ def _watch_rows(
     premise_path_list, premise_id_list = _validated_exact_premise_inputs(
         premise_paths, premise_ids
     )
+    adapter_paths = _adapter_paths(root)
+    pack_paths = _pack_paths(root)
+    retirement_paths = _retirement_paths(root)
     requested = [
         *DEFAULT_WATCH_PATHS,
         *watch_paths,
-        *_adapter_paths(root),
-        *_pack_paths(root),
-        *_retirement_paths(root),
+        *adapter_paths,
+        *pack_paths,
+        *retirement_paths,
     ]
     if any(not isinstance(item, str) for item in requested):
         raise ValueError("selection watch paths must be strings")
@@ -243,7 +278,32 @@ def _watch_rows(
         raise ValueError(
             "terminal wait cannot watch the mutable whole authority policy; supply an exact v2 authority packet"
         )
-    rows = [_entry(root, raw, explicit=False) for raw in deduped]
+    explicit_paths = {
+        _safe_path(root, item, explicit=False)[1]
+        for item in watch_paths
+        if item.strip()
+    }
+    adapter_path_set = set(adapter_paths)
+    retirement_path_set = set(retirement_paths)
+    rows = []
+    for raw in deduped:
+        evidence_class_override = None
+        if raw in adapter_path_set:
+            evidence_class_override = "adapter"
+        elif raw in pack_paths:
+            evidence_class_override = (
+                "task_pack" if raw in explicit_paths else pack_paths[raw]
+            )
+        elif raw in retirement_path_set:
+            evidence_class_override = "task_state"
+        rows.append(
+            _entry(
+                root,
+                raw,
+                explicit=False,
+                evidence_class_override=evidence_class_override,
+            )
+        )
     for raw, premise_id in zip(premise_path_list, premise_id_list, strict=True):
         path, _normalized = _safe_path(root, raw, explicit=True)
         row = _entry(root, raw, explicit=True, premise_id=premise_id)

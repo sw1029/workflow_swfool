@@ -10,11 +10,18 @@ from typing import Any
 
 from ..cycle_ledger import cycle_dir, immutable_write_bytes
 from ..ledger.support import rel_path
-from .contracts import canonical_bytes, canonical_sha256, validate_preparation
+from .artifact_store import load_compiler_artifact
+from .contracts import (
+    PREPARATION_SCHEMA_VERSION_V2,
+    canonical_bytes,
+    canonical_sha256,
+    validate_preparation,
+)
 from .specs import TARGET_COMPILE_SPECS
 
 
 MAX_PREPARATION_BYTES = 2 * 1024 * 1024
+MAX_V2_PREPARATION_BYTES = 256 * 1024
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 PUBLICATION_OPERATION = {
     "skill_id": "orchestrate-task-cycle",
@@ -37,11 +44,24 @@ def publish_preparation(
 ) -> dict[str, Any]:
     workspace = Path(root).resolve(strict=True)
     validated = validate_preparation(preparation)
+    if validated.get("schema_version") == PREPARATION_SCHEMA_VERSION_V2:
+        cycle_id = str(validated["cycle_id"])
+        load_compiler_artifact(
+            workspace, cycle_id, validated["context_binding"], "context"
+        )
+        load_compiler_artifact(
+            workspace, cycle_id, validated["work_order_binding"], "work_order"
+        )
     payload = canonical_bytes(validated) + b"\n"
-    if len(payload) > MAX_PREPARATION_BYTES:
+    maximum = (
+        MAX_V2_PREPARATION_BYTES
+        if validated.get("schema_version") == PREPARATION_SCHEMA_VERSION_V2
+        else MAX_PREPARATION_BYTES
+    )
+    if len(payload) > maximum:
         raise ValueError(
             f"preparation_artifact_budget_exceeded: {len(payload)} > "
-            f"{MAX_PREPARATION_BYTES} bytes"
+            f"{maximum} bytes"
         )
     body_digest = canonical_sha256(validated)
     digest = hashlib.sha256(payload).hexdigest()
@@ -112,6 +132,11 @@ def load_published_preparation(
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("published preparation is not valid UTF-8 JSON") from exc
     validated = validate_preparation(value)
+    if (
+        validated.get("schema_version") == PREPARATION_SCHEMA_VERSION_V2
+        and len(payload) > MAX_V2_PREPARATION_BYTES
+    ):
+        raise ValueError("preparation_artifact_budget_exceeded")
     if payload != canonical_bytes(validated) + b"\n":
         raise ValueError("published preparation is not canonical immutable JSON")
     expected_path = preparation_path(
@@ -128,6 +153,7 @@ def load_published_preparation(
 
 __all__ = [
     "MAX_PREPARATION_BYTES",
+    "MAX_V2_PREPARATION_BYTES",
     "PUBLICATION_OPERATION",
     "load_published_preparation",
     "preparation_path",

@@ -9,7 +9,25 @@ from typing import Any
 
 import pytest
 from orchestrate_task_cycle import cycle_ledger
-from orchestrate_task_cycle.ledger import finalization_publication
+from orchestrate_task_cycle.ledger import candidate_validation, finalization_publication
+from orchestrate_task_cycle.result_contract.consumer_receipt_contract import (
+    CONSUMER_RECEIPT_CONTRACT_VERSION,
+    CONSUMER_REVISION_SHA256,
+    VALIDATOR_SIGNATURE_SHA256,
+)
+
+
+ROOT = Path(__file__).resolve().parents[1]
+AUDIT_SCRIPTS = ROOT / "audit-cycle-loopback" / "scripts"
+if str(AUDIT_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(AUDIT_SCRIPTS))
+from audit_cycle_loopback.consumer_context import (  # noqa: E402
+    consumer_context_conformance_gate,
+    consumer_receipt_binding_sha256,
+)
+from audit_cycle_loopback.decision_identity_binding import (  # noqa: E402
+    decision_identity_echo,
+)
 
 
 sys.dont_write_bytecode = True
@@ -626,6 +644,642 @@ def present_no_change_evidence(
         attempt_identity=attempt_identity,
         target_observations=observations,
     )
+
+
+def _loopback_gate_for(
+    root: Path,
+    candidate: dict[str, Any],
+    *,
+    conformance_status: str = "pass",
+    identity_status: str = "verified",
+) -> dict[str, Any]:
+    exact_identity = {
+        "decision_subject_id": "SUBJECT_REF",
+        "subject_class_id": "BODY_REF",
+        "revision_id": "REVISION_REF",
+        "subject_digest": "a" * 64,
+        "lineage_id": "EVIDENCE_REF",
+        "freshness_status": "current",
+        "body_fingerprint": {
+            "applicability": "applicable",
+            "value": "b" * 64,
+        },
+        "production_lane": {"applicability": "not_applicable", "value": None},
+        "cohort": {"applicability": "applicable", "value": ["COHORT_REF"]},
+        "producer_run": {"applicability": "not_applicable", "value": None},
+    }
+    decision_ref = {
+        **exact_identity,
+        "decision_identity_kind": "explicit_v2",
+        "decision_identity": exact_identity,
+        "artifact_id": "SUBJECT_REF",
+        "artifact_class": "BODY_REF",
+        "artifact_path_or_store_ref": "EVIDENCE_REF",
+        "artifact_sha256": "a" * 64,
+        "production_lane_identity": None,
+        "body_projection_fingerprint": "b" * 64,
+        "cohort_identity": ["COHORT_REF"],
+        "producer_run_id": None,
+        "verification_input_ids": ["COHORT_REF"],
+        "input_fingerprints": None,
+        "created_or_observed_at": None,
+        "discovery_basis": "explicit_caller_path",
+        "advisory_discovery": False,
+        "conflicting_discovery_paths": [],
+        "identity_status": identity_status,
+        "scope_verified": identity_status == "verified",
+    }
+    consumer_id = "CONSUMER_REF"
+    hook_id = "HOOK_REF"
+    gate_id = "GATE_REF"
+    task_id = "TASK_REF"
+    adapter_revision = "d" * 64
+    input_fingerprint = "c" * 64
+    consumer_contract = {
+        "consumer_id": consumer_id,
+        "task_id": task_id,
+        "adapter_revision_sha256": adapter_revision,
+        "consumer_revision_sha256": CONSUMER_REVISION_SHA256,
+        "hook_id": hook_id,
+        "required_hook_ids": [hook_id],
+        "required_gate_ids": [gate_id],
+    }
+    rows: list[dict[str, Any]] = []
+    if conformance_status == "pass":
+        row = {
+            "consumer_context_id": consumer_id,
+            "hook_id": hook_id,
+            "cycle_id": candidate["cycle_id"],
+            "task_id": task_id,
+            "attempt_identity": candidate["attempt_id"],
+            "input_state_fingerprint": input_fingerprint,
+            "adapter_revision_sha256": adapter_revision,
+            "consumer_contract_version": CONSUMER_RECEIPT_CONTRACT_VERSION,
+            "consumer_revision_sha256": CONSUMER_REVISION_SHA256,
+            "validator_signature_sha256": VALIDATOR_SIGNATURE_SHA256,
+            "hook_io_receipts": [
+                {
+                    "acceptance_required": True,
+                    "invocation_index": 0,
+                    "hook_id": hook_id,
+                    "input_sha256": "1" * 64,
+                    "output_sha256": "2" * 64,
+                    "return_contract_valid": True,
+                    "semantic_status": "accepted",
+                    "signature_sha256": "3" * 64,
+                    "status": "completed",
+                    "value_consumed_by_decision": True,
+                }
+            ],
+            "decision_identity_echo": decision_identity_echo(decision_ref),
+            "required_hook_ids": [hook_id],
+            "required_gate_ids": [gate_id],
+            "consumed_hook_ids": [hook_id],
+            "consumed_gate_ids": [gate_id],
+            "excluded_gate_ids": [],
+            "result_contract_status": "conformant",
+            "adapter_loaded": True,
+            "hook_resolved": True,
+            "required_hook_callable": True,
+            "hook_signature_compatible": True,
+            "invocation_completed": True,
+            "return_contract_valid": True,
+            "artifact_identity_echo_valid": True,
+            "value_consumed_by_decision": True,
+            "evidence_provenance": "independently_verified",
+            "probe_evidence_ref": "EVIDENCE_REF",
+        }
+        row["probe_evidence_sha256"] = consumer_receipt_binding_sha256(row)
+        rows.append(row)
+    conformance = consumer_context_conformance_gate(
+        {
+            "required_consumer_ids": [consumer_id],
+            "consumer_contract": consumer_contract,
+            "consumer_context_conformance": {"rows": rows},
+        },
+        expected_artifact_ref=decision_ref,
+        expected_cycle_id=candidate["cycle_id"],
+        expected_input_state_fingerprint=input_fingerprint,
+        expected_attempt_identity=candidate["attempt_id"],
+        expected_task_id=task_id,
+        expected_adapter_revision_sha256=adapter_revision,
+    )
+    packet = {
+        "schema_version": "anti-loop-progress-gate-v1",
+        "handoff_contract_version": 1,
+        "decision_contract_version": 1,
+        "step": "loopback_audit",
+        "cycle_id": candidate["cycle_id"],
+        "task_id": task_id,
+        "finalization_required": True,
+        "finalization_state": "candidate",
+        "authoritative_consumption_allowed": False,
+        "attempt_identity": candidate["attempt_id"],
+        "attempt_identity_version": 2,
+        "input_state_fingerprint": input_fingerprint,
+        "decision_artifact_ref": decision_ref,
+        "scope_verified": identity_status == "verified",
+        "artifact_id": "SUBJECT_REF",
+        "artifact_sha256": "a" * 64,
+        "artifact_family": "BODY_REF",
+        "blocker_signature": "BLOCKER_REF",
+        "progress_verdict": (
+            "advanced" if conformance_status == "pass" else "not_evaluated"
+        ),
+        "hard_stop_required": False,
+        "terminal_state": "derive",
+        "allowed_next_action_classes": ["derive"],
+        "gate_compatibility_results": [],
+        "consumer_context_conformance": conformance,
+        "durable_mutation_candidate": candidate["durable_state_candidate"],
+    }
+    packet_path = root / (
+        "loopback-packet-"
+        + conformance_status.replace("_", "-")
+        + "-"
+        + identity_status.replace("_", "-")
+        + ".json"
+    )
+    packet_path.write_text(
+        json.dumps(packet, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    packet_sha = hashlib.sha256(packet_path.read_bytes()).hexdigest()
+    packet["anti_loop_handoff"] = {
+        "handoff_contract_version": 1,
+        "applicability": "required",
+        "finalization_required": True,
+        "authoritative_consumption_allowed": False,
+        "packet_ref": packet_path.name,
+        "packet_sha256": packet_sha,
+        "artifact_id": packet["artifact_id"],
+        "artifact_sha256": packet["artifact_sha256"],
+        "artifact_family": packet["artifact_family"],
+        "blocker_signature": packet["blocker_signature"],
+        "progress_verdict": packet["progress_verdict"],
+        "hard_stop": packet["hard_stop_required"],
+        "terminal_state": packet["terminal_state"],
+        "allowed_next_action_classes": packet["allowed_next_action_classes"],
+        "compatible_gate_ids": [],
+        "incompatible_gate_ids": [],
+        "durable_mutation_candidate_sha256": candidate["durable_state_candidate"][
+            "candidate_sha256"
+        ],
+    }
+    return packet
+
+
+def _rewrite_loopback_packet(root: Path, gate: dict[str, Any]) -> None:
+    handoff = gate["anti_loop_handoff"]
+    packet_path = root / handoff["packet_ref"]
+    packet_path.write_text(
+        json.dumps(
+            {key: value for key, value in gate.items() if key != "anti_loop_handoff"},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    handoff["packet_sha256"] = hashlib.sha256(packet_path.read_bytes()).hexdigest()
+
+
+def test_exact_loopback_consumer_and_typed_mutation_finalize_successfully(
+    tmp_path: Path,
+) -> None:
+    cycle_id = "cycle-loopback-exact-happy"
+    attempt = "ATTEMPT_REF"
+    initialize_with_context(tmp_path, cycle_id, task_id="task-loopback-happy")
+    candidate = final_candidate(cycle_id, attempt)
+    candidate["anti_loop_progress_gate"] = _loopback_gate_for(tmp_path, candidate)
+    candidate["decision_artifact_ref"] = candidate["anti_loop_progress_gate"][
+        "decision_artifact_ref"
+    ]
+
+    finalized = cycle_ledger.finalize_candidate(tmp_path, cycle_id, candidate)
+
+    assert finalized["receipt"]["authoritative_final"] == "success"
+    assert finalized["snapshot"]["durable_state_candidate"] == (
+        candidate["durable_state_candidate"]
+    )
+    assert finalized["receipt"]["attempt_id"] == attempt
+
+
+@pytest.mark.parametrize("tamper", ["probe_ref", "hook_io_input"])
+def test_loopback_consumer_receipt_hash_is_recomputed_before_finalization(
+    tmp_path: Path,
+    tamper: str,
+) -> None:
+    cycle_id = "cycle-loopback-receipt-tamper"
+    attempt = "ATTEMPT_REF"
+    initialize_with_context(tmp_path, cycle_id, task_id="task-loopback-tamper")
+    candidate = final_candidate(cycle_id, attempt)
+    gate = _loopback_gate_for(tmp_path, candidate)
+    row = gate["consumer_context_conformance"]["rows"][0]
+    if tamper == "probe_ref":
+        row["probe_evidence_ref"] = "EVIDENCE_OTHER"
+    else:
+        row["hook_io_receipts"][0]["input_sha256"] = "9" * 64
+    _rewrite_loopback_packet(tmp_path, gate)
+    candidate["anti_loop_progress_gate"] = gate
+    candidate["decision_artifact_ref"] = gate["decision_artifact_ref"]
+
+    with pytest.raises(ValueError, match="blocks favorable semantic and goal"):
+        cycle_ledger.finalize_candidate(tmp_path, cycle_id, candidate)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["missing_field", "duplicate", "extra", "conflicted"],
+)
+def test_explicit_loopback_consumer_contract_cannot_relax_expectations(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    cycle_id = f"cycle-loopback-contract-{mutation}"
+    attempt = "ATTEMPT_REF"
+    initialize_with_context(tmp_path, cycle_id, task_id="task-loopback-contract")
+    candidate = final_candidate(cycle_id, attempt)
+    gate = _loopback_gate_for(tmp_path, candidate)
+    contracts = gate["consumer_context_conformance"]["consumer_contracts"]
+    if mutation == "missing_field":
+        contracts[0].pop("task_id")
+    elif mutation == "duplicate":
+        contracts.append(json.loads(json.dumps(contracts[0])))
+    elif mutation == "extra":
+        extra = json.loads(json.dumps(contracts[0]))
+        extra["consumer_id"] = "CONSUMER_OTHER"
+        contracts.append(extra)
+    else:
+        contracts[0]["contract_conflicted"] = True
+    _rewrite_loopback_packet(tmp_path, gate)
+    candidate["anti_loop_progress_gate"] = gate
+    candidate["decision_artifact_ref"] = gate["decision_artifact_ref"]
+
+    with pytest.raises(ValueError, match="blocks favorable semantic and goal"):
+        cycle_ledger.finalize_candidate(tmp_path, cycle_id, candidate)
+
+
+def test_mixed_owner_loopback_operation_set_cannot_omit_gate(tmp_path: Path) -> None:
+    cycle_id = "cycle-loopback-mixed-owner"
+    attempt = "ATTEMPT_REF"
+    initialize_with_context(tmp_path, cycle_id, task_id="task-loopback-mixed")
+    candidate = final_candidate(cycle_id, attempt)
+    audit_operation = cycle_ledger.build_durable_operation(
+        target_ref="family_progress_registry",
+        operation_kind="replace_projection",
+        attempt_identity=attempt,
+        payload_schema_id="family-progress-registry-v1",
+        payload={"rows": [{"cycle_id": cycle_id, "family_key": "ROOT_REF"}]},
+    )
+    candidate["durable_state_candidate"] = (
+        cycle_ledger.build_typed_operations_candidate(
+            producer="mixed-owner-producer",
+            attempt_identity=attempt,
+            operations=[
+                *candidate["durable_state_candidate"]["operations"],
+                audit_operation,
+            ],
+        )
+    )
+
+    with pytest.raises(ValueError, match="loopback-owned finalization cannot omit"):
+        cycle_ledger.finalize_candidate(tmp_path, cycle_id, candidate)
+
+
+def test_audit_owned_exact_no_change_cannot_omit_loopback_gate(
+    tmp_path: Path,
+) -> None:
+    cycle_id = "cycle-loopback-audit-no-change"
+    attempt = "ATTEMPT_REF"
+    initialize_with_context(tmp_path, cycle_id, task_id="task-loopback-no-change")
+    candidate = final_candidate(cycle_id, attempt)
+    candidate["durable_state_candidate"] = (
+        cycle_ledger.build_no_durable_state_change_candidate(
+            attempt_identity=attempt,
+            reason_id="validation-has-no-durable-axis-change",
+            evidence=absent_no_change_evidence(
+                attempt,
+                "family_progress_registry",
+            ),
+        )
+    )
+
+    with pytest.raises(ValueError, match="loopback-owned finalization cannot omit"):
+        cycle_ledger.finalize_candidate(tmp_path, cycle_id, candidate)
+
+
+def test_loopback_packet_rejects_symlinked_parent_component(tmp_path: Path) -> None:
+    cycle_id = "cycle-loopback-parent-symlink"
+    attempt = "ATTEMPT_REF"
+    initialize_with_context(tmp_path, cycle_id, task_id="task-loopback-symlink")
+    candidate = final_candidate(cycle_id, attempt)
+    gate = _loopback_gate_for(tmp_path, candidate)
+    real_parent = tmp_path / "real-packets"
+    real_parent.mkdir()
+    real_packet = real_parent / "packet.json"
+    real_packet.write_text(
+        json.dumps(
+            {key: value for key, value in gate.items() if key != "anti_loop_handoff"},
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "linked-packets").symlink_to(real_parent, target_is_directory=True)
+    gate["anti_loop_handoff"]["packet_ref"] = "linked-packets/packet.json"
+    gate["anti_loop_handoff"]["packet_sha256"] = hashlib.sha256(
+        real_packet.read_bytes()
+    ).hexdigest()
+    candidate["anti_loop_progress_gate"] = gate
+    candidate["decision_artifact_ref"] = gate["decision_artifact_ref"]
+
+    with pytest.raises(ValueError, match="not a safe local file"):
+        cycle_ledger.finalize_candidate(tmp_path, cycle_id, candidate)
+
+
+@pytest.mark.parametrize("path_form", ["dot_prefix", "parent_segment"])
+def test_loopback_packet_ref_must_be_canonical_posix_relative(
+    tmp_path: Path,
+    path_form: str,
+) -> None:
+    cycle_id = f"cycle-loopback-noncanonical-{path_form}"
+    attempt = "ATTEMPT_REF"
+    initialize_with_context(tmp_path, cycle_id, task_id="task-loopback-path")
+    candidate = final_candidate(cycle_id, attempt)
+    gate = _loopback_gate_for(tmp_path, candidate)
+    packet_name = gate["anti_loop_handoff"]["packet_ref"]
+    if path_form == "dot_prefix":
+        gate["anti_loop_handoff"]["packet_ref"] = f"./{packet_name}"
+    else:
+        (tmp_path / "nested").mkdir()
+        gate["anti_loop_handoff"]["packet_ref"] = f"nested/../{packet_name}"
+    candidate["anti_loop_progress_gate"] = gate
+    candidate["decision_artifact_ref"] = gate["decision_artifact_ref"]
+
+    with pytest.raises(ValueError, match="not a safe local file"):
+        cycle_ledger.finalize_candidate(tmp_path, cycle_id, candidate)
+
+
+def test_loopback_packet_read_is_bounded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cycle_id = "cycle-loopback-oversized-packet"
+    attempt = "ATTEMPT_REF"
+    initialize_with_context(tmp_path, cycle_id, task_id="task-loopback-oversized")
+    candidate = final_candidate(cycle_id, attempt)
+    gate = _loopback_gate_for(tmp_path, candidate)
+    oversized = tmp_path / "oversized-loopback-packet.json"
+    monkeypatch.setattr(candidate_validation, "MAX_LOOPBACK_PACKET_BYTES", 32)
+    oversized.write_bytes(b" " * 33)
+    gate["anti_loop_handoff"]["packet_ref"] = oversized.name
+    gate["anti_loop_handoff"]["packet_sha256"] = hashlib.sha256(
+        oversized.read_bytes()
+    ).hexdigest()
+    candidate["anti_loop_progress_gate"] = gate
+    candidate["decision_artifact_ref"] = gate["decision_artifact_ref"]
+
+    with pytest.raises(ValueError, match="bounded size limit"):
+        cycle_ledger.finalize_candidate(tmp_path, cycle_id, candidate)
+
+
+@pytest.mark.parametrize(
+    ("container", "field", "invalid_value"),
+    [
+        ("packet", "handoff_contract_version", True),
+        ("packet", "handoff_contract_version", 1.0),
+        ("packet", "decision_contract_version", True),
+        ("packet", "decision_contract_version", 1.0),
+        ("packet", "attempt_identity_version", True),
+        ("packet", "attempt_identity_version", 2.0),
+        ("handoff", "handoff_contract_version", True),
+        ("handoff", "handoff_contract_version", 1.0),
+    ],
+)
+def test_loopback_version_fields_require_exact_integers(
+    tmp_path: Path,
+    container: str,
+    field: str,
+    invalid_value: object,
+) -> None:
+    cycle_id = f"cycle-loopback-bool-{container}-{field}"
+    attempt = "ATTEMPT_REF"
+    initialize_with_context(tmp_path, cycle_id, task_id="task-loopback-bool")
+    candidate = final_candidate(cycle_id, attempt)
+    gate = _loopback_gate_for(tmp_path, candidate)
+    if container == "packet":
+        gate[field] = invalid_value
+        _rewrite_loopback_packet(tmp_path, gate)
+    else:
+        gate["anti_loop_handoff"][field] = invalid_value
+    candidate["anti_loop_progress_gate"] = gate
+    candidate["decision_artifact_ref"] = gate["decision_artifact_ref"]
+
+    with pytest.raises(ValueError, match="finalization contract|producer packet"):
+        cycle_ledger.finalize_candidate(tmp_path, cycle_id, candidate)
+
+
+def test_ungated_legacy_decision_ref_preserves_preexisting_commit_digest(
+    tmp_path: Path,
+) -> None:
+    cycle_id = "cycle-legacy-decision-digest"
+    initialize_with_context(tmp_path, cycle_id, task_id="task-legacy-digest")
+    candidate = final_candidate(cycle_id, "ATTEMPT_REF")
+    legacy = json.loads(json.dumps(candidate))
+    legacy["decision_artifact_ref"] = {
+        "artifact_id": "SUBJECT_REF",
+        "artifact_sha256": "a" * 64,
+        "production_lane_identity": "COHORT_REF",
+    }
+    legacy["anti_loop_progress_gate"] = None
+    legacy["anti_loop_handoff"] = None
+
+    assert cycle_ledger.final_candidate_commit_material(legacy) == (
+        cycle_ledger.final_candidate_commit_material(candidate)
+    )
+    first = cycle_ledger.finalize_candidate(tmp_path, cycle_id, candidate)
+    replay = cycle_ledger.finalize_candidate(tmp_path, cycle_id, legacy)
+    assert replay["idempotent"] is True
+    assert replay["receipt"] == first["receipt"]
+
+
+def test_finalizer_consumes_exact_loopback_mutation_and_limits_unevaluated_consumer(
+    tmp_path: Path,
+) -> None:
+    cycle_id = "cycle-loopback-finalization-binding"
+    attempt = "ATTEMPT_REF"
+    initialize_with_context(tmp_path, cycle_id, task_id="task-loopback-binding")
+    candidate = final_candidate(cycle_id, attempt)
+    typed_candidate = candidate["durable_state_candidate"]
+    explicit_without_gate = json.loads(json.dumps(candidate))
+    explicit_without_gate["decision_artifact_ref"] = {
+        "decision_identity_kind": "explicit_v2",
+        "decision_identity": {
+            "artifact_id": "SUBJECT_REF",
+            "artifact_sha256": "a" * 64,
+            "production_lane_identity": "COHORT_REF",
+        },
+    }
+    with pytest.raises(ValueError, match="cannot omit anti_loop_progress_gate"):
+        cycle_ledger.finalize_candidate(tmp_path, cycle_id, explicit_without_gate)
+
+    audit_owned = json.loads(json.dumps(candidate))
+    audit_operation = cycle_ledger.build_durable_operation(
+        target_ref="family_progress_registry",
+        operation_kind="replace_projection",
+        attempt_identity=attempt,
+        payload_schema_id="family-progress-registry-v1",
+        payload={"rows": [{"cycle_id": cycle_id, "family_key": "ROOT_REF"}]},
+    )
+    audit_owned["durable_state_candidate"] = (
+        cycle_ledger.build_typed_operations_candidate(
+            producer="audit-cycle-loopback",
+            attempt_identity=attempt,
+            operations=[audit_operation],
+        )
+    )
+    with pytest.raises(ValueError, match="loopback-owned finalization cannot omit"):
+        cycle_ledger.finalize_candidate(tmp_path, cycle_id, audit_owned)
+
+    candidate["anti_loop_progress_gate"] = _loopback_gate_for(tmp_path, candidate)
+    candidate["decision_artifact_ref"] = candidate["anti_loop_progress_gate"][
+        "decision_artifact_ref"
+    ]
+    downgraded_gate = json.loads(json.dumps(candidate))
+    downgraded_gate["anti_loop_progress_gate"]["finalization_required"] = False
+    with pytest.raises(ValueError, match="cannot lower finalization_required"):
+        cycle_ledger.finalize_candidate(tmp_path, cycle_id, downgraded_gate)
+
+    missing_handoff = json.loads(json.dumps(candidate))
+    missing_handoff["anti_loop_progress_gate"].pop("anti_loop_handoff")
+    with pytest.raises(ValueError, match="lacks its hash-bound handoff"):
+        cycle_ledger.finalize_candidate(tmp_path, cycle_id, missing_handoff)
+
+    no_change = cycle_ledger.build_no_durable_state_change_candidate(
+        attempt_identity=attempt,
+        reason_id="validation-has-no-durable-axis-change",
+        evidence=absent_no_change_evidence(attempt),
+    )
+    bypass = json.loads(json.dumps(candidate))
+    bypass["durable_state_candidate"] = no_change
+    bypass["anti_loop_progress_gate"]["durable_mutation_candidate"] = no_change
+    with pytest.raises(ValueError, match="reopened anti-loop producer packet"):
+        cycle_ledger.finalize_candidate(tmp_path, cycle_id, bypass)
+
+    unevaluated = json.loads(json.dumps(candidate))
+    unevaluated["anti_loop_progress_gate"] = _loopback_gate_for(
+        tmp_path,
+        unevaluated,
+        conformance_status="not_evaluated",
+    )
+    with pytest.raises(ValueError, match="blocks favorable semantic and goal"):
+        cycle_ledger.finalize_candidate(tmp_path, cycle_id, unevaluated)
+
+    malformed = json.loads(json.dumps(candidate))
+    malformed["anti_loop_progress_gate"] = _loopback_gate_for(
+        tmp_path,
+        malformed,
+        conformance_status="missing",
+    )
+    malformed["anti_loop_progress_gate"]["consumer_context_conformance"] = {}
+    malformed_packet = tmp_path / "loopback-packet-missing-verified.json"
+    malformed_packet.write_text(
+        json.dumps(
+            {
+                key: value
+                for key, value in malformed["anti_loop_progress_gate"].items()
+                if key != "anti_loop_handoff"
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    malformed["anti_loop_progress_gate"]["anti_loop_handoff"][
+        "packet_sha256"
+    ] = hashlib.sha256(malformed_packet.read_bytes()).hexdigest()
+    with pytest.raises(ValueError, match="blocks favorable semantic and goal"):
+        cycle_ledger.finalize_candidate(tmp_path, cycle_id, malformed)
+
+    stale_identity = json.loads(json.dumps(candidate))
+    stale_identity["anti_loop_progress_gate"] = _loopback_gate_for(
+        tmp_path,
+        stale_identity,
+        identity_status="hash_mismatch",
+    )
+    with pytest.raises(ValueError, match="blocks favorable semantic and goal"):
+        cycle_ledger.finalize_candidate(tmp_path, cycle_id, stale_identity)
+
+    bounded = json.loads(json.dumps(unevaluated))
+    bounded["artifact_semantic_verdict"] = {
+        "status": "not_evaluated",
+        "evidence_ref": "EVIDENCE_REF",
+    }
+    bounded["goal_readiness_verdict"] = {
+        "status": "not_evaluated",
+        "evidence_ref": "EVIDENCE_REF",
+    }
+    finalized = cycle_ledger.finalize_candidate(tmp_path, cycle_id, bounded)
+
+    assert typed_candidate == bounded["durable_state_candidate"]
+    assert finalized["authoritative_projection"]["task_acceptance_verdict"][
+        "status"
+    ] == "pass"
+    assert finalized["authoritative_projection"]["artifact_semantic_verdict"][
+        "status"
+    ] == "not_evaluated"
+    assert finalized["authoritative_projection"]["goal_readiness_verdict"][
+        "status"
+    ] == "not_evaluated"
+    expected_digest = cycle_ledger.canonical_sha256(
+        cycle_ledger.final_candidate_commit_material(bounded)
+    )
+    assert finalized["receipt"]["final_candidate_digest"] == expected_digest
+    other_packet = json.loads(json.dumps(bounded))
+    other_packet["anti_loop_progress_gate"]["blocker_signature"] = "BLOCKER_OTHER"
+    assert cycle_ledger.canonical_sha256(
+        cycle_ledger.final_candidate_commit_material(other_packet)
+    ) != expected_digest
+
+
+def test_exported_final_candidate_normalizer_keeps_legacy_two_argument_api() -> None:
+    candidate = final_candidate("cycle-normalizer-api", "ATTEMPT_REF")
+
+    normalized = cycle_ledger.normalize_final_candidate(
+        "cycle-normalizer-api", candidate
+    )
+
+    assert normalized["attempt_id"] == "ATTEMPT_REF"
+
+
+def _no_op_pointer_writer(_path: Path, _body: str) -> None:
+    return None
+
+
+def _corrupt_pointer_writer(path: Path, _body: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"kind":"corrupt"}\n', encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "writer",
+    [_no_op_pointer_writer, _corrupt_pointer_writer],
+    ids=["no-op", "corrupt"],
+)
+def test_finalizer_post_reads_authoritative_pointer_before_returning_valid(
+    tmp_path: Path,
+    writer: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cycle_id = f"cycle-post-read-{writer.__name__}"
+    initialize_with_context(tmp_path, cycle_id, task_id="task-post-read")
+    candidate = final_candidate(cycle_id, "ATTEMPT_REF")
+    monkeypatch.setattr(cycle_ledger, "atomic_write_text", writer)
+
+    with pytest.raises(ValueError, match="current finalization pointer"):
+        cycle_ledger.finalize_candidate(tmp_path, cycle_id, candidate)
 
 
 def registered_payload_cases() -> list[tuple[str, str, dict[str, Any]]]:
@@ -1504,27 +2158,16 @@ def test_failure_before_pointer_publish_leaves_prior_truth_unchanged_and_retry_r
     operations: list[dict[str, Any]] = []
     for target_ref, operation_kind, payload_schema_id, payload in (
         (
-            "family_progress_registry",
+            "registry_projection",
             "replace_projection",
-            "family-progress-registry-v1",
-            {"rows": [{"cycle_id": "cycle-C", "family_key": "family-C"}]},
+            "registry-projection-v1",
+            {"artifact_id": "artifact-C"},
         ),
         (
-            "root_cause_ledger",
+            "ledger_projection",
             "append_projection",
-            "root-cause-ledger-v1",
-            {"rows": [{"cycle_id": "cycle-C", "root_key": "root-C"}]},
-        ),
-        (
-            "sealed_blocker_families",
-            "replace_projection",
-            "sealed-blocker-families-v1",
-            {
-                "state": {
-                    "schema_version": "sealed-blocker-families-v1",
-                    "families": [],
-                }
-            },
+            "ledger-projection-v1",
+            {"rows": [{"evidence_id": "evidence-C"}]},
         ),
         (
             "dedup_symbol_registry",
@@ -1552,6 +2195,9 @@ def test_failure_before_pointer_publish_leaves_prior_truth_unchanged_and_retry_r
                 attempt_identity="attempt_C",
                 payload_schema_id=payload_schema_id,
                 payload=payload,
+                expected_revision_id=first["receipt"]["target_revision_ids"].get(
+                    target_ref
+                ),
                 depends_on_operation_ids=(
                     [operations[-1]["operation_id"]] if operations else []
                 ),

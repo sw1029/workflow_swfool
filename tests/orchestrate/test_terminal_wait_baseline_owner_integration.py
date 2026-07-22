@@ -417,6 +417,7 @@ def _selection_rebase(
     suffix: str,
     *,
     verify_forged_receipt: bool = False,
+    add_nonmaterial_drift: bool = False,
 ) -> dict[str, Any]:
     assert trigger["status"] == "selection_required"
     assert trigger["agent_fanout_allowed"] is True
@@ -476,6 +477,11 @@ def _selection_rebase(
         receipt,
     )
     receipt_binding = _binding(root, receipt_path)
+    if add_nonmaterial_drift:
+        _write(
+            root / ".agent_advice/index.jsonl",
+            '{"advice_id":"EVIDENCE_REF","status":"retired"}\n',
+        )
     rebased = build_selection_tick(
         root,
         previous=trigger,
@@ -490,6 +496,9 @@ def _selection_rebase(
     assert acknowledgement["selection_receipt_id"] == receipt["receipt_id"]
     assert acknowledgement["selection_receipt_ref"] == receipt_binding["ref"]
     assert acknowledgement["selection_receipt_sha256"] == receipt_binding["sha256"]
+    if add_nonmaterial_drift:
+        assert rebased["changed_evidence_classes"] == ["advice"]
+        assert rebased["material_changed_watch_entries"] == []
     validate_selection_packet(rebased, root=root)
 
     if forged_binding is not None:
@@ -877,6 +886,7 @@ def test_real_owner_terminal_wait_publication_settles_exact_authority_lifecycle(
         trigger,
         "real",
         verify_forged_receipt=True,
+        add_nonmaterial_drift=True,
     )
     real_core = _source_core(
         tmp_path,

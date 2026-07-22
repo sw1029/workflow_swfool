@@ -4,11 +4,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any
+
+from .v2_specs import EXECUTOR_KINDS
 
 
 PREPARATION_KIND = "orchestrate_stage_preparation"
 PREPARATION_SCHEMA_VERSION = 1
+PREPARATION_SCHEMA_VERSION_V2 = 2
+SUPPORTED_PREPARATION_SCHEMA_VERSIONS = frozenset(
+    {PREPARATION_SCHEMA_VERSION, PREPARATION_SCHEMA_VERSION_V2}
+)
+SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 
 def canonical_bytes(value: Any) -> bytes:
@@ -60,6 +68,26 @@ def state_fingerprint(
 
 
 def preparation_identity(value: dict[str, Any]) -> dict[str, Any]:
+    if value.get("schema_version") == PREPARATION_SCHEMA_VERSION_V2:
+        return {
+            key: value.get(key)
+            for key in (
+                "schema_version",
+                "artifact_kind",
+                "cycle_id",
+                "target",
+                "workflow_mode",
+                "executor_kind",
+                "model_call_required",
+                "state_fingerprint",
+                "fingerprint_roles",
+                "context_binding",
+                "work_order_binding",
+                "derived_values",
+                "result_contract",
+                "next_action",
+            )
+        }
     return {
         key: value.get(key)
         for key in (
@@ -78,6 +106,8 @@ def preparation_identity(value: dict[str, Any]) -> dict[str, Any]:
 
 
 def trusted_preparation_material(value: dict[str, Any]) -> dict[str, Any]:
+    if value.get("schema_version") == PREPARATION_SCHEMA_VERSION_V2:
+        return {"identity": preparation_identity(value)}
     return {
         "identity": preparation_identity(value),
         "model_packet": value.get("model_packet"),
@@ -118,7 +148,8 @@ def stale_preparation_result(
 def validate_preparation(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("stage preparation must be a JSON object")
-    if value.get("schema_version") != PREPARATION_SCHEMA_VERSION:
+    version = value.get("schema_version")
+    if version not in SUPPORTED_PREPARATION_SCHEMA_VERSIONS:
         raise ValueError("unsupported stage preparation schema_version")
     if value.get("artifact_kind") != PREPARATION_KIND:
         raise ValueError("stage preparation has an invalid artifact_kind")
@@ -126,10 +157,13 @@ def validate_preparation(value: Any) -> dict[str, Any]:
     expected = "stageprep-" + canonical_sha256(identity)[:32]
     if value.get("preparation_id") != expected:
         raise ValueError("stage preparation identity does not match its content")
-    model_context = value.get("model_context")
     roles = value.get("fingerprint_roles")
     if not isinstance(roles, list):
         raise ValueError("stage preparation fingerprint_roles must be a list")
+    if version == PREPARATION_SCHEMA_VERSION_V2:
+        _validate_v2_preparation(value)
+        return value
+    model_context = value.get("model_context")
     if not isinstance(model_context, dict) or state_fingerprint(
         model_context, roles
     ) != value.get("state_fingerprint"):
@@ -137,6 +171,37 @@ def validate_preparation(value: Any) -> dict[str, Any]:
     if canonical_sha256(value.get("model_packet")) != value.get("model_packet_sha256"):
         raise ValueError("stage preparation model_packet binding is invalid")
     return value
+
+
+def _validate_binding(value: Any, label: str) -> None:
+    if not isinstance(value, dict):
+        raise ValueError(f"stage preparation {label} must be an object")
+    if value.get("artifact_type") != label.removesuffix("_binding"):
+        raise ValueError(f"stage preparation {label} has an invalid artifact_type")
+    if not isinstance(value.get("ref"), str) or not value.get("ref"):
+        raise ValueError(f"stage preparation {label} requires ref")
+    if not SHA256_PATTERN.fullmatch(str(value.get("sha256") or "")):
+        raise ValueError(f"stage preparation {label} requires raw sha256")
+    size = value.get("size_bytes")
+    if isinstance(size, bool) or not isinstance(size, int) or size < 1:
+        raise ValueError(f"stage preparation {label} requires positive size_bytes")
+
+
+def _validate_v2_preparation(value: dict[str, Any]) -> None:
+    if value.get("executor_kind") not in EXECUTOR_KINDS - {"system"}:
+        raise ValueError("stage preparation has an invalid executor_kind")
+    if "model_context" in value or "model_packet" in value:
+        raise ValueError("v2 stage preparation must not embed context or packet bodies")
+    _validate_binding(value.get("context_binding"), "context_binding")
+    _validate_binding(value.get("work_order_binding"), "work_order_binding")
+    contract = value.get("result_contract")
+    if not isinstance(contract, dict):
+        raise ValueError("v2 stage preparation result_contract must be an object")
+    semantic = contract.get("semantic_fields")
+    if not isinstance(semantic, list):
+        raise ValueError("v2 result_contract semantic_fields must be a list")
+    if value.get("model_call_required") is not bool(semantic):
+        raise ValueError("v2 model_call_required does not match semantic field count")
 
 
 def leaf_count(value: Any) -> int:
@@ -150,6 +215,8 @@ def leaf_count(value: Any) -> int:
 __all__ = [
     "PREPARATION_KIND",
     "PREPARATION_SCHEMA_VERSION",
+    "PREPARATION_SCHEMA_VERSION_V2",
+    "SUPPORTED_PREPARATION_SCHEMA_VERSIONS",
     "canonical_bytes",
     "canonical_sha256",
     "leaf_count",

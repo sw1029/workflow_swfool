@@ -13,6 +13,7 @@ from .selection_decision_receipt import (
 )
 from .selection_tick_baseline import changed_watch_entries
 from .selection_tick_contract import validate_selection_tick_v2
+from .selection_tick_policy import material_watch_entries
 from .selection_tick_premise import VERIFIED_PREMISE_CONTRACT
 from .terminal_wait_baseline_store import SHA256, read_bound_json
 
@@ -153,15 +154,20 @@ def _validate_rebased_lineage(
         )
     ):
         raise ValueError("selection trigger does not descend from the predecessor")
+    rebased_changes = changed_watch_entries(trigger, packet["watch_entries"])
+    rebased_material = material_watch_entries(
+        rebased_changes,
+        packet["watch_entries"],
+        packet["watched_evidence_classes"],
+    )
     if (
         packet["previous_input_manifest_sha256"]
         != trigger["observed_input_manifest_sha256"]
-        or packet["observed_input_manifest_sha256"]
-        != trigger["observed_input_manifest_sha256"]
-        or packet["watch_entries"] != trigger["watch_entries"]
-        or packet["changed_watch_entries"]
-        or packet["material_changed_watch_entries"]
+        or packet["changed_watch_entries"] != rebased_changes
+        or packet["material_changed_watch_entries"] != rebased_material
+        or rebased_material
         or packet["changed_evidence_classes"]
+        != sorted({row["evidence_class"] for row in rebased_changes})
         or any(
             packet[field] != trigger[field]
             for field in (

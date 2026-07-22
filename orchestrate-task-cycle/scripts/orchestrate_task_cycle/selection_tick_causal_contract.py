@@ -67,7 +67,7 @@ def validate_tick_causality(
         packet["selection_acknowledgement_status"] != "not_requested"
         and publication_status == "clear"
     ):
-        if changes:
+        if expected_fresh or material:
             expected_status = "selection_required"
             expected_reason = "selection_inputs_changed_during_acknowledgement"
             expected_required = True

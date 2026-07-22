@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
+import re
 import sys
 from typing import Any, Sequence
 
@@ -15,6 +17,11 @@ from .selection_decision_receipt import (
     render_selection_decision_receipt,
 )
 from .selection_synthesis import render_selection_synthesis
+from .selection_decision_store import canonical_bytes
+from .selection_publication_store import _write_once
+
+
+CYCLE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
 def _binding(ref: str, digest: str) -> dict[str, str]:
@@ -43,7 +50,83 @@ def _parser() -> argparse.ArgumentParser:
     validate.add_argument("--receipt-sha256", required=True)
     validate.add_argument("--trigger-tick-ref", required=True)
     validate.add_argument("--trigger-tick-sha256", required=True)
+    pipeline = commands.add_parser("pipeline")
+    pipeline.add_argument("--cycle-id", required=True)
+    pipeline.add_argument("--source-result-ref", required=True)
+    pipeline.add_argument("--source-result-sha256", required=True)
+    pipeline.add_argument("--trigger-tick-ref", required=True)
+    pipeline.add_argument("--trigger-tick-sha256", required=True)
     return parser
+
+
+def _pipeline_directory(root: Path, cycle_id: str) -> Path:
+    if not CYCLE_ID.fullmatch(cycle_id):
+        raise ValueError("selection decision pipeline cycle ID is invalid")
+    directory = root / ".task" / "cycle" / cycle_id / "agent_receipts" / "selection"
+    current = root
+    for part in directory.relative_to(root).parts:
+        current /= part
+        if current.is_symlink():
+            raise ValueError("selection decision pipeline cannot traverse symlinks")
+        if current.exists() and not current.is_dir():
+            raise ValueError("selection decision pipeline output parent is not a directory")
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def _persist_pipeline_artifact(
+    root: Path, directory: Path, prefix: str, value: dict[str, Any]
+) -> tuple[dict[str, str], bool]:
+    payload = canonical_bytes(value)
+    digest = hashlib.sha256(payload).hexdigest()
+    path = directory / f"{prefix}-{digest}.json"
+    created = not path.exists()
+    persisted = _write_once(path, payload, f"selection decision {prefix}")
+    return {
+        "ref": path.relative_to(root).as_posix(),
+        "sha256": persisted,
+    }, created
+
+
+def _pipeline(root: Path, args: argparse.Namespace) -> dict[str, Any]:
+    root = root.expanduser().resolve(strict=True)
+    source_binding = _binding(args.source_result_ref, args.source_result_sha256)
+    _, source_result = read_bound_json(
+        root, source_binding, "derive synthesis source result"
+    )
+    trigger_binding, trigger = _trigger(root, args)
+    synthesis = render_selection_synthesis(root, source_result)
+    directory = _pipeline_directory(root, args.cycle_id)
+    synthesis_binding, synthesis_created = _persist_pipeline_artifact(
+        root, directory, "synthesis", synthesis
+    )
+    decision = render_preliminary_selection_decision(
+        root, trigger, synthesis_binding
+    )
+    decision_binding, decision_created = _persist_pipeline_artifact(
+        root, directory, "decision", decision
+    )
+    receipt = render_selection_decision_receipt(
+        root, trigger, trigger_binding, decision_binding
+    )
+    receipt_binding, receipt_created = _persist_pipeline_artifact(
+        root, directory, "receipt", receipt
+    )
+    reopened = read_selection_decision_receipt(
+        root, receipt_binding, expected_trigger_tick=trigger
+    )
+    return {
+        "status": "completed",
+        "cycle_id": args.cycle_id,
+        "outcome": reopened["outcome"],
+        "selected_task_id": reopened["selected_task_id"],
+        "synthesis": synthesis_binding,
+        "decision": decision_binding,
+        "receipt": receipt_binding,
+        "mutation_performed": any(
+            (synthesis_created, decision_created, receipt_created)
+        ),
+    }
 
 
 def _trigger(
@@ -59,6 +142,8 @@ def _trigger(
 
 
 def _run(root: Path, args: argparse.Namespace) -> dict[str, Any]:
+    if args.action == "pipeline":
+        return _pipeline(root, args)
     if args.action == "render-synthesis":
         _, source_result = read_bound_json(
             root,

@@ -1,10 +1,4 @@
-"""Forward-recoverable publication of one canonical task selection.
-
-The helper owns no task-selection policy.  It only publishes caller-prepared
-workflow projections with exact before/after digests, writes the authoritative
-``task.md`` pointer last, and withholds a committed receipt until every target
-matches its prepared after-state.
-"""
+"""Forward-recoverable publication of one canonical task selection."""
 
 from __future__ import annotations
 
@@ -33,6 +27,7 @@ from .selection_publication_plan import (
     _target_path,
 )
 from .selection_publication_status import current_head_status
+from .selection_publication_state import load_state, status_from_state, write_state
 from .selection_publication_store import (
     TRANSACTION_ID,
     _atomic_write,
@@ -46,6 +41,11 @@ from .selection_publication_store import (
     _sha256_file,
     _transactions_root,
     _write_once,
+)
+from .selection_publication_v2 import (
+    normalize_prepare as normalize_v2_prepare,
+    payload_for_target,
+    validate_owner_assertion,
 )
 
 
@@ -64,17 +64,20 @@ def _load_prepare(root: Path, transaction_id: str) -> tuple[dict[str, Any], Path
     prepare = _load_json(path, "selection-publication prepare journal")
     if prepare.get("transaction_id") != transaction_id:
         raise ValueError("selection-publication prepare transaction id is inconsistent")
-    plan_material = {
-        key: value
-        for key, value in prepare.items()
-        if key not in {"transaction_id", "predecessor_transaction_id"}
-    }
-    plan_material["kind"] = "selection_publication_plan"
-    normalized = _normalize_plan(
-        root,
-        plan_material,
-        require_current_owner_projections=False,
-    )
+    if prepare.get("schema_version") == 2:
+        normalized = normalize_v2_prepare(root, prepare)
+    else:
+        plan_material = {
+            key: value
+            for key, value in prepare.items()
+            if key not in {"transaction_id", "predecessor_transaction_id"}
+        }
+        plan_material["kind"] = "selection_publication_plan"
+        normalized = _normalize_plan(
+            root,
+            plan_material,
+            require_current_owner_projections=False,
+        )
     if "predecessor_transaction_id" in prepare:
         predecessor = prepare.get("predecessor_transaction_id")
         if predecessor is not None and not TRANSACTION_ID.fullmatch(str(predecessor)):
@@ -107,12 +110,14 @@ def prepare_publication(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
             load_prepare=_load_prepare,
         )
         if replay is not None:
+            _repair_state_if_needed(root)
             return replay
         receipts = _committed_receipts(root)
         replay = committed_replay(
             root, normalized, receipts, load_prepare=_load_prepare
         )
         if replay is not None:
+            _repair_state_if_needed(root)
             return replay
         predecessor = new_predecessor_transaction_id(
             normalized, receipts, _sha256_file(root / "task.md")
@@ -130,6 +135,7 @@ def prepare_publication(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
             path, _display_json(prepare), "selection-publication prepare journal"
         )
         _load_prepare(root, transaction_id)
+        _refresh_state(root)
     return prepare_response(
         root,
         transaction_id,
@@ -139,6 +145,14 @@ def prepare_publication(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
         mutation_performed=True,
         recovery_required=True,
     )
+
+
+def prepare_publication_intent(
+    root: Path, intent: dict[str, Any]
+) -> dict[str, Any]:
+    from .selection_publication_intent_service import prepare_publication_intent as run
+
+    return run(root, intent)
 
 
 def prepare_drift_reconciliation(
@@ -160,12 +174,14 @@ def prepare_drift_reconciliation(
             load_prepare=_load_prepare,
         )
         if replay is not None:
+            _repair_state_if_needed(root)
             return replay
         receipts = _committed_receipts(root)
         replay = committed_replay(
             root, normalized, receipts, load_prepare=_load_prepare
         )
         if replay is not None:
+            _repair_state_if_needed(root)
             return replay
         current_task_sha256 = _sha256_file(root / "task.md")
         head = current_head_status(receipts, current_task_sha256)
@@ -194,6 +210,7 @@ def prepare_drift_reconciliation(
             path, _display_json(prepare), "selection-publication prepare journal"
         )
         _load_prepare(root, transaction_id)
+        _refresh_state(root)
     return prepare_response(
         root,
         transaction_id,
@@ -225,7 +242,8 @@ def validate_receipt(
         "predecessor_transaction_id"
     )
     if (
-        receipt.get("schema_version") != SCHEMA_VERSION
+        receipt.get("schema_version") != prepare.get("schema_version")
+        or receipt.get("schema_version") not in {SCHEMA_VERSION, 2}
         or receipt.get("kind") != "selection_publication_receipt"
         or receipt.get("status") != "committed"
         or receipt.get("transaction_id") != transaction_id
@@ -273,7 +291,11 @@ def publish_prepared(root: Path, transaction_id: str) -> dict[str, Any]:
     with _lock(root):
         receipt_path = _receipt_path(root, transaction_id)
         if receipt_path.is_file():
-            return _historical_receipt_response(root, transaction_id)
+            response = _historical_receipt_response(root, transaction_id)
+            if _repair_state_if_needed(root):
+                response["mutation_performed"] = True
+                response["compact_state_repaired"] = True
+            return response
         _reject_competing_pending(root, transaction_id)
         prepare, prepare_path, prepare_sha = _load_prepare(root, transaction_id)
         validate_publish_predecessor(
@@ -282,6 +304,9 @@ def publish_prepared(root: Path, transaction_id: str) -> dict[str, Any]:
             _sha256_file(root / "task.md"),
         )
         targets = list(prepare["targets"])
+        if prepare.get("schema_version") == 2:
+            for assertion in prepare["owner_assertions"]:
+                validate_owner_assertion(root, assertion)
         for target in targets:
             current = _sha256_file(
                 _target_path(root, target["role"], target["target_ref"])
@@ -294,7 +319,12 @@ def publish_prepared(root: Path, transaction_id: str) -> dict[str, Any]:
             path = _target_path(root, target["role"], target["target_ref"])
             if _sha256_file(path) == target["after_sha256"]:
                 continue
-            _atomic_write(path, _decode_payload(target))
+            payload = (
+                payload_for_target(root, target)
+                if prepare.get("schema_version") == 2
+                else _decode_payload(target)
+            )
+            _atomic_write(path, payload)
             if _sha256_file(path) != target["after_sha256"]:
                 raise ValueError(
                     "selection-publication target failed post-write verification"
@@ -307,7 +337,7 @@ def publish_prepared(root: Path, transaction_id: str) -> dict[str, Any]:
             for target in targets
         ]
         receipt = {
-            "schema_version": SCHEMA_VERSION,
+            "schema_version": prepare["schema_version"],
             "kind": "selection_publication_receipt",
             "status": "committed",
             "transaction_id": transaction_id,
@@ -328,6 +358,7 @@ def publish_prepared(root: Path, transaction_id: str) -> dict[str, Any]:
             receipt_path, _display_json(receipt), "selection-publication receipt"
         )
         verified = validate_receipt(root, transaction_id, require_current_targets=True)
+        _refresh_state(root)
         return {
             **verified,
             "receipt_sha256": receipt_sha,
@@ -380,6 +411,39 @@ def _committed_receipts(root: Path) -> list[dict[str, Any]]:
     return receipts
 
 
+def _refresh_state(root: Path) -> dict[str, Any]:
+    """Deep-validate history once, then publish its compact status projection."""
+
+    receipts = _committed_receipts(root)
+    pending = pending_transaction_ids(root)
+    return write_state(root, receipts, pending)
+
+
+def _repair_state_if_needed(root: Path) -> bool:
+    try:
+        state = load_state(root)
+    except ValueError:
+        state = None
+    if state is not None:
+        return False
+    _refresh_state(root)
+    return True
+
+
+def migrate_publication_state(root: Path) -> dict[str, Any]:
+    root = root.expanduser().resolve(strict=True)
+    with _lock(root):
+        state = _refresh_state(root)
+    return {
+        "status": "migrated",
+        "receipt_count": len(state["receipts"]),
+        "pending_count": len(state["pending_transaction_ids"]),
+        "state_ref": ".task/selection_publication/state.json",
+        "state_content_sha256": state["state_content_sha256"],
+        "mutation_performed": True,
+    }
+
+
 def recover_publications(
     root: Path, transaction_id: str | None = None
 ) -> dict[str, Any]:
@@ -400,8 +464,12 @@ def recover_publications(
     }
 
 
-def publication_status(root: Path) -> dict[str, Any]:
+def publication_status(root: Path, *, deep: bool = False) -> dict[str, Any]:
     root = root.expanduser().resolve(strict=True)
+    if not deep:
+        state = load_state(root)
+        if state is not None:
+            return status_from_state(root, state)
     pending = pending_transaction_ids(root)
     head = current_head_status(
         _committed_receipts(root), _sha256_file(root / "task.md")

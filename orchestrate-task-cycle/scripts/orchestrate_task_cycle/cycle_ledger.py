@@ -19,6 +19,7 @@ from .ledger.candidate_validation import (
 )
 from .ledger.constants import (
     CANONICAL_STEPS,
+    CURRENT_STAGE_PROJECTION_VERSION,
     CYCLE_ID_PATTERN,
     DEFAULT_STEPS,
     DURABLE_OPERATION_TYPES,
@@ -35,7 +36,9 @@ from .ledger.constants import (
     SENSITIVE_DURABLE_KEY_PARTS,
     SHA256_PATTERN,
     STAGE_STATUS_NORMALIZATION,
+    STAGE_COMPILER_PROTOCOL_VERSION,
     SUPPORTED_LEDGER_FORMAT_VERSIONS,
+    SUPPORTED_STAGE_COMPILER_PROTOCOL_VERSIONS,
     TERMINAL_LATCH_KEY_VERSION,
     TERMINAL_OBSERVATION_FIELDS,
     VERDICT_AXES,
@@ -74,6 +77,7 @@ from .ledger.no_change_contract import (
     build_no_change_evidence,
     build_unchanged_target_observation,
 )
+from .ledger.initialization import cli_init_protocol as _cli_init_protocol
 from .ledger.initialization import init_cycle as _init_cycle
 from .ledger.reporting import render_markdown, summarize
 from .ledger.repository import (
@@ -82,6 +86,7 @@ from .ledger.repository import (
     read_all_cycle_events,
     read_events,
     read_events_unlocked,
+    read_current_expanded,
     write_current as _write_current,
     write_current_unlocked as _write_current_unlocked,
 )
@@ -123,6 +128,7 @@ from .ledger.terminal import (
 
 __all__ = [
     "CANONICAL_STEPS",
+    "CURRENT_STAGE_PROJECTION_VERSION",
     "CYCLE_ID_PATTERN",
     "DEFAULT_STEPS",
     "DURABLE_OPERATION_TYPES",
@@ -140,7 +146,9 @@ __all__ = [
     "SENSITIVE_DURABLE_KEY_PARTS",
     "SHA256_PATTERN",
     "STAGE_STATUS_NORMALIZATION",
+    "STAGE_COMPILER_PROTOCOL_VERSION",
     "SUPPORTED_LEDGER_FORMAT_VERSIONS",
+    "SUPPORTED_STAGE_COMPILER_PROTOCOL_VERSIONS",
     "TERMINAL_LATCH_KEY_VERSION",
     "TERMINAL_OBSERVATION_FIELDS",
     "VERDICT_AXES",
@@ -192,6 +200,7 @@ __all__ = [
     "pending_finalizations_dir",
     "pending_resolutions_dir",
     "read_all_cycle_events",
+    "read_current_expanded",
     "read_events",
     "read_events_unlocked",
     "read_initialization_metadata",
@@ -222,8 +231,16 @@ def write_current_unlocked(
     root: Path,
     cycle_id: str,
     events: list[dict[str, Any]],
+    *,
+    stage_compiler_protocol_version: int = 1,
 ) -> dict[str, Any]:
-    return _write_current_unlocked(root, cycle_id, events, atomic_writer=atomic_write_text)
+    return _write_current_unlocked(
+        root,
+        cycle_id,
+        events,
+        protocol_version=stage_compiler_protocol_version,
+        atomic_writer=atomic_write_text,
+    )
 
 
 def write_current(
@@ -257,6 +274,7 @@ def init_cycle(
     reason: str,
     terminal_state: dict[str, Any] | None = None,
     allow_missing_task_for_bootstrap: bool = False,
+    stage_compiler_protocol_version: int | None = None,
 ) -> dict[str, Any]:
     return _init_cycle(
         root,
@@ -265,6 +283,7 @@ def init_cycle(
         reason,
         terminal_state,
         allow_missing_task_for_bootstrap,
+        stage_compiler_protocol_version,
         atomic_writer=atomic_write_text,
         append_event=append_event,
     )
@@ -325,6 +344,15 @@ def _build_parser() -> argparse.ArgumentParser:
     init_p.add_argument("--cycle-id")
     init_p.add_argument("--task-id")
     init_p.add_argument("--allow-missing-task-for-bootstrap", action="store_true")
+    init_p.add_argument(
+        "--stage-compiler-protocol-version",
+        type=int,
+        choices=(1, STAGE_COMPILER_PROTOCOL_VERSION),
+        help=(
+            "Compiler protocol for a new cycle (default: 2); omitted on an "
+            "existing cycle preserves its initialized protocol."
+        ),
+    )
     init_p.add_argument("--reason", default="cycle ledger initialized")
     init_p.add_argument("--terminal-state-json", help="Optional terminal state used to suppress an unchanged full-cycle restart.")
 
@@ -414,6 +442,11 @@ def main(argv: list[str] | None = None) -> int:
             args.reason,
             load_json_value(args.terminal_state_json),
             args.allow_missing_task_for_bootstrap,
+            _cli_init_protocol(
+                args.root,
+                args.cycle_id,
+                args.stage_compiler_protocol_version,
+            ),
         )
     elif args.command == "append":
         result = _append_cli_event(args)

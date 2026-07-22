@@ -42,6 +42,12 @@ IDENTITY_ENVELOPE_FIELDS = {
     "identity_status",
     "scope_verified",
 }
+IDENTITY_REF_FIELDS = (
+    "decision_artifact_ref",
+    "decision_identity",
+    "artifact_ref",
+    "selected_artifact_ref",
+)
 OPAQUE_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:@+-]{0,255}")
 SOURCE_LIKE_SUFFIXES = (
     ".csv",
@@ -206,6 +212,34 @@ def explicit_identity_object(value: object) -> dict[str, Any] | None:
         if nested is not None:
             return nested
     return value if any(name in value for name in DIMENSION_NAMES) else None
+
+
+def explicit_v2_floor_declared(value: object) -> bool:
+    """Detect an explicit-v2 floor without treating unrelated v2 packets as identity."""
+
+    if not isinstance(value, dict):
+        return False
+    if str(value.get("decision_identity_kind") or "").strip() == "explicit_v2":
+        return True
+    contract_version = value.get("contract_version")
+    identity_bearing = any(
+        key in value
+        for key in (
+            *IDENTITY_REF_FIELDS,
+            *SUBJECT_FIELDS,
+            *DIMENSION_NAMES,
+            "artifact_id",
+            "artifact_sha256",
+            "production_lane_identity",
+        )
+    )
+    if (
+        not isinstance(contract_version, bool)
+        and contract_version == 2
+        and identity_bearing
+    ):
+        return True
+    return any(explicit_v2_floor_declared(value.get(key)) for key in IDENTITY_REF_FIELDS)
 
 
 def normalized_legacy_identity(identity: object) -> dict[str, Any]:

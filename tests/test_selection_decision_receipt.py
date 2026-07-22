@@ -45,9 +45,10 @@ def _cli(
 
 
 def _selected_tick(root: Path, suffix: str = "A") -> dict[str, object]:
-    task = _write(root / "task.md", "# Task\n")
+    _write(root / "task.md", "# Task\n")
+    goal = _write(root / ".agent_goal/final_goal.md", "# Goal\n")
     baseline = build_selection_tick(root)
-    _write(task, f"# Task {suffix}\n")
+    _write(goal, f"# Goal {suffix}\n")
     return build_selection_tick(root, previous=baseline)
 
 

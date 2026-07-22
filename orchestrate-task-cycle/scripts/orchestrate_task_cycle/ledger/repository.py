@@ -5,10 +5,15 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .artifact_evidence import annotate_artifact_refs
-from .constants import CANONICAL_STEPS, LEDGER_FORMAT_VERSION
+from .constants import CURRENT_STAGE_PROJECTION_VERSION
+from .current_projection import (
+    build_current_projection,
+    expand_current_projection,
+    load_cycle_current_file,
+    stage_compiler_protocol_version,
+)
 from .event_model import (
     complete_event,
-    now_iso,
     request_fingerprint,
     validate_event_envelope,
     validate_stored_event,
@@ -18,6 +23,7 @@ from .support import (
     current_stage_path,
     cycle_dir,
     durable_append_json,
+    initialization_path,
     ledger_lock,
     ledger_path,
     read_initialization_metadata,
@@ -89,33 +95,14 @@ def write_current_unlocked(
     cycle_id: str,
     events: list[dict[str, Any]],
     *,
+    protocol_version: int = 1,
     atomic_writer: AtomicTextWriter = atomic_write_text,
 ) -> dict[str, Any]:
-    latest_by_step: dict[str, dict[str, Any]] = {}
-    malformed_events: list[dict[str, Any]] = []
-    for event in events:
-        step = str(event.get("step") or "unknown")
-        if step in CANONICAL_STEPS:
-            latest_by_step[step] = event
-        else:
-            malformed_events.append(event)
-    latest = events[-1] if events else {}
-    status = "empty"
-    if any(str(event.get("status")).lower() in {"blocked", "failed"} for event in latest_by_step.values()):
-        status = "blocked"
-    elif latest:
-        status = str(latest.get("status") or "unknown")
-    current = {
-        "format_version": LEDGER_FORMAT_VERSION,
-        "cycle_id": cycle_id,
-        "updated_at": now_iso(),
-        "status": status,
-        "latest_event": latest,
-        "steps": {step: latest_by_step[step] for step in sorted(latest_by_step)},
-        "malformed_event_count": len(malformed_events),
-        "malformed_events": malformed_events[-10:],
-        "event_count": len(events),
-    }
+    current = build_current_projection(
+        cycle_id,
+        events,
+        protocol_version=protocol_version,
+    )
     path = current_stage_path(root, cycle_id)
     atomic_writer(path, json.dumps(current, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
     return current
@@ -132,7 +119,48 @@ def write_current(
     with ledger_lock(root, cycle_id, exclusive=True):
         stored_events = read_events_unlocked(root, cycle_id)
         effective_events = stored_events if ledger_path(root, cycle_id).is_file() else list(events or [])
-        return write_current_unlocked(root, cycle_id, effective_events, atomic_writer=atomic_writer)
+        metadata = (
+            read_initialization_metadata(root, cycle_id)
+            if initialization_path(root, cycle_id).is_file()
+            else None
+        )
+        return write_current_unlocked(
+            root,
+            cycle_id,
+            effective_events,
+            protocol_version=stage_compiler_protocol_version(metadata),
+            atomic_writer=atomic_writer,
+        )
+
+
+def read_current_expanded(root: Path, cycle_id: str) -> dict[str, Any]:
+    """Read current_stage.json and hydrate protocol-v2 event refs from stage.jsonl.
+
+    Legacy snapshots are returned unchanged.  A v2 snapshot is accepted only when
+    it exactly projects the ledger while the shared ledger lock is held.
+    """
+
+    cycle_id = validate_cycle_id(cycle_id)
+    with ledger_lock(root, cycle_id, exclusive=False):
+        current = load_cycle_current_file(root, cycle_id)
+        if not current:
+            return {}
+        events = read_events_unlocked(root, cycle_id)
+        metadata = (
+            read_initialization_metadata(root, cycle_id)
+            if initialization_path(root, cycle_id).is_file()
+            else None
+        )
+        protocol_version = stage_compiler_protocol_version(metadata)
+        projection_version = current.get("projection_version", 1)
+        expected_projection_version = (
+            CURRENT_STAGE_PROJECTION_VERSION if protocol_version == 2 else 1
+        )
+        if projection_version != expected_projection_version:
+            raise ValueError(
+                "current_stage projection does not match the initialized compiler protocol"
+            )
+        return expand_current_projection(current, events, cycle_id=cycle_id)
 
 
 def duplicate_event(
@@ -223,7 +251,13 @@ def append_event(
         (cycle_dir(root, cycle_id) / "packets").mkdir(parents=True, exist_ok=True)
         duplicate = duplicate_event(previous_events, event, fingerprint)
         if duplicate is not None:
-            current = write_current_unlocked(root, cycle_id, previous_events, atomic_writer=atomic_writer)
+            current = write_current_unlocked(
+                root,
+                cycle_id,
+                previous_events,
+                protocol_version=stage_compiler_protocol_version(initialization),
+                atomic_writer=atomic_writer,
+            )
             return {
                 "event": duplicate,
                 "event_duplicate": True,
@@ -244,6 +278,7 @@ def append_event(
             root,
             cycle_id,
             previous_events + [completed],
+            protocol_version=stage_compiler_protocol_version(initialization),
             atomic_writer=atomic_writer,
         )
         return {

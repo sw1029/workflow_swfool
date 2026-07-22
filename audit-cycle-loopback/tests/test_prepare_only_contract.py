@@ -825,6 +825,7 @@ def test_cli_forward_consumes_all_na_explicit_identity_without_legacy_downgrade(
     process, output = run_explicit_provider(tmp_path, identity)
 
     assert process.returncode == 0, process.stderr
+    emitted = json.loads(process.stdout)
     packet = json.loads(output.read_text(encoding="utf-8"))
     selected = packet["decision_artifact_ref"]
     assert selected["scope_verified"] is True
@@ -838,6 +839,136 @@ def test_cli_forward_consumes_all_na_explicit_identity_without_legacy_downgrade(
     assert primary_gate.get("not_evaluated_reason") != (
         "exact_decision_artifact_binding_missing"
     )
+    assert emitted["anti_loop_handoff"]["packet_sha256"]
+    assert selected["artifact_path_or_store_ref"] == "artifact_explicit.json"
+    assert "consumer_wiring_defect" in {
+        finding.get("code") for finding in packet.get("findings", [])
+    }
+
+    cycle_ledger = load_cycle_ledger()
+    cycle_ledger.init_cycle(
+        tmp_path,
+        emitted["cycle_id"],
+        emitted["task_id"],
+        "finalize actual explicit producer packet",
+    )
+    axes = {
+        axis: {"status": "pass", "evidence_ref": f"EVIDENCE_REF_{index}"}
+        for index, axis in enumerate(cycle_ledger.VERDICT_AXES, start=1)
+    }
+    final_candidate = {
+        "schema_version": 1,
+        "kind": "cycle_final_candidate",
+        "final_candidate": True,
+        "cycle_id": emitted["cycle_id"],
+        "attempt_id": emitted["attempt_identity"],
+        "expected_previous_revision": None,
+        "expected_previous_attempt_id": None,
+        "expected_previous_finalization_token": None,
+        "verdict_contract_version": 1,
+        **axes,
+        "decision_artifact_ref": selected,
+        "anti_loop_progress_gate": emitted,
+        "durable_state_candidate": emitted["durable_mutation_candidate"],
+    }
+
+    with pytest.raises(
+        ValueError,
+        match="consumer not_evaluated or identity downgrade",
+    ):
+        cycle_ledger.finalize_candidate(
+            tmp_path,
+            emitted["cycle_id"],
+            final_candidate,
+        )
+
+
+@pytest.mark.parametrize(
+    "envelope",
+    [
+        {"decision_identity_kind": "explicit_v2"},
+        {"contract_version": 2},
+    ],
+)
+def test_explicit_v2_envelope_cannot_downgrade_nested_legacy_identity(
+    tmp_path: Path,
+    envelope: dict[str, object],
+) -> None:
+    artifact = tmp_path / "artifact_floor.json"
+    artifact.write_text('{"artifact_id":"SUBJECT_REF"}\n', encoding="utf-8")
+    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    legacy = {
+        "artifact_id": "SUBJECT_REF",
+        "artifact_class": "BODY_REF",
+        "artifact_sha256": digest,
+        "production_lane_identity": "COHORT_REF",
+    }
+
+    _paths, selected = load_provider().load_artifact_selection(
+        tmp_path,
+        None,
+        [artifact.name],
+        artifact_ref_json=json.dumps({**envelope, "decision_identity": legacy}),
+        artifact_family="BODY_REF",
+    )
+
+    assert selected["decision_identity_kind"] == "explicit_v2"
+    assert selected["identity_status"] == "consumer_wiring_defect"
+    assert selected["scope_verified"] is False
+
+
+def test_complete_legacy_identity_remains_compatible_without_explicit_floor(
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "artifact_legacy.json"
+    artifact.write_text('{"artifact_id":"SUBJECT_REF"}\n', encoding="utf-8")
+    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    legacy = {
+        "artifact_id": "SUBJECT_REF",
+        "artifact_class": "BODY_REF",
+        "artifact_sha256": digest,
+        "production_lane_identity": "COHORT_REF",
+    }
+
+    _paths, selected = load_provider().load_artifact_selection(
+        tmp_path,
+        None,
+        [artifact.name],
+        artifact_ref_json=json.dumps(legacy),
+        artifact_family="BODY_REF",
+    )
+
+    assert selected["identity_status"] == "verified"
+    assert selected["scope_verified"] is True
+    assert "decision_identity_kind" not in selected
+
+
+def test_direct_identity_bearing_contract_v2_cannot_fall_back_to_legacy(
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "artifact_direct_floor.json"
+    artifact.write_text('{"artifact_id":"SUBJECT_REF"}\n', encoding="utf-8")
+    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+
+    _paths, selected = load_provider().load_artifact_selection(
+        tmp_path,
+        None,
+        [artifact.name],
+        artifact_ref_json=json.dumps(
+            {
+                "contract_version": 2,
+                "artifact_id": "SUBJECT_REF",
+                "artifact_class": "BODY_REF",
+                "artifact_sha256": digest,
+                "production_lane_identity": "COHORT_REF",
+            }
+        ),
+        artifact_family="BODY_REF",
+    )
+
+    assert selected["decision_identity_kind"] == "explicit_v2"
+    assert selected["identity_status"] == "consumer_wiring_defect"
+    assert selected["scope_verified"] is False
 
 
 def run_provider(
@@ -847,6 +978,7 @@ def run_provider(
     previous_metric_value: int | None = 0,
     provenance_label: str = "independently_verified",
     primary_metric_value: int | None = None,
+    artifact_ref_value: dict[str, Any] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     artifact = root / "artifact_A.json"
     artifact.write_text('{"artifact_id":"artifact_A"}\n', encoding="utf-8")
@@ -894,7 +1026,7 @@ def run_provider(
         "--artifact-path",
         artifact.name,
         "--artifact-ref-json",
-        json.dumps(artifact_ref, sort_keys=True),
+        json.dumps(artifact_ref_value or artifact_ref, sort_keys=True),
         "--blocker-signature",
         "blocker_A",
         "--output",
@@ -916,6 +1048,43 @@ def run_provider(
             env=env,
         ),
         output,
+    )
+
+
+def test_explicit_v2_to_legacy_cli_path_is_consumer_wiring_defect(
+    tmp_path: Path,
+) -> None:
+    artifact_digest = hashlib.sha256(
+        b'{"artifact_id":"artifact_A"}\n'
+    ).hexdigest()
+    legacy = {
+        "artifact_id": "artifact_A",
+        "artifact_class": "class_A",
+        "artifact_sha256": artifact_digest,
+        "production_lane_identity": "lane_A",
+    }
+    process, output = run_provider(
+        tmp_path,
+        artifact_ref_value={
+            "decision_identity_kind": "explicit_v2",
+            "decision_identity": legacy,
+        },
+    )
+
+    assert process.returncode == 2
+    packet = json.loads(output.read_text(encoding="utf-8"))
+    assert packet["decision_artifact_ref"]["identity_status"] == (
+        "consumer_wiring_defect"
+    )
+    assert packet["progress_verdict"] == "not_evaluated"
+    assert packet["adapter_wiring_defect"] is False
+    assert packet["adapter_wiring_gate"].get("adapter_load_error") != (
+        "consumer_wiring_defect"
+    )
+    assert any(
+        row.get("code") == "consumer_wiring_defect"
+        for row in packet.get("findings", [])
+        if isinstance(row, dict)
     )
 
 
@@ -1657,8 +1826,20 @@ def test_authority_axes_without_per_axis_evidence_remain_unverified() -> None:
 
 def test_next_cycle_consumes_only_helper_verified_finalized_projection(tmp_path: Path) -> None:
     cycle_ledger = load_cycle_ledger()
-    prior_cycle_id = "cycle_prior"
-    cycle_ledger.init_cycle(tmp_path, prior_cycle_id, "task_prior", "prepare replay state")
+    producer_process, producer_output = run_provider(
+        tmp_path,
+        previous_metric_value=0,
+    )
+    assert producer_process.returncode == 0, producer_process.stderr
+    producer_packet = json.loads(producer_process.stdout)
+    prior_cycle_id = producer_packet["cycle_id"]
+    attempt_identity = producer_packet["attempt_identity"]
+    cycle_ledger.init_cycle(
+        tmp_path,
+        prior_cycle_id,
+        producer_packet["task_id"],
+        "prepare replay state",
+    )
     axes = {
         axis: {"status": "pass", "evidence_ref": f"evidence_{index}"}
         for index, axis in enumerate(cycle_ledger.VERDICT_AXES, start=1)
@@ -1668,57 +1849,15 @@ def test_next_cycle_consumes_only_helper_verified_finalized_projection(tmp_path:
         "kind": "cycle_final_candidate",
         "final_candidate": True,
         "cycle_id": prior_cycle_id,
-        "attempt_id": "attempt_prior",
+        "attempt_id": attempt_identity,
         "expected_previous_revision": None,
         "expected_previous_attempt_id": None,
         "expected_previous_finalization_token": None,
         "verdict_contract_version": 1,
         **axes,
-        "durable_state_candidate": cycle_ledger.build_typed_operations_candidate(
-            producer="audit-cycle-loopback-test",
-            attempt_identity="attempt_prior",
-            operations=[
-                cycle_ledger.build_durable_operation(
-                    target_ref="family_progress_registry",
-                    operation_kind="replace_projection",
-                    attempt_identity="attempt_prior",
-                    payload_schema_id="family-progress-registry-v1",
-                    payload={
-                        "rows": [
-                            {
-                                "cycle_id": prior_cycle_id,
-                                "family_key": "class_a|family_a",
-                                "root_key": "axis_A",
-                                "root_family_key": "axis_a",
-                                "high_water_mark": {"metric_A": 1},
-                                "substance_metrics": {"axis_A": 1},
-                                "current_output_fingerprint": "fingerprint_A",
-                                "micro_hardening_count": 0,
-                            }
-                        ]
-                    },
-                ),
-                cycle_ledger.build_durable_operation(
-                    target_ref="root_cause_ledger",
-                    operation_kind="replace_projection",
-                    attempt_identity="attempt_prior",
-                    payload_schema_id="root-cause-ledger-v1",
-                    payload={"rows": [{"cycle_id": prior_cycle_id, "root_key": "axis_prior"}]},
-                ),
-                cycle_ledger.build_durable_operation(
-                    target_ref="sealed_blocker_families",
-                    operation_kind="replace_projection",
-                    attempt_identity="attempt_prior",
-                    payload_schema_id="sealed-blocker-families-v1",
-                    payload={
-                        "state": {
-                            "schema_version": "sealed-blocker-families-v1",
-                            "families": [],
-                        }
-                    },
-                ),
-            ],
-        ),
+        "decision_artifact_ref": producer_packet["decision_artifact_ref"],
+        "anti_loop_progress_gate": producer_packet,
+        "durable_state_candidate": producer_packet["durable_mutation_candidate"],
     }
     cycle_ledger.finalize_candidate(tmp_path, prior_cycle_id, finalized_candidate)
 

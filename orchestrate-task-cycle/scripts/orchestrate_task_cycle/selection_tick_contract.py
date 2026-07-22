@@ -22,7 +22,7 @@ from .selection_tick_limits import (
     MAX_POLICY_IDS,
     MAX_WATCH_ENTRIES,
 )
-from .selection_tick_policy import EVIDENCE_CLASSES
+from .selection_tick_policy import EVIDENCE_CLASSES, material_watch_entries
 
 
 V2_PACKET_KEYS = {
@@ -375,7 +375,17 @@ def validate_selection_tick_v2(packet: Any) -> dict[str, Any]:
         if row["change_kind"] == "removed":
             if current is not None:
                 raise ValueError("removed selection watch still exists in current rows")
-        elif current is None or current.get("evidence_class") != row["evidence_class"]:
+        elif current is None or (
+            current.get("evidence_class") != row["evidence_class"]
+            and not (
+                row["evidence_class"] == "task_pack"
+                and current.get("evidence_class") == "task_state"
+                and current.get("kind") == "workflow_input"
+                and str(current.get("path") or "").startswith(
+                    ".task/task_pack/"
+                )
+            )
+        ):
             raise ValueError("changed selection watch does not match current rows")
     classes = _ids(
         packet["watched_evidence_classes"],
@@ -384,9 +394,7 @@ def validate_selection_tick_v2(packet: Any) -> dict[str, Any]:
     )
     if any(item not in EVIDENCE_CLASSES for item in classes):
         raise ValueError("selection tick watched evidence class is unsupported")
-    expected_material = [
-        row for row in changes if row["evidence_class"] in set(classes)
-    ]
+    expected_material = material_watch_entries(changes, watches, classes)
     if material != expected_material:
         raise ValueError("selection tick material changes do not match watched classes")
     if (

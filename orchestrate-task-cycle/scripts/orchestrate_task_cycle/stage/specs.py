@@ -10,6 +10,7 @@ from ..result_contract.configuration import (
     COMMON_FIELDS,
     TARGETS,
 )
+from .v2_specs import SEMANTIC_FIELDS, dependency_selectors, executor_kind
 
 
 OWNER_FIELD_NAMES = frozenset(
@@ -83,6 +84,8 @@ class TargetCompileSpec:
     optional_owner_fields: tuple[str, ...] = ()
     reasoned_not_applicable_fields: tuple[str, ...] = ()
     dependency_roles: tuple[str, ...] = ("core",)
+    dependency_selectors: tuple[str, ...] = ("core",)
+    executor_kind: str = "owner"
 
     @property
     def classified_fields(self) -> frozenset[str]:
@@ -291,7 +294,7 @@ OPTIONAL_OWNER_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 
-def _spec(target: str) -> TargetCompileSpec:
+def _legacy_spec(target: str) -> TargetCompileSpec:
     fields = tuple(dict.fromkeys(("step", *COMMON_FIELDS[target])))
     derived = tuple(field for field in fields if field in DERIVED_FIELD_NAMES)
     if target == "authority":
@@ -322,37 +325,55 @@ def _spec(target: str) -> TargetCompileSpec:
         optional_semantic_fields=OPTIONAL_SEMANTIC_FIELDS.get(target, ()),
         optional_owner_fields=tuple(dict.fromkeys(optional_owner)),
         dependency_roles=tuple(roles),
+        dependency_selectors=tuple(roles),
+        executor_kind=("hybrid" if semantic else "owner"),
+    )
+
+
+LEGACY_TARGET_COMPILE_SPECS: dict[str, TargetCompileSpec] = {
+    target: _legacy_spec(target) for target in TARGETS
+}
+
+
+def _v2_spec(target: str) -> TargetCompileSpec:
+    fields = tuple(dict.fromkeys(("step", *COMMON_FIELDS[target])))
+    derived = tuple(field for field in fields if field in DERIVED_FIELD_NAMES)
+    semantic = SEMANTIC_FIELDS.get(target, ())
+    if not set(semantic) <= set(fields):
+        raise RuntimeError(f"v2 semantic provenance names unknown fields for {target}")
+    owner = tuple(field for field in fields if field not in set(derived) | set(semantic))
+    optional_semantic = (
+        OPTIONAL_SEMANTIC_FIELDS.get(target, ())
+        if target in SEMANTIC_FIELDS
+        else ()
+    )
+    optional_owner = list(OPTIONAL_OWNER_FIELDS.get(target, ()))
+    if target not in SEMANTIC_FIELDS:
+        optional_owner.extend(OPTIONAL_SEMANTIC_FIELDS.get(target, ()))
+    if target in AGENT_ROUTING_TARGETS:
+        optional_owner.extend(ROUTING_OWNER_FIELDS)
+    selectors = dependency_selectors(target)
+    roles = ["core"]
+    if "git" in selectors:
+        roles.append("git")
+    if len(selectors) > len(roles):
+        roles.append("diagnostics")
+    return TargetCompileSpec(
+        target=target,
+        required_fields=tuple(COMMON_FIELDS[target]),
+        derived_fields=derived,
+        semantic_fields=tuple(semantic),
+        owner_receipt_fields=owner,
+        optional_semantic_fields=tuple(optional_semantic),
+        optional_owner_fields=tuple(dict.fromkeys(optional_owner)),
+        dependency_roles=tuple(roles),
+        dependency_selectors=selectors,
+        executor_kind=executor_kind(target),
     )
 
 
 TARGET_COMPILE_SPECS: dict[str, TargetCompileSpec] = {
-    "authority": _spec("authority"),
-    "repo_skill_adapter_scan": _spec("repo_skill_adapter_scan"),
-    "acceptance": _spec("acceptance"),
-    "validation_scope_plan": _spec("validation_scope_plan"),
-    "governance": _spec("governance"),
-    "validation_set_plan": _spec("validation_set_plan"),
-    "repo_skill_adapter_validate": _spec("repo_skill_adapter_validate"),
-    "code_structure_audit": _spec("code_structure_audit"),
-    "run": _spec("run"),
-    "qualitative_review": _spec("qualitative_review"),
-    "loopback_audit": _spec("loopback_audit"),
-    "validation_set_build": _spec("validation_set_build"),
-    "visible_increment": _spec("visible_increment"),
-    "repo_skill_gap_analysis": _spec("repo_skill_gap_analysis"),
-    "cycle_efficiency_profile": _spec("cycle_efficiency_profile"),
-    "validation_scope_finalize": _spec("validation_scope_finalize"),
-    "index_pre_validate": _spec("index_pre_validate"),
-    "schema_pre_derive": _spec("schema_pre_derive"),
-    "derive": _spec("derive"),
-    "schema_post_derive": _spec("schema_post_derive"),
-    "index": _spec("index"),
-    "validate": _spec("validate"),
-    "issue": _spec("issue"),
-    "commit": _spec("commit"),
-    "dashboard": _spec("dashboard"),
-    "report": _spec("report"),
-    "closeout_commit": _spec("closeout_commit"),
+    target: _v2_spec(target) for target in TARGETS
 }
 
 
@@ -366,4 +387,9 @@ for _target, _specification in TARGET_COMPILE_SPECS.items():
         raise RuntimeError(f"result field provenance is incomplete for {_target}")
 
 
-__all__ = ["TARGET_COMPILE_SPECS", "TargetCompileSpec"]
+__all__ = [
+    "DERIVED_FIELD_NAMES",
+    "LEGACY_TARGET_COMPILE_SPECS",
+    "TARGET_COMPILE_SPECS",
+    "TargetCompileSpec",
+]

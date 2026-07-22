@@ -8,6 +8,14 @@ from typing import Any
 
 DECISION_ARTIFACT_REF = "decision_artifact_ref"
 VERIFICATION_SEPARATION_GATE = "verification_source_separation_gate"
+VALIDATION_PREDICATE_CONTRACT = "validation_predicate_contract"
+PRODUCER_DIRECTIVES = "producer_directives"
+SATISFIABILITY_FIELDS = (
+    VALIDATION_PREDICATE_CONTRACT,
+    PRODUCER_DIRECTIVES,
+    "mutually_unsatisfiable_contract",
+    "unverifiable_acceptance_contract",
+)
 
 
 @dataclass(frozen=True)
@@ -15,7 +23,7 @@ class ValidationContractEvaluation:
     findings: tuple[dict[str, str], ...]
     rationale: tuple[str, ...]
     requires_affected_chain: bool
-    manifest_fields: dict[str, dict[str, Any]]
+    manifest_fields: dict[str, Any]
 
 
 def decision_artifact_ref_issues(value: Any) -> tuple[list[str], Any | None]:
@@ -72,9 +80,15 @@ def verification_separation_issues(value: Any) -> list[str]:
     return sorted(set(issues))
 
 
-def _finding(*, mode: str, code: str, message: str) -> dict[str, str]:
+def _finding(
+    *,
+    mode: str,
+    code: str,
+    message: str,
+    block_in_plan: bool = False,
+) -> dict[str, str]:
     return {
-        "severity": "block" if mode == "finalize" else "warn",
+        "severity": "block" if mode == "finalize" or block_in_plan else "warn",
         "code": code,
         "message": message,
     }
@@ -90,9 +104,9 @@ def _finding_codes(value: Any) -> set[str]:
     }
 
 
-def _planned_contracts(plan: dict[str, Any] | None) -> tuple[bool, bool]:
+def _planned_contracts(plan: dict[str, Any] | None) -> tuple[bool, bool, bool]:
     if not isinstance(plan, dict):
-        return False, False
+        return False, False, False
     codes = _finding_codes(plan.get("findings"))
     decision_declared = DECISION_ARTIFACT_REF in plan or any(
         code.startswith("decision_artifact_")
@@ -110,7 +124,12 @@ def _planned_contracts(plan: dict[str, Any] | None) -> tuple[bool, bool]:
             "verification_separation_gate_missing_at_finalize",
         }
     )
-    return decision_declared, separation_declared
+    satisfiability_declared = any(field in plan for field in SATISFIABILITY_FIELDS) or any(
+        code.startswith("acceptance_satisfiability_")
+        or code.startswith("validation_predicate_contract_")
+        for code in codes
+    )
+    return decision_declared, separation_declared, satisfiability_declared
 
 
 def _decision_findings(
@@ -120,7 +139,7 @@ def _decision_findings(
     plan: dict[str, Any] | None,
 ) -> tuple[list[dict[str, str]], list[str], bool]:
     declared = DECISION_ARTIFACT_REF in payload
-    planned_decision, _ = _planned_contracts(plan)
+    planned_decision, _, _ = _planned_contracts(plan)
     findings: list[dict[str, str]] = []
     if mode == "finalize" and planned_decision and not declared:
         findings.append(
@@ -141,6 +160,7 @@ def _decision_findings(
                 code="decision_artifact_binding_not_evaluated",
                 message="Exact current decision-artifact binding is unavailable: "
                 + ",".join(issues),
+                block_in_plan=True,
             )
         )
         return findings, ["decision_artifact_recompute_required"], True
@@ -149,18 +169,27 @@ def _decision_findings(
 
     planned_ref = plan.get(DECISION_ARTIFACT_REF)
     planned_issues, planned = decision_artifact_ref_issues(planned_ref)
-    if planned_issues or planned is None or current is None:
+    if planned_issues or planned is None:
+        findings.append(
+            _finding(
+                mode=mode,
+                code="decision_artifact_binding_not_evaluated",
+                message="The planned decision-artifact identity was invalid and cannot be replaced silently during finalization.",
+            )
+        )
+        return findings, ["decision_artifact_recompute_required"], True
+    if current is None:
         return findings, [], False
-    stable_fields = ("decision_subject_id", "subject_class_id", "lineage_id")
-    if any(
-        planned.subject_values.get(field) != current.subject_values.get(field)
-        for field in stable_fields
+    if (
+        planned.subject_values != current.subject_values
+        or planned.dimension_statuses != current.dimension_statuses
+        or planned.dimension_values != current.dimension_values
     ):
         findings.append(
             _finding(
                 mode=mode,
                 code="decision_artifact_subject_changed",
-                message="Finalization supplied a different decision subject or lineage.",
+                message="Finalization supplied a different decision subject, revision, digest, lineage, freshness, or applicable dimension.",
             )
         )
         return findings, ["decision_artifact_subject_changed"], True
@@ -174,7 +203,7 @@ def _separation_findings(
     plan: dict[str, Any] | None,
 ) -> tuple[list[dict[str, str]], list[str], bool]:
     declared = VERIFICATION_SEPARATION_GATE in payload
-    _, planned_separation = _planned_contracts(plan)
+    _, planned_separation, _ = _planned_contracts(plan)
     findings: list[dict[str, str]] = []
     if mode == "finalize" and planned_separation and not declared:
         findings.append(
@@ -200,6 +229,98 @@ def _separation_findings(
     return findings, ["independent_verification_recompute_required"], True
 
 
+def _satisfiability_findings(
+    *,
+    mode: str,
+    payload: dict[str, Any],
+    plan: dict[str, Any] | None,
+) -> tuple[list[dict[str, str]], list[str], bool]:
+    declared = any(field in payload for field in SATISFIABILITY_FIELDS)
+    _, _, planned_satisfiability = _planned_contracts(plan)
+    findings: list[dict[str, str]] = []
+    rationale: list[str] = []
+    if mode == "finalize" and planned_satisfiability and not declared:
+        findings.append(
+            _finding(
+                mode=mode,
+                code="validation_predicate_contract_missing_at_finalize",
+                message="The planned validation predicate/directive contract was not supplied for finalization.",
+            )
+        )
+        return findings, ["acceptance_satisfiability_recompute_required"], True
+    if not declared:
+        return findings, rationale, False
+    try:
+        from orchestrate_task_cycle.result_contract.acceptance_satisfiability import (  # noqa: PLC0415
+            assess_contract_satisfiability,
+        )
+    except ImportError:
+        findings.append(
+            _finding(
+                mode=mode,
+                code="acceptance_satisfiability_contract_unavailable",
+                message="The canonical acceptance satisfiability consumer is unavailable.",
+                block_in_plan=True,
+            )
+        )
+        return findings, ["acceptance_satisfiability_recompute_required"], True
+
+    assessment = assess_contract_satisfiability(payload)
+    supplied_matches = bool(
+        assessment.present
+        and assessment.supplied_rows_match
+        and assessment.supplied_conflict_matches
+        and assessment.supplied_unverifiable_matches
+    )
+    if not supplied_matches:
+        findings.append(
+            _finding(
+                mode=mode,
+                code="acceptance_satisfiability_claim_mismatch",
+                message="Supplied satisfiability rows or summary flags do not match canonical recomputation from the raw predicate and producer directives.",
+                block_in_plan=True,
+            )
+        )
+        rationale.append("acceptance_satisfiability_recompute_required")
+    if assessment.mutually_unsatisfiable:
+        findings.append(
+            _finding(
+                mode=mode,
+                code="acceptance_satisfiability_failed",
+                message="At least one required validation predicate is incompatible with its bound producer directive.",
+                block_in_plan=True,
+            )
+        )
+        rationale.append("acceptance_contract_repair_required")
+    if assessment.unverifiable:
+        findings.append(
+            _finding(
+                mode=mode,
+                code="acceptance_satisfiability_not_evaluated",
+                message="At least one required validation predicate lacks a unique producer, execution, or verifier premise.",
+                block_in_plan=True,
+            )
+        )
+        rationale.append("acceptance_premise_acquisition_required")
+    if mode == "finalize" and isinstance(plan, dict):
+        changed = [
+            field
+            for field in SATISFIABILITY_FIELDS
+            if field in plan and plan.get(field) != payload.get(field)
+        ]
+        if changed:
+            findings.append(
+                _finding(
+                    mode=mode,
+                    code="validation_predicate_contract_changed",
+                    message="Finalization changed the planned predicate/directive satisfiability contract: "
+                    + ",".join(changed),
+                )
+            )
+            rationale.append("validation_predicate_contract_changed")
+    return findings, rationale, bool(findings)
+
+
 def evaluate_validation_contracts(
     *,
     mode: str,
@@ -208,14 +329,23 @@ def evaluate_validation_contracts(
 ) -> ValidationContractEvaluation:
     decision = _decision_findings(mode=mode, payload=payload, plan=plan)
     separation = _separation_findings(mode=mode, payload=payload, plan=plan)
+    satisfiability = _satisfiability_findings(
+        mode=mode, payload=payload, plan=plan
+    )
     manifest_fields = {
         key: payload[key]
-        for key in (DECISION_ARTIFACT_REF, VERIFICATION_SEPARATION_GATE)
-        if isinstance(payload.get(key), dict)
+        for key in (
+            DECISION_ARTIFACT_REF,
+            VERIFICATION_SEPARATION_GATE,
+            *SATISFIABILITY_FIELDS,
+        )
+        if key in payload
     }
     return ValidationContractEvaluation(
-        findings=tuple([*decision[0], *separation[0]]),
-        rationale=tuple([*decision[1], *separation[1]]),
-        requires_affected_chain=decision[2] or separation[2],
+        findings=tuple([*decision[0], *separation[0], *satisfiability[0]]),
+        rationale=tuple([*decision[1], *separation[1], *satisfiability[1]]),
+        requires_affected_chain=(
+            decision[2] or separation[2] or satisfiability[2]
+        ),
         manifest_fields=manifest_fields,
     )

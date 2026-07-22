@@ -20,18 +20,20 @@ python3 -m orchestrate_task_cycle selection-tick --root .
 
 When an authority-settled current terminal-wait baseline exists, the command resolves and re-verifies `.task/terminal_wait_baseline/current.json` and uses its bound selection packet. Add `--previous-json <prior-tick.json>` only for initial publication, recovery, testing, or a caller that already owns the exact packet. Absence of both a current pointer and an explicit prior packet means an initial baseline observation, not permission to fan out.
 
-`--watch-path` extends rather than replaces the default workflow inputs. The packet hashes the exact workflow inputs, every canonical pack JSON (including non-active residual packs), repository-adapter implementation/delegate/renderer/authority-projection surfaces, and explicit premise inputs without copying source bodies or corpus metadata.
+`--watch-path` extends rather than replaces the default workflow observations. The packet may retain task aliases, advice indexes, completed pack/retirement history, and repository-adapter implementation/delegate/renderer surfaces for bounded audit comparison, but their static byte changes are availability or workflow-self-write evidence only. The task-pack row named by the canonical mutable `task.md` pointer remains distinct from completed pack history; changing, completing, or removing that current row is material only when `task_pack` is explicitly watched. Manifest-declared adapter components remain `adapter` availability rows even when their paths sit under a generic workflow directory. Bind any other current residual through an exact-subject/post-use receipt, an exact authority packet, or an explicitly watched decision-bearing class; do not use a filename, render, registration, or import success as semantic wake evidence.
 
 ### Executable wake semantics
 
-Bind terminal wait to one or more `--wake-predicate <opaque-id>`, one or more supported `--watched-evidence-class <class>`, and one `--minimum-material-delta <opaque-id>`. Supported classes are `task_state`, `goal_truth`, `authority`, `advice`, `issue`, `schema_contract`, `adapter`, `task_pack`, `custom_watch`, and `exact_subject`. The baseline owns these values, so comparison cannot silently widen, narrow, or replace them.
+Bind terminal wait to one or more `--wake-predicate <opaque-id>`, one or more supported `--watched-evidence-class <class>`, and one `--minimum-material-delta <opaque-id>`. Supported classes are `task_state`, `goal_truth`, `authority`, `advice`, `issue`, `schema_contract`, `adapter`, `task_pack`, `custom_watch`, and `exact_subject`; the default material set is `authority`, `exact_subject`, and `goal_truth`. The baseline owns these values, so comparison cannot silently widen, narrow, or replace them. `task_state` and advice-container rows remain availability-only. A historical baseline whose class set is the entire supported enum is treated as the former broad default, not as proof that every static row is current-blocker relevant. A narrower baseline may explicitly bind an open issue, required adapter/runtime/source surface, or another decision-bearing class, but its static digest opens re-evaluation only; actual consumption still requires the owning post-use receipt.
+
+For fresh baselines, completed/noncurrent pack rows are `task_state` availability while the canonical current pointer row or an explicitly watched pack row is `task_pack`. A bound `task_pack` or `custom_watch` deletion retains its pre-change evidence class in the closed change row and is material; deleting completed history, an archive, an index render, or a retirement projection remains nonmaterial. A pre-existing narrow legacy baseline that lacks this distinction must be rebound from current inputs rather than granting historical rows semantic relevance.
 
 `wake_predicates` and `minimum_material_delta` document policy intent. They are not parsed or evaluated as caller-defined expressions. The packet makes this explicit with:
 
 - `wake_evaluation_rule: explicit-premise-or-bound-class-change-v1`;
 - `wake_predicate_ids_are_policy_labels: true`.
 
-The fixed rule opens selection only when the current manifest differs from the authenticated prior manifest and either an exact-premise row was added or content-changed, or at least one changed watch row belongs to a baseline-bound watched evidence class. A byte change outside those classes returns `no_op`. An identical manifest returns `no_op`; an identical premise receipt combined only with nonmaterial drift also returns `no_op`. The helper reports changed rows and material changed rows separately; consumers must not reinterpret a supplied-input boolean or policy label as proof that a fresh semantic premise exists.
+The fixed rule opens selection only when the current manifest differs from the authenticated prior manifest and either an exact-premise row was added or content-changed, or at least one non-availability watch row belongs to a baseline-bound watched evidence class. A static task rename, archive/retirement change, index render, same-body report serialization, unbound adapter/workflow self-write, or byte change outside the material classes returns `no_op`. An identical manifest returns `no_op`; an identical premise receipt combined only with nonmaterial drift also returns `no_op`. The helper reports changed rows and material changed rows separately; consumers must not reinterpret a supplied-input boolean, registration, loader success, or policy label as proof that a fresh semantic premise exists.
 
 Exact-premise and effective-authority watch rows are sticky. If a later tick omits them, the helper validates and carries their prior body-free rows forward instead of treating omission as removal. Re-supplying the same ID and semantic digest is therefore unchanged; supplying a changed receipt for the same premise ID, a new premise ID, or changed effective authority for an exact scope is a material comparison. Sticky carry-forward preserves comparison continuity but does not make the evidence GT or authority.
 
@@ -87,7 +89,7 @@ When derive first emits `terminal_wait`, run the tick without a prior packet and
 - `recovery_required`: recover the pending selection publication before any new proposal or selection.
 - `drift_blocked`: the unique committed selection head no longer matches `task.md`; repair or explicitly reconcile that unjournaled drift before fanout.
 
-A changed timestamp, renamed task, old advice, or stale candidate is not an explicit premise. A missing ID, missing/external/symlinked/non-regular/oversized premise path, or a comparison that changes the baseline's wake contract is rejected.
+A changed timestamp, renamed task, archive/retirement projection, index render, old advice, workflow self-write, or stale candidate is not an explicit premise. A missing ID, missing/external/symlinked/non-regular/oversized premise path, or a comparison that changes the baseline's wake contract is rejected.
 
 ### Selection acknowledgement and baseline rebase
 
@@ -160,9 +162,9 @@ python3 -m orchestrate_task_cycle selection-tick --root . \
   --selection-receipt-sha256 <full-sha256>
 ```
 
-The command authenticates `B`, reopens the workspace-relative regular non-symlink selection-decision receipt, verifies its exact bytes against the supplied raw digest, derives rather than trusts its receipt ID and integrity digest, and recursively reopens the receipt-bound preliminary decision, durable selection synthesis, four runtime artifacts, and persisted trigger. It then carries sticky premise/authority rows forward and accepts `C` only when watched inputs did not change during selection and selection publication is clear. An ID plus an arbitrary 64-hex string is not acknowledgement evidence. Success returns a safe `baseline_recorded` packet with `baseline_rebased: true`, `selection_acknowledgement_status: accepted`, and the closed eight-field acknowledgement binding: trigger ID/digest, receipt ID/ref/raw digest/internal integrity digest, outcome, and selected task ID. For `terminal_wait`, `selected_task_id` is `null`.
+The command authenticates `B`, reopens the workspace-relative regular non-symlink selection-decision receipt, verifies its exact bytes against the supplied raw digest, derives rather than trusts its receipt ID and integrity digest, and recursively reopens the receipt-bound preliminary decision, durable selection synthesis, four runtime artifacts, and persisted trigger. It then carries sticky premise/authority rows forward and accepts `C` only when no material watched input changed during selection and selection publication is clear. Nonmaterial availability/history drift is recomputed and may be absorbed into `C`; it cannot become another selection trigger. An ID plus an arbitrary 64-hex string is not acknowledgement evidence. Success returns a safe `baseline_recorded` packet with `baseline_rebased: true`, `selection_acknowledgement_status: accepted`, and the closed eight-field acknowledgement binding: trigger ID/digest, receipt ID/ref/raw digest/internal integrity digest, outcome, and selected task ID. For `terminal_wait`, `selected_task_id` is `null`.
 
-Lineage is exact, not label-based. The terminal owner reopens the predecessor snapshot named by `expected_current_snapshot_sha256` and requires `B.previous_input_manifest_sha256 == A.observed_input_manifest_sha256`; it recomputes `B.changed_watch_entries` from `A` and requires the same wake contract. It then requires `C.previous_input_manifest_sha256 == B.observed_input_manifest_sha256`, `C.observed_input_manifest_sha256 == B.observed_input_manifest_sha256`, identical watch entries and wake contract, and empty changed/material-changed/class-change sets. Thus `B` proves the material wake and `C` proves that selection itself introduced no watched-input drift.
+Lineage is exact, not label-based. The terminal owner reopens the predecessor snapshot named by `expected_current_snapshot_sha256` and requires `B.previous_input_manifest_sha256 == A.observed_input_manifest_sha256`; it recomputes `B.changed_watch_entries` from `A` and requires the same wake contract. It then requires `C.previous_input_manifest_sha256 == B.observed_input_manifest_sha256`, recomputes `C.changed_watch_entries` from persisted `B`, requires an empty material-change set, and preserves the same wake contract. Thus `B` proves the material wake and `C` proves that selection introduced no additional blocker-relevant drift, while bounded history/render changes remain visible without reopening fanout.
 
 After `C` is durable, produce a direct full final derive-result JSON object. It must pass the derive result contract in block mode, set the disjoint outcome/source to `terminal_wait`, carry `C` byte-for-value as `terminal_wait.selection_tick_baseline`, bind its canonical baseline digest and watched-input fields, and set `last_selection_receipt` to the validated selection-decision receipt ID. Its `improvement_analysis_manifest` must exactly match the manifest reopened through the durable selection synthesis. A `{ "result": ... }` wrapper, preliminary decision, receipt, or partial projection is not a valid `source_derive`. Input drift returns `selection_required` again; pending publication returns recovery state. Neither case may be coerced into a safe baseline.
 
@@ -205,7 +207,50 @@ Once activated, ordinary `selection-tick --root .` auto-discovers this verified 
 
 ## Recoverable selected-task publication
 
-The derive owner must first produce one authoritative, digest-bound selection decision. When publishing that decision touches `task.md` plus its archive, task index, advice index, or pack projection, use one bounded publication transaction instead of independent writes:
+The derive owner must first produce one authoritative, digest-bound selection decision. Persist the deterministic synthesis/decision/receipt chain without asking the coordinator to write or hash three JSON envelopes:
+
+```bash
+python3 -m orchestrate_task_cycle selection-decision-receipt --root . pipeline \
+  --cycle-id <cycle-id> \
+  --source-result-ref <derive-result-ref> \
+  --source-result-sha256 <derive-result-raw-sha256> \
+  --trigger-tick-ref <selection-tick-ref> \
+  --trigger-tick-sha256 <selection-tick-raw-sha256>
+```
+
+For new selected successors, supply only a compact `selection_publication_intent`. It binds the validated selection-decision receipt, exact prospective task Markdown, and the already-applied task-state transition receipt:
+
+```json
+{
+  "schema_version": 1,
+  "kind": "selection_publication_intent",
+  "source_decision": {"ref": "<receipt-ref>", "sha256": "<raw-sha256>"},
+  "task_source": {"ref": "<prospective-task-ref>", "sha256": "<raw-sha256>"},
+  "owner_receipts": [{"ref": "<task-state-receipt-ref>", "sha256": "<raw-sha256>"}]
+}
+```
+
+```bash
+python3 -m orchestrate_task_cycle selection-publication --root . prepare-intent \
+  --intent <selection-publication-intent.json>
+python3 -m orchestrate_task_cycle selection-publication --root . apply-intent \
+  --intent <selection-publication-intent.json>
+```
+
+The v2 compiler reopens the complete decision and owner chains, derives all IDs, lineage, paths, target order, before/after digests, and transaction identity, and stores the exact task bytes once under `.task/selection_publication/blobs/sha256/`. Its prepare and CLI output contain no Base64, task body, or task-index body. Task-state index bytes remain owned by `$manage-task-state-index`; selection publication verifies its apply receipt and publishes only `task.md`, last.
+
+Use `status` for the compact normal path, `status --deep` for historical prepare/blob audit, and `migrate-state` to create the compact projection only after validating existing history. Missing state may use the legacy scan; malformed or stale state fails closed. Historical v1 artifacts are neither rewritten nor garbage-collected.
+
+When one unique committed head has independently authorized `task.md` drift, compile reconciliation from the exact task-state transition receipt rather than authoring another target payload:
+
+```bash
+python3 -m orchestrate_task_cycle selection-publication --root . reconcile-current \
+  --source-ref <task-state-receipt-ref> --source-sha256 <raw-sha256>
+```
+
+### Legacy v1 plan and recovery
+
+When recovering or replaying an existing v1 transaction, retain its caller-owned plan and Base64 wire shape:
 
 ```bash
 python3 -m orchestrate_task_cycle selection-publication --root . apply \

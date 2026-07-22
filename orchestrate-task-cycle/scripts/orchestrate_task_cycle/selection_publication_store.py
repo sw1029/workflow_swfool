@@ -147,6 +147,21 @@ def _receipts_root(root: Path) -> Path:
     return _safe_store_directory(root, ("receipts",))
 
 
+def _blob_path(root: Path, digest: str) -> Path:
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise ValueError("invalid selection-publication blob digest")
+    directory = _safe_store_directory(root, ("blobs", "sha256"))
+    path = directory / digest
+    _safe_regular_file(path, "selection-publication task blob")
+    return path
+
+
+def _state_path(root: Path) -> Path:
+    path = _store_root(root) / "state.json"
+    _safe_regular_file(path, "selection-publication compact state")
+    return path
+
+
 def _create_store_directories(root: Path) -> Path:
     store = _store_root(root)
     task_root = root / ".task"
@@ -177,6 +192,7 @@ def _lock(root: Path) -> Iterator[None]:
 __all__ = (
     "TRANSACTION_ID",
     "_atomic_write",
+    "_blob_path",
     "_canonical_json",
     "_display_json",
     "_lock",
@@ -185,6 +201,7 @@ __all__ = (
     "_receipt_path",
     "_sha256_bytes",
     "_sha256_file",
+    "_state_path",
     "_store_root",
     "_transactions_root",
     "_write_once",

@@ -5,8 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .contracts import validate_preparation
-from .specs import DERIVED_FIELD_NAMES, TARGET_COMPILE_SPECS
+from .contracts import PREPARATION_SCHEMA_VERSION_V2, validate_preparation
+from .specs import (
+    DERIVED_FIELD_NAMES,
+    LEGACY_TARGET_COMPILE_SPECS,
+    TARGET_COMPILE_SPECS,
+)
 
 
 def _mapping(value: Any, label: str) -> dict[str, Any]:
@@ -40,7 +44,12 @@ class ResultBuilder:
                 + ", ".join(sorted(unknown_sections))
             )
         target = str(preparation["target"])
-        spec = TARGET_COMPILE_SPECS[target]
+        registry = (
+            TARGET_COMPILE_SPECS
+            if preparation["schema_version"] == PREPARATION_SCHEMA_VERSION_V2
+            else LEGACY_TARGET_COMPILE_SPECS
+        )
+        spec = registry[target]
         semantic = _mapping(judgment.get("semantic"), "semantic")
         owner_result = _mapping(judgment.get("owner_result"), "owner_result")
         reasoned = _mapping(

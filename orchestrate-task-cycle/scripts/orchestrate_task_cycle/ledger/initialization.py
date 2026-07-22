@@ -4,7 +4,8 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
-from .constants import LEDGER_FORMAT_VERSION
+from .constants import LEDGER_FORMAT_VERSION, STAGE_COMPILER_PROTOCOL_VERSION
+from .current_projection import stage_compiler_protocol_version as _protocol_version
 from .event_model import default_cycle_id, now_iso
 from .repository import AtomicTextWriter, read_all_cycle_events, read_events_unlocked, write_current_unlocked
 from .support import (
@@ -21,6 +22,24 @@ from .terminal import terminal_latch_state, verify_terminal_reopen_receipt
 
 
 EventAppender = Callable[[Path, str, dict[str, Any], bool], dict[str, Any]]
+
+
+def cli_init_protocol(
+    root: Path,
+    cycle_id: str | None,
+    requested: int | None,
+) -> int | None:
+    """Default new CLI cycles to v2 without migrating initialized cycles."""
+
+    if requested is not None:
+        return requested
+    if cycle_id is None:
+        return STAGE_COMPILER_PROTOCOL_VERSION
+    return (
+        None
+        if initialization_path(root, cycle_id).is_file()
+        else STAGE_COMPILER_PROTOCOL_VERSION
+    )
 
 
 def _validate_terminal_state(
@@ -85,10 +104,18 @@ def init_cycle(
     reason: str,
     terminal_state: dict[str, Any] | None = None,
     allow_missing_task_for_bootstrap: bool = False,
+    stage_compiler_protocol_version: int | None = None,
     *,
     atomic_writer: AtomicTextWriter = atomic_write_text,
     append_event: EventAppender,
 ) -> dict[str, Any]:
+    requested_protocol = (
+        None
+        if stage_compiler_protocol_version is None
+        else _protocol_version(
+            {"stage_compiler_protocol_version": stage_compiler_protocol_version}
+        )
+    )
     terminal_reopen_result: dict[str, Any] | None = None
     if terminal_state:
         latch = _validate_terminal_state(root, terminal_state)
@@ -112,6 +139,10 @@ def init_cycle(
                 or str(existing_metadata.get("reason") or "") != expected_reason
                 or existing_metadata.get("allow_missing_task_for_bootstrap", False)
                 is not allow_missing_task_for_bootstrap
+                or (
+                    requested_protocol is not None
+                    and _protocol_version(existing_metadata) != requested_protocol
+                )
             ):
                 raise ValueError(f"cycle `{cycle_id}` is already initialized with different task or reason")
             metadata = existing_metadata
@@ -127,10 +158,18 @@ def init_cycle(
                 "first_canonical_step": "context",
                 "allow_missing_task_for_bootstrap": allow_missing_task_for_bootstrap,
             }
+            if requested_protocol is not None:
+                metadata["stage_compiler_protocol_version"] = requested_protocol
             atomic_writer(metadata_path, json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
             cycle_existing = False
         events = read_events_unlocked(root, cycle_id)
-        current = write_current_unlocked(root, cycle_id, events, atomic_writer=atomic_writer)
+        current = write_current_unlocked(
+            root,
+            cycle_id,
+            events,
+            protocol_version=_protocol_version(metadata),
+            atomic_writer=atomic_writer,
+        )
     result = {
         "cycle_id": cycle_id,
         "cycle_dir": rel_path(root, directory),

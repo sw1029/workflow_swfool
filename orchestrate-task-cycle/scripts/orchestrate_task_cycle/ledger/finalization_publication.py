@@ -9,7 +9,7 @@ from typing import Any, Callable
 from .candidate_validation import (
     authoritative_final_from_axes,
     final_candidate_commit_material,
-    normalize_final_candidate,
+    normalize_final_candidate_for_root,
 )
 from .constants import (
     FINALIZATION_POINTER_KIND,
@@ -52,8 +52,12 @@ class FinalizationVerification:
     verify_receipt: Callable[..., dict[str, Any]]
 
 
-def _prepared_candidate(cycle_id: str, candidate: dict[str, Any]) -> dict[str, Any]:
-    normalized = normalize_final_candidate(cycle_id, candidate)
+def _prepared_candidate(
+    root: Path,
+    cycle_id: str,
+    candidate: dict[str, Any],
+) -> dict[str, Any]:
+    normalized = normalize_final_candidate_for_root(root, cycle_id, candidate)
     final_candidate_digest = canonical_sha256(
         final_candidate_commit_material(normalized)
     )
@@ -338,7 +342,7 @@ def publish_candidate(
     immutable_writer: ImmutableBytesWriter = immutable_write_bytes,
 ) -> dict[str, Any]:
     cycle_id = validate_cycle_id(cycle_id)
-    prepared = _prepared_candidate(cycle_id, candidate)
+    prepared = _prepared_candidate(root, cycle_id, candidate)
     normalized = prepared["normalized"]
 
     with ledger_lock(root, cycle_id, exclusive=True):
@@ -381,8 +385,9 @@ def publish_candidate(
             current_finalization_path(root, cycle_id),
             json.dumps(pointer, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         )
+        published_pointer = verification.load_current(root, cycle_id)
         verified = verification.verify_receipt(
-            root, cycle_id, receipt, current_pointer=pointer
+            root, cycle_id, receipt, current_pointer=published_pointer
         )
         merged_pending_conflicts = merge_matching_pending_conflicts_unlocked(
             root,

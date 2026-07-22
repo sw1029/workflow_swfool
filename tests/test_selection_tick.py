@@ -13,6 +13,7 @@ from orchestrate_task_cycle.selection_decision_receipt import (
 )
 from orchestrate_task_cycle.selection_tick import build_selection_tick
 from orchestrate_task_cycle.selection_tick_contract import validate_selection_tick_v2
+from orchestrate_task_cycle.selection_tick_policy import EVIDENCE_CLASSES
 from orchestrate_task_cycle.selection_publication import (
     prepare_publication,
     publish_prepared,
@@ -354,7 +355,7 @@ def test_selection_tick_rejects_external_or_missing_explicit_path(
         build_selection_tick(root, watch_paths=["../missing.json"])
 
 
-def test_selection_tick_watches_non_active_residual_pack_state(tmp_path: Path) -> None:
+def test_non_active_pack_static_change_is_observed_without_semantic_wake(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     pack = root / ".task/task_pack/pack-A.json"
     _write(pack, '{"pack_id":"pack-A","status":"completed","items":[]}\n')
@@ -363,13 +364,116 @@ def test_selection_tick_watches_non_active_residual_pack_state(tmp_path: Path) -
 
     changed = build_selection_tick(root, previous=baseline)
 
-    assert changed["status"] == "selection_required"
+    assert changed["status"] == "no_op"
+    assert changed["material_changed_watch_entries"] == []
     assert any(
         row["path"] == ".task/task_pack/pack-A.json" for row in changed["watch_entries"]
     )
 
 
-def test_selection_tick_watches_retirement_settlement_surfaces(tmp_path: Path) -> None:
+def test_task_pack_watch_separates_current_pointer_from_completed_history(
+    tmp_path: Path,
+) -> None:
+    root = _repo(tmp_path)
+    _write(
+        root / "task.md",
+        "# Task\n\n- Status: `active`\n- Executable: `true`\n- Task Pack: `pack-current`\n",
+    )
+    current = root / ".task/task_pack/pack-current.json"
+    history = root / ".task/task_pack/pack-history.json"
+    _write(current, '{"pack_id":"pack-current","status":"active","items":[]}\n')
+    _write(history, '{"pack_id":"pack-history","status":"completed","items":[]}\n')
+    baseline = build_selection_tick(
+        root,
+        watched_evidence_classes=["task_pack"],
+        wake_predicates=["current-task-pack-changed"],
+    )
+    rows = {row.get("path"): row for row in baseline["watch_entries"]}
+    assert rows[".task/task_pack/pack-current.json"]["evidence_class"] == "task_pack"
+    assert rows[".task/task_pack/pack-history.json"]["evidence_class"] == "task_state"
+
+    _write(history, '{"pack_id":"pack-history","status":"completed","items":[{}]}\n')
+    historical_change = build_selection_tick(root, previous=baseline)
+    assert historical_change["status"] == "no_op"
+    assert historical_change["material_changed_watch_entries"] == []
+
+    history.unlink()
+    historical_removal = build_selection_tick(root, previous=historical_change)
+    assert historical_removal["status"] == "no_op"
+    assert historical_removal["material_changed_watch_entries"] == []
+
+    _write(current, '{"pack_id":"pack-current","status":"active","items":[{}]}\n')
+    current_change = build_selection_tick(root, previous=historical_removal)
+    assert current_change["status"] == "selection_required"
+    assert current_change["material_changed_watch_entries"]
+
+
+def test_bound_current_pack_and_custom_watch_deletion_are_material(
+    tmp_path: Path,
+) -> None:
+    root = _repo(tmp_path)
+    _write(
+        root / "task.md",
+        "# Task\n\n- Status: `active`\n- Executable: `true`\n- Task Pack: `pack-current`\n",
+    )
+    pack = root / ".task/task_pack/pack-current.json"
+    _write(pack, '{"pack_id":"pack-current","status":"active","items":[]}\n')
+    pack_baseline = build_selection_tick(
+        root,
+        watched_evidence_classes=["task_pack"],
+        wake_predicates=["current-task-pack-changed"],
+    )
+    pack.unlink()
+    removed_pack = build_selection_tick(root, previous=pack_baseline)
+    assert removed_pack["status"] == "selection_required"
+    assert removed_pack["material_changed_watch_entries"][0]["change_kind"] == "removed"
+
+    custom = root / "residual/current-input.json"
+    _write(custom, '{"residual":"open"}\n')
+    custom_baseline = build_selection_tick(
+        root,
+        watch_paths=["residual/current-input.json"],
+        watched_evidence_classes=["custom_watch"],
+        wake_predicates=["current-residual-input-changed"],
+    )
+    custom.unlink()
+    removed_custom = build_selection_tick(root, previous=custom_baseline)
+    assert removed_custom["status"] == "selection_required"
+    assert removed_custom["material_changed_watch_entries"][0]["change_kind"] == "removed"
+
+
+def test_current_pack_completion_remains_material_when_pointer_moves_to_history(
+    tmp_path: Path,
+) -> None:
+    root = _repo(tmp_path)
+    pack = root / ".task/task_pack/pack-current.json"
+    _write(
+        root / "task.md",
+        "# Task\n\n- Status: `active`\n- Executable: `true`\n- Task Pack: `pack-current`\n",
+    )
+    _write(pack, '{"pack_id":"pack-current","status":"active","items":[]}\n')
+    baseline = build_selection_tick(
+        root,
+        watched_evidence_classes=["task_pack"],
+        wake_predicates=["current-task-pack-changed"],
+    )
+    _write(
+        root / "task.md",
+        "# Task\n\n- Status: `completed`\n- Executable: `false`\n- Task Pack: `none`\n",
+    )
+    _write(pack, '{"pack_id":"pack-current","status":"completed","items":[]}\n')
+
+    completed = build_selection_tick(root, previous=baseline)
+
+    assert completed["status"] == "selection_required"
+    assert any(
+        row["evidence_class"] == "task_pack"
+        for row in completed["material_changed_watch_entries"]
+    )
+    assert validate_selection_tick_v2(completed) == completed
+
+
+def test_retirement_settlement_surface_is_history_not_semantic_wake(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     baseline = build_selection_tick(root)
     activation = root / ".task/task_pack_retirement/activations/lgra-test.json"
@@ -380,7 +484,8 @@ def test_selection_tick_watches_retirement_settlement_surfaces(tmp_path: Path) -
 
     changed = build_selection_tick(root, previous=baseline)
 
-    assert changed["status"] == "selection_required"
+    assert changed["status"] == "no_op"
+    assert changed["material_changed_watch_entries"] == []
     assert any(
         row.get("path") == ".task/task_pack_retirement/activations/lgra-test.json"
         for row in changed["watch_entries"]
@@ -405,7 +510,8 @@ def test_selection_tick_discovers_adapter_manifests_without_repo_specific_skill_
     _write(root / ".codex/skills/second/scripts/adapter.py", "VALUE = 7\n")
     changed = build_selection_tick(root, previous=baseline)
 
-    assert changed["status"] == "selection_required"
+    assert changed["status"] == "no_op"
+    assert changed["material_changed_watch_entries"] == []
     assert any(
         row["path"] == ".codex/skills/second/adapter.manifest.json"
         for row in changed["watch_entries"]
@@ -414,6 +520,104 @@ def test_selection_tick_discovers_adapter_manifests_without_repo_specific_skill_
         row["path"] == ".codex/skills/second/scripts/adapter.py"
         for row in changed["watch_entries"]
     )
+    assert next(
+        row
+        for row in changed["watch_entries"]
+        if row.get("path") == ".task/second_adapter.py"
+    )["evidence_class"] == "adapter"
+
+    custom_baseline = build_selection_tick(
+        root,
+        watched_evidence_classes=["custom_watch"],
+        wake_predicates=["custom-runtime-input-changed"],
+    )
+    _write(root / ".task/second_adapter.py", "VALUE = 7\n")
+    custom_change = build_selection_tick(root, previous=custom_baseline)
+    assert custom_change["status"] == "no_op"
+    assert custom_change["material_changed_watch_entries"] == []
+
+    adapter_baseline = build_selection_tick(
+        root,
+        watched_evidence_classes=["adapter"],
+        wake_predicates=["required-adapter-revision-changed"],
+    )
+    _write(root / ".task/second_adapter.py", "VALUE = 8\n")
+    adapter_change = build_selection_tick(root, previous=adapter_baseline)
+    assert adapter_change["status"] == "selection_required"
+    assert adapter_change["material_changed_watch_entries"]
+
+    broad_baseline = build_selection_tick(
+        root,
+        watched_evidence_classes=sorted(EVIDENCE_CLASSES),
+    )
+    _write(root / ".codex/skills/second/scripts/adapter.py", "VALUE = 8\n")
+    broad_change = build_selection_tick(root, previous=broad_baseline)
+    assert broad_change["status"] == "no_op"
+    assert broad_change["material_changed_watch_entries"] == []
+
+    relevant_baseline = build_selection_tick(
+        root,
+        watched_evidence_classes=["adapter"],
+        wake_predicates=["required-adapter-revision-changed"],
+        minimum_material_delta="one-required-adapter-revision-change",
+    )
+    _write(root / ".codex/skills/second/scripts/adapter.py", "VALUE = 9\n")
+    relevant_change = build_selection_tick(root, previous=relevant_baseline)
+
+    assert relevant_change["status"] == "selection_required"
+    assert relevant_change["changed_evidence_classes"] == ["adapter"]
+    assert relevant_change["material_changed_watch_entries"]
+
+
+def test_task_rename_archive_and_index_render_are_nonmaterial(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    watch_paths = [".task/archive/task-old.md", ".task/index.md"]
+    baseline = build_selection_tick(
+        root,
+        watch_paths=watch_paths,
+        watched_evidence_classes=["custom_watch", "task_state"],
+    )
+    _write(root / "task.md", "# Renamed Task\n")
+    _write(root / ".task/archive/task-old.md", "# Historical Task\n")
+    _write(root / ".task/index.md", "# Rendered Index\n")
+
+    changed = build_selection_tick(
+        root,
+        previous=baseline,
+        watch_paths=watch_paths,
+    )
+
+    assert changed["status"] == "no_op"
+    assert changed["selection_required"] is False
+    assert changed["agent_fanout_allowed"] is False
+    assert changed["material_changed_watch_entries"] == []
+    assert set(changed["changed_evidence_classes"]) == {"task_state"}
+
+
+def test_acknowledgement_absorbs_only_nonmaterial_workflow_drift(
+    tmp_path: Path,
+) -> None:
+    root = _repo(tmp_path)
+    baseline = build_selection_tick(root)
+    _write(root / ".agent_goal/final_goal.md", "# Changed Goal\n")
+    selected = build_selection_tick(root, previous=baseline)
+    receipt = _selection_receipt(root, selected, "nonmaterial-drift")
+    _write(root / "task.md", "# Renamed During Selection\n")
+
+    rebased = build_selection_tick(
+        root,
+        previous=selected,
+        acknowledge_selection_tick_id=selected["packet_id"],
+        selection_receipt_ref=receipt["ref"],
+        selection_receipt_sha256=receipt["sha256"],
+    )
+    replay = build_selection_tick(root, previous=rebased)
+
+    assert rebased["status"] == "baseline_recorded"
+    assert rebased["selection_acknowledgement_status"] == "accepted"
+    assert rebased["material_changed_watch_entries"] == []
+    assert rebased["changed_evidence_classes"] == ["task_state"]
+    assert replay["status"] == "no_op"
 
 
 def test_selection_tick_routes_pending_publication_to_recovery(tmp_path: Path) -> None:

@@ -1217,11 +1217,14 @@ def test_terminal_wait_binds_rebased_tick_to_last_selection_receipt(
     wait = packet["terminal_wait"]
     task = tmp_path / "task.md"
     task.write_text("# Task A\n", encoding="utf-8")
+    goal = tmp_path / ".agent_goal/final_goal.md"
+    goal.parent.mkdir(parents=True, exist_ok=True)
+    goal.write_text("# Goal A\n", encoding="utf-8")
     initial = build_selection_tick(
         tmp_path,
         premise_contract=VERIFIED_PREMISE_CONTRACT,
     )
-    task.write_text("# Task B\n", encoding="utf-8")
+    goal.write_text("# Goal B\n", encoding="utf-8")
     trigger = build_selection_tick(tmp_path, previous=initial)
     trigger_path = tmp_path / ".task/cycle/cycle-A/selection-trigger.json"
     trigger_path.parent.mkdir(parents=True, exist_ok=True)

@@ -174,15 +174,16 @@ def _common_packet_valid(root: Path, packet: dict[str, Any]) -> bool:
 def _rebased_descends_from_trigger(
     packet: dict[str, Any], trigger: dict[str, Any]
 ) -> bool:
+    expected_changes = changed_watch_entries(
+        trigger, packet.get("watch_entries") or []
+    )
     return bool(
         packet.get("previous_input_manifest_sha256")
         == trigger.get("observed_input_manifest_sha256")
-        and packet.get("observed_input_manifest_sha256")
-        == trigger.get("observed_input_manifest_sha256")
-        and packet.get("watch_entries") == trigger.get("watch_entries")
-        and packet.get("changed_watch_entries") == []
+        and packet.get("changed_watch_entries") == expected_changes
         and packet.get("material_changed_watch_entries") == []
-        and packet.get("changed_evidence_classes") == []
+        and packet.get("changed_evidence_classes")
+        == sorted({row["evidence_class"] for row in expected_changes})
         and all(
             packet.get(field) == trigger.get(field)
             for field in (
@@ -390,10 +391,17 @@ def changed_watch_entries(
         if old == new:
             continue
         row = new or old or {}
+        old_class = str((old or {}).get("evidence_class") or "")
+        new_class = str((new or {}).get("evidence_class") or "")
+        evidence_class = (
+            old_class
+            if old_class == "task_pack" and new_class == "task_state"
+            else str(row.get("evidence_class") or "custom_watch")
+        )
         changed.append(
             {
                 "watch_id": watch_id,
-                "evidence_class": row.get("evidence_class", "custom_watch"),
+                "evidence_class": evidence_class,
                 "change_kind": (
                     "added"
                     if old is None

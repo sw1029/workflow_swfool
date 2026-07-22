@@ -19,6 +19,7 @@ from .builder import ResultBuilder
 from .contracts import (
     PREPARATION_KIND,
     PREPARATION_SCHEMA_VERSION,
+    PREPARATION_SCHEMA_VERSION_V2,
     canonical_bytes,
     canonical_sha256,
     leaf_count,
@@ -37,13 +38,23 @@ from .publication import (
     replay_mismatch,
     result_path,
 )
-from .specs import TARGET_COMPILE_SPECS
+from .protocol import cycle_preparation_version
+from .specs import LEGACY_TARGET_COMPILE_SPECS, TARGET_COMPILE_SPECS
+from .system_steps import (
+    compile_derived_values,
+    render_context_event,
+    render_system_event,
+)
+from .v2_context import collect_selected_context
+from .v2_service import prepare_v2, require_v1_judgment, submit_v2
+from .v2_specs import SYSTEM_STEPS
 
 
 STOP_REASONS = frozenset(
     {
         "awaiting_owner_result",
         "awaiting_model_judgment",
+        "awaiting_deterministic_result",
         "awaiting_authority",
         "awaiting_exact_approval",
         "awaiting_external_input",
@@ -82,39 +93,6 @@ def _task_id(root: Path, cycle_id: str) -> str | None:
     return str(value) if value is not None and str(value).strip() else None
 
 
-def _derived_values(
-    root: Path,
-    cycle_id: str,
-    target: str,
-    model_context: dict[str, Any],
-) -> dict[str, Any]:
-    spec = TARGET_COMPILE_SPECS[target]
-    task_id = _task_id(root, cycle_id)
-    advice = (
-        model_context.get("advice")
-        if isinstance(model_context.get("advice"), dict)
-        else {}
-    )
-    candidates: dict[str, Any] = {
-        "step": target,
-        "cycle_id": cycle_id,
-        "task_id": task_id,
-        "used_goal_truth": list(
-            (model_context.get("goal_truth") or {}).get("used_goal_truth") or []
-        ),
-        "used_advice": [
-            item.get("advice_id")
-            for item in advice.get("items") or []
-            if isinstance(item, dict) and item.get("advice_id")
-        ],
-    }
-    return {
-        field: candidates[field]
-        for field in spec.derived_fields
-        if candidates.get(field) is not None
-    }
-
-
 def prepare_stage(
     root: str | Path,
     cycle_id: str,
@@ -123,6 +101,8 @@ def prepare_stage(
     workflow_mode: str = "normal",
     max_files: int = 12,
     max_paths: int = 40,
+    preparation_schema_version: int | None = None,
+    persist_compiler_artifacts: bool = False,
 ) -> dict[str, Any]:
     workspace = Path(root).resolve(strict=True)
     cycle_dir(workspace, cycle_id)
@@ -130,16 +110,32 @@ def prepare_stage(
         raise ValueError(f"unsupported stage target: {target}")
     if workflow_mode not in {"normal", "bootstrap"}:
         raise ValueError(f"unsupported workflow mode: {workflow_mode}")
+    preparation_schema_version = cycle_preparation_version(
+        workspace, cycle_id, preparation_schema_version
+    )
     events = read_events(workspace, cycle_id)
     if not any(event.get("step") == "context" for event in events):
         raise ValueError("stage prepare requires the deterministic context event")
-    expected_target = _next_target(events, workflow_mode)
+    expected_target = _next_target(
+        events, workflow_mode, preparation_schema_version
+    )
     if expected_target != target:
         raise ValueError(
             f"stage target is not dependency-ready: expected {expected_target!r}, got {target!r}"
         )
+    if preparation_schema_version == PREPARATION_SCHEMA_VERSION_V2:
+        return prepare_v2(
+            workspace,
+            cycle_id,
+            target,
+            workflow_mode,
+            _task_id(workspace, cycle_id),
+            max_files=max_files,
+            max_paths=max_paths,
+            persist_compiler_artifacts=persist_compiler_artifacts,
+        )
     full, model = _context(workspace, cycle_id, max_files, max_paths)
-    spec = TARGET_COMPILE_SPECS[target]
+    spec = LEGACY_TARGET_COMPILE_SPECS[target]
     packet = _model_packet(target, full, model, workflow_mode)
     preparation: dict[str, Any] = {
         "schema_version": PREPARATION_SCHEMA_VERSION,
@@ -152,7 +148,9 @@ def prepare_stage(
         "model_context": model,
         "model_packet": packet,
         "model_packet_sha256": canonical_sha256(packet),
-        "derived_values": _derived_values(workspace, cycle_id, target, model),
+        "derived_values": compile_derived_values(
+            spec, cycle_id, target, _task_id(workspace, cycle_id), model
+        ),
         "result_contract": {
             "required_fields": list(spec.required_fields),
             "derived_fields": list(spec.derived_fields),
@@ -186,16 +184,40 @@ def prepare_stage(
 def submit_stage(
     root: str | Path,
     preparation: dict[str, Any],
-    judgment: dict[str, Any],
+    judgment: dict[str, Any] | None = None,
     *,
     mode: str = "block",
     apply: bool = False,
     max_files: int = 12,
     max_paths: int = 40,
+    owner_result_ref: str | None = None,
+    owner_result_sha256: str | None = None,
+    semantic_ref: str | None = None, semantic_sha256: str | None = None,
+    usage_ref: str | None = None, usage_sha256: str | None = None,
 ) -> dict[str, Any]:
     workspace = Path(root).resolve(strict=True)
     preparation = validate_preparation(preparation)
     cycle_id = str(preparation["cycle_id"])
+    cycle_preparation_version(workspace, cycle_id, preparation["schema_version"])
+    if preparation["schema_version"] == PREPARATION_SCHEMA_VERSION_V2:
+        if judgment is not None:
+            raise ValueError("v2 stage submission forbids inline judgment JSON")
+        return submit_v2(
+            workspace,
+            preparation,
+            task_id=_task_id(workspace, cycle_id),
+            owner_result_ref=owner_result_ref,
+            owner_result_sha256=owner_result_sha256,
+            semantic_ref=semantic_ref,
+            semantic_sha256=semantic_sha256,
+            usage_ref=usage_ref, usage_sha256=usage_sha256,
+            mode=mode,
+            apply=apply,
+            max_files=max_files,
+            max_paths=max_paths,
+        )
+    exact_bindings = (owner_result_ref, owner_result_sha256, semantic_ref, semantic_sha256, usage_ref, usage_sha256)
+    judgment = require_v1_judgment(judgment, *exact_bindings)
     replay = published_preparation(workspace, cycle_id, preparation)
     if not replay:
         _full, current_model = _context(workspace, cycle_id, max_files, max_paths)
@@ -289,9 +311,7 @@ def submit_stage(
     }
     if not apply or validation["status"] == "block":
         return output
-    publication = publish_result(
-        workspace, cycle_id, preparation, result, result_sha256
-    )
+    publication = publish_result(workspace, cycle_id, preparation, result, result_sha256)
     output.update(
         {
             "applied": True,
@@ -303,49 +323,22 @@ def submit_stage(
     return output
 
 
-def _target_order(workflow_mode: str) -> list[str]:
+def _target_order(workflow_mode: str, schema_version: int = 1) -> list[str]:
     order = BOOTSTRAP_ORDER if workflow_mode == "bootstrap" else ORDER
+    if schema_version == PREPARATION_SCHEMA_VERSION_V2:
+        return list(order)
     return [target for target in order if target in TARGET_COMPILE_SPECS]
 
 
-def _next_target(events: list[dict[str, Any]], workflow_mode: str) -> str | None:
+def _next_target(
+    events: list[dict[str, Any]], workflow_mode: str, schema_version: int = 1
+) -> str | None:
     latest = {str(event.get("step")): event for event in events}
-    for target in _target_order(workflow_mode):
+    for target in _target_order(workflow_mode, schema_version):
         event = latest.get(target)
         if event is None or str(event.get("status") or "").lower() not in TERMINAL_OK:
             return target
     return None
-
-
-def _context_event(
-    root: Path,
-    cycle_id: str,
-    full: dict[str, Any],
-    model: dict[str, Any],
-) -> dict[str, Any]:
-    task_id = _task_id(root, cycle_id)
-    identity = {
-        "cycle_id": cycle_id,
-        "task": model.get("task"),
-        "goal_truth": model.get("goal_truth"),
-        "advice_digest": (model.get("advice") or {}).get("advice_packet_digest"),
-    }
-    return {
-        "step": "context",
-        "status": "completed",
-        "event_id": "stage-context-" + canonical_sha256(identity)[:32],
-        "reason": "deterministic cycle context projection",
-        "task_id": task_id,
-        "task_absent": task_id is None,
-        "task_md": full.get("task_md"),
-        "used_goal_truth": (model.get("goal_truth") or {}).get("used_goal_truth", []),
-        "used_advice": [
-            item.get("advice_id")
-            for item in (model.get("advice") or {}).get("items", [])
-            if isinstance(item, dict) and item.get("advice_id")
-        ],
-        "context_fingerprint": state_fingerprint(model),
-    }
 
 
 def advance_stage(
@@ -357,11 +350,15 @@ def advance_stage(
     apply: bool = False,
     max_files: int = 12,
     max_paths: int = 40,
+    preparation_schema_version: int | None = None,
 ) -> dict[str, Any]:
     if max_steps < 1 or max_steps > 32:
         raise ValueError("max_steps must be between 1 and 32")
     workspace = Path(root).resolve(strict=True)
     read_initialization_metadata(workspace, cycle_id)
+    preparation_schema_version = cycle_preparation_version(
+        workspace, cycle_id, preparation_schema_version
+    )
     actions: list[dict[str, Any]] = []
     fingerprints: set[str] = set()
     for _step in range(max_steps):
@@ -379,7 +376,16 @@ def advance_stage(
                 "blocking_event_ids": [event.get("event_id") for event in blocked],
                 "actions": actions,
             }
-        full, model = _context(workspace, cycle_id, max_files, max_paths)
+        if preparation_schema_version == PREPARATION_SCHEMA_VERSION_V2:
+            full, model, _metrics = collect_selected_context(
+                workspace,
+                cycle_id,
+                TARGET_COMPILE_SPECS["authority"],
+                max_files=max_files,
+                max_paths=max_paths,
+            )
+        else:
+            full, model = _context(workspace, cycle_id, max_files, max_paths)
         fingerprint = canonical_sha256(
             {
                 "state": state_fingerprint(model),
@@ -400,7 +406,9 @@ def advance_stage(
                 "actions": actions,
             }
         if "context" not in latest:
-            event = _context_event(workspace, cycle_id, full, model)
+            event = render_context_event(
+                cycle_id, _task_id(workspace, cycle_id), full, model
+            )
             actions.append({"kind": "append_system_context", "event": event})
             if not apply:
                 return {
@@ -415,7 +423,7 @@ def advance_stage(
                 "event_duplicate": bool(publication.get("event_duplicate")),
             }
             continue
-        target = _next_target(events, workflow_mode)
+        target = _next_target(events, workflow_mode, preparation_schema_version)
         if target is None:
             return {
                 "status": "complete",
@@ -423,6 +431,27 @@ def advance_stage(
                 "actions": actions,
                 "applied": bool(actions and apply),
             }
+        if (
+            preparation_schema_version == PREPARATION_SCHEMA_VERSION_V2
+            and target in SYSTEM_STEPS
+        ):
+            event = render_system_event(
+                cycle_id, target, _task_id(workspace, cycle_id), events
+            )
+            actions.append({"kind": "append_system_stage", "event": event})
+            if not apply:
+                return {
+                    "status": "ready",
+                    "stop_reason": None,
+                    "actions": actions,
+                    "applied": False,
+                }
+            publication = append_event(workspace, cycle_id, event)
+            actions[-1]["publication"] = {
+                "event_id": publication["event"].get("event_id"),
+                "event_duplicate": bool(publication.get("event_duplicate")),
+            }
+            continue
         preparation = prepare_stage(
             workspace,
             cycle_id,
@@ -430,8 +459,9 @@ def advance_stage(
             workflow_mode=workflow_mode,
             max_files=max_files,
             max_paths=max_paths,
+            preparation_schema_version=preparation_schema_version,
         )
-        reason = boundary_reason(target)
+        reason = boundary_reason(target, preparation_schema_version)
         return {
             "status": "waiting",
             "stop_reason": reason,

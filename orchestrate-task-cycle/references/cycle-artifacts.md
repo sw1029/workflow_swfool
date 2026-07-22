@@ -19,7 +19,7 @@ This reference defines durable workflow artifacts for `$orchestrate-task-cycle`.
 Store cycle state under `.task/cycle/<cycle-id>/`:
 
 - `stage.jsonl`: append-only stage events. New rows carry `format_version: 1`; versionless rows are legacy-compatible. Malformed rows, unknown versions, duplicate event IDs, and cycle-ID mismatches fail closed.
-- `current_stage.json`: atomically replaced latest stage summary with `format_version: 1` and its source `event_count`.
+- `current_stage.json`: atomically replaced latest stage summary with its source `event_count`. Protocol-v1 cycles retain full events; protocol-v2 cycles store only bounded event refs/scalars and hydrate exact event bodies from `stage.jsonl` through the ledger reader.
 - `packets/*.md` or `packets/*.json`: rendered subskill packets.
 - `.task/cycle/<cycle-id>/packets/code_structure_audit_packet.json`: read-only generated-code size, module-boundary, semantic-structure, and convention-conformance audit evidence.
 - `final_report.md`: durable final report draft when written.
@@ -189,9 +189,13 @@ Ledger `status` is a required workflow-stage lifecycle status, not the owning su
 
 When an event references an artifact path already recorded with the same SHA-256, the ledger writer should emit `artifact_refs[].unchanged_ref: {path, sha256}` and top-level `unchanged_refs`. Downstream profile snapshots use `unchanged_ref_count` to avoid counting repeated packet bodies as fresh fixed cost.
 
+New CLI-created cycles record `stage_compiler_protocol_version: 2` in `initialization.json`. Existing cycles without that field remain protocol v1 and are never rewritten implicitly. A consumer that needs nested result fields must use the expanded ledger read surface; it must not treat the compact `current_stage.json` event ref as a full event. The v2 projection is accepted only when its event IDs, sequence numbers, event digests, step/status scalars, and event count exactly reproject the authoritative `stage.jsonl` bytes.
+
 ## Finalization Durable-State Contracts
 
 Finalization accepts either non-empty `typed_operations` or an exact `no_durable_state_change` receipt. These are closed contracts, not caller-extensible labels. Builders fail early, and finalization independently revalidates the same contract so a caller cannot bypass it by constructing or modifying JSON directly.
+
+When any typed operation targets loopback-owned durable state, an explicit-v2 identity applies, or an `anti_loop_progress_gate` object is supplied, the existing hash-bound handoff, `attempt_identity`, and `durable_mutation_candidate` are finalization preconditions. The finalizer reopens only a canonical POSIX-relative, component-non-symlink, bounded-size local producer packet; verifies its raw digest, exact integer versions, and canonical producer envelope; requires the gate minus its handoff to equal that complete packet body; and rechecks every required consumer row against the producer's normalized external consumer contract and the row's recomputed canonical receipt digest. It cannot accept an omitted or downgraded gate, let a mixed-owner operation set hide a loopback-owned target, replace the producer candidate with a separately authored no-change receipt, or treat a producer `status: pass` scalar as actual consumer use. Missing, malformed, stale, conflicted, or unevaluated required consumer/identity state may coexist with bounded task acceptance, but it blocks favorable semantic/global publication. For gated candidates the existing final-candidate digest conditionally includes the exact decision ref, gate, and handoff; ungated legacy digest material—including absent/null gate aliases and a legacy decision ref—remains unchanged. After writing the pointer, the finalizer reloads the authoritative current pointer through the owner read path and verifies the receipt against those re-read bytes. The in-memory pointer prepared before the write is not post-write evidence.
 
 ### Owner-registered typed operations
 

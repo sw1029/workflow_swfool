@@ -98,6 +98,45 @@ def _artifact_ref_from_value(value: Any) -> dict[str, Any]:
     return {}
 
 
+def _requires_explicit_v2(value: Any) -> bool:
+    """Preserve an upstream explicit identity floor across envelope extraction."""
+
+    if not isinstance(value, dict):
+        return False
+    if str(value.get("decision_identity_kind") or "").strip() == "explicit_v2":
+        return True
+    contract_version = value.get("contract_version")
+    identity_bearing = any(
+        key in value
+        for key in (
+            "decision_artifact_ref",
+            "decision_identity",
+            "artifact_ref",
+            "selected_artifact_ref",
+            *SUBJECT_FIELDS,
+            *DIMENSION_NAMES,
+            "artifact_id",
+            "artifact_sha256",
+            "production_lane_identity",
+        )
+    )
+    if (
+        not isinstance(contract_version, bool)
+        and contract_version == 2
+        and identity_bearing
+    ):
+        return True
+    return any(
+        _requires_explicit_v2(value.get(key))
+        for key in (
+            "decision_artifact_ref",
+            "decision_identity",
+            "artifact_ref",
+            "selected_artifact_ref",
+        )
+    )
+
+
 def _normalize_artifact_path(root: Path, value: Any) -> Path | None:
     text = str(value or "").strip()
     if not text or "://" in text or text.lower().startswith("sha256:"):
@@ -149,6 +188,7 @@ class _PathSelection:
     computed_sha: str | None
     store_sha: str
     ref_matches_explicit: bool
+    explicit_v2_required: bool
 
 
 @dataclass(frozen=True)
@@ -163,6 +203,7 @@ class _IdentitySelection:
     contract_valid: bool
     exact: bool
     store_exact: bool
+    explicit_v2_required: bool
 
 
 def _prepare_path_selection(
@@ -172,8 +213,9 @@ def _prepare_path_selection(
     artifact_ref_json: str | None,
 ) -> _PathSelection:
     discovery_value = _load_json_argument(root, artifact_paths_json)
+    artifact_ref_value = _load_json_argument(root, artifact_ref_json)
     supplied_ref = _artifact_ref_from_value(
-        _load_json_argument(root, artifact_ref_json)
+        artifact_ref_value
     ) or _artifact_ref_from_value(discovery_value)
     explicit_paths = [
         path
@@ -218,6 +260,10 @@ def _prepare_path_selection(
             and ref_path is not None
             and ref_path.resolve()
             not in {path.resolve() for path in explicit_paths}
+        ),
+        explicit_v2_required=(
+            _requires_explicit_v2(artifact_ref_value)
+            or _requires_explicit_v2(discovery_value)
         ),
     )
 
@@ -265,7 +311,11 @@ def _prepare_identity_selection(
         )
         and all(field in supplied_ref for field in SUBJECT_FIELDS)
     )
-    legacy_or_explicit_ready = contract_valid if explicit else bool(lane_identity)
+    legacy_or_explicit_ready = (
+        contract_valid
+        if explicit
+        else bool(lane_identity) and not paths.explicit_v2_required
+    )
     local_exact = bool(
         len(paths.paths) == 1
         and artifact_id
@@ -297,10 +347,13 @@ def _prepare_identity_selection(
         contract_valid=contract_valid,
         exact=local_exact or store_exact,
         store_exact=store_exact,
+        explicit_v2_required=paths.explicit_v2_required,
     )
 
 
 def _identity_status(paths: _PathSelection, identity: _IdentitySelection) -> str:
+    if identity.explicit_v2_required and not identity.explicit:
+        return "consumer_wiring_defect"
     if identity.exact:
         return "verified"
     if (
@@ -348,6 +401,8 @@ def _selected_artifact_ref(
             },
             **identity.aliases,
         }
+    elif identity.explicit_v2_required:
+        explicit_fields = {"decision_identity_kind": "explicit_v2"}
     return {
         **explicit_fields,
         "artifact_id": identity.artifact_id or None,

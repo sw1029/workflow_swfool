@@ -69,10 +69,20 @@ def _load_decisions(
     for path, decision, digest in _safe_artifacts(
         root, "decisions", "authority decision"
     ):
-        validate_decision_artifact(root, decision, path, skills_root=skills_root)
+        selected = (
+            request_sha256 is None
+            or decision.get("request_sha256") == request_sha256
+        )
+        validate_decision_artifact(
+            root,
+            decision,
+            path,
+            skills_root=skills_root,
+            verify_manifest=selected,
+        )
         summary = _decision_summary(root, path, decision, digest)
         decisions_by_ref[summary["ref"]] = decision
-        if request_sha256 and decision["request_sha256"] != request_sha256:
+        if not selected:
             continue
         decisions.append((decision, summary))
     return decisions, decisions_by_ref

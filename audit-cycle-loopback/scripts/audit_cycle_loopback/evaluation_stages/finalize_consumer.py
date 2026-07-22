@@ -229,9 +229,7 @@ def _finalize_consumer_conformance(frame: _EvaluationFrame) -> None:
         "hard_stop",
         "identity_gate_inputs",
         "input_state_fingerprint",
-        "output_delta",
-        "runner_validation",
-        "self_consumer_probe_row",
+        "output_delta", "runner_validation", "self_consumer_probe_row",
     )
     hook_io_receipts = adapter_invocation_receipts()
     if (
@@ -306,13 +304,14 @@ def _finalize_consumer_conformance(frame: _EvaluationFrame) -> None:
         expected_consumer_revision_sha256=CONSUMER_REVISION_SHA256,
     )
     adapter_load_gate["consumer_context_conformance"] = consumer_conformance_gate
-    if (
+    missing_context = (
         adapter_consumer_contract_mode == "manifest_v2"
         and _missing_context_is_wiring_defect(
             consumer_conformance_gate,
             self_consumer_probe_row,
         )
-    ):
+    )
+    if missing_context and decision_artifact_ref.get("decision_identity_kind") != "explicit_v2":
         adapter_load_gate["status"] = "block"
         adapter_load_gate["constrains_disposition"] = True
         adapter_load_gate["adapter_wiring_defect"] = True

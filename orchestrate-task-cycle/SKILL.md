@@ -20,6 +20,7 @@ Read these first-level references only when the corresponding part of the cycle 
 - [workflow-routing.md](references/workflow-routing.md): full phase order, detailed procedure, routing table, transition rules, worker reasoning/model policy, helper-script hooks, ordering rules, and failure handling.
 - [model-effort-routing.md](references/model-effort-routing.md): dynamic Tier 1-5 policy, abstract configured model references, structured promotion signals, binding/enforcement evidence, and bounded `max`/`ultra` rules. The executable map is [model-effort-profiles.json](references/model-effort-profiles.json).
 - [workflow-interface-contracts.md](references/workflow-interface-contracts.md): skill handoff surfaces, packet ownership, required fields, helper-script inputs/outputs, fail-closed rules, and downstream consumers.
+- [compiler-first-efficiency.md](references/compiler-first-efficiency.md): semantic-only model boundaries, explicit field origins, body-free publication, compact work orders, lazy context, v1/v2 recovery, and efficiency evidence.
 - [authority-boundary-contract.md](references/authority-boundary-contract.md): closed authority phase packet, independent decision axes, owner decision/reservation/pre-dispatch/pre-commit/settlement bindings, scoped terminal-wait replay, and legacy migration.
 - [cycle-artifacts.md](references/cycle-artifacts.md): ledger, result-contract, optional noncanonical session-audit sidecar, visible-increment, validation-scope, evidence-cache, dashboard/profile, and running-execution artifact contracts.
 - [mode-profile-contract.md](references/mode-profile-contract.md): bounded internal capture/consume/reaction composition, activation provenance, reducing local overrides, and the exact derived-metadata repair allowlist. The executable registry is [mode-profiles.json](references/mode-profiles.json).
@@ -50,25 +51,31 @@ Use `workflow authority|task-doctor|external-advice|task-index|cycle` for cross-
 
 Prefer compiler-first stage coordination over hand-authoring a full result JSON.
 
+- Submit only exact owner-result bindings and registered semantic judgment fields. Let the compiler derive IDs, paths, hashes, ordering, projections, and receipts.
+- Skip coordinator model judgment whenever `semantic_field_count` is zero; follow the registered system, deterministic, or owner executor instead.
+- Keep task/index/context/policy bodies out of model-visible packets and publication journals. Persist complete evidence once and pass compact ref/digest bindings.
+- Use the v2 compiler path for new cycles after parity validation; keep v1 artifacts read-only and recoverable without rewriting them.
+
+The ledger CLI initializes new cycles with compiler protocol v2 by default. An existing cycle with protocol v1, including legacy metadata without a protocol field, remains v1; do not force a v2 preparation into it.
+
 ```bash
 python3 -m orchestrate_task_cycle workflow cycle context --root . --cycle-id <cycle> \
   --projection model
 python3 -m orchestrate_task_cycle workflow cycle stage prepare --root . \
-  --cycle-id <cycle> --target <target>
+  --cycle-id <cycle> --target <target> --preparation-schema-version 2
 python3 -m orchestrate_task_cycle workflow cycle stage prepare --root . \
-  --cycle-id <cycle> --target <target> --publish
-python3 -m orchestrate_task_cycle workflow cycle stage submit --root . \
-  --preparation preparation.json --judgment judgment.json --mode block
+  --cycle-id <cycle> --target <target> --preparation-schema-version 2 --publish
 python3 -m orchestrate_task_cycle workflow cycle stage submit --root . \
   --preparation-ref <ref> --preparation-sha256 <sha256> \
-  --judgment judgment.json --mode block
+  --owner-result-ref <ref> --owner-result-sha256 <sha256> \
+  --semantic-ref <ref> --semantic-sha256 <sha256> --mode block
 python3 -m orchestrate_task_cycle workflow cycle stage advance --root . \
-  --cycle-id <cycle> --max-steps 8
+  --cycle-id <cycle> --max-steps 8 --preparation-schema-version 2
 ```
 
 The model projection is never a validator substitute. Preserve the current semantic-context digest, exact actionable advice, authority axes, pending runs, and target dependencies; truncate only diagnostic inventories. The semantic binding excludes declared volatile observation metadata such as collection time. Its `ref` remains null unless the digest names an exact immutable context artifact that actually exists. If required semantic material exceeds the projection budget or normalized advice is missing, stop rather than infer from a sample.
 
-`stage prepare` derives protected identifiers, routing, GT/advice bindings, dependency hashes, and the target judgment contract. Its default remains write-free and prints the full preparation. Use `--publish` to write one content-addressed immutable preparation and return only its exact ref, digest, identity, and scalar metrics; submit that artifact with both `--preparation-ref` and `--preparation-sha256`. Supply only owner receipts and semantic fields in `stage submit`; conflicting derived values fail closed. Add `--apply` only after the existing result and transition validators pass. `stage advance` is also a dry-run by default; with `--apply` it may apply only bounded deterministic context projection, then returns the next preparation and stops at owner, model, authority, approval, GT, risk, design, external-input, running-execution, or effect-settlement boundaries. Exact replay must not append another ledger event.
+`stage prepare` derives protected identifiers, routing, GT/advice bindings, dependency hashes, and the target judgment contract. Its default remains write-free. Use `--publish` to write content-addressed context, work-order, and preparation artifacts and return only exact bindings and scalar metrics; submit that preparation with both `--preparation-ref` and `--preparation-sha256`. Supply exact owner-result and semantic bindings only when the registered field-origin contract requires them. If the runtime exposes actual usage, bind `--usage-ref` with `--usage-sha256`; accept token counts only, never prices or estimates. Inline `--judgment` is legacy v1 only; conflicting derived/owner values fail closed. Add `--apply` only after the existing result and transition validators pass. `stage advance` is also a dry-run by default; with `--apply` it may append bounded system stages, then returns the next compact work order and stops at a deterministic renderer, owner, semantic, authority, approval, GT, risk, design, external-input, running-execution, or effect-settlement boundary. Exact replay must not append another ledger event.
 
 ## Domain Adapter Contract
 
@@ -94,6 +101,7 @@ Consume repository adapter output only through typed packets and owner-defined h
 - Route behavior-changing implementation through `$task-md-agent-governance`. The orchestrator may prepare and validate packets but must not patch implementation, tests, runtime configuration, or CI behavior.
 - Reuse an unchanged terminal-wait record instead of starting another full cycle. Compare the exact blocker, input, authority, and external-state fingerprints; a stale material-delta label cannot reopen the wait.
 - While the wait is unchanged, run only the bounded selection tick. Reopen the existing derive-selection boundary only after a validated exact-subject premise or relevant bound state change. Use the receipt, baseline, CAS, and forward-recovery contracts in [selection-reentry-and-publication.md](references/selection-reentry-and-publication.md).
+- For a selected successor, run `selection-decision-receipt ... pipeline` and `selection-publication ... prepare-intent|apply-intent`; do not author a target array, Base64 payload, lineage ID, digest, or receipt in the coordinator context.
 - Never redispatch a released, consumed, settled-no-effect, or otherwise terminal authority/owner operation. A changed subject or operation requires a new ordinary plan rather than rotated retry IDs.
 
 ### Evidence and progress

@@ -250,12 +250,34 @@ def test_changed_watch_cannot_also_be_carried_forward(tmp_path: Path) -> None:
     }
     packet["previous_input_manifest_sha256"] = "b" * 64
     packet["changed_watch_entries"] = [change]
-    packet["material_changed_watch_entries"] = [change]
+    packet["material_changed_watch_entries"] = []
     packet["changed_evidence_classes"] = ["task_state"]
     packet["carried_forward_watch_ids"] = [row["watch_id"]]
     _reseal(packet)
 
     with pytest.raises(ValueError, match="cannot be carried forward"):
+        validate_selection_tick_v2(packet)
+
+
+def test_bound_removed_watch_cannot_be_reclassified_as_nonmaterial(
+    tmp_path: Path,
+) -> None:
+    root = _repo(tmp_path)
+    watched = root / "current-residual.json"
+    watched.write_text('{"status":"open"}\n', encoding="utf-8")
+    baseline = build_selection_tick(
+        root,
+        watch_paths=[watched.name],
+        watched_evidence_classes=["custom_watch"],
+        wake_predicates=["current-residual-input-changed"],
+    )
+    watched.unlink()
+    packet = build_selection_tick(root, previous=baseline)
+    assert packet["material_changed_watch_entries"]
+    packet["material_changed_watch_entries"] = []
+    _reseal(packet)
+
+    with pytest.raises(ValueError, match="material changes do not match"):
         validate_selection_tick_v2(packet)
 
 

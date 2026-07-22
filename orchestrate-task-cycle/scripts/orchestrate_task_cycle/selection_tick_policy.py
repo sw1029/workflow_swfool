@@ -22,6 +22,21 @@ EVIDENCE_CLASSES = {
     "custom_watch",
     "exact_subject",
 }
+DEFAULT_WATCHED_EVIDENCE_CLASSES = (
+    "authority",
+    "exact_subject",
+    "goal_truth",
+)
+AVAILABILITY_ONLY_EVIDENCE_CLASSES = frozenset(
+    {"task_state", "advice"}
+)
+NONMATERIAL_WORKFLOW_PATH_PREFIXES = (
+    ".task/archive/",
+    ".task/task_pack_retirement/",
+)
+NONMATERIAL_WORKFLOW_PATHS = frozenset(
+    {".task/index.json", ".task/index.jsonl", ".task/index.md"}
+)
 
 
 def opaque_ids(
@@ -98,7 +113,7 @@ def selection_policy(
         wake_predicates or DEFAULT_WAKE_PREDICATES, "wake_predicates"
     )
     classes = opaque_ids(
-        watched_evidence_classes or sorted(EVIDENCE_CLASSES),
+        watched_evidence_classes or DEFAULT_WATCHED_EVIDENCE_CLASSES,
         "watched_evidence_classes",
     )
     unknown_classes = sorted(set(classes) - EVIDENCE_CLASSES)
@@ -110,6 +125,41 @@ def selection_policy(
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", minimum):
         raise ValueError("minimum_material_delta must be a bounded opaque ID")
     return "", predicates, classes, minimum
+
+
+def material_watch_entries(
+    changed_entries: list[dict[str, Any]],
+    watch_entries: list[dict[str, Any]],
+    active_classes: Sequence[str],
+) -> list[dict[str, Any]]:
+    """Select semantic wakes while retaining static availability rows for audit."""
+
+    watch_by_id = {
+        str(row.get("watch_id")): row
+        for row in watch_entries
+        if isinstance(row, dict) and row.get("watch_id")
+    }
+    active = set(active_classes)
+    if active == EVIDENCE_CLASSES:
+        # Historical packets used the full supported enum as a broad default.
+        # Do not reinterpret that compatibility shape as current relevance.
+        active = set(DEFAULT_WATCHED_EVIDENCE_CLASSES)
+    material: list[dict[str, Any]] = []
+    for change in changed_entries:
+        evidence_class = str(change.get("evidence_class") or "")
+        if evidence_class not in active:
+            continue
+        row = watch_by_id.get(str(change.get("watch_id") or ""), {})
+        row_class = evidence_class
+        if row_class in AVAILABILITY_ONLY_EVIDENCE_CLASSES:
+            continue
+        path = str(row.get("path") or "")
+        if path in NONMATERIAL_WORKFLOW_PATHS or path.startswith(
+            NONMATERIAL_WORKFLOW_PATH_PREFIXES
+        ):
+            continue
+        material.append(change)
+    return material
 
 
 def selection_disposition(

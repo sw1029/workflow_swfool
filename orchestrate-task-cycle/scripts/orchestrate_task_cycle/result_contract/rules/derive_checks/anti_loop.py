@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+from ...decision_identity_dimensions import (
+    explicit_identity_object,
+    explicit_v2_floor_declared,
+    parse_decision_identity,
+)
+
 from .shared import (
     HANDOFF_APPLICABILITY,
     _local_packet,
@@ -14,6 +20,70 @@ from .shared import (
     value_for,
 )
 from .state import DeriveFacts
+
+
+def _explicit_identity_matches(left: object, right: object) -> bool:
+    left_identity = explicit_identity_object(left)
+    right_identity = explicit_identity_object(right)
+    left_projection = parse_decision_identity(left_identity or left)
+    right_projection = parse_decision_identity(right_identity or right)
+    return bool(
+        left_projection.explicit
+        and right_projection.explicit
+        and not left_projection.issues
+        and not right_projection.issues
+        and left_projection.subject_values == right_projection.subject_values
+        and left_projection.dimension_statuses
+        == right_projection.dimension_statuses
+        and left_projection.dimension_values == right_projection.dimension_values
+    )
+
+
+def _check_explicit_identity_floor(
+    facts: DeriveFacts,
+    packet_body: dict[str, object],
+) -> None:
+    packet_ref = first_present(
+        packet_body,
+        ["decision_artifact_ref", "selected_artifact_ref", "artifact_ref"],
+    )
+    packet_identity = explicit_identity_object(packet_ref)
+    packet_projection = parse_decision_identity(packet_identity or packet_ref)
+    if not packet_projection.explicit and not explicit_v2_floor_declared(packet_ref):
+        return
+    current_ref = first_present(
+        facts.result,
+        [
+            "decision_artifact_ref",
+            "selected_artifact_ref",
+            "artifact_ref",
+            "result.decision_artifact_ref",
+        ],
+    )
+    packet_attempt = str(packet_body.get("attempt_identity") or "").strip()
+    current_attempt = first_present(
+        facts.result,
+        [
+            "finalization_consumption.attempt_id",
+        ],
+    )
+    mismatches: list[str] = []
+    if current_ref is None or not _explicit_identity_matches(current_ref, packet_ref):
+        mismatches.append("current_decision_artifact_ref")
+    if (
+        not packet_attempt
+        or current_attempt is None
+        or str(current_attempt).strip() != packet_attempt
+    ):
+        mismatches.append("attempt_identity")
+    if mismatches:
+        add(
+            facts.findings,
+            "block",
+            "consumer_wiring_defect",
+            "An explicit-v2 anti-loop identity was downgraded or not consumed under the same attempt.",
+            {"mismatched_fields": sorted(mismatches)},
+        )
 
 
 def _check_required_handoff(
@@ -58,34 +128,15 @@ def _check_required_handoff(
             "Anti-loop handoff packet hash does not match the referenced packet.",
         )
     elif observed_sha is None:
-        verification_receipt = handoff.get("packet_verification_receipt")
-        receipt_packet = (
-            _local_packet(_workspace_root(context), verification_receipt.get("evidence_ref"))
-            if isinstance(verification_receipt, dict)
-            else None
+        add(
+            findings,
+            "block",
+            "derive_anti_loop_handoff_ref_unverifiable",
+            "Derive requires the hash-bound producer packet body; a receipt that echoes only its ref and digest cannot prove identity, attempt, or consumer use.",
         )
-        receipt_evidence_sha = str(
-            verification_receipt.get("evidence_sha256") or ""
-        ).removeprefix("sha256:").lower() if isinstance(verification_receipt, dict) else ""
-        receipt_valid = bool(
-            isinstance(verification_receipt, dict)
-            and str(verification_receipt.get("status") or "").lower() == "pass"
-            and str(verification_receipt.get("packet_sha256") or "").removeprefix("sha256:").lower() == expected_sha
-            and non_empty(verification_receipt.get("evidence_ref"))
-            and receipt_packet is not None
-            and receipt_evidence_sha == receipt_packet[0]
-            and _packet_scalar(receipt_packet[1], "packet_sha256") == expected_sha
-            and _packet_scalar(receipt_packet[1], "packet_ref") == handoff.get("packet_ref")
-        )
-        if not receipt_valid:
-            add(
-                findings,
-                "block",
-                "derive_anti_loop_handoff_ref_unverifiable",
-                "Anti-loop packet reference requires either a verified workspace file or a trusted hash-bound store receipt.",
-            )
     if local_packet is not None:
         packet_body = local_packet[1]
+        _check_explicit_identity_floor(facts, packet_body)
         scalar_bindings = (
             ("artifact_id", ("artifact_id", "current_artifact_id", "decision_artifact_ref.artifact_id")),
             ("artifact_sha256", ("artifact_sha256", "decision_artifact_ref.artifact_sha256")),
@@ -279,4 +330,3 @@ def check_anti_loop(facts: DeriveFacts) -> None:
     
     facts.explicit_report_key_divergence = explicit_report_key_divergence
     facts.auto_report_key_divergences = auto_report_key_divergences
-

@@ -67,6 +67,31 @@ def _collect_policy_base(state: dict[str, Any]) -> None:
                 "evidence": {"root_cause_ledger_entries": rejected_self_reports[:5]},
             }
         )
+    decision_ref = row.get("decision_artifact_ref")
+    conformance = row.get("consumer_context_conformance")
+    consumer_wiring_defect = bool(
+        isinstance(decision_ref, dict)
+        and (
+            decision_ref.get("identity_status") == "consumer_wiring_defect"
+            or (
+                decision_ref.get("decision_identity_kind") == "explicit_v2"
+                and isinstance(conformance, dict)
+                and bool(conformance.get("missing_consumer_context_ids"))
+            )
+        )
+    )
+    if consumer_wiring_defect:
+        findings.append(
+            {
+                "severity": "block",
+                "code": "consumer_wiring_defect",
+                "message": "an explicit-v2 decision identity was downgraded or not echoed by the actual consumer; repair the existing consumer wiring before dependent decisions run.",
+                "evidence": {
+                    "decision_artifact_ref": decision_ref,
+                    "consumer_context_conformance": conformance,
+                },
+            }
+        )
     if row["adapter_wiring_defect"]:
         findings.append(
             {

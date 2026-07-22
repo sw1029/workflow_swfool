@@ -481,6 +481,52 @@ def isolated_skills_root(root: Path) -> Path:
     return skills_root
 
 
+def isolated_skills_root_with_unrelated_alias(root: Path) -> Path:
+    skills_root = isolated_skills_root(root)
+    source = ROOT / "task-md-agent-governance" / "authority.operations.json"
+    manifest = json.loads(source.read_text(encoding="utf-8"))
+    manifest["skill_id"] = "unrelated-authority-skill"
+    write(
+        skills_root / "unrelated-authority-skill" / "authority.operations.json",
+        json.dumps(manifest, sort_keys=True) + "\n",
+    )
+    return skills_root
+
+
+def persist_unrelated_decision(
+    root: Path,
+    workspace: dict[str, Any],
+    skills_root: Path,
+    *,
+    stale_manifest: bool,
+) -> tuple[dict[str, Any], str]:
+    request = request_for(
+        workspace,
+        request_id="unrelated-request",
+        skill_id="unrelated-authority-skill",
+        attempt_id="unrelated-attempt",
+        idempotency_key="unrelated-request-key",
+    )
+    decision = evaluate(
+        root,
+        request,
+        context_for(workspace, request),
+        evaluated_at=AT,
+        skills_root=skills_root,
+    )
+    decision_ref, _ = persist_decision(root, decision)
+    if stale_manifest:
+        manifest = (
+            skills_root
+            / "unrelated-authority-skill"
+            / "authority.operations.json"
+        )
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8") + "\n", encoding="utf-8"
+        )
+    return decision, decision_ref
+
+
 def replace_with_narrow_source(
     root: Path, workspace: dict[str, Any], grant_ids: list[str]
 ) -> dict[str, Any]:
@@ -1669,6 +1715,259 @@ def test_status_rehashes_bound_operation_manifest(tmp_path: Path) -> None:
 
     with pytest.raises(SystemExit, match="operation manifest binding is stale"):
         status_snapshot(tmp_path, evaluated_at=LATER, skills_root=skills_root)
+
+
+def test_exact_request_filter_ignores_only_unrelated_stale_manifest(
+    tmp_path: Path,
+) -> None:
+    workspace = setup_workspace(tmp_path)
+    skills_root = isolated_skills_root_with_unrelated_alias(tmp_path)
+    unrelated, _ = persist_unrelated_decision(
+        tmp_path, workspace, skills_root, stale_manifest=True
+    )
+    request = request_for(workspace)
+    context = context_for(workspace, request)
+    current = evaluate(
+        tmp_path,
+        request,
+        context,
+        evaluated_at=AT,
+        skills_root=skills_root,
+    )
+    persist_decision(tmp_path, current)
+    assert unrelated["request_sha256"] != current["request_sha256"]
+
+    with pytest.raises(SystemExit, match="operation manifest binding is stale"):
+        status_snapshot(tmp_path, evaluated_at=LATER, skills_root=skills_root)
+
+    filtered = status_snapshot(
+        tmp_path,
+        request_sha256=current["request_sha256"],
+        evaluated_at=LATER,
+        skills_root=skills_root,
+    )
+    assert filtered["request_sha256_filter"] == current["request_sha256"]
+    assert filtered["workflow_state"] == "source_approval_ready_for_grant"
+    assert filtered["workflow_basis"]["request_sha256"] == current["request_sha256"]
+
+    resolved = resolve_operation(
+        tmp_path,
+        request,
+        context,
+        evaluated_at=LATER,
+        skills_root=skills_root,
+    )
+    assert resolved["workflow_state"] == "source_approval_ready_for_grant"
+    assert resolved["workflow_basis"]["request_sha256"] == current["request_sha256"]
+
+
+def test_exact_request_filter_rejects_same_request_stale_manifest(
+    tmp_path: Path,
+) -> None:
+    workspace = setup_workspace(tmp_path)
+    request = request_for(workspace)
+    context = context_for(workspace, request)
+    skills_root = isolated_skills_root(tmp_path)
+    decision = evaluate(
+        tmp_path,
+        request,
+        context,
+        evaluated_at=AT,
+        skills_root=skills_root,
+    )
+    persist_decision(tmp_path, decision)
+    manifest = skills_root / request["skill_id"] / "authority.operations.json"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8") + "\n", encoding="utf-8"
+    )
+
+    with pytest.raises(SystemExit, match="operation manifest binding is stale"):
+        status_snapshot(
+            tmp_path,
+            request_sha256=decision["request_sha256"],
+            evaluated_at=LATER,
+            skills_root=skills_root,
+        )
+
+
+def test_exact_request_filter_rejects_unrelated_malformed_decision(
+    tmp_path: Path,
+) -> None:
+    workspace = setup_workspace(tmp_path)
+    skills_root = isolated_skills_root_with_unrelated_alias(tmp_path)
+    _, unrelated_ref = persist_unrelated_decision(
+        tmp_path, workspace, skills_root, stale_manifest=False
+    )
+    request = request_for(workspace)
+    current = evaluate(
+        tmp_path,
+        request,
+        context_for(workspace, request),
+        evaluated_at=AT,
+        skills_root=skills_root,
+    )
+    persist_decision(tmp_path, current)
+    unrelated_path = tmp_path / unrelated_ref
+    malformed = json.loads(unrelated_path.read_text(encoding="utf-8"))
+    malformed["unknown_field"] = True
+    unrelated_path.write_text(json.dumps(malformed) + "\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="decision is not closed"):
+        status_snapshot(
+            tmp_path,
+            request_sha256=current["request_sha256"],
+            evaluated_at=LATER,
+            skills_root=skills_root,
+        )
+
+
+def test_exact_request_filter_rejects_unrelated_unsettled_intent_graph(
+    tmp_path: Path,
+) -> None:
+    workspace = setup_workspace(tmp_path)
+    unrelated_request = request_for(
+        workspace,
+        request_id="unrelated-intent-request",
+        attempt_id="unrelated-intent-attempt",
+        idempotency_key="unrelated-intent-request-key",
+    )
+    register_grant(
+        tmp_path, grant_for(workspace, unrelated_request, max_uses=2)
+    )
+    unrelated = evaluate(
+        tmp_path,
+        unrelated_request,
+        context_for(workspace, unrelated_request),
+        evaluated_at=AT,
+        skills_root=ROOT,
+    )
+    unrelated_ref, unrelated_sha = persist_decision(tmp_path, unrelated)
+    reserved = reserve(
+        tmp_path,
+        unrelated_ref,
+        unrelated_sha,
+        reserved_at=LATER,
+        idempotency_key="unrelated-unsettled-reservation",
+        skills_root=ROOT,
+    )
+    current_request = request_for(
+        workspace,
+        request_id="current-filter-request",
+        attempt_id="current-filter-attempt",
+        idempotency_key="current-filter-request-key",
+    )
+    current = evaluate(
+        tmp_path,
+        current_request,
+        context_for(workspace, current_request),
+        evaluated_at=LATER,
+        skills_root=ROOT,
+    )
+    persist_decision(tmp_path, current)
+    regressed = next(
+        change
+        for change in reserved["reservation"]["state_changes"]
+        if "/state/grants/" in f"/{change['ref']}"
+    )
+    (tmp_path / regressed["ref"]).write_text(
+        json.dumps(regressed["before"], sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="intent replay is not settled"):
+        status_snapshot(
+            tmp_path,
+            request_sha256=current["request_sha256"],
+            evaluated_at=LATER,
+            skills_root=ROOT,
+        )
+
+
+@pytest.mark.parametrize(
+    ("lifecycle_state", "expected_workflow_state", "settlement_directory"),
+    [
+        ("reserved", "ready_to_resume", None),
+        ("consumed", "already_consumed", "use_receipts"),
+        ("released", "already_released", "release_receipts"),
+    ],
+)
+def test_exact_request_filter_preserves_current_lifecycle_precedence_and_basis(
+    tmp_path: Path,
+    lifecycle_state: str,
+    expected_workflow_state: str,
+    settlement_directory: str | None,
+) -> None:
+    workspace = setup_workspace(tmp_path)
+    skills_root = isolated_skills_root_with_unrelated_alias(tmp_path)
+    persist_unrelated_decision(
+        tmp_path, workspace, skills_root, stale_manifest=True
+    )
+    request = request_for(workspace)
+    register_grant(tmp_path, grant_for(workspace, request))
+    current = evaluate(
+        tmp_path,
+        request,
+        context_for(workspace, request),
+        evaluated_at=AT,
+        skills_root=skills_root,
+    )
+    decision_ref, decision_sha = persist_decision(tmp_path, current)
+    reserved = reserve(
+        tmp_path,
+        decision_ref,
+        decision_sha,
+        reserved_at=LATER,
+        idempotency_key=f"current-{lifecycle_state}-reservation",
+        skills_root=skills_root,
+    )
+    if lifecycle_state == "consumed":
+        result = write(
+            tmp_path / ".task/authorization/results/current-consumed.json", "{}\n"
+        )
+        consume(
+            tmp_path,
+            reserved["reservation_ref"],
+            reserved["reservation_sha256"],
+            {"ref": str(result.relative_to(tmp_path)), "sha256": sha256_file(result)},
+            consumed_at=LATER,
+            expected_version=0,
+            idempotency_key="current-consumed-settlement",
+            skills_root=skills_root,
+        )
+    elif lifecycle_state == "released":
+        evidence = write(
+            tmp_path / ".task/authorization/results/current-released.json", "{}\n"
+        )
+        release(
+            tmp_path,
+            reserved["reservation_ref"],
+            reserved["reservation_sha256"],
+            {
+                "ref": str(evidence.relative_to(tmp_path)),
+                "sha256": sha256_file(evidence),
+            },
+            released_at=LATER,
+            expected_version=0,
+            idempotency_key="current-released-settlement",
+            effect_status="verified_no_effect",
+        )
+
+    filtered = status_snapshot(
+        tmp_path,
+        request_sha256=current["request_sha256"],
+        evaluated_at=LATER,
+        skills_root=skills_root,
+    )
+    assert filtered["workflow_state"] == expected_workflow_state
+    assert filtered["workflow_basis"]["request_sha256"] == current["request_sha256"]
+    assert filtered["workflow_basis"]["reservation"]["ref"] == reserved[
+        "reservation_ref"
+    ]
+    settlement = filtered["workflow_basis"]["settlement_receipt"]
+    if settlement_directory is None:
+        assert settlement is None
+    else:
+        assert f"/{settlement_directory}/" in f"/{settlement['ref']}"
 
 
 def test_resolve_rejects_tampered_bound_operation_manifest(tmp_path: Path) -> None:

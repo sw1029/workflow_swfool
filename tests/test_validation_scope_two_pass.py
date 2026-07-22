@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import sys
 from typing import Any
@@ -11,6 +12,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "orchestrate-task-cycle" / "scripts"))
 sys.path.insert(0, str(ROOT / "plan-validation-scope" / "scripts"))
 from plan_validation_scope import changed_surface, validation_scope  # noqa: E402
+from orchestrate_task_cycle.result_contract.acceptance_satisfiability import (  # noqa: E402
+    assess_contract_satisfiability,
+)
 
 
 def build(
@@ -69,6 +73,51 @@ def separation_gate(*, invariant_status: str = "pass") -> dict[str, Any]:
             }
         ],
     }
+
+
+def satisfiability_payload(
+    *,
+    conflict: bool = False,
+    unverifiable: bool = False,
+) -> dict[str, Any]:
+    criterion = {
+        "criterion_id": "EVENT_REF",
+        "predicate_id": "EVIDENCE_REF",
+        "required_output_classes": ["BODY_REF"],
+        "required_non_empty_output_classes": ["BODY_REF"],
+        "required_mutation_surfaces": ["SUBJECT_REF"],
+        "required_verifier_input_classes": ["SOURCE_UNIT_REF"],
+        "required_freshness_class": "fresh_producer_execution",
+        "requires_body_movement": True,
+    }
+    directive = {
+        "producer_directive_id": "ENTITY_REF",
+        "criterion_ids": ["EVENT_REF"],
+        "permitted_output_classes": [] if conflict else ["BODY_REF"],
+        "guaranteed_non_empty_output_classes": ["BODY_REF"],
+        "allowed_task_mutation_surfaces": ["SUBJECT_REF"],
+        "verifier_observable_output_classes": (
+            [] if unverifiable else ["SOURCE_UNIT_REF"]
+        ),
+        "satisfying_execution_paths": [] if unverifiable else ["WORK_REF"],
+        "producer_execution_allowed": True,
+        "body_mutation_allowed": True,
+        "local_repair_routes": ["WORK_REF"],
+    }
+    payload: dict[str, Any] = {
+        "validation_predicate_contract": {"criteria": [criterion]},
+        "producer_directives": [directive],
+        "evidence_paths": ["EVIDENCE_REF"],
+    }
+    assessment = assess_contract_satisfiability(payload)
+    payload["validation_predicate_contract"]["satisfiability_rows"] = list(
+        assessment.expected_rows
+    )
+    payload["mutually_unsatisfiable_contract"] = (
+        assessment.mutually_unsatisfiable
+    )
+    payload["unverifiable_acceptance_contract"] = assessment.unverifiable
+    return payload
 
 
 def test_changed_surface_classifies_skill_contract_and_task_state() -> None:
@@ -197,7 +246,9 @@ def test_finalize_rejects_placeholder_current_task_id(tmp_path: Path) -> None:
         )
 
 
-def test_stale_decision_subject_warns_in_plan_and_blocks_finalize(tmp_path: Path) -> None:
+def test_stale_decision_subject_blocks_plan_and_cannot_be_rebound_at_finalize(
+    tmp_path: Path,
+) -> None:
     payload = {"decision_artifact_ref": decision_ref(freshness="stale")}
     plan = build(tmp_path, mode="plan", values=["src/unit.py"], payload=payload)
     finalized = build(
@@ -208,14 +259,27 @@ def test_stale_decision_subject_warns_in_plan_and_blocks_finalize(tmp_path: Path
         plan=plan,
         commands=["python -m pytest -q"],
     )
+    rebound = build(
+        tmp_path,
+        mode="finalize",
+        values=["src/unit.py"],
+        payload={"decision_artifact_ref": decision_ref()},
+        plan=plan,
+        commands=["python -m pytest -q"],
+    )
 
-    assert plan["status"] == "warn"
+    assert plan["status"] == "block"
     assert plan["validation_profile"] == "affected_chain"
     assert finalized["status"] == "block"
     assert finalized["finalized"] is False
     assert any(
         row["code"] == "decision_artifact_binding_not_evaluated"
         for row in finalized["findings"]
+    )
+    assert rebound["status"] == "block"
+    assert any(
+        row["code"] == "decision_artifact_binding_not_evaluated"
+        for row in rebound["findings"]
     )
 
 
@@ -267,7 +331,7 @@ def test_source_disjoint_but_invariant_coupled_verification_cannot_finalize(
     )
 
 
-def test_current_subject_and_independent_verification_finalize_normally(
+def test_changed_revision_cannot_rebind_the_same_validation_attempt(
     tmp_path: Path,
 ) -> None:
     planned_payload = {
@@ -293,7 +357,155 @@ def test_current_subject_and_independent_verification_finalize_normally(
         commands=["python -m pytest -q"],
     )
 
+    assert finalized["status"] == "block"
+    assert finalized["finalized"] is False
+    assert any(
+        row["code"] == "decision_artifact_subject_changed"
+        for row in finalized["findings"]
+    )
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda ref: ref.update(subject_digest="c" * 64),
+        lambda ref: ref["body_fingerprint"].update(value="d" * 64),
+        lambda ref: ref["cohort"].update(value=["cohort_B"]),
+    ],
+)
+def test_changed_digest_or_applicable_dimension_cannot_finalize(
+    tmp_path: Path,
+    mutate: Any,
+) -> None:
+    planned_ref = decision_ref()
+    plan = build(
+        tmp_path,
+        mode="plan",
+        values=["docs/unit.md"],
+        payload={"decision_artifact_ref": planned_ref},
+    )
+    current_ref = json.loads(json.dumps(planned_ref))
+    mutate(current_ref)
+
+    finalized = build(
+        tmp_path,
+        mode="finalize",
+        values=["docs/unit.md"],
+        payload={"decision_artifact_ref": current_ref},
+        plan=plan,
+        commands=["python -m pytest -q"],
+    )
+
+    assert finalized["status"] == "block"
+    assert any(
+        row["code"] == "decision_artifact_subject_changed"
+        for row in finalized["findings"]
+    )
+
+
+def test_exact_identity_and_not_applicable_dimensions_finalize_normally(
+    tmp_path: Path,
+) -> None:
+    payload = {
+        "decision_artifact_ref": decision_ref(),
+        "verification_source_separation_gate": separation_gate(),
+    }
+    plan = build(tmp_path, mode="plan", values=["docs/unit.md"], payload=payload)
+    finalized = build(
+        tmp_path,
+        mode="finalize",
+        values=["docs/unit.md"],
+        payload=payload,
+        plan=plan,
+        commands=["python -m pytest -q"],
+    )
+
     assert finalized["status"] == "ok"
     assert finalized["finalized"] is True
-    assert finalized["decision_artifact_ref"]["revision_id"] == "revision_B"
     assert finalized["validation_profile"] == "current_only"
+
+
+def test_satisfiable_predicate_contract_is_preserved_and_finalizes(
+    tmp_path: Path,
+) -> None:
+    payload = satisfiability_payload()
+    plan = build(tmp_path, mode="plan", values=["docs/unit.md"], payload=payload)
+    finalized = build(
+        tmp_path,
+        mode="finalize",
+        values=["docs/unit.md"],
+        payload=payload,
+        plan=plan,
+        commands=["python -m pytest -q"],
+    )
+
+    assert plan["validation_predicate_contract"] == payload[
+        "validation_predicate_contract"
+    ]
+    assert finalized["status"] == "ok"
+    assert finalized["finalized"] is True
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_code"),
+    [
+        (satisfiability_payload(conflict=True), "acceptance_satisfiability_failed"),
+        (
+            satisfiability_payload(unverifiable=True),
+            "acceptance_satisfiability_not_evaluated",
+        ),
+    ],
+)
+def test_failed_or_unevaluated_satisfiability_blocks_finalization(
+    tmp_path: Path,
+    payload: dict[str, Any],
+    expected_code: str,
+) -> None:
+    plan = build(tmp_path, mode="plan", values=["docs/unit.md"], payload=payload)
+    finalized = build(
+        tmp_path,
+        mode="finalize",
+        values=["docs/unit.md"],
+        payload=payload,
+        plan=plan,
+        commands=["python -m pytest -q"],
+    )
+
+    assert plan["status"] == "block"
+    assert finalized["status"] == "block"
+    assert any(row["code"] == expected_code for row in finalized["findings"])
+
+
+def test_forged_satisfiability_pass_and_missing_finalize_contract_are_blocked(
+    tmp_path: Path,
+) -> None:
+    payload = satisfiability_payload(conflict=True)
+    payload["validation_predicate_contract"]["satisfiability_rows"][0][
+        "evaluation_status"
+    ] = "pass"
+    plan = build(tmp_path, mode="plan", values=["docs/unit.md"], payload=payload)
+    forged = build(
+        tmp_path,
+        mode="finalize",
+        values=["docs/unit.md"],
+        payload=payload,
+        plan=plan,
+        commands=["python -m pytest -q"],
+    )
+    missing = build(
+        tmp_path,
+        mode="finalize",
+        values=["docs/unit.md"],
+        plan=plan,
+        commands=["python -m pytest -q"],
+    )
+
+    assert plan["status"] == "block"
+    assert any(
+        row["code"] == "acceptance_satisfiability_claim_mismatch"
+        for row in forged["findings"]
+    )
+    assert any(
+        row["code"] == "validation_predicate_contract_missing_at_finalize"
+        for row in missing["findings"]
+    )

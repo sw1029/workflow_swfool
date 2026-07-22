@@ -2337,6 +2337,34 @@ def test_hash_bound_handoff_requires_body_match_explicit_echo_and_reasoned_not_a
             {key: value for key, value in result.items() if key != "consumed_anti_loop_packet_sha256"},
             "block",
         )
+        receipt_path = root / "packet-verification-receipt.json"
+        receipt_body = {
+            "packet_ref": "missing-packet.json",
+            "packet_sha256": packet_sha,
+        }
+        receipt_path.write_text(
+            json.dumps(receipt_body, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        receipt_only_handoff = {
+            **handoff,
+            "packet_ref": "missing-packet.json",
+            "packet_verification_receipt": {
+                "status": "pass",
+                "packet_sha256": packet_sha,
+                "evidence_ref": receipt_path.name,
+                "evidence_sha256": hashlib.sha256(
+                    receipt_path.read_bytes()
+                ).hexdigest(),
+            },
+        }
+        receipt_only = result_contract.validate(
+            "derive",
+            {
+                **result,
+                "anti_loop_handoff": receipt_only_handoff,
+            },
+            "block",
+        )
         packet_path.write_text(json.dumps({**packet, "progress_verdict": "advanced"}) + "\n", encoding="utf-8")
         tampered = result_contract.validate("derive", result, "block")
         missing = result_contract.validate(
@@ -2366,8 +2394,171 @@ def test_hash_bound_handoff_requires_body_match_explicit_echo_and_reasoned_not_a
     assert not any(code.startswith("derive_anti_loop_handoff") for code in valid_codes)
     assert any(item["code"] == "derive_anti_loop_handoff_echo_mismatch" for item in missing_echo["findings"])
     assert any(item["code"] == "derive_anti_loop_handoff_hash_mismatch" for item in tampered["findings"])
+    assert any(
+        item["code"] == "derive_anti_loop_handoff_ref_unverifiable"
+        for item in receipt_only["findings"]
+    )
     assert any(item["code"] == "derive_anti_loop_handoff_missing" for item in missing["findings"])
     assert not any(item["code"] == "derive_anti_loop_not_applicable_invalid" for item in standalone["findings"])
+
+
+def test_explicit_loopback_handoff_cannot_downgrade_identity_or_attempt() -> None:
+    identity = {
+        "decision_subject_id": "SUBJECT_REF",
+        "subject_class_id": "BODY_REF",
+        "revision_id": "REVISION_REF",
+        "subject_digest": "a" * 64,
+        "lineage_id": "EVIDENCE_REF",
+        "freshness_status": "current",
+        "body_fingerprint": {"applicability": "applicable", "value": "b" * 64},
+        "production_lane": {"applicability": "not_applicable", "value": None},
+        "cohort": {"applicability": "applicable", "value": ["COHORT_REF"]},
+        "producer_run": {"applicability": "not_applicable", "value": None},
+    }
+    selected_ref = {
+        **identity,
+        "decision_identity": identity,
+        "decision_identity_kind": "explicit_v2",
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        packet_path = root / "packet-explicit.json"
+        packet = {
+            "decision_contract_version": 1,
+            "decision_artifact_ref": selected_ref,
+            "attempt_identity": "ATTEMPT_REF",
+            "artifact_id": "SUBJECT_REF",
+            "artifact_sha256": "a" * 64,
+            "artifact_family": "BODY_REF",
+            "blocker_signature": "EVENT_REF",
+            "progress_verdict": "stalled",
+            "hard_stop_required": False,
+            "terminal_state": "conservative_hold",
+            "allowed_next_action_classes": ["conservative_hold"],
+        }
+        packet_path.write_text(
+            json.dumps(packet, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        packet_sha = hashlib.sha256(packet_path.read_bytes()).hexdigest()
+        handoff = {
+            "handoff_contract_version": 1,
+            "applicability": "required",
+            "packet_ref": packet_path.name,
+            "packet_sha256": packet_sha,
+            "artifact_id": "SUBJECT_REF",
+            "artifact_sha256": "a" * 64,
+            "artifact_family": "BODY_REF",
+            "blocker_signature": "EVENT_REF",
+            "progress_verdict": "stalled",
+            "hard_stop": False,
+            "terminal_state": "conservative_hold",
+            "allowed_next_action_classes": ["conservative_hold"],
+        }
+        result = {
+            "workspace_root": str(root),
+            "decision_contract_version": 1,
+            "attempt_id": "ATTEMPT_REF",
+            "finalization_consumption": {"attempt_id": "ATTEMPT_REF"},
+            "decision_artifact_ref": selected_ref,
+            "anti_loop_handoff": handoff,
+            "consumed_anti_loop_packet_sha256": packet_sha,
+            "progress_verdict": "stalled",
+        }
+        valid = result_contract.validate("derive", result, "block")
+        downgraded = result_contract.validate(
+            "derive",
+            {
+                **result,
+                "decision_artifact_ref": {
+                    "artifact_id": "SUBJECT_REF",
+                    "artifact_sha256": "a" * 64,
+                    "production_lane_identity": "COHORT_REF",
+                },
+            },
+            "block",
+        )
+        wrong_attempt = result_contract.validate(
+            "derive",
+            {
+                **result,
+                "finalization_consumption": {"attempt_id": "ATTEMPT_OTHER"},
+            },
+            "block",
+        )
+        missing_attempt_consumption = result_contract.validate(
+            "derive",
+            {
+                key: value
+                for key, value in result.items()
+                if key != "finalization_consumption"
+            },
+            "block",
+        )
+        missing_current_use = result_contract.validate(
+            "derive",
+            {
+                key: value
+                for key, value in result.items()
+                if key != "decision_artifact_ref"
+            },
+            "block",
+        )
+        marker_only_ref = {
+            "decision_identity_kind": "explicit_v2",
+            "decision_identity": {
+                "artifact_id": "SUBJECT_REF",
+                "artifact_sha256": "a" * 64,
+                "production_lane_identity": "COHORT_REF",
+            },
+        }
+        marker_packet_path = root / "packet-marker-floor.json"
+        marker_packet = {
+            **packet,
+            "decision_artifact_ref": marker_only_ref,
+        }
+        marker_packet_path.write_text(
+            json.dumps(marker_packet, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        marker_sha = hashlib.sha256(marker_packet_path.read_bytes()).hexdigest()
+        marker_handoff = {
+            **handoff,
+            "packet_ref": marker_packet_path.name,
+            "packet_sha256": marker_sha,
+        }
+        marker_only = result_contract.validate(
+            "derive",
+            {
+                **result,
+                "decision_artifact_ref": marker_only_ref,
+                "anti_loop_handoff": marker_handoff,
+                "consumed_anti_loop_packet_sha256": marker_sha,
+            },
+            "block",
+        )
+
+    assert not any(
+        item["code"] == "consumer_wiring_defect" for item in valid["findings"]
+    )
+    assert any(
+        item["code"] == "consumer_wiring_defect"
+        for item in downgraded["findings"]
+    )
+    assert any(
+        item["code"] == "consumer_wiring_defect"
+        for item in wrong_attempt["findings"]
+    )
+    assert any(
+        item["code"] == "consumer_wiring_defect"
+        for item in missing_attempt_consumption["findings"]
+    )
+    assert any(
+        item["code"] == "consumer_wiring_defect"
+        for item in missing_current_use["findings"]
+    )
+    assert any(
+        item["code"] == "consumer_wiring_defect"
+        for item in marker_only["findings"]
+    )
 
 
 def main() -> int:

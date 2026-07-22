@@ -19,7 +19,14 @@ REQUIRED_COMPILER_TOKENS = {
     "task-doctor": ("compile-intent", "accept-review", "schema-v2"),
     "manage-task-state-index": ("compile-transition", "--intent"),
     "manage-external-advice": ("compile-dispositions", "--decision-map"),
-    "orchestrate-task-cycle": ("stage prepare", "stage submit", "stage advance"),
+    "orchestrate-task-cycle": (
+        "stage prepare",
+        "stage submit",
+        "stage advance",
+        "prepare-intent",
+        "semantic_field_count",
+        "compiler-first-efficiency.md",
+    ),
 }
 FORBIDDEN_AUXILIARY_DOCS = {
     "README.md",

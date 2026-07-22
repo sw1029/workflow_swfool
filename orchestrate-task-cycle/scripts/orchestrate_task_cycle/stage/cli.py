@@ -43,6 +43,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     prepare.add_argument("--max-files", type=int, default=12)
     prepare.add_argument("--model-max-paths", type=int, default=40)
+    prepare.add_argument(
+        "--preparation-schema-version", type=int, choices=(1, 2)
+    )
     prepare.add_argument("--publish", action="store_true")
 
     submit = sub.add_parser("submit")
@@ -51,7 +54,13 @@ def _parser() -> argparse.ArgumentParser:
     preparation_input.add_argument("--preparation")
     preparation_input.add_argument("--preparation-ref")
     submit.add_argument("--preparation-sha256")
-    submit.add_argument("--judgment", required=True)
+    submit.add_argument("--judgment")
+    submit.add_argument("--owner-result-ref")
+    submit.add_argument("--owner-result-sha256")
+    submit.add_argument("--semantic-ref")
+    submit.add_argument("--semantic-sha256")
+    submit.add_argument("--usage-ref")
+    submit.add_argument("--usage-sha256")
     submit.add_argument("--mode", choices=("block", "warn"), default="block")
     submit.add_argument("--apply", action="store_true")
     submit.add_argument("--max-files", type=int, default=12)
@@ -67,6 +76,9 @@ def _parser() -> argparse.ArgumentParser:
     advance.add_argument("--apply", action="store_true")
     advance.add_argument("--max-files", type=int, default=12)
     advance.add_argument("--model-max-paths", type=int, default=40)
+    advance.add_argument(
+        "--preparation-schema-version", type=int, choices=(1, 2)
+    )
     return parser
 
 
@@ -79,6 +91,8 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             workflow_mode=args.workflow_mode,
             max_files=max(1, args.max_files),
             max_paths=max(1, args.model_max_paths),
+            preparation_schema_version=args.preparation_schema_version,
+            persist_compiler_artifacts=args.publish,
         )
         return publish_preparation(args.root, prepared) if args.publish else prepared
     if args.stage_command == "submit":
@@ -98,11 +112,17 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         return submit_stage(
             args.root,
             preparation,
-            _load_json(args.judgment),
+            _load_json(args.judgment) if args.judgment else None,
             mode=args.mode,
             apply=args.apply,
             max_files=max(1, args.max_files),
             max_paths=max(1, args.model_max_paths),
+            owner_result_ref=args.owner_result_ref,
+            owner_result_sha256=args.owner_result_sha256,
+            semantic_ref=args.semantic_ref,
+            semantic_sha256=args.semantic_sha256,
+            usage_ref=args.usage_ref,
+            usage_sha256=args.usage_sha256,
         )
     return advance_stage(
         args.root,
@@ -112,6 +132,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         apply=args.apply,
         max_files=max(1, args.max_files),
         max_paths=max(1, args.model_max_paths),
+        preparation_schema_version=args.preparation_schema_version,
     )
 
 

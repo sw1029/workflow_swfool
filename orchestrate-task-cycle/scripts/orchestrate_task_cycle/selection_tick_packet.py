@@ -8,7 +8,7 @@ from typing import Any
 
 from .selection_tick_baseline import PreviousSelectionTick
 from .selection_tick_contract import validate_selection_tick_v2
-from .selection_tick_policy import selection_disposition
+from .selection_tick_policy import material_watch_entries, selection_disposition
 
 
 def _canonical(value: Any) -> bytes:
@@ -39,9 +39,9 @@ def render_selection_tick_packet(
     """Apply wake, acknowledgement, and publication gates then seal the packet."""
 
     changed_classes = sorted({str(row["evidence_class"]) for row in changed_entries})
-    material_entries = [
-        row for row in changed_entries if row["evidence_class"] in set(active_classes)
-    ]
+    material_entries = material_watch_entries(
+        changed_entries, rows, active_classes
+    )
     pending_publications = publication["pending_transaction_ids"]
     publication_blocked = publication["status"] != "clear"
     status, reason, selection_required = selection_disposition(
@@ -55,7 +55,7 @@ def render_selection_tick_packet(
     acknowledging = bool(previous_tick and previous_tick.acknowledging_selection)
     baseline_rebased = False
     if acknowledging and not publication_blocked:
-        if changed_entries:
+        if fresh_exact_premise_detected or material_entries:
             status = "selection_required"
             reason = "selection_inputs_changed_during_acknowledgement"
             selection_required = True
