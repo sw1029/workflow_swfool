@@ -132,6 +132,16 @@ def _usage() -> str:
     )
 
 
+def _owner_arguments(owner: str, arguments: list[str]) -> list[str]:
+    if (
+        owner == "authority"
+        and arguments
+        and arguments[0] not in {"-h", "--help", "authority", "receipt"}
+    ):
+        return ["authority", *arguments]
+    return arguments
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if not arguments or arguments[0] in {"-h", "--help"}:
@@ -153,7 +163,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         isolated_module_argv(
             sys.executable,
             spec.module,
-            owner_arguments,
+            _owner_arguments(owner, owner_arguments),
             import_roots,
         ),
         env=environment,

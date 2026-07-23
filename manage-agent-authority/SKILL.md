@@ -212,8 +212,11 @@ grant per compilation, snapshots, IDs, paths, hashes, a write-ahead prepare, and
 completion receipt. Every source preserves the exact per-grant projection, including
 request digest and task/improvement/session/policy scope. Registration compares a
 grant only with its own projection; the aggregate source union never authorizes a
-Cartesian-product recombination. Materialization preflights all conflicts before its
-first write, stages every grant as `draft`, and recovers an exact interrupted
+Cartesian-product recombination. Canonicalize aggregate `grant_ids` and `lineage_ids`
+as sorted exact sets before source-decision comparison; plan presentation order is
+not authority and must not invalidate the same signed membership. Materialization
+preflights all conflicts before its first write, stages every grant as `draft`, and
+recovers an exact interrupted
 transaction before reporting all grants active.
 The transaction effect API accepts only the exact plan and decision-seed bindings.
 Inside the authority lock it boundedly reopens the plan, signed host/user evidence,
@@ -357,9 +360,16 @@ creation time, or idempotency key.
 ```bash
 PYTHONPATH="$SKILLS_ROOT/orchestrate-task-cycle/scripts" \
   python3 -P -m orchestrate_task_cycle workflow authority evaluate --root . \
-  --request request.json --context evaluation-context.json \
+  --compiled-operation \
+  '{"ref":".task/authorization/operation_compilations/operation_compilation-<fingerprint>.json","sha256":"<sha256>","compilation_fingerprint":"<fingerprint>"}' \
   --at 2026-01-01T00:00:00Z
 ```
+
+Require the compact binding to reopen under the producer-owned compilation CAS with
+matching bytes, filename, and fingerprint. An identical full compilation copied to
+another path is not compiler provenance. Retain `--request` plus `--context` only for
+explicit legacy diagnostics. Acquire the bounded regular-file bytes once, then hash,
+decode, and validate that same payload.
 
 Use `effective_authority_fingerprint` for approval-wait wakeup and exact replay. It contains only operation-relevant projections and selected immutable grant/policy bindings. Do not substitute a hash of the mutable whole policy or goal context.
 

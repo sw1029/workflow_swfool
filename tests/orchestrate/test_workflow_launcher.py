@@ -54,6 +54,7 @@ def _public_workflow_argv(*arguments: str) -> list[str]:
     ("owner", "arguments"),
     (
         ("authority", ["authority", "--help"]),
+        ("authority", ["publish-root-authorization-evidence", "--help"]),
         ("task-doctor", ["--help"]),
         ("external-advice", ["registry", "--help"]),
         ("task-index", ["index", "--help"]),

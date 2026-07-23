@@ -622,6 +622,11 @@ stale evidence, stale subjects, and stale manifests. Publish each ordinary
 operation compilation first, then one batch that references those producer bindings
 under `.task/authorization/operation_batches/sha256/`. A copied context, compilation,
 batch, or plan at an arbitrary path is not producer output even when its bytes match.
+`evaluate|resolve --compiled-operation` accepts only the compact published binding,
+reopens the canonical compilation filename under its producer CAS, and revalidates
+one bounded regular-file payload against its digest, JSON contract, filename, and
+fingerprint before extracting request/context. A full compilation path or JSON body
+is not a compact binding and cannot bypass provenance.
 Treat the operation input as a true set: sort by canonical bytes, reject duplicates,
 cap it at 128 operations and 256 KiB, and cap the compiled batch at 2 MiB. Validation
 must recompile every row from the exact set/context/timestamp, including defaults,
@@ -649,6 +654,11 @@ compilation. Emit one grant projection and unique grant/lineage/replay IDs per
 compilation. Never create one grant from the batch-wide capability × subject ×
 operation union. The schema-v5 source preserves the exact per-grant mapping in
 addition to its aggregate coverage. The plan creates no authority.
+Treat aggregate `grant_ids` and `lineage_ids` as exact sets: the schema-v5 source
+canonicalizes them lexicographically before source-decision comparison. The signed
+plan may retain producer request order, but order alone neither widens authority nor
+invalidates identical membership; the request-bound grant projections remain the
+mapping authority.
 
 `publish-root-authorization-evidence` accepts a closed host/user-signed envelope,
 verifies its exact plan/audience/window and RSA/SHA-256 signature against an active

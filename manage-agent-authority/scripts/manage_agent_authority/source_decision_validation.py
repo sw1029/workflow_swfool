@@ -46,6 +46,12 @@ def _require_source_fields(
         )
 
 
+def _canonical_exact_values(value: Any) -> Any:
+    """Mirror source-approval normalization for set-valued exact IDs."""
+
+    return sorted(value) if isinstance(value, list) else value
+
+
 def _root_decision_mode(
     approval: dict[str, Any], decision: dict[str, Any]
 ) -> str:
@@ -208,9 +214,9 @@ def _root_projection_source_fields(
         "decision_classes": coverage.get("decision_classes"),
         "cardinalities": coverage.get("cardinalities"),
         "max_uses": coverage.get("max_uses"),
-        "grant_ids": coverage.get("grant_ids"),
+        "grant_ids": _canonical_exact_values(coverage.get("grant_ids")),
         "request_digests": coverage.get("request_digests"),
-        "lineage_ids": coverage.get("lineage_ids"),
+        "lineage_ids": _canonical_exact_values(coverage.get("lineage_ids")),
         "delegation_binding": None,
         "not_before": decided_at,
         "expires_at": (

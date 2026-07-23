@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "manage-agent-authority" / "scripts"))
 
 from manage_agent_authority import authority_cli  # noqa: E402
+from manage_agent_authority import operation_publication  # noqa: E402
 from manage_agent_authority.decision_publication import (  # noqa: E402
     evaluate_and_publish,
 )
@@ -22,6 +23,9 @@ from manage_agent_authority.operation_compiler import (  # noqa: E402
     validate_compilation,
 )
 from manage_agent_authority.operation_request import build_request  # noqa: E402
+from manage_agent_authority.operation_publication import (  # noqa: E402
+    publish_compilation,
+)
 
 
 AT = "2026-07-19T10:00:00+09:00"
@@ -239,8 +243,7 @@ def test_cli_evaluate_accepts_compiled_operation_without_full_json_reentry(
     compiled = compile_operation(
         tmp_path, _seed(tmp_path), compiled_at=AT, skills_root=ROOT
     )
-    compiled_path = tmp_path / "compiled.json"
-    compiled_path.write_text(json.dumps(compiled), encoding="utf-8")
+    binding = publish_compilation(tmp_path, compiled)
 
     result = authority_cli.main(
         [
@@ -248,13 +251,44 @@ def test_cli_evaluate_accepts_compiled_operation_without_full_json_reentry(
             "--root", str(tmp_path),
             "--at", AT,
             "--skills-root", str(ROOT),
-            "--compiled-operation", str(compiled_path),
+            "--compiled-operation", json.dumps(binding),
         ]
     )
     payload = json.loads(capsys.readouterr().out)
     assert result == 0
     assert payload["request_sha256"] == compiled["request_sha256"]
     assert payload["decision"] == "approval_required"
+
+    copied = tmp_path / "copied-compilation.json"
+    copied.write_bytes((tmp_path / binding["ref"]).read_bytes())
+    invalid_inputs = (
+        (str(copied), "binding must contain exact"),
+        (
+            json.dumps(
+                {
+                    "ref": copied.relative_to(tmp_path).as_posix(),
+                    "sha256": binding["sha256"],
+                }
+            ),
+            "outside its producer-owned CAS",
+        ),
+        (
+            json.dumps({**binding, "sha256": "0" * 64}),
+            "SHA-256 does not match",
+        ),
+    )
+    for invalid, message in invalid_inputs:
+        assert authority_cli.main(
+            [
+                "evaluate",
+                "--root", str(tmp_path),
+                "--at", AT,
+                "--skills-root", str(ROOT),
+                "--compiled-operation", invalid,
+            ]
+        ) == 2
+        error = json.loads(capsys.readouterr().out)
+        assert message in error["error"]["message"]
 
 
 def test_cli_publish_compilation_replays_compact_binding_and_fails_on_conflict(
@@ -291,6 +325,30 @@ def test_cli_publish_compilation_replays_compact_binding_and_fails_on_conflict(
     conflict = json.loads(capsys.readouterr().out)
     assert conflict["status"] == "error"
     assert "Conflicting operation compilation" in conflict["error"]["message"]
+
+
+def test_published_compilation_loader_reads_one_bounded_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    compiled = compile_operation(
+        tmp_path, _seed(tmp_path), compiled_at=AT, skills_root=ROOT
+    )
+    binding = publish_compilation(tmp_path, compiled)
+    observed: list[int | None] = []
+    actual_read = operation_publication.read_regular
+
+    def read_once(path: Path, **kwargs: object) -> bytes | None:
+        observed.append(kwargs.get("max_bytes"))
+        return actual_read(path, **kwargs)
+
+    monkeypatch.setattr(operation_publication, "read_regular", read_once)
+    normalized, loaded = operation_publication.load_published_compilation(
+        tmp_path, binding
+    )
+
+    assert normalized == binding
+    assert loaded == compiled
+    assert observed == [operation_publication.MAX_COMPILATION_BYTES]
 
 
 def test_cli_does_not_treat_compilation_as_source_approval() -> None:

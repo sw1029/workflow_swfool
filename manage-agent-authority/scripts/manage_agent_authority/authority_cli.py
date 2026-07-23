@@ -6,9 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .artifact_store import snapshot_file
-from .artifact_store import transition_grants
-from .artifact_store import update_current_policy
+from .artifact_store import snapshot_file, transition_grants, update_current_policy
 from .canonical import load_object
 from .composition_intent_compiler import compile_grant_composition
 from .decision_publication import evaluate_and_publish
@@ -16,9 +14,8 @@ from .lifecycle import consume
 from .lifecycle import release
 from .reconciliation import reconcile_quarantine
 from .lifecycle import reserve
-from .operation_compiler import compilation_inputs
-from .operation_compiler import compile_operation
-from .operation_publication import publish_compilation
+from .operation_compiler import compilation_inputs, compile_operation
+from .operation_publication import load_published_compilation, publish_compilation
 from .operation_batch import publish_operation_batch, publish_operation_set
 from .root_grant import (
     materialize_plan_bound_root_grant,
@@ -100,9 +97,10 @@ def _operation_inputs(
             raise SystemExit(
                 "--context cannot be combined with --compiled-operation."
             )
+        _, compilation = load_published_compilation(root, _input_object(compiled))
         return compilation_inputs(
             root,
-            _input_object(compiled),
+            compilation,
             skills_root=_skills_root(args),
         )
     if getattr(args, "context", None) is None:

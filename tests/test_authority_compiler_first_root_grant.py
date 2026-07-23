@@ -974,13 +974,21 @@ def test_root_plan_uses_current_policy_and_compilation_minimum_grants(
 ) -> None:
     _write(tmp_path / "evidence/risk.json", "{}\n")
     _write(tmp_path / "evidence/design.json", "{}\n")
-    first = _write(tmp_path / "plans/first.json", '{"plan":1}\n')
-    second = _write(tmp_path / "plans/second.json", '{"plan":2}\n')
+    first = _write(
+        tmp_path / "plans/task-transition-a.json", '{"plan":"a"}\n'
+    )
+    second = _write(
+        tmp_path / "plans/task-transition-b.json", '{"plan":"b"}\n'
+    )
     goal = _write(tmp_path / ".agent_goal/goal_architecture.md", "# Goal\n")
     initialization = _write(
-        tmp_path / ".task/cycle/cycle-minimum/initialization.json",
+        tmp_path / ".task/cycle/cycle-multi-grant/initialization.json",
         json.dumps(
-            {"format_version": 1, "cycle_id": "cycle-minimum", "task_id": "task-1"}
+            {
+                "format_version": 1,
+                "cycle_id": "cycle-multi-grant",
+                "task_id": "task-1",
+            }
         )
         + "\n",
     )
@@ -1004,10 +1012,10 @@ def test_root_plan_uses_current_policy_and_compilation_minimum_grants(
                 "capabilities": ["task.scope.mutate"],
                 "risk_ceiling": "R3",
                 "mutation_classes": ["local_mutation"],
-                "evidence_id": "session-minimum",
+                "evidence_id": "session-multi-grant",
             },
             "goal_autonomy_envelope": {
-                "envelope_id": "envelope-minimum",
+                "envelope_id": "goal-envelope-multi-grant",
                 "capabilities": ["task.scope.mutate"],
                 "risk_ceiling": "R3",
                 "decision_classes": ["D2"],
@@ -1026,13 +1034,19 @@ def test_root_plan_uses_current_policy_and_compilation_minimum_grants(
             {
                 "skill_id": "task-doctor",
                 "operation_id": "mutate_task_scope",
-                "subject": {"ref": "plans/first.json", "revision": "first"},
+                "subject": {
+                    "ref": "plans/task-transition-a.json",
+                    "revision": "plan-1",
+                },
                 "scope": {"pack_id": None},
             },
             {
                 "skill_id": "task-doctor",
                 "operation_id": "mutate_task_scope",
-                "subject": {"ref": "plans/second.json", "revision": "second"},
+                "subject": {
+                    "ref": "plans/task-transition-b.json",
+                    "revision": "plan-2",
+                },
                 "scope": {"pack_id": None},
             },
         ],
@@ -1045,7 +1059,7 @@ def test_root_plan_uses_current_policy_and_compilation_minimum_grants(
         skills_root=ROOT,
     )
     current_policy = _write(
-        tmp_path / ".agent_goal/agent_authority.md", "# Authority 1\n"
+        tmp_path / ".agent_goal/agent_authority.md", "# Authority\n"
     )
     current_binding = snapshot_file(
         tmp_path, str(current_policy.relative_to(tmp_path)), "policy"
@@ -1055,7 +1069,7 @@ def test_root_plan_uses_current_policy_and_compilation_minimum_grants(
         "source_kind": "explicit_user_instruction",
         "holder_rank": "S0",
         "expires_at": EXPIRES_AT,
-        "session_id": "session-minimum",
+        "session_id": "session-multi-grant",
     }
     prepared = prepare_root_approval_plan(
         tmp_path,
@@ -1077,7 +1091,10 @@ def test_root_plan_uses_current_policy_and_compilation_minimum_grants(
         grant["capabilities"] == ["task.scope.mutate"]
         for grant in projection["grants"]
     )
-    assert len(projection["source_coverage"]["subjects"]) == 2
+    coverage = projection["source_coverage"]
+    assert len(coverage["subjects"]) == 2
+    assert coverage["grant_ids"] != sorted(coverage["grant_ids"])
+    assert coverage["lineage_ids"] != sorted(coverage["lineage_ids"])
     decision_result = compile_root_decision_seed(
         tmp_path,
         prepared["root_approval_plan"],
@@ -1099,6 +1116,8 @@ def test_root_plan_uses_current_policy_and_compilation_minimum_grants(
     source = load_source_approval(
         tmp_path / materialized["source_approval"]["ref"]
     )
+    assert source["grant_ids"] == sorted(coverage["grant_ids"])
+    assert source["lineage_ids"] == sorted(coverage["lineage_ids"])
     for field, forged_value, message in (
         ("max_uses", None, "max_uses must be positive"),
         (
