@@ -81,9 +81,7 @@ def _add_context_arguments(parser: argparse.ArgumentParser) -> None:
         parser.add_argument(f"--{prefix}-ref")
         parser.add_argument(f"--{prefix}-sha256")
     parser.add_argument("--session-capability", action="append", required=True)
-    parser.add_argument(
-        "--session-risk-ceiling", choices=RISK_TIERS, required=True
-    )
+    parser.add_argument("--session-risk-ceiling", choices=RISK_TIERS, required=True)
     parser.add_argument(
         "--session-mutation-class",
         action="append",
@@ -119,9 +117,7 @@ def _add_execution_arguments(parser: argparse.ArgumentParser) -> None:
         parser.add_argument(f"--{prefix}-reservation-sha256")
         parser.add_argument(f"--{prefix}-pre-commit-ref")
         parser.add_argument(f"--{prefix}-pre-commit-sha256")
-        parser.add_argument(
-            f"--{prefix}-expected-version", type=int
-        )
+        parser.add_argument(f"--{prefix}-expected-version", type=int)
 
 
 def _authority_proofs(args: argparse.Namespace) -> dict[str, dict[str, Any]]:
@@ -226,6 +222,50 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             at=args.at,
             skills_root=Path(args.skills_root) if args.skills_root else None,
         )
+    if args.command == "compile-approval-batch":
+        from manage_agent_authority.operation_batch import (
+            publish_projected_operation_batch,
+        )
+
+        return publish_projected_operation_batch(
+            root,
+            _binding(
+                args.approval_projection_ref,
+                args.approval_projection_sha256,
+            ),
+            skills_root=Path(args.skills_root) if args.skills_root else None,
+        )
+    if args.command == "validate-approval-batch-source":
+        from .selected_successor_approval_batch import (
+            validate_approval_batch_source,
+        )
+
+        return validate_approval_batch_source(
+            root,
+            _binding(
+                args.approval_projection_ref,
+                args.approval_projection_sha256,
+            ),
+            skills_root=Path(args.skills_root) if args.skills_root else None,
+        )
+    if args.command == "resume-authority":
+        from .selected_successor_authority_resume import (
+            resume_selected_successor_authority,
+        )
+
+        return resume_selected_successor_authority(
+            root,
+            projection_binding=_binding(
+                args.approval_projection_ref,
+                args.approval_projection_sha256,
+            ),
+            materialization_binding=_binding(
+                args.root_grant_materialization_ref,
+                args.root_grant_materialization_sha256,
+            ),
+            at=args.at,
+            skills_root=Path(args.skills_root) if args.skills_root else None,
+        )
     if args.command == "prepare-authority-context":
         request_context = {
             "external_input_status": args.external_input_status,
@@ -255,9 +295,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             "decision_classes": args.goal_decision_class,
             "subjects": args.goal_subject_digest,
             "operations": args.goal_operation,
-            "source_binding": _binding(
-                args.goal_source_ref, args.goal_source_sha256
-            ),
+            "source_binding": _binding(args.goal_source_ref, args.goal_source_sha256),
         }
         return prepare_selected_successor_authority_contexts(
             root,
@@ -283,9 +321,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         operation=args.operation,
         owner_result=_binding(args.owner_result_ref, args.owner_result_sha256),
         reservation=_binding(args.reservation_ref, args.reservation_sha256),
-        pre_commit_verification=_binding(
-            args.pre_commit_ref, args.pre_commit_sha256
-        ),
+        pre_commit_verification=_binding(args.pre_commit_ref, args.pre_commit_sha256),
         phase=args.phase,
     )
 
@@ -312,9 +348,37 @@ def main(argv: Sequence[str] | None = None) -> int:
     for prefix in PREFIXES.values():
         authority.add_argument(f"--{prefix}-grant-ref")
         authority.add_argument(f"--{prefix}-grant-sha256")
-        authority.add_argument(
-            f"--{prefix}-grant-absent", action="store_true"
-        )
+        authority.add_argument(f"--{prefix}-grant-absent", action="store_true")
+    approval_batch = commands.add_parser(
+        "compile-approval-batch",
+        help=(
+            "Seal exact grant-governed compilations from one current "
+            "selected-successor approval projection."
+        ),
+    )
+    approval_batch.add_argument("--approval-projection-ref", required=True)
+    approval_batch.add_argument("--approval-projection-sha256", required=True)
+    approval_batch.add_argument("--skills-root")
+    validate_batch = commands.add_parser(
+        "validate-approval-batch-source",
+        help="Read-only fixed-owner validation for the root batching bridge.",
+    )
+    validate_batch.add_argument("--approval-projection-ref", required=True)
+    validate_batch.add_argument("--approval-projection-sha256", required=True)
+    validate_batch.add_argument("--skills-root")
+    resume = commands.add_parser(
+        "resume-authority",
+        help=(
+            "Reuse exact projected requests with one signed root-grant "
+            "materialization at a later authority time."
+        ),
+    )
+    resume.add_argument("--approval-projection-ref", required=True)
+    resume.add_argument("--approval-projection-sha256", required=True)
+    resume.add_argument("--root-grant-materialization-ref", required=True)
+    resume.add_argument("--root-grant-materialization-sha256", required=True)
+    resume.add_argument("--at", required=True)
+    resume.add_argument("--skills-root")
     _add_context_arguments(commands.add_parser("prepare-authority-context"))
     for name in ("execute", "recover"):
         _add_execution_arguments(commands.add_parser(name))

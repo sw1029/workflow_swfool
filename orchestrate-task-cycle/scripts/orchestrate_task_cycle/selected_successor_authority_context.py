@@ -52,9 +52,7 @@ MAX_SEMANTIC_INPUT_BYTES = 1024 * 1024
 
 
 def _sealed_content(value: dict[str, Any]) -> str:
-    body = {
-        key: item for key, item in value.items() if key != "context_content_sha256"
-    }
+    body = {key: item for key, item in value.items() if key != "context_content_sha256"}
     return _sha256_bytes(_canonical_json(body))
 
 
@@ -68,15 +66,11 @@ def _evidence(
     if not required:
         raise ValueError(f"{label} must be null for the asserted status")
     binding = normalize_binding(value, label)
-    read_bound_bytes(
-        root, binding, label, max_bytes=MAX_SEMANTIC_INPUT_BYTES
-    )
+    read_bound_bytes(root, binding, label, max_bytes=MAX_SEMANTIC_INPUT_BYTES)
     return binding
 
 
-def normalize_evaluation_semantics(
-    root: Path, value: Any
-) -> dict[str, Any]:
+def normalize_evaluation_semantics(root: Path, value: Any) -> dict[str, Any]:
     """Validate a semantic ceiling/envelope and its bounded exact source."""
 
     from manage_agent_authority.evaluation_context import (
@@ -102,9 +96,7 @@ def normalize_evaluation_semantics(
     return normalized
 
 
-def normalize_request_semantics(
-    root: Path, value: Any
-) -> dict[str, Any]:
+def normalize_request_semantics(root: Path, value: Any) -> dict[str, Any]:
     """Validate the four semantic axes and their exact evidence bindings."""
 
     root = root.expanduser().resolve(strict=True)
@@ -175,8 +167,7 @@ def load_request_context(
     context = closed_object(value.get("context"), CONTEXT_KEYS, "request context")
     if (
         value.get("schema_version") != 1
-        or value.get("artifact_kind")
-        != "selected_successor_authority_request_context"
+        or value.get("artifact_kind") != "selected_successor_authority_request_context"
         or value.get("bundle") != bundle_binding
         or value.get("actor_rank") not in {"S0", "S1", "S2", "S3", "S4"}
         or value.get("context_content_sha256") != _sealed_content(value)
@@ -194,9 +185,7 @@ def load_request_context(
     if normalized != context:
         raise ValueError("Authority request context is not normalized")
     compiler_context = {
-        key: item
-        for key, item in normalized.items()
-        if not key.endswith("_evidence")
+        key: item for key, item in normalized.items() if not key.endswith("_evidence")
     }
     for key in (
         "external_input_evidence",
@@ -253,14 +242,19 @@ def load_evaluation_context(
 
 def normalize_grant_inputs(
     root: Path, value: Any
-) -> tuple[dict[str, dict[str, Any]], dict[str, tuple[dict[str, Any], str, dict[str, Any]]]]:
+) -> tuple[
+    dict[str, dict[str, Any]], dict[str, tuple[dict[str, Any], str, dict[str, Any]]]
+]:
     """Validate action-wise exact grant bindings or explicit absence sentinels."""
 
     from manage_agent_authority.workflow_candidates import validated_grants
 
     if not isinstance(value, dict) or set(value) != set(ACTIONS):
         raise ValueError("Selected-successor grants require all three actions")
-    records = validated_grants(root)
+    has_bound = any(
+        raw is not None and raw != {"status": "absent"} for raw in value.values()
+    )
+    records = validated_grants(root) if has_bound else {}
     descriptors: dict[str, dict[str, Any]] = {}
     selected: dict[str, tuple[dict[str, Any], str, dict[str, Any]]] = {}
     for action in ACTIONS:
@@ -274,7 +268,9 @@ def normalize_grant_inputs(
             raw = raw["binding"]
         binding = normalize_binding(raw, f"{action} authority grant")
         path, grant_value = read_bound_json(root, binding, f"{action} authority grant")
-        grant_id = grant_value.get("grant_id") if isinstance(grant_value, dict) else None
+        grant_id = (
+            grant_value.get("grant_id") if isinstance(grant_value, dict) else None
+        )
         record = records.get(grant_id) if isinstance(grant_id, str) else None
         expected_ref = f".task/authorization/grants/{grant_id}.json"
         if (

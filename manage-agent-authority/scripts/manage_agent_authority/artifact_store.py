@@ -149,7 +149,10 @@ def state_path(root: Path, grant_id: str) -> Path:
     return root.resolve() / AUTHORIZATION_ROOT / "state" / "grants" / f"{grant_id}.json"
 
 
-def load_grant(root: Path, grant_id: str) -> tuple[dict[str, Any], str, dict[str, Any]]:
+def load_grant(
+    root: Path,
+    grant_id: str,
+) -> tuple[dict[str, Any], str, dict[str, Any]]:
     artifact = grant_path(root, grant_id)
     projection = state_path(root, grant_id)
     if not artifact.is_file() or not projection.is_file():
@@ -164,11 +167,23 @@ def load_grant(root: Path, grant_id: str) -> tuple[dict[str, Any], str, dict[str
     return grant, digest, state
 
 
-def list_grants(root: Path) -> list[tuple[dict[str, Any], str, dict[str, Any]]]:
+def list_grants(
+    root: Path, *, evaluated_at: Any | None = None
+) -> list[tuple[dict[str, Any], str, dict[str, Any]]]:
+    from .root_grant_visibility import root_grant_receipt_cache
+
     directory = root.resolve() / AUTHORIZATION_ROOT / "grants"
     if not directory.is_dir():
         return []
-    return [load_grant(root, path.stem) for path in sorted(directory.glob("*.json"))]
+    records = []
+    with root_grant_receipt_cache():
+        for path in sorted(directory.glob("*.json")):
+            if evaluated_at is not None:
+                raw = validate_grant(read_object(path, "authority grant"))
+                if parse_time(raw["created_at"], "grant.created_at") > evaluated_at:
+                    continue
+            records.append(load_grant(root, path.stem))
+    return records
 
 
 def _scope_set(items: list[dict[str, Any]]) -> set[str]:
@@ -289,9 +304,7 @@ def _register_compiled_grant(
                 raise SystemExit(
                     "Conflicting authority grant already exists for this grant ID."
                 )
-            state = _effective_root_grant_state(
-                root, existing, digest, state
-            )
+            state = _effective_root_grant_state(root, existing, digest, state)
             return {"grant": existing, "grant_sha256": digest, "state": state}
         parent: dict[str, Any] | None = None
         if parent_id:

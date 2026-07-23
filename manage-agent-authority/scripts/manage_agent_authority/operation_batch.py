@@ -17,6 +17,11 @@ from .operation_batch_validation import (
     load_operation_batch,
     validate_operation_batch,
 )
+from .projected_operation_batch import (
+    compile_projected_operation_batch,
+    publish_projected_operation_batch,
+    validate_projected_operation_batch,
+)
 
 
 __all__ = (
@@ -26,11 +31,14 @@ __all__ = (
     "MAX_OPERATION_SET_BYTES",
     "MAX_OPERATION_SET_COUNT",
     "compile_operation_batch",
+    "compile_projected_operation_batch",
     "compile_operation_set",
     "load_operation_batch",
     "load_operation_set",
     "publish_operation_batch",
+    "publish_projected_operation_batch",
     "publish_operation_set",
     "validate_operation_batch",
+    "validate_projected_operation_batch",
     "validate_operation_set",
 )

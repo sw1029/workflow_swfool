@@ -259,6 +259,15 @@ An owner renderer may pass an immutable owner-derived idempotency key through th
 Python-only `trusted_request_idempotency_key` compiler argument. Do not expose that
 override in the semantic seed or CLI; ordinary compilations retain their derived key.
 
+For an initial selected-successor projection with all three grants explicitly absent
+and all three typed intents equal to `grant_authority`, use the selected owner's
+`compile-approval-batch`, ordinary signed root-plan/materialization flow, and
+`resume-authority`. The bridge creates no authority, mixed grant state fails closed,
+and continuation reuses the exact compiled requests while evaluating authority at a
+strictly later time. Keep root-plan preparation and the signed decision strictly after
+the original compilation. Never approve the projection itself, recompile it to move
+the clock, or reuse its topology grant for fresh-cycle dispatch/run.
+
 The required seed shape is closed and intentionally separates derived request facts
 from asserted ceilings:
 

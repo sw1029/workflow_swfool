@@ -18,6 +18,7 @@
 - [Operation compilation](#operation-compilation)
 - [Shared context, batches, and root approval](#shared-context-batches-and-root-approval)
   - [Legacy implement-seed migration](#legacy-implement-seed-migration)
+  - [Selected-successor projected batch and continuation](#selected-successor-projected-batch-and-continuation)
 - [CLI surface](#cli-surface)
 - [Migration](#migration)
 - [Required invariants](#required-invariants)
@@ -31,7 +32,7 @@ Use this workspace-local layout:
 ├── operation_compilations/ immutable non-authoritative preparation artifacts
 ├── semantic_contexts/      producer-owned cycle-shared semantic context CAS
 ├── operation_sets/         producer-owned semantic operation-set CAS
-├── operation_batches/      producer-owned compiled operation-batch CAS
+├── operation_batches/      ordinary schema-v1 or owner-projected schema-v2 batch CAS
 ├── root_approval_plans/    immutable ordinary root-grant projections
 ├── root_grant_materializations/ plan-bound source/grant transactions
 ├── root_decision_seeds/ producer-owned compact approval seeds
@@ -704,6 +705,66 @@ source snapshot/metadata, all grant artifacts, and receipt bytes. Thus a crash
 between grant activations or a structurally resealed forged transaction exposes no
 usable partial authority, and exact replay completes the transaction.
 
+### Selected-successor projected batch and continuation
+
+The selected-successor approval projection is non-authoritative compiler/evaluator
+output, not a root plan or a signer input. Its historical source-cycle and prospective
+selected-task scope cannot pass the ordinary shared-context rule that derives one
+cycle/task pair from a canonical initialization, and its owner-bound idempotency keys
+cannot be reconstructed through a caller seed. Never copy its rows into an ordinary
+operation set or ask the user to approve the projection.
+
+For the initial supported bridge, require all three selected-successor grant
+declarations to be explicitly absent and all three non-allowed rows to carry a
+canonically derived `typed_intent: grant_authority` projection. Reject mixed absent and
+bound grants, an allowed prefix, fewer than three projected grant requests,
+`accept_risk_or_cost`, `select_design_option`, or any other intent before batch
+publication. This restriction is deliberate: the bridge issues exact missing
+authority; it does not compose existing grants or resolve another decision axis.
+
+`selected-successor compile-approval-batch` invokes the fixed selected-owner validator
+through the isolated, co-located import surface. It publishes an
+`authority_operation_batch` schema v2 under the existing operation-batch CAS. The
+closed batch contains the exact selected-successor projection binding, the original
+`compiled_at`, three ordered producer compilation rows, operation count, fixed
+provenance, and the batch fingerprint. It contains no semantic-context or
+operation-set binding because the projection is its sole owner source. Reopen the
+projection and every compilation on validation; reject arbitrary-path copies,
+self-sealed row insertion, omission, reordering, request or subject mismatch, unsafe
+paths, manifest drift, a non-co-located executable validator, and oversized output.
+Publication remains preparation-only and creates no authority lifecycle artifact.
+
+`prepare-root-approval` accepts both ordinary schema-v1 batches and this exact
+schema-v2 producer batch. Everything after batch loading is the same signed plan-bound
+pipeline: require the current policy, derive one request-bound grant projection per
+compilation, preserve exact request-to-grant mapping, obtain host/user-signed plan
+evidence, compile the decision seed, and atomically materialize the grants. Never use
+the aggregate capability, subject, or operation union as a grant. The signer confirms
+only `APPROVE ROOT PLAN <approval-plan-sha256>` on `/dev/tty`; neither the source
+projection nor the batch is directly approvable.
+
+Keep request compilation and authority evaluation on separate explicit clocks. `T1`
+is the immutable projection and compilation time and participates in the request
+identity. Root-plan preparation must be strictly later than T1; the signed decision is
+no earlier than that plan and sets each root grant's non-retroactive `not_before`.
+`selected-successor resume-authority` accepts only the exact source projection, the
+complete `root_grant_materialization` receipt binding, and a continuation time `T2`
+strictly after T1 and no earlier than the signed decision. It revalidates the signed
+receipt chain, root plan, schema-v2 batch, projection membership, and exact
+three-request set; reuses the T1 compilations; and evaluates, reserves, and verifies
+at T2. Do not use an equal-to-T1 plan/decision/continuation, move `not_before`
+backward, recompile at T2, or evaluate at T1 to manufacture coverage.
+
+Continuation requires the pristine selected successor and three current covering
+materialized grants with sufficient aggregate reservation budget. It fails before
+lifecycle publication on receipt, request-set, subject, manifest, rank, time, grant,
+or budget mismatch. Success publishes a selected-successor authority packet schema v2
+that binds `compiled_at: T1`, `prepared_at: T2`, the source projection, the root grant
+materialization, and the three exact decision/reservation/pre-commit chains. The packet
+authorizes only the selected topology sequence. After it settles, initialize a fresh
+cycle and compile a separate root plan for dispatch/run; topology and run approvals
+have different cycle, subject, and operation scopes and are not reusable.
+
 ## CLI surface
 
 Invoke through:
@@ -724,6 +785,9 @@ Use:
   `materialize-plan-bound-root-grant` for ordinary root grants;
 - owner batch renderers such as `selected-successor prepare-authority` for closed
   compile/evaluate/reserve/verify orchestration over explicit existing grants;
+- `selected-successor compile-approval-batch` and
+  `selected-successor resume-authority` for the fixed initial all-three-absent
+  projection bridge and its receipt-bound later-time continuation;
 - `snapshot-policy`, `snapshot-source`;
 - `delegate` and `compose` for compiler-owned prospective child/composition
   artifacts; `register-grant` only for exact already-registered replay;

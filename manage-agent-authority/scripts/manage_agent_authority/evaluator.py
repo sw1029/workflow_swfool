@@ -195,7 +195,7 @@ def _grant_decision(
     at: Any,
     session_id: str,
 ) -> tuple[str, list[str], list[dict[str, Any]], list[dict[str, Any]]]:
-    records = list_grants(root)
+    records = list_grants(root, evaluated_at=at)
     candidates = []
     for grant, digest, state in records:
         if not _covers(

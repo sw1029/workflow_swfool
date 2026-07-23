@@ -31,6 +31,7 @@ def validated_grants(root: Path) -> GrantRecords:
     if directory is None:
         return {}
     records: GrantRecords = {}
+    receipt_cache: dict[str, dict[str, Any]] = {}
     for path in sorted(directory.iterdir()):
         if path.suffix != ".json":
             continue
@@ -44,7 +45,9 @@ def validated_grants(root: Path) -> GrantRecords:
         )
         state, state_digest = safe_json(root, state_path, "authority grant state")
         state = validate_grant_state(state, grant, digest, "authority grant state")
-        state = effective_root_grant_state(root, grant, digest, state)
+        state = effective_root_grant_state(
+            root, grant, digest, state, receipt_cache=receipt_cache
+        )
         if grant["grant_id"] in records:
             raise SystemExit("Authority grant identities must be unique.")
         records[grant["grant_id"]] = (

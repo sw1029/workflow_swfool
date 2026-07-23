@@ -27,9 +27,7 @@ from .operation_publication import COMPILATION_ROOT
 from .semantic_context import load_shared_semantic_context
 
 
-def _load_row(
-    root: Path, row: Any, index: int
-) -> dict[str, Any]:
+def _load_row(root: Path, row: Any, index: int) -> dict[str, Any]:
     if not isinstance(row, dict) or set(row) != {
         "compilation",
         "request_sha256",
@@ -38,9 +36,7 @@ def _load_row(
     }:
         raise SystemExit(f"Authority operation batch row[{index}] is not closed.")
     path = verify_binding(root, row["compilation"], f"batch compilation[{index}]")
-    compilation = validate_compilation(
-        read_object(path, f"batch compilation[{index}]")
-    )
+    compilation = validate_compilation(read_object(path, f"batch compilation[{index}]"))
     try:
         path.relative_to(root / COMPILATION_ROOT)
     except ValueError as exc:
@@ -48,9 +44,7 @@ def _load_row(
             f"Batch compilation[{index}] is outside its producer store."
         ) from exc
     expected_name = (
-        "operation_compilation-"
-        + compilation["compilation_fingerprint"]
-        + ".json"
+        "operation_compilation-" + compilation["compilation_fingerprint"] + ".json"
     )
     if path.name != expected_name:
         raise SystemExit(
@@ -184,6 +178,10 @@ def validate_operation_batch(
     *,
     skills_root: Path | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    if isinstance(value, dict) and value.get("schema_version") == 2:
+        from .projected_operation_batch import validate_projected_operation_batch
+
+        return validate_projected_operation_batch(root, value, skills_root=skills_root)
     if not isinstance(value, dict) or set(value) != BATCH_KEYS:
         raise SystemExit("Authority operation batch is not a closed typed object.")
     if (

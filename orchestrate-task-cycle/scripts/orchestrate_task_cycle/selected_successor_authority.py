@@ -132,16 +132,23 @@ def _compilations(
 
 
 def _existing_reservation(
-    root: Path, compilation: dict[str, Any], row: dict[str, Any]
+    root: Path,
+    compilation: dict[str, Any],
+    row: dict[str, Any],
+    *,
+    expected_at: str,
 ) -> dict[str, Any] | None:
     from manage_agent_authority.canonical import object_sha256, sha256_file
     from manage_agent_authority.evaluator import load_bound_decision
     from manage_agent_authority.lifecycle import load_reservation
     from manage_agent_authority.lifecycle_paths import reservation_path
 
-    reservation_id = "authz-" + object_sha256(
-        {"request": compilation["request_sha256"], "key": row["idempotency_key"]}
-    )[:24]
+    reservation_id = (
+        "authz-"
+        + object_sha256(
+            {"request": compilation["request_sha256"], "key": row["idempotency_key"]}
+        )[:24]
+    )
     path = reservation_path(root, reservation_id)
     if not path.exists():
         return None
@@ -158,10 +165,14 @@ def _existing_reservation(
         or reservation.get("idempotency_key") != row["idempotency_key"]
         or decision.get("request") != compilation["request"]
         or decision.get("evaluation_context") != compilation["evaluation_context"]
+        or decision.get("evaluated_at") != expected_at
+        or reservation.get("reserved_at") != expected_at
     ):
         raise ValueError(f"Selected-successor {row['action']} reservation conflicts")
     if state.get("status") != "reserved" or state.get("version") != 0:
-        raise ValueError(f"Selected-successor {row['action']} reservation is not preparable")
+        raise ValueError(
+            f"Selected-successor {row['action']} reservation is not preparable"
+        )
     return {
         "reservation": reservation,
         "reservation_binding": {
@@ -223,6 +234,7 @@ def prepare_selected_successor_authority(
     from manage_agent_authority.canonical import normalized_time
     from manage_agent_authority.evaluator import evaluate
     from manage_agent_authority.operation_publication import publish_compilation
+
     root = root.expanduser().resolve(strict=True)
     at = normalized_time(at, "selected-successor authority prepared_at")
     bundle = load_selected_successor_bundle(root, bundle_binding)
@@ -272,7 +284,7 @@ def prepare_selected_successor_authority(
         raise ValueError("New authority preparation requires a pristine successor")
     validate_pristine_source(root, bundle, states)
     existing = [
-        _existing_reservation(root, compilation, row)
+        _existing_reservation(root, compilation, row, expected_at=at)
         for compilation, row in zip(compilations, rows)
     ]
     decisions = [

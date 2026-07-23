@@ -37,6 +37,11 @@ PACKET_KEYS = {
     "authority_effects",
     "packet_content_sha256",
 }
+PACKET_V2_KEYS = PACKET_KEYS | {
+    "compiled_at",
+    "root_grant_materialization",
+    "source_projection",
+}
 PROJECTION_KEYS = {
     "schema_version",
     "artifact_kind",
@@ -65,6 +70,10 @@ INDEX_KEYS = {
     "outcome",
     "index_content_sha256",
 }
+INDEX_V2_KEYS = INDEX_KEYS | {
+    "root_grant_materialization",
+    "source_projection",
+}
 MAX_INDEX_BYTES = 64 * 1024
 MAX_OUTCOME_BYTES = 256 * 1024
 LOCATOR_KEYS = {
@@ -90,9 +99,15 @@ def authority_input_identity(
     grants: dict[str, dict[str, Any]],
     operation_manifests: dict[str, dict[str, str]],
     prepared_at: str,
+    source_projection: dict[str, str] | None = None,
+    root_grant_materialization: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], str]:
+    if (source_projection is None) != (root_grant_materialization is None):
+        raise ValueError(
+            "Authority continuation identity requires projection and materialization"
+        )
     identity = {
-        "schema_version": 1,
+        "schema_version": 2 if source_projection is not None else 1,
         "artifact_kind": "selected_successor_authority_input",
         "prepared_at": prepared_at,
         "bundle": normalize_binding(bundle, "authority input bundle"),
@@ -104,6 +119,25 @@ def authority_input_identity(
         ),
         "grants": grants,
         "operation_manifests": operation_manifests,
+        **(
+            {
+                "source_projection": normalize_binding(
+                    source_projection, "authority input source projection"
+                )
+            }
+            if source_projection is not None
+            else {}
+        ),
+        **(
+            {
+                "root_grant_materialization": normalize_binding(
+                    root_grant_materialization,
+                    "authority input root grant materialization",
+                )
+            }
+            if root_grant_materialization is not None
+            else {}
+        ),
     }
     return identity, _sha256_bytes(_canonical_json(identity))
 
@@ -177,25 +211,30 @@ def _load_content_addressed(
     root: Path,
     binding_value: Any,
     *,
-    keys: set[str],
+    keys: set[str] | dict[int, set[str]],
     kind: str,
     field: str,
     path_factory: Any,
     label: str,
+    schema_version: int | None = 1,
 ) -> tuple[dict[str, str], dict[str, Any]]:
     binding = normalize_binding(binding_value, label)
-    path, raw = read_bound_bytes(
-        root, binding, label, max_bytes=MAX_OUTCOME_BYTES
-    )
+    path, raw = read_bound_bytes(root, binding, label, max_bytes=MAX_OUTCOME_BYTES)
     try:
         value = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"{label} is unreadable") from exc
+    observed_version = value.get("schema_version") if isinstance(value, dict) else None
+    expected_keys = (
+        keys.get(observed_version, set()) if isinstance(keys, dict) else keys
+    )
     if (
         not isinstance(value, dict)
-        or set(value) != keys
+        or set(value) != expected_keys
         or raw != _canonical_json(value)
-        or value.get("schema_version") != 1
+        or (
+            schema_version is not None and value.get("schema_version") != schema_version
+        )
         or value.get("artifact_kind") != kind
         or value.get(field) != _content(value, field)
         or path != path_factory(root, value.get(field))
@@ -209,7 +248,9 @@ def load_locator(root: Path, input_sha256: str) -> dict[str, Any] | None:
     if not path.exists():
         return None
     if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_INDEX_BYTES:
-        raise ValueError("Authority packet locator must be a regular file at most 64 KiB")
+        raise ValueError(
+            "Authority packet locator must be a regular file at most 64 KiB"
+        )
     with path.open("rb") as handle:
         raw = handle.read(MAX_INDEX_BYTES + 1)
     try:
@@ -267,11 +308,12 @@ def load_packet(
     return _load_content_addressed(
         root,
         binding_value,
-        keys=PACKET_KEYS,
+        keys={1: PACKET_KEYS, 2: PACKET_V2_KEYS},
         kind="selected_successor_authority_packet",
         field="packet_content_sha256",
         path_factory=_successor_authority_packet_path,
         label="selected-successor authority packet",
+        schema_version=None,
     )
 
 
@@ -296,7 +338,9 @@ def load_index(
     if not path.exists():
         return None
     if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_INDEX_BYTES:
-        raise ValueError("Authority input index must be a regular file of at most 64 KiB")
+        raise ValueError(
+            "Authority input index must be a regular file of at most 64 KiB"
+        )
     with path.open("rb") as handle:
         raw = handle.read(MAX_INDEX_BYTES + 1)
     if len(raw) > MAX_INDEX_BYTES:
@@ -316,18 +360,23 @@ def load_index(
             "operation_manifests",
         )
     }
+    if identity.get("schema_version") == 2:
+        expected_identity["source_projection"] = identity["source_projection"]
+        expected_identity["root_grant_materialization"] = identity[
+            "root_grant_materialization"
+        ]
+    expected_keys = INDEX_V2_KEYS if identity.get("schema_version") == 2 else INDEX_KEYS
     if (
         not isinstance(value, dict)
-        or set(value) != INDEX_KEYS
+        or set(value) != expected_keys
         or raw != _canonical_json(value)
-        or value.get("schema_version") != 1
+        or value.get("schema_version") != identity.get("schema_version")
         or value.get("artifact_kind") != "selected_successor_authority_index"
         or value.get("input_sha256") != input_sha256
         or path != _successor_authority_index_path(root, value.get("input_sha256"))
         or any(value.get(key) != item for key, item in expected_identity.items())
         or value.get("outcome_kind") not in {"packet", "approval_projection"}
-        or value.get("index_content_sha256")
-        != _content(value, "index_content_sha256")
+        or value.get("index_content_sha256") != _content(value, "index_content_sha256")
     ):
         raise ValueError("Authority input index integrity failed")
     normalize_binding(value.get("outcome"), "authority indexed outcome")
@@ -345,7 +394,7 @@ def publish_index(
     if outcome_kind not in {"packet", "approval_projection"}:
         raise ValueError("Authority indexed outcome kind is invalid")
     body = {
-        "schema_version": 1,
+        "schema_version": identity.get("schema_version"),
         "artifact_kind": "selected_successor_authority_index",
         "input_sha256": input_sha256,
         "prepared_at": identity["prepared_at"],
@@ -354,6 +403,14 @@ def publish_index(
         "evaluation_context": identity["evaluation_context"],
         "grants": identity["grants"],
         "operation_manifests": identity["operation_manifests"],
+        **(
+            {
+                "source_projection": identity["source_projection"],
+                "root_grant_materialization": identity["root_grant_materialization"],
+            }
+            if identity.get("schema_version") == 2
+            else {}
+        ),
         "outcome_kind": outcome_kind,
         "outcome": normalize_binding(outcome, "authority indexed outcome"),
     }

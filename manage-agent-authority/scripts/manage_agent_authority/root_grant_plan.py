@@ -103,9 +103,7 @@ def _unique_objects(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(deduplicated.values(), key=lambda item: tuple(item.values()))
 
 
-def _normalized_policy_binding(
-    root: Path, binding: dict[str, str]
-) -> dict[str, str]:
+def _normalized_policy_binding(root: Path, binding: dict[str, str]) -> dict[str, str]:
     path = verify_binding(root, binding, "root approval policy snapshot")
     try:
         path.relative_to(root / ".task/authorization/policy_snapshots")
@@ -167,9 +165,7 @@ def _plan_scope(
             [request["risk_tier"] for request in requests],
             key=RISK_TIERS.index,
         ),
-        "decision_classes": sorted(
-            {request["decision_class"] for request in requests}
-        ),
+        "decision_classes": sorted({request["decision_class"] for request in requests}),
         "request_digests": sorted(
             {compilation["request_sha256"] for compilation in compilations}
         ),
@@ -240,9 +236,7 @@ def _approval_projection(
     plan_schema_version: int,
 ) -> dict[str, Any]:
     source_coverage = {
-        "capabilities": sorted(
-            set(scope["capabilities"]) | {"authority.grant.issue"}
-        ),
+        "capabilities": sorted(set(scope["capabilities"]) | {"authority.grant.issue"}),
         "subjects": scope["subjects"],
         "operations": scope["operations"],
         "risk_ceiling": scope["risk_ceiling"],
@@ -298,9 +292,15 @@ def _build_plan(
 ) -> dict[str, Any]:
     root = root.resolve()
     at = normalized_time(prepared_at, "root approval prepared_at")
-    batch_binding, _batch, compilations = load_operation_batch(
+    batch_binding, batch, compilations = load_operation_batch(
         root, operation_batch, skills_root=skills_root
     )
+    if batch.get("schema_version") == 2 and parse_time(
+        at, "root approval prepared_at"
+    ) <= parse_time(batch["compiled_at"], "projected operation batch compiled_at"):
+        raise SystemExit(
+            "Projected-operation root approval must be prepared after compilation."
+        )
     for compilation in compilations:
         compilation_inputs(root, compilation, skills_root=skills_root)
         if not compilation["source_and_grant_requirements"]["requires_grant"]:
@@ -329,9 +329,7 @@ def _build_plan(
         "request_digests": scope["request_digests"],
     }
     if plan_schema_version == 2:
-        identity_seed["authorization_trust_class"] = (
-            "host_user_signed_exact_plan"
-        )
+        identity_seed["authorization_trust_class"] = "host_user_signed_exact_plan"
     identity = object_sha256(identity_seed)
     grants = _grant_projections(
         compilations, requests, semantics, identity, policy_binding
@@ -369,10 +367,7 @@ def _build_plan(
             ],
             "authority_effect": "none",
             **(
-                {
-                    "authorization_evidence":
-                    "host_user_signed_exact_plan_required"
-                }
+                {"authorization_evidence": "host_user_signed_exact_plan_required"}
                 if plan_schema_version == 2
                 else {}
             ),

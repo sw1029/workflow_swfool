@@ -137,7 +137,9 @@ candidate's old blocker changed; they are not topology or execution grants for t
 task. Settle the exact three-operation topology under its own signed plan, then
 initialize a fresh compiler-first cycle for the selected task and compile a separate
 dispatch/run plan. Because topology and fresh execution have different cycle scopes,
-the current single-batch root-plan contract requires separate exact approvals.
+subjects, and operation sets, the current single-batch root-plan contract requires
+separate exact approvals. Never add the later run operation to the projected topology
+batch or reuse a topology grant after the fresh cycle is initialized.
 
 ## Terminal-wait selection tick
 
@@ -498,14 +500,99 @@ the same bound host installation.
 If genuine no-covering authority or another evaluator result is not `allowed`, publish one compact
 `selected_successor_authority_approval_projection` binding and stop. This fail-closed
 path may publish the three non-authoritative compilation bindings, but publishes zero decisions, reservations, or pre-commit verifications and performs
-zero selected-successor effects. Present only that exact projection to the authority
-owner; do not expose three model-authored request bodies, invent a replacement grant,
-or continue with a mixed subset. If an action is declared absent but evaluation finds
-covering authority, or a supplied binding differs from the selected grant, treat the
-input as a conflict rather than misreporting approval-required. Exact replay reopens
-the indexed inputs and returns
+zero selected-successor effects. The projection is not user approval and is not an
+input to the root signer. Do not expose three model-authored request bodies, invent a
+replacement grant, continue with a mixed subset, or ask the authority owner to approve
+the projection directly. If an action is declared absent but evaluation finds covering
+authority, or a supplied binding differs from the selected grant, treat the input as a
+conflict rather than misreporting approval-required. Exact replay reopens the indexed inputs and returns
 the same packet or approval-projection binding. Any bundle, context, grant, manifest,
 subject, or state drift requires a fresh evaluation and cannot reuse the old packet.
+
+The current root-approval bridge intentionally accepts only the initial closed case in
+which all three grant descriptors are `absent` and all three per-operation approval
+projections have `typed_intent: grant_authority`. A bound grant, an allowed/missing
+mixture, fewer than three grant-authority projections, a risk/cost or design-selection
+intent, or any other mixed state fails closed before a batch is published. Do not
+manually extract a subset or use the ordinary shared-context batch compiler: its
+canonical initialization owns one current cycle/task pair and cannot reproduce the
+historical source-cycle plus prospective selected-task scope or the bundle-owned
+idempotency keys.
+
+Seal the exact projection as a schema-v2 owner-projected operation batch:
+
+```bash
+python3 -P -m orchestrate_task_cycle selected-successor --root . \
+  compile-approval-batch \
+  --approval-projection-ref <approval-projection-ref> \
+  --approval-projection-sha256 <approval-projection-raw-sha256> \
+  --skills-root <co-located-skills-root>
+```
+
+The fixed owner validator reopens the projection, bundle, contexts, subjects,
+manifests, grant declarations, and all three producer-CAS compilations. The batch binds
+the projection, its original compilation time, the exact ordered compilation rows,
+their request digests, and one batch fingerprint. It has no semantic-context or
+operation-set substitute, creates no source approval, grant, decision, reservation, or
+verification, and applies no selected-successor effect. Exact replay returns the same
+batch binding.
+
+Run the ordinary root path with that batch: preflight the controlling TTY, use the
+exact current policy snapshot, and prepare one root plan.
+
+```bash
+python3 -P -m orchestrate_task_cycle workflow authority \
+  prepare-root-approval --root . \
+  --operation-batch '{"ref":"<schema-v2-batch-ref>","sha256":"<raw-sha256>"}' \
+  --policy-snapshot '{"ref":"<current-policy-ref>","sha256":"<raw-sha256>"}' \
+  --grant-semantics root-grant-semantics.json \
+  --at <RFC3339-plan-time-strictly-after-T1>
+```
+
+The isolated signer accepts only the exact root-plan binding and foreground
+`/dev/tty` confirmation `APPROVE ROOT PLAN <approval-plan-sha256>`. The projection
+digest, batch fingerprint, chat text, or an unsigned scalar is not that confirmation.
+Publish the verified signer evidence, compile the root decision seed, and run
+`materialize-plan-bound-root-grant` exactly as specified by
+`$manage-agent-authority`. Preserve the returned
+`root_grant_materialization` binding; individual grant paths are not the continuation
+interface. Root-plan preparation must be strictly later than the batch's original T1
+compilation, and the signed decision must be no earlier than that plan; equal-to-T1
+plan or decision times fail closed.
+
+Compilation and later authority use have distinct times. Let `T1` be the immutable
+projection/compilation time. The signed decision occurs later and root grants retain
+the non-retroactive `not_before` decision time. Choose an explicit continuation time
+`T2` strictly after `T1`, no earlier than the signed decision, and before grant expiry,
+then resume from the exact projection and materialization receipt:
+
+```bash
+python3 -P -m orchestrate_task_cycle selected-successor --root . \
+  resume-authority \
+  --approval-projection-ref <approval-projection-ref> \
+  --approval-projection-sha256 <approval-projection-raw-sha256> \
+  --root-grant-materialization-ref <materialization-receipt-ref> \
+  --root-grant-materialization-sha256 <materialization-receipt-raw-sha256> \
+  --at <RFC3339-T2> --skills-root <co-located-skills-root>
+```
+
+`resume-authority` reopens the complete signed receipt chain, proves that its root plan
+consumed the schema-v2 batch for this exact projection, requires the three
+materialized request digests to equal the three T1 requests, and reuses those
+compilations byte-for-byte. It evaluates, publishes, reserves, and verifies only at
+`T2`. Recompiling at `T2` would change request identity and cannot be used to satisfy
+the signed grants; evaluating or issuing the plan at `T1` would collapse the
+non-retroactive boundary. A non-pristine successor, request-set drift, wrong
+materialization, inactive/expired grant,
+non-`allowed` result, or insufficient aggregate reservation budget fails before an
+all-three packet is exposed.
+
+The successful schema-v2 packet records both `compiled_at: T1` and
+`prepared_at: T2`, plus the exact source projection and root-grant-materialization
+bindings. Its three decisions, reservations, and `pre_commit` verifications all bind
+`T2`; its request digests remain the signed T1 values. Execute only its returned opaque
+`execute_argv` or `recover_argv`. After topology settlement, initialize the fresh
+compiler-first cycle and obtain a separate exact approval for dispatch/run.
 
 The input identity, immutable index, and pre-index packet locator bind all three exact
 operation-manifest digests. Publish the locator before the packet and the final index
