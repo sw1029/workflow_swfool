@@ -48,6 +48,21 @@ PYTHONPATH="$SKILLS_ROOT/orchestrate-task-cycle/scripts" \
 
 Use `workflow authority|task-doctor|external-advice|task-index|cycle` for cross-owner calls. The launcher dispatches only the selected registered owner; it does not grant authority or alter owner effect semantics. Retain direct `python3 -P -m orchestrate_task_cycle <command> ...` for compatibility when the caller already supplies the complete dependency environment. Do not call a file under `scripts/` directly.
 
+`-P` host-entry examples require CPython 3.11 or newer. The checked-in library
+contract still supports CPython 3.10: workflow child processes and generated
+selected-successor `execute_argv` / `recover_argv` use
+`isolated_python.isolated_module_argv`, which starts `-B -I -c`, imports `runpy`
+before adding paths, pins the current absolute interpreter, and then inserts only
+canonical, real, validated owner roots. `-I` intentionally retains that
+interpreter's system site-packages as the trusted third-party dependency surface;
+it excludes the caller CWD, `PYTHONPATH`, and user site, not system packages. A
+3.10 embedding must enter through an already trusted or installed library surface
+and use that constructor; never obtain compatibility by deleting `-P` from a raw
+`python -m` command, because that reintroduces the caller's working directory.
+Generated commands always import executable code from the co-located installed
+skills root. A separately supplied `--skills-root` remains a validation/data
+argument and must never redirect those executable imports.
+
 ## Compiled Stage Workflow
 
 Prefer compiler-first stage coordination over hand-authoring a full result JSON.

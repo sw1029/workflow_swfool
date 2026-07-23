@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 from typing import Any
 
+from .isolated_python import isolated_module_argv
 from .selected_successor_authority_artifacts import (
     packet_candidate,
     publish_index,
@@ -12,6 +14,7 @@ from .selected_successor_authority_artifacts import (
     publish_packet,
     publish_projection,
 )
+from .workflow_launcher import OWNER_SPECS, owner_import_roots
 
 
 def supplied_grant_matches(
@@ -35,11 +38,7 @@ def _argv(
     at: str,
     skills_root: Path | None,
 ) -> list[str]:
-    result = [
-        "python3",
-        "-P",
-        "-m",
-        "orchestrate_task_cycle",
+    arguments = [
         "selected-successor",
         "--root",
         str(root),
@@ -52,8 +51,14 @@ def _argv(
         at,
     ]
     if skills_root is not None:
-        result.extend(("--skills-root", str(skills_root.resolve())))
-    return result
+        arguments.extend(("--skills-root", str(skills_root.resolve())))
+    roots = owner_import_roots(OWNER_SPECS["cycle"])
+    return isolated_module_argv(
+        sys.executable,
+        "orchestrate_task_cycle",
+        arguments,
+        roots,
+    )
 
 
 def result_from_index(

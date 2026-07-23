@@ -10,6 +10,8 @@ import subprocess
 import sys
 from typing import Sequence
 
+from .isolated_python import isolated_module_argv
+
 
 @dataclass(frozen=True, slots=True)
 class OwnerSpec:
@@ -79,19 +81,27 @@ def _scripts_path(root: Path, skill: str, module: str) -> Path:
     return scripts
 
 
-def _environment(spec: OwnerSpec) -> dict[str, str]:
+def owner_import_roots(spec: OwnerSpec) -> tuple[Path, ...]:
     root = _skills_root()
-    paths: list[str] = []
+    paths: list[Path] = []
     for skill in spec.skill_dependencies:
         module = spec.module if skill == spec.skill_dependencies[0] else _module_for(skill)
-        paths.append(str(_scripts_path(root, skill, module)))
+        paths.append(_scripts_path(root, skill, module))
+    return tuple(paths)
+
+
+def _environment_from_paths(paths: Sequence[Path]) -> dict[str, str]:
     environment = os.environ.copy()
     environment.pop("PYTHONHOME", None)
     environment.pop("PYTHONSTARTUP", None)
-    environment["PYTHONPATH"] = os.pathsep.join(paths)
+    environment["PYTHONPATH"] = os.pathsep.join(str(path) for path in paths)
     environment["PYTHONNOUSERSITE"] = "1"
     environment["PYTHONSAFEPATH"] = "1"
     return environment
+
+
+def _environment(spec: OwnerSpec) -> dict[str, str]:
+    return _environment_from_paths(owner_import_roots(spec))
 
 
 def _module_for(skill: str) -> str:
@@ -134,16 +144,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(_usage(), file=sys.stderr)
         return 2
     try:
-        environment = _environment(spec)
+        import_roots = owner_import_roots(spec)
+        environment = _environment_from_paths(import_roots)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
     completed = subprocess.run(
-        [sys.executable, "-P", "-m", spec.module, *owner_arguments],
+        isolated_module_argv(
+            sys.executable,
+            spec.module,
+            owner_arguments,
+            import_roots,
+        ),
         env=environment,
         check=False,
     )
     return completed.returncode
 
 
-__all__ = ["OWNER_SPECS", "OwnerSpec", "main"]
+__all__ = ["OWNER_SPECS", "OwnerSpec", "main", "owner_import_roots"]

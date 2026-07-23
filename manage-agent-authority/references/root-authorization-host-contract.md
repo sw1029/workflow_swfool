@@ -142,10 +142,11 @@ device, a pipe, a chat message, or a pseudo-terminal created automatically by th
 signer.
 
 Handle partial writes and interrupted system calls. Write and flush the complete
-summary and prompt before reading. Limit the UTF-8 summary to 1 MiB. Read at most
-512 bytes of strict UTF-8 confirmation and require a terminating LF. Remove only
-the optional CR immediately before that LF. Do not trim or normalize any other
-space, case, punctuation, or Unicode.
+summary and prompt before reading. Limit the UTF-8 summary to 1 MiB. Limit the
+strict UTF-8 confirmation content to 512 bytes, excluding its required terminating
+LF and optional immediately preceding CR; bound the complete transport read to 514
+bytes. Remove only that optional CR. Do not trim or normalize any other space,
+case, punctuation, or Unicode.
 
 After preflight succeeds, prepare the exact producer CAS plan through the ordinary
 workflow, then invoke:

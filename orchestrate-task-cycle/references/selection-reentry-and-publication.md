@@ -404,6 +404,15 @@ verifications, and finally publishes one immutable
 binding and closed `execute_argv` / `recover_argv` projections. The renderer never
 creates a source approval or grant and never treats the request or evaluation context,
 selection receipt, compilation, packet, or CLI success as an allow decision.
+Both argv projections use the version-portable isolated-module launcher and pin
+the absolute current interpreter plus executable imports to the co-located
+installed skills root. A supplied
+`--skills-root` remains a manifest/proof validation argument; it cannot become a
+Python import root or redirect executable owner code. Treat each argv list as one
+opaque, host-local execution projection: execute the exact returned list without
+parsing or reconstructing its interpreter prefix. Its absolute workspace and
+installed-root arguments are not packet identity and are reproducible only under
+the same bound host installation.
 
 If genuine no-covering authority or another evaluator result is not `allowed`, publish one compact
 `selected_successor_authority_approval_projection` binding and stop. This fail-closed

@@ -23,6 +23,7 @@ from manage_agent_authority.owner_validation_io import (
     MAX_OWNER_VALIDATION_RECEIPT_BYTES,
 )
 from manage_agent_authority.owner_validator_process import (
+    ISOLATED_MODULE_BOOTSTRAP,
     MAX_OWNER_VALIDATOR_STDOUT_BYTES,
     run_bounded_owner_validator,
 )
@@ -139,7 +140,13 @@ def test_registered_invocation_uses_fixed_module_and_command(tmp_path: Path) -> 
     )
     argv = captured["argv"]
     assert isinstance(argv, list)
-    assert argv[1:6] == ["-P", "-m", "manage_task_state_index", "index", "--root"]
+    assert argv[1:5] == ["-B", "-I", "-c", ISOLATED_MODULE_BOOTSTRAP]
+    root_count = int(argv[5])
+    assert argv[6 + root_count : 9 + root_count] == [
+        "manage_task_state_index",
+        "index",
+        "--root",
+    ]
     assert "validate-owner-result" in argv
     assert captured["cwd"] == ROOT
     environment = captured["env"]

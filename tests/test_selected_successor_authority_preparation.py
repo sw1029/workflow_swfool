@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 from typing import Any
 
 import pytest
@@ -13,6 +16,9 @@ from orchestrate_task_cycle.selected_successor import (
 )
 from orchestrate_task_cycle.selected_successor_authority import (
     prepare_selected_successor_authority,
+)
+from orchestrate_task_cycle.selected_successor_authority_publication import (
+    _argv as authority_argv,
 )
 from orchestrate_task_cycle.selected_successor_authority_artifacts import (
     load_index,
@@ -93,6 +99,8 @@ def test_prepare_authority_builds_body_free_packet_and_packet_cli_executes(
 
     assert result["status"] == "prepared"
     assert result["model_authored_mechanical_bytes"] == 0
+    assert result["execute_argv"][0] == sys.executable
+    assert result["execute_argv"][1:4] == ["-B", "-I", "-c"]
     assert "--skills-root" in result["execute_argv"]
     assert str(SKILLS_ROOT.resolve()) in result["execute_argv"]
     assert packet_binding == result["authority_packet"]
@@ -113,28 +121,75 @@ def test_prepare_authority_builds_body_free_packet_and_packet_cli_executes(
     )
     assert _authority_counts(tmp_path) == (3, 3, 3)
 
-    code = successor_cli(
-        [
-            "--root",
-            str(tmp_path),
-            "execute",
-            "--authority-packet-ref",
-            packet_binding["ref"],
-            "--authority-packet-sha256",
-            packet_binding["sha256"],
-            "--at",
-            AT,
-            "--skills-root",
-            str(SKILLS_ROOT),
-        ]
+    shadow = tmp_path / "orchestrate_task_cycle"
+    shadow.mkdir()
+    marker = tmp_path / "workspace-shadow-ran"
+    payload = (
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('shadowed', encoding='utf-8')\n"
+        "raise SystemExit(97)\n"
     )
-    executed = json.loads(capsys.readouterr().out)
-    assert code == 0
+    (shadow / "__init__.py").write_text(payload, encoding="utf-8")
+    (shadow / "__main__.py").write_text(payload, encoding="utf-8")
+    fake_bin = tmp_path / "hostile-path"
+    fake_bin.mkdir()
+    fake_python = fake_bin / "python3"
+    fake_python.write_text("#!/bin/sh\nexit 98\n", encoding="utf-8")
+    fake_python.chmod(0o755)
+    environment = os.environ.copy()
+    environment["PATH"] = str(fake_bin) + os.pathsep + environment["PATH"]
+
+    completed = subprocess.run(
+        result["execute_argv"],
+        cwd=tmp_path,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    executed = json.loads(completed.stdout)
     assert executed["status"] == "complete"
+    assert not marker.exists()
+
+    recovered_process = subprocess.run(
+        result["recover_argv"],
+        cwd=tmp_path,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+    assert recovered_process.returncode == 0, (
+        recovered_process.stderr or recovered_process.stdout
+    )
+    recovered = json.loads(recovered_process.stdout)
+    assert recovered["status"] == "complete"
+    assert not marker.exists()
 
     replay = _prepare_authority(tmp_path, prepared, inputs)
     assert replay["idempotent_replay"] is True
     assert replay["mutation_performed"] is False
+
+
+def test_generated_authority_argv_never_imports_code_from_skills_root_argument(
+    tmp_path: Path,
+) -> None:
+    alternate = tmp_path / "workspace-supplied-skills"
+    packet = {
+        "ref": ".task/authorization/packets/packet.json",
+        "sha256": "a" * 64,
+    }
+
+    argv = authority_argv(tmp_path, "execute", packet, AT, alternate)
+
+    import_root_count = int(argv[5])
+    import_roots = argv[6 : 6 + import_root_count]
+    assert import_roots
+    assert all(not root.startswith(str(alternate)) for root in import_roots)
+    assert argv[argv.index("--skills-root") + 1] == str(alternate.resolve())
 
 
 def test_truly_absent_grants_publish_projection_but_no_authority_lifecycle(

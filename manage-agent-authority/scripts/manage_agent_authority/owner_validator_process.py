@@ -6,12 +6,73 @@ import contextlib
 import os
 from pathlib import Path
 import selectors
+import stat
 import subprocess
+import sys
 import time
+from typing import Sequence
 
 
 MAX_OWNER_VALIDATOR_STDOUT_BYTES = 256 * 1024
 MAX_OWNER_VALIDATOR_STDERR_BYTES = 64 * 1024
+ISOLATED_MODULE_BOOTSTRAP = (
+    "import runpy,sys;"
+    "count=int(sys.argv[1]);"
+    "roots=sys.argv[2:2+count];"
+    "module=sys.argv[2+count];"
+    "arguments=sys.argv[3+count:];"
+    "sys.path[:0]=roots;"
+    "sys.argv=[module,*arguments];"
+    "runpy.run_module(module,run_name='__main__',alter_sys=True)"
+)
+
+
+def isolated_owner_validator_argv(
+    module: str,
+    arguments: Sequence[str],
+    import_roots: Sequence[Path],
+) -> list[str]:
+    """Build a CPython 3.10+ owner-validator command without cwd imports."""
+
+    if (
+        not module
+        or "\x00" in module
+        or any(not isinstance(argument, str) or "\x00" in argument for argument in arguments)
+    ):
+        raise ValueError("Owner validator execution requires a module and import roots.")
+    roots: list[str] = []
+    for root in import_roots:
+        if not root.is_absolute():
+            raise ValueError(
+                "Owner validator import roots must be canonical real directories."
+            )
+        try:
+            resolved = root.resolve(strict=True)
+            mode = root.lstat().st_mode
+        except OSError as exc:
+            raise ValueError("Owner validator import roots must exist.") from exc
+        if (
+            root != resolved
+            or stat.S_ISLNK(mode)
+            or not stat.S_ISDIR(mode)
+        ):
+            raise ValueError(
+                "Owner validator import roots must be canonical real directories."
+            )
+        roots.append(str(root))
+    if not roots:
+        raise ValueError("Owner validator execution requires import roots.")
+    return [
+        sys.executable,
+        "-B",
+        "-I",
+        "-c",
+        ISOLATED_MODULE_BOOTSTRAP,
+        str(len(roots)),
+        *roots,
+        module,
+        *arguments,
+    ]
 
 
 def _decode(value: bytearray) -> str:
@@ -86,7 +147,9 @@ def run_bounded_owner_validator(
 
 
 __all__ = (
+    "ISOLATED_MODULE_BOOTSTRAP",
     "MAX_OWNER_VALIDATOR_STDERR_BYTES",
     "MAX_OWNER_VALIDATOR_STDOUT_BYTES",
+    "isolated_owner_validator_argv",
     "run_bounded_owner_validator",
 )

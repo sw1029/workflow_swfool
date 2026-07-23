@@ -15,6 +15,10 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 from orchestrate_task_cycle import workflow_launcher  # noqa: E402
+from orchestrate_task_cycle.isolated_python import (  # noqa: E402
+    ISOLATED_MODULE_BOOTSTRAP,
+    isolated_module_argv,
+)
 
 
 TRUSTED_MODULES = (
@@ -35,6 +39,15 @@ TRUSTED_SKILL_DOCS = (
     "audit-session-governance",
     "task-doctor",
 )
+
+
+def _public_workflow_argv(*arguments: str) -> list[str]:
+    return isolated_module_argv(
+        sys.executable,
+        "orchestrate_task_cycle",
+        ["workflow", *arguments],
+        [SCRIPTS],
+    )
 
 
 @pytest.mark.parametrize(
@@ -100,7 +113,16 @@ def test_workflow_launcher_child_retains_python_safe_path(
     assert workflow_launcher.main(["cycle", "--help"]) == 0
     argv = captured["argv"]
     assert isinstance(argv, list)
-    assert argv[:4] == [sys.executable, "-P", "-m", "orchestrate_task_cycle"]
+    assert argv[:5] == [
+        sys.executable,
+        "-B",
+        "-I",
+        "-c",
+        ISOLATED_MODULE_BOOTSTRAP,
+    ]
+    root_count = int(argv[5])
+    assert argv[6 + root_count] == "orchestrate_task_cycle"
+    assert argv[7 + root_count :] == ["--help"]
     environment = captured["env"]
     assert isinstance(environment, dict)
     assert environment["PYTHONSAFEPATH"] == "1"
@@ -136,14 +158,7 @@ def test_public_workflow_subcommand_dispatches_from_unrelated_cwd(
     environment["PYTHONPATH"] = str(SCRIPTS)
 
     completed = subprocess.run(
-        [
-            sys.executable,
-            "-P",
-            "-m",
-            "orchestrate_task_cycle",
-            "workflow",
-            *owner_arguments,
-        ],
+        _public_workflow_argv(*owner_arguments),
         cwd=unrelated,
         env=environment,
         text=True,
@@ -174,15 +189,7 @@ def test_public_workflow_bootstrap_ignores_workspace_shadow_package(
     environment["PYTHONPATH"] = str(SCRIPTS)
 
     completed = subprocess.run(
-        [
-            sys.executable,
-            "-P",
-            "-m",
-            "orchestrate_task_cycle",
-            "workflow",
-            "cycle",
-            "--help",
-        ],
+        _public_workflow_argv("cycle", "--help"),
         cwd=workspace,
         env=environment,
         text=True,
@@ -194,6 +201,16 @@ def test_public_workflow_bootstrap_ignores_workspace_shadow_package(
     assert completed.returncode == 0, completed.stderr or completed.stdout
     assert "usage:" in completed.stdout.lower()
     assert not marker.exists()
+
+
+def test_isolated_module_argv_rejects_relative_import_roots() -> None:
+    with pytest.raises(ValueError, match="canonical real"):
+        isolated_module_argv(
+            sys.executable,
+            "orchestrate_task_cycle",
+            ["--help"],
+            ["relative/scripts"],
+        )
 
 
 def test_workflow_launcher_rejects_symlinked_skill_dependency(

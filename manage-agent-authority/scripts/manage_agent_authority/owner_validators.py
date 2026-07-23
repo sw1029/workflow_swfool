@@ -11,7 +11,6 @@ import json
 import os
 from pathlib import Path
 import subprocess
-import sys
 from typing import Any, Callable
 
 from .canonical import object_sha256, parse_time, write_immutable_json
@@ -19,6 +18,7 @@ from .canonical import resolve_workspace_path
 from .owner_validation_io import read_bound_owner_validation_receipt
 from .owner_validator_process import MAX_OWNER_VALIDATOR_STDERR_BYTES
 from .owner_validator_process import MAX_OWNER_VALIDATOR_STDOUT_BYTES
+from .owner_validator_process import isolated_owner_validator_argv
 from .owner_validator_process import run_bounded_owner_validator
 from .owner_validator_registry import (
     OWNER_VALIDATORS,
@@ -353,30 +353,30 @@ def invoke_registered_owner_validator(
     environment["PYTHONPATH"] = os.pathsep.join(str(path) for path in import_roots)
     environment["PYTHONNOUSERSITE"] = "1"
     environment["PYTHONSAFEPATH"] = "1"
-    argv = [
-        sys.executable,
-        "-P",
-        "-m",
+    argv = isolated_owner_validator_argv(
         spec.module,
-        spec.argv_prefix[0],
-        "--root",
-        str(root.resolve()),
-        *spec.argv_prefix[1:],
-        "--owner-result-ref",
-        owner_result["ref"],
-        "--owner-result-sha256",
-        owner_result["sha256"],
-        "--reservation-ref",
-        reservation["ref"],
-        "--reservation-sha256",
-        reservation["sha256"],
-        "--pre-commit-ref",
-        pre_commit_verification["ref"],
-        "--pre-commit-sha256",
-        pre_commit_verification["sha256"],
-        "--phase",
-        phase,
-    ]
+        [
+            spec.argv_prefix[0],
+            "--root",
+            str(root.resolve()),
+            *spec.argv_prefix[1:],
+            "--owner-result-ref",
+            owner_result["ref"],
+            "--owner-result-sha256",
+            owner_result["sha256"],
+            "--reservation-ref",
+            reservation["ref"],
+            "--reservation-sha256",
+            reservation["sha256"],
+            "--pre-commit-ref",
+            pre_commit_verification["ref"],
+            "--pre-commit-sha256",
+            pre_commit_verification["sha256"],
+            "--phase",
+            phase,
+        ],
+        import_roots,
+    )
     try:
         if runner is subprocess.run:
             completed = run_bounded_owner_validator(
