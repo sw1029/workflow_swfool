@@ -56,9 +56,7 @@ def _binding(root: Path, path: Path) -> dict[str, str]:
 def _selected_inputs(
     root: Path, capsys: pytest.CaptureFixture[str]
 ) -> tuple[dict[str, str], dict[str, str]]:
-    (root / "task.md").write_text(
-        "# Task\n\n- Task ID: `task-old`\n", encoding="utf-8"
-    )
+    (root / "task.md").write_text("# Task\n\n- Task ID: `task-old`\n", encoding="utf-8")
     goal = root / ".agent_goal/final_goal.md"
     goal.parent.mkdir(parents=True)
     goal.write_text("# Goal\n", encoding="utf-8")
@@ -134,9 +132,7 @@ def _transition_receipt(
         "events": [event],
     }
     plan = {**plan_body, "plan_sha256": _compact_sha(plan_body)}
-    plan_path = _write(
-        root / f".task/transition_plans/{plan_id}.json", plan
-    )
+    plan_path = _write(root / f".task/transition_plans/{plan_id}.json", plan)
     plan_binding = _binding(root, plan_path)
     receipt_body = {
         "schema_version": 1,
@@ -154,9 +150,7 @@ def _transition_receipt(
         **receipt_body,
         "receipt_content_sha256": _compact_sha(receipt_body),
     }
-    receipt_path = _write(
-        root / f".task/transition_receipts/{plan_id}.json", receipt
-    )
+    receipt_path = _write(root / f".task/transition_receipts/{plan_id}.json", receipt)
     return _binding(root, receipt_path)
 
 
@@ -290,9 +284,7 @@ def test_reconciliation_uses_drifted_head_as_before_digest(
     publish_prepared(tmp_path, selected["transaction_id"])
     selected_sha = hashlib.sha256((tmp_path / "task.md").read_bytes()).hexdigest()
 
-    (tmp_path / "task.md").write_bytes(
-        b"# Task\n\n- Task ID: `task-reconciled`\n"
-    )
+    (tmp_path / "task.md").write_bytes(b"# Task\n\n- Task ID: `task-reconciled`\n")
     reconciliation_source = _transition_receipt(
         tmp_path, tmp_path / "task.md", "task-reconciled", "reconciled"
     )
@@ -340,12 +332,129 @@ def test_exact_replay_requires_explicit_missing_state_migration(
     assert replay["transaction_id"] == prepared["transaction_id"]
     assert state.is_file()
     publish_prepared(tmp_path, prepared["transaction_id"])
+    assert publication_status(tmp_path)["current_head"]["status"] == "current"
+    refreshed = migrate_publication_state(tmp_path)
+    assert refreshed["idempotent_replay"] is False
+    history = tmp_path / ".task/selection_publication/migrations/storage-v4/history"
+    assert len(list(history.iterdir())) == 1
+    assert publication_status(tmp_path)["current_head"]["status"] == "current"
     state.unlink()
     assert publication_status(tmp_path)["status"] == "migration_required"
     migrate_publication_state(tmp_path)
     replay_receipt = publish_prepared(tmp_path, prepared["transaction_id"])
     assert replay_receipt["mutation_performed"] is False
     assert state.is_file()
+
+
+def test_completed_migration_allows_new_prepare_and_commit(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    receipt, _ = _selected_inputs(tmp_path, capsys)
+    first_task = _write(
+        tmp_path / ".task/candidates/task-next.md",
+        b"# Task\n\n- Task ID: `task-next`\n",
+    )
+    first = prepare_publication_intent(
+        tmp_path,
+        _intent(
+            receipt,
+            _binding(tmp_path, first_task),
+            _transition_receipt(tmp_path, first_task, "task-next", "first"),
+        ),
+    )
+    publish_prepared(tmp_path, first["transaction_id"])
+    migrate_publication_state(tmp_path)
+
+    next_task = _write(
+        tmp_path / ".task/candidates/task-next-revised.md",
+        b"# Task\n\n- Task ID: `task-next`\n\nRevised.\n",
+    )
+    successor = prepare_publication_intent(
+        tmp_path,
+        _intent(
+            receipt,
+            _binding(tmp_path, next_task),
+            _transition_receipt(tmp_path, next_task, "task-next", "successor"),
+        ),
+    )
+
+    active = load_state(tmp_path)
+    assert active is not None
+    assert active["active_transaction"]["transaction_id"] == successor["transaction_id"]
+    publish_prepared(tmp_path, successor["transaction_id"])
+    committed = load_state(tmp_path)
+    assert committed is not None
+    assert committed["head"]["transaction_id"] == successor["transaction_id"]
+    assert publication_status(tmp_path)["current_head"]["status"] == "current"
+
+
+def test_forward_migration_crash_keeps_new_wal_fail_closed(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    receipt, _ = _selected_inputs(tmp_path, capsys)
+    task_path = _write(
+        tmp_path / ".task/candidates/task-next.md",
+        b"# Task\n\n- Task ID: `task-next`\n",
+    )
+    prepared = prepare_publication_intent(
+        tmp_path,
+        _intent(
+            receipt,
+            _binding(tmp_path, task_path),
+            _transition_receipt(tmp_path, task_path, "task-next", "selected"),
+        ),
+    )
+    migrate_publication_state(tmp_path)
+    publish_prepared(tmp_path, prepared["transaction_id"])
+
+    def crash_after_state(stage: str, _path: Path) -> None:
+        if stage == "after_state":
+            raise RuntimeError("simulated forward migration crash")
+
+    monkeypatch.setattr(migration, "_migration_hook", crash_after_state)
+    with pytest.raises(RuntimeError, match="simulated forward migration crash"):
+        migrate_publication_state(tmp_path)
+    with pytest.raises(ValueError, match="diverges from its WAL"):
+        load_state(tmp_path)
+
+    monkeypatch.setattr(migration, "_migration_hook", lambda _stage, _path: None)
+    recovered = migrate_publication_state(tmp_path)
+    assert recovered["mutation_performed"] is True
+    assert load_state(tmp_path) is not None
+
+
+def test_noncanonical_live_state_is_not_migration_idempotent_replay(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "task.md").write_text("# Task\n", encoding="utf-8")
+    first = migrate_publication_state(tmp_path)
+    assert first["idempotent_replay"] is False
+    state_path = tmp_path / ".task/selection_publication/state.json"
+    state = json.loads(state_path.read_bytes())
+    state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+    refreshed = migrate_publication_state(tmp_path)
+
+    assert refreshed["idempotent_replay"] is False
+    assert refreshed["mutation_performed"] is True
+    assert state_path.read_bytes() == _canonical(json.loads(state_path.read_bytes()))
+
+
+def test_symlink_live_state_is_not_migration_idempotent_replay(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "task.md").write_text("# Task\n", encoding="utf-8")
+    migrate_publication_state(tmp_path)
+    state_path = tmp_path / ".task/selection_publication/state.json"
+    alternate = tmp_path / "alternate-state.json"
+    alternate.write_bytes(state_path.read_bytes())
+    state_path.unlink()
+    state_path.symlink_to(alternate)
+
+    with pytest.raises(ValueError, match="compact state cannot be a symlink"):
+        migrate_publication_state(tmp_path)
 
 
 def test_deep_status_preserves_schema_v1_migration_debt(tmp_path: Path) -> None:
@@ -496,13 +605,10 @@ def test_state_migration_hides_state_until_completion_receipt_and_recovers(
     with pytest.raises(ValueError, match="completion receipt is absent"):
         load_state(tmp_path)
     assert not (
-        tmp_path
-        / ".task/selection_publication/migrations/storage-v4/complete.json"
+        tmp_path / ".task/selection_publication/migrations/storage-v4/complete.json"
     ).exists()
 
-    monkeypatch.setattr(
-        migration, "_migration_hook", lambda _stage, _path: None
-    )
+    monkeypatch.setattr(migration, "_migration_hook", lambda _stage, _path: None)
     recovered = migrate_publication_state(tmp_path)
 
     assert recovered["mutation_performed"] is True
@@ -523,16 +629,14 @@ def test_state_migration_fails_before_wal_when_inventory_exceeds_bound(
         migrate_publication_state(tmp_path)
 
     assert not (
-        tmp_path
-        / ".task/selection_publication/migrations/storage-v4/prepare.json"
+        tmp_path / ".task/selection_publication/migrations/storage-v4/prepare.json"
     ).exists()
-    assert not (
-        tmp_path / ".task/selection_publication/state.json"
-    ).exists()
+    assert not (tmp_path / ".task/selection_publication/state.json").exists()
 
 
-def test_migration_file_bound_accepts_observed_legacy_size_and_rejects_overflow(
-) -> None:
+def test_migration_file_bound_accepts_observed_legacy_size_and_rejects_overflow() -> (
+    None
+):
     assert migration_contract.MAX_MIGRATION_FILE_BYTES == 32 * 1024 * 1024
     budget = migration_contract.MigrationBudget()
     budget.consume_stat(

@@ -210,8 +210,14 @@ inventory, boundary tests, and an explicit contract revision.
 Its visibility order is: immutable migration prepare/WAL, every historical
 intent prepare/commit index, compact state, then completion receipt last.
 Readers reject a compact state while its prepare exists without the exact
-completion receipt. Re-running the command resumes the same prepared bytes;
-completed older generations are retained before a later recovery migration.
+completion receipt. The receipt seals the migration-time state and remains
+historical evidence after registered publication writers advance the compact
+state; it is not a permanent compare-and-swap against the live projection.
+Every live head or active record is still reopened through its exact prepare
+and receipt contracts. Re-running `migrate-state` is idempotent only while the
+live state still matches that sealed generation. After a legitimate state
+advance it compiles a new generation, retaining the completed older generation
+before replacement.
 
 Packet retention remains adapter-owned close hygiene under
 `$maintain-cycle-ledger`. Without a valid adapter retention policy, rotate

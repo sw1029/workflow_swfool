@@ -31,6 +31,7 @@ from .selection_publication_store import (
     _receipt_path,
     _sha256_bytes,
     _sha256_file,
+    _state_path,
     _write_once,
 )
 from .selection_publication_gc_fs import (
@@ -56,9 +57,7 @@ def _index_rows(
     root: Path,
     transaction_ids: list[str],
     *,
-    load_prepare: Callable[
-        [Path, str], tuple[dict[str, Any], Path, str]
-    ],
+    load_prepare: Callable[[Path, str], tuple[dict[str, Any], Path, str]],
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for transaction_id in transaction_ids:
@@ -67,9 +66,7 @@ def _index_rows(
         if not isinstance(intent_sha256, str):
             continue
         if not SHA256.fullmatch(intent_sha256):
-            raise ValueError(
-                "legacy selection publication intent digest is invalid"
-            )
+            raise ValueError("legacy selection publication intent digest is invalid")
         prepare_value = prepare_index_value(
             root,
             intent_sha256,
@@ -118,9 +115,7 @@ def _transaction_inventory(
     transaction_ids: list[str],
     *,
     budget: MigrationBudget,
-    load_prepare: Callable[
-        [Path, str], tuple[dict[str, Any], Path, str]
-    ],
+    load_prepare: Callable[[Path, str], tuple[dict[str, Any], Path, str]],
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for transaction_id in transaction_ids:
@@ -152,9 +147,7 @@ def _write_indexes(
     root: Path,
     transaction_ids: list[str],
     *,
-    load_prepare: Callable[
-        [Path, str], tuple[dict[str, Any], Path, str]
-    ],
+    load_prepare: Callable[[Path, str], tuple[dict[str, Any], Path, str]],
 ) -> None:
     for transaction_id in transaction_ids:
         prepare, prepare_path, prepare_sha = load_prepare(root, transaction_id)
@@ -184,11 +177,21 @@ def _completed_result(
     if not complete_path.is_file() or not state_path.is_file():
         return None
     try:
-        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state_payload = state_path.read_bytes()
+        state = json.loads(state_payload)
+        if state_payload != _canonical_json(state):
+            return None
         complete = validate_migration_visibility(root, state)
-    except (ValueError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
         return None
     if complete is None:
+        return None
+    current_state_binding = migration_binding(
+        root,
+        state_path,
+        _sha256_bytes(state_payload),
+    )
+    if complete.get("state") != current_state_binding:
         return None
     return {
         "status": "migrated",
@@ -303,9 +306,7 @@ def _publish_assets(
             producer_capability=_SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
         )
     _migration_hook("after_prepare", prepare_path)
-    _write_indexes(
-        root, assets["transaction_ids"], load_prepare=load_prepare
-    )
+    _write_indexes(root, assets["transaction_ids"], load_prepare=load_prepare)
     _migration_hook("after_indexes", prepare_path)
     write_compiled_state(root, assets["state"])
     _migration_hook("after_state", assets["state_path"])
@@ -322,9 +323,7 @@ def _publish_assets(
     }
     complete = {
         **complete_body,
-        "completion_content_sha256": _sha256_bytes(
-            _canonical_json(complete_body)
-        ),
+        "completion_content_sha256": _sha256_bytes(_canonical_json(complete_body)),
     }
     complete_payload = _canonical_json(complete)
     expected_complete_sha = _sha256_bytes(complete_payload)
@@ -362,7 +361,7 @@ def migrate_publication_state(
         producer_capability=_SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
     ):
         complete_path = _migration_path(root, "complete")
-        state_path = root / ".task/selection_publication/state.json"
+        state_path = _state_path(root)
         completed = _completed_result(root, state_path, complete_path)
         if completed is not None:
             return completed
@@ -385,9 +384,7 @@ def migrate_publication_state(
         "pending_count": len(assets["pending"]),
         "state_ref": assets["state_path"].relative_to(root).as_posix(),
         "state_content_sha256": assets["state"]["state_content_sha256"],
-        "migration_completion": migration_binding(
-            root, complete_path, complete_sha
-        ),
+        "migration_completion": migration_binding(root, complete_path, complete_sha),
         "idempotent_replay": False,
         "mutation_performed": True,
     }

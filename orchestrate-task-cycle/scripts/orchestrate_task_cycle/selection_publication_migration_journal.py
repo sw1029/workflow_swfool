@@ -15,6 +15,7 @@ from .selection_publication_migration_contract import (
 )
 from .selection_publication_state import STORAGE_SCHEMA_VERSION
 from .selection_publication_store import (
+    SHA256,
     _canonical_json,
     _migration_path,
     _sha256_bytes,
@@ -45,9 +46,7 @@ MIGRATION_COMPLETE_KEYS = {
 }
 
 
-def migration_binding(
-    root: Path, path: Path, digest: str
-) -> dict[str, str]:
+def migration_binding(root: Path, path: Path, digest: str) -> dict[str, str]:
     return {"ref": path.relative_to(root).as_posix(), "sha256": digest}
 
 
@@ -96,11 +95,9 @@ def validate_complete(value: dict[str, Any]) -> None:
     if (
         set(value) != MIGRATION_COMPLETE_KEYS
         or value.get("schema_version") != 1
-        or value.get("kind")
-        != "selection_publication_storage_v4_migration_complete"
+        or value.get("kind") != "selection_publication_storage_v4_migration_complete"
         or value.get("storage_schema_version") != STORAGE_SCHEMA_VERSION
-        or value.get("visibility_rule")
-        != "indexes_then_state_then_completion_receipt"
+        or value.get("visibility_rule") != "indexes_then_state_then_completion_receipt"
         or value.get("completion_content_sha256")
         != content_sha256(value, "completion_content_sha256")
     ):
@@ -132,8 +129,7 @@ def archive_completed_generation(
         return False
     generation = _sha256_bytes(complete_payload)
     base = (
-        Path(".task/selection_publication/migrations/storage-v4/history")
-        / generation
+        Path(".task/selection_publication/migrations/storage-v4/history") / generation
     )
     write_once_relative(
         root,
@@ -155,7 +151,12 @@ def archive_completed_generation(
 def validate_migration_visibility(
     root: Path, state: dict[str, Any]
 ) -> dict[str, Any] | None:
-    """Reject a state made visible before its migration completion receipt."""
+    """Require an exact completed migration generation before state use.
+
+    The completion seals the migration-time state.  A later compact state is
+    allowed to advance through the standard, independently validated
+    publication writers; the historical completion is not a live-state CAS.
+    """
 
     prepare_path = _migration_path(root, "prepare")
     complete_path = _migration_path(root, "complete")
@@ -177,19 +178,22 @@ def validate_migration_visibility(
     validate_prepare(prepare)
     validate_complete(complete)
     state_path = root / ".task/selection_publication/state.json"
-    state_payload = _canonical_json(state)
+    migration_state = prepare.get("state")
+    if (
+        not isinstance(migration_state, dict)
+        or set(migration_state) != {"ref", "sha256"}
+        or migration_state.get("ref") != state_path.relative_to(root).as_posix()
+        or not isinstance(migration_state.get("sha256"), str)
+        or not SHA256.fullmatch(migration_state["sha256"])
+    ):
+        raise ValueError("selection publication migration state binding is invalid")
     if (
         complete.get("migration_prepare")
         != migration_binding(root, prepare_path, _sha256_bytes(prepare_payload))
-        or complete.get("state")
-        != migration_binding(root, state_path, _sha256_bytes(state_payload))
-        or prepare.get("state") != complete.get("state")
-        or complete.get("receipt_count")
-        != prepare["inventory"].get("receipt_count")
-        or complete.get("pending_count")
-        != prepare["inventory"].get("pending_count")
-        or complete.get("intent_index_count")
-        != len(prepare["intent_indexes"])
+        or migration_state != complete.get("state")
+        or complete.get("receipt_count") != prepare["inventory"].get("receipt_count")
+        or complete.get("pending_count") != prepare["inventory"].get("pending_count")
+        or complete.get("intent_index_count") != len(prepare["intent_indexes"])
     ):
         raise ValueError(
             "selection publication migration completion diverges from its WAL"
