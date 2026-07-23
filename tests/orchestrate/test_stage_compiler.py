@@ -33,6 +33,7 @@ from orchestrate_task_cycle.stage.service import (
 )
 from orchestrate_task_cycle.stage.specs import TARGET_COMPILE_SPECS
 from orchestrate_task_cycle.transition.constants import ORDER
+from compiler_first_fixture_support import create_sealed_legacy_v1_cycle
 
 
 def _base_context() -> dict:
@@ -150,18 +151,32 @@ def _base_context() -> dict:
 def _initialized_workspace(root: Path) -> str:
     (root / "task.md").write_text("# Task\n\nDo bounded work.\n", encoding="utf-8")
     cycle_id = "cycle-stage-test"
-    init_cycle(
+    create_sealed_legacy_v1_cycle(
         root,
         cycle_id,
         "task-stage",
         "stage compiler test",
-        stage_compiler_protocol_version=1,
-        stage_preparation_schema_version=1,
     )
     advance = advance_stage(root, cycle_id, apply=True, max_steps=2)
     assert advance["stop_reason"] == "awaiting_authority"
     assert read_events(root, cycle_id)[0]["step"] == "context"
     return cycle_id
+
+
+def _explicit_v1_context(root: Path) -> dict:
+    (root / "task.md").write_text("# Task\n", encoding="utf-8")
+    cycle_id = "cycle-model-packet"
+    create_sealed_legacy_v1_cycle(
+        root,
+        cycle_id,
+        "task-model-packet",
+        "legacy model packet contract test",
+    )
+    context = _base_context()
+    context["workspace"] = str(root)
+    context["cycle_state"]["latest_cycle_id"] = cycle_id
+    context["cycle_state"]["current_stage"]["cycle_id"] = cycle_id
+    return context
 
 
 def _prime_until(root: Path, cycle_id: str, target: str) -> None:
@@ -289,8 +304,10 @@ def test_model_projection_fails_closed_when_required_payload_is_too_large() -> N
     assert projected["compiler_metrics"]["essential_projected_bytes"] > 262_144
 
 
-def test_model_packet_reuses_only_compact_advice_projection() -> None:
-    full = _base_context()
+def test_model_packet_reuses_only_compact_advice_projection(
+    tmp_path: Path,
+) -> None:
+    full = _explicit_v1_context(tmp_path)
     model = project_model_context(full, max_paths=40)
 
     packet = _model_packet("acceptance", full, model, "normal")
@@ -302,8 +319,10 @@ def test_model_packet_reuses_only_compact_advice_projection() -> None:
     assert all("fields" not in item for item in packet["used_advice"])
 
 
-def test_model_packet_does_not_reimport_large_legacy_context() -> None:
-    full = _base_context()
+def test_model_packet_does_not_reimport_large_legacy_context(
+    tmp_path: Path,
+) -> None:
+    full = _explicit_v1_context(tmp_path)
     sentinel = "large-legacy-active-pack-sentinel"
     full["task_state"]["task_pack"]["active_pack"] = {
         "unbounded_body": sentinel + ("x" * 800_000)
@@ -318,8 +337,10 @@ def test_model_packet_does_not_reimport_large_legacy_context() -> None:
     assert len(encoded) < MAX_MODEL_PACKET_BYTES
 
 
-def test_model_packet_fails_closed_above_hard_byte_budget() -> None:
-    full = _base_context()
+def test_model_packet_fails_closed_above_hard_byte_budget(
+    tmp_path: Path,
+) -> None:
+    full = _explicit_v1_context(tmp_path)
     model = project_model_context(full, max_paths=40)
     model["advice"]["items"][0]["directives"][0]["directive_text"] = "x" * (
         MAX_MODEL_PACKET_BYTES + 1

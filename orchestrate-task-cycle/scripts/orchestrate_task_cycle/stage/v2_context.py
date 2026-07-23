@@ -215,6 +215,10 @@ def collect_selected_context(
         require_exact_git_worktree="git_worktree" in selectors,
     )
     metrics = {
+        "collection_limits": {
+            "max_files": max_files,
+            "max_paths": max_paths,
+        },
         "context_sections_collected": sorted(data),
         "context_section_count": len(data),
         "target_context_bytes": len(canonical_bytes(model)),

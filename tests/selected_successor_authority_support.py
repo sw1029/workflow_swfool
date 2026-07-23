@@ -6,7 +6,11 @@ import json
 from pathlib import Path
 from typing import Any
 
-from manage_agent_authority.artifact_store import register_grant, snapshot_file
+from manage_agent_authority import artifact_store as artifact_store_module
+from manage_agent_authority.artifact_store import (
+    _register_compiled_grant as _production_register_grant,
+    snapshot_file,
+)
 from manage_agent_authority.canonical import (
     object_sha256,
     parse_time,
@@ -16,6 +20,10 @@ from manage_agent_authority.canonical import (
 from manage_agent_authority.evaluator import evaluate
 from manage_agent_authority.lifecycle import reserve, verify_reservation_with_recovery
 from manage_agent_authority.operations import load_operation
+from manage_agent_authority.producer_capability import (
+    _AUTHORITY_PRODUCER_CAPABILITY,
+)
+from manage_agent_authority.source_approval import validate_for_grant
 from orchestrate_task_cycle.selected_successor_authority_context_compiler import (
     prepare_selected_successor_authority_contexts,
 )
@@ -31,6 +39,52 @@ def _write(path: Path, text: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return path
+
+
+def _snapshot_historical_source(root: Path, source: Path) -> dict[str, str]:
+    payload = source.read_bytes()
+    digest = sha256_file(source)
+    snapshot = (
+        root
+        / ".task/authorization/source_snapshots"
+        / f"source_approval-{digest}.json"
+    )
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    if snapshot.exists() and snapshot.read_bytes() != payload:
+        raise AssertionError("historical source fixture conflicts")
+    snapshot.write_bytes(payload)
+    return {"ref": snapshot.relative_to(root).as_posix(), "sha256": digest}
+
+
+def register_grant(
+    root: Path, raw: dict[str, Any], *, parent_id: str | None = None
+) -> dict[str, Any]:
+    """Test-only registration for pre-upgrade schema-v2 fixtures."""
+
+    original = artifact_store_module.validate_for_grant
+
+    def validate_historical(
+        fixture_root: Path,
+        approval: dict[str, Any],
+        grant: dict[str, Any],
+    ) -> None:
+        validate_for_grant(
+            fixture_root,
+            approval,
+            grant,
+            prospective=approval["schema_version"] != 2,
+        )
+
+    artifact_store_module.validate_for_grant = validate_historical
+    try:
+        return _production_register_grant(
+            root,
+            raw,
+            parent_id=parent_id,
+            producer_capability=_AUTHORITY_PRODUCER_CAPABILITY,
+        )
+    finally:
+        artifact_store_module.validate_for_grant = original
 
 
 def _context(goal: Path, request: dict[str, Any]) -> dict[str, Any]:
@@ -201,9 +255,7 @@ def prepare_authority_proofs(
         root / ".task/authorization/selected-successor-approval.json",
         json.dumps(source, indent=2, sort_keys=True) + "\n",
     )
-    source_binding = snapshot_file(
-        root, source_path.relative_to(root).as_posix(), "source_approval"
-    )
+    source_binding = _snapshot_historical_source(root, source_path)
     proofs: dict[str, dict[str, Any]] = {}
     for index, (row, manifest) in enumerate(
         zip(bundle["execution_order"], manifests), start=1
@@ -344,9 +396,7 @@ def prepare_authority_inputs(
         root / ".task/authorization/selected-successor-compiler-approval.json",
         json.dumps(source, indent=2, sort_keys=True) + "\n",
     )
-    source_binding = snapshot_file(
-        root, source_path.relative_to(root).as_posix(), "source_approval"
-    )
+    source_binding = _snapshot_historical_source(root, source_path)
     grants: dict[str, dict[str, str]] = {}
     if register_existing_grants and shared_grant_max_uses is not None:
         shared = {

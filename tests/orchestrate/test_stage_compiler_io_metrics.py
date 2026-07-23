@@ -4,7 +4,16 @@ from pathlib import Path
 
 import pytest
 
-from orchestrate_task_cycle.cycle_ledger import append_event, init_cycle, read_events_raw
+from orchestrate_task_cycle.cycle_ledger import (
+    append_event as _public_append_event,
+    init_cycle as _init_cycle,
+    read_events_raw,
+)
+from orchestrate_task_cycle.ledger.compiled_events import (
+    append_compiled_system_stage,
+)
+from orchestrate_task_cycle.ledger.support import read_initialization_metadata
+from orchestrate_task_cycle.ledger.workflow_contract import workflow_contract_state
 from orchestrate_task_cycle.cycle_efficiency.compiler_metrics import (
     compiler_efficiency_projection,
 )
@@ -12,7 +21,14 @@ from orchestrate_task_cycle.stage import publication as stage_publication
 from orchestrate_task_cycle.stage import artifact_store as stage_artifact_store
 from orchestrate_task_cycle.stage import preparation_store as stage_preparation_store
 from orchestrate_task_cycle.stage import publication_origin as stage_publication_origin
-from orchestrate_task_cycle.stage.artifact_store import compiler_artifact_binding
+from orchestrate_task_cycle.stage import (
+    deterministic_commit as deterministic_commit_module,
+)
+from orchestrate_task_cycle.stage.artifact_store import (
+    compiler_artifact_binding,
+    load_stage_input,
+)
+from orchestrate_task_cycle.stage.builder import ResultBuilder
 from orchestrate_task_cycle.stage.contracts import canonical_bytes, canonical_sha256
 from orchestrate_task_cycle.stage.deterministic_dispatch import dispatch_deterministic
 from orchestrate_task_cycle.stage.preparation_store import (
@@ -25,9 +41,46 @@ from orchestrate_task_cycle.stage.service import (
     prepare_stage,
     submit_stage,
 )
+from compiler_first_fixture_support import append_fixture_event
 
 
-def _origin_intent_paths(root: Path, cycle_id: str) -> list[Path]:
+def init_cycle(*args, **kwargs):
+    return _init_cycle(*args, **kwargs)
+
+
+def append_event(root: Path, cycle_id: str, event: dict) -> dict:
+    if workflow_contract_state(read_initialization_metadata(root, cycle_id)) != "enforced":
+        return _public_append_event(root, cycle_id, event)
+    step = str(event.get("step") or "")
+    if step in {"context", "route_plan", "result_contract", "ledger_append"}:
+        return append_compiled_system_stage(root, cycle_id, step)
+    return append_fixture_event(root, cycle_id, event)
+
+
+def _fixture_deterministic_owner(
+    root: Path, preparation: dict
+) -> dict:
+    prediction = dispatch_deterministic(root, preparation)
+    assert prediction.get("status") != "block", prediction
+    committed = deterministic_commit_module.commit_deterministic_gated(
+        root,
+        preparation,
+        prediction,
+        max_files=12,
+        max_paths=40,
+    )
+    assert committed.get("status") != "block", committed
+    return {
+        **committed["owner_result_binding"],
+        "deterministic_commit_binding": committed[
+            "deterministic_commit_binding"
+        ],
+    }
+
+
+def _origin_intent_paths(
+    root: Path, cycle_id: str, preparation_id: str | None = None
+) -> list[Path]:
     directory = (
         root
         / ".task"
@@ -36,7 +89,10 @@ def _origin_intent_paths(root: Path, cycle_id: str) -> list[Path]:
         / "compiler"
         / "publication-origin"
     )
-    return sorted(directory.rglob("*.intent.json")) if directory.is_dir() else []
+    if not directory.is_dir():
+        return []
+    selected = directory / preparation_id if preparation_id else directory
+    return sorted(selected.rglob("*.intent.json")) if selected.is_dir() else []
 
 
 def _origin_totals(
@@ -49,7 +105,9 @@ def _origin_totals(
     target_bytes = sum(
         int(preparation[field]["size_bytes"]) for field in binding_fields
     )
-    intent_paths = _origin_intent_paths(root, cycle_id)
+    intent_paths = _origin_intent_paths(
+        root, cycle_id, str(preparation["preparation_id"])
+    )
     total_bytes = (
         target_bytes
         + int(publication["preparation_bytes"])
@@ -75,6 +133,7 @@ def test_compiler_cas_receipt_reports_actual_new_and_reused_bytes(
         "machine_input",
         value,
         persist=True,
+        _legacy_recovery=True,
     )
     replay = compiler_artifact_binding(
         tmp_path,
@@ -82,6 +141,7 @@ def test_compiler_cas_receipt_reports_actual_new_and_reused_bytes(
         "machine_input",
         value,
         persist=True,
+        _legacy_recovery=True,
     )
 
     assert dry["write_receipt"] == {
@@ -117,15 +177,38 @@ def test_result_cas_metrics_add_to_prior_io_and_crash_retry_is_reused(
             "task_id": "task-result-io",
         },
     )
-    preparation = {
-        "schema_version": 2,
-        "artifact_kind": "orchestrate_stage_preparation",
-        "cycle_id": cycle_id,
-        "target": "repo_skill_adapter_scan",
-        "workflow_mode": "normal",
-        "preparation_id": "stageprep-result-io",
+    append_event(
+        tmp_path,
+        cycle_id,
+        {
+            "step": "authority",
+            "status": "completed",
+            "event_id": "authority-result-io",
+            "task_id": "task-result-io",
+        },
+    )
+    preparation = prepare_stage(
+        tmp_path,
+        cycle_id,
+        "repo_skill_adapter_scan",
+        persist_compiler_artifacts=True,
+    )
+    owner = _fixture_deterministic_owner(tmp_path, preparation)
+    judgment, exact_owner = load_stage_input(
+        tmp_path,
+        owner["ref"],
+        owner["sha256"],
+        cycle_id=cycle_id,
+        target="repo_skill_adapter_scan",
+        input_kind="owner_result",
+    )
+    result = ResultBuilder().build(preparation, judgment)
+    input_bindings = {
+        "owner_result_binding": exact_owner,
+        "deterministic_commit_binding": owner[
+            "deterministic_commit_binding"
+        ],
     }
-    result = {"step": "repo_skill_adapter_scan", "adapter_scan_status": "pass"}
     result_size = len(canonical_bytes(result)) + 1
     prior = {
         "cas_newly_written_bytes": 101,
@@ -136,7 +219,10 @@ def test_result_cas_metrics_add_to_prior_io_and_crash_retry_is_reused(
     def fail_before_append(*_args, **_kwargs):
         raise RuntimeError("injected post-CAS crash")
 
-    monkeypatch.setattr(stage_publication, "append_event", fail_before_append)
+    actual_append = stage_publication._append_compiled_result_binding
+    monkeypatch.setattr(
+        stage_publication, "_append_compiled_result_binding", fail_before_append
+    )
     with pytest.raises(RuntimeError, match="post-CAS crash"):
         publish_result(
             tmp_path,
@@ -145,6 +231,7 @@ def test_result_cas_metrics_add_to_prior_io_and_crash_retry_is_reused(
             result,
             canonical_sha256(result),
             prior,
+            input_bindings,
         )
     assert not [
         event
@@ -152,7 +239,9 @@ def test_result_cas_metrics_add_to_prior_io_and_crash_retry_is_reused(
         if event.get("step") == "repo_skill_adapter_scan"
     ]
 
-    monkeypatch.setattr(stage_publication, "append_event", append_event)
+    monkeypatch.setattr(
+        stage_publication, "_append_compiled_result_binding", actual_append
+    )
     replay = publish_result(
         tmp_path,
         cycle_id,
@@ -160,6 +249,7 @@ def test_result_cas_metrics_add_to_prior_io_and_crash_retry_is_reused(
         result,
         canonical_sha256(result),
         prior,
+        input_bindings,
     )
     metrics = replay["compiler_metrics"]
 
@@ -203,7 +293,10 @@ def test_preparation_publication_accumulates_actual_cas_io_and_replays_stably(
     )
     binding_bytes = sum(first[field]["size_bytes"] for field in binding_fields)
     artifact_intent_bytes = sum(
-        path.stat().st_size for path in _origin_intent_paths(tmp_path, cycle_id)
+        path.stat().st_size
+        for path in _origin_intent_paths(
+            tmp_path, cycle_id, str(first["preparation_id"])
+        )
     )
     assert first["compiler_metrics"]["cas_newly_written_bytes"] == (
         binding_bytes + artifact_intent_bytes
@@ -295,7 +388,7 @@ def test_origin_metrics_recover_after_each_compiler_artifact_write(
                 "task_id": "task-artifact-crash",
             },
         )
-    original_publish = stage_artifact_store.publish_origin_object
+    original_publish = stage_artifact_store.publish_compiler_artifact_origin
     call_count = 0
 
     def crash_after_object(*args, **kwargs):
@@ -307,7 +400,9 @@ def test_origin_metrics_recover_after_each_compiler_artifact_write(
         return result
 
     monkeypatch.setattr(
-        stage_artifact_store, "publish_origin_object", crash_after_object
+        stage_artifact_store,
+        "publish_compiler_artifact_origin",
+        crash_after_object,
     )
     with pytest.raises(RuntimeError, match="post-artifact crash"):
         prepare_stage(
@@ -317,7 +412,9 @@ def test_origin_metrics_recover_after_each_compiler_artifact_write(
             persist_compiler_artifacts=True,
         )
     monkeypatch.setattr(
-        stage_artifact_store, "publish_origin_object", original_publish
+        stage_artifact_store,
+        "publish_compiler_artifact_origin",
+        original_publish,
     )
 
     replay = prepare_stage(
@@ -483,13 +580,19 @@ def test_published_preparation_origin_io_survives_separate_submit_process(
         publication["preparation_ref"],
         publication["preparation_sha256"],
     )
-    owner = dispatch_deterministic(tmp_path, loaded)["owner_result_binding"]
+    owner = _fixture_deterministic_owner(tmp_path, loaded)
 
     output = submit_stage(
         tmp_path,
         loaded,
         owner_result_ref=owner["ref"],
         owner_result_sha256=owner["sha256"],
+        deterministic_commit_ref=owner[
+            "deterministic_commit_binding"
+        ]["ref"],
+        deterministic_commit_sha256=owner[
+            "deterministic_commit_binding"
+        ]["sha256"],
         apply=True,
     )
     event = next(

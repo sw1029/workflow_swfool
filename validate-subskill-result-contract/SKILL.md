@@ -23,7 +23,7 @@ Use `PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/orchestrate-task-cycle/scrip
    - For authority settlement, accept schema-v3 execution results only when their exact registered `owner_validation` receipt reopens and validates the owner result, reservation, pre-commit verification, operation identity, outcome, and historical effect boundary. Preserve schema-v2 historical reads; never upgrade an opaque legacy result to confirmed effect.
 3. Treat a missing or mismatched top-level canonical `step` as a ledger-envelope warning. Use `block` mode, or pass an explicit `--step <canonical-step>` to `$maintain-cycle-ledger`, before using the result JSON directly as a ledger event.
 4. Use `block` mode when missing fields would corrupt the cycle transition, especially a governed final candidate, current finalization receipt, consumer echo, final report fields, `running` execution details, task-pack promotion provenance, candidate deletion, issue closure, or commit creation. Finalization-integrity findings block regardless of the caller's warning preference.
-5. Append the contract result to the cycle ledger through `$maintain-cycle-ledger`.
+5. Return the validated owner result to the stage compiler. In a `compiler_first_enforced_v1` cycle, let its typed result producer append the compact reference; never append a raw result through the public ledger surface. Retain `$maintain-cycle-ledger` direct append only for unmarked legacy compatibility.
 6. Pass warnings downstream in the next subskill packet.
 
 ## Required Evidence

@@ -16,6 +16,7 @@ from .contracts import reservation_units
 from .contracts import cardinality_covers
 from .contracts import rank_value
 from .source_approval import load_source_approval
+from .producer_capability import _require_authority_producer_capability
 
 
 COMPOSITION_KEYS = {
@@ -66,6 +67,40 @@ def validate_composition(value: dict[str, Any]) -> dict[str, Any]:
 
 
 def create_composition(root: Path, raw: dict[str, Any]) -> dict[str, Any]:
+    """Read one exact existing composition; never publish prospective bytes."""
+
+    root = root.resolve()
+    composition = validate_composition(raw)
+    path = (
+        root
+        / AUTHORIZATION_ROOT
+        / "compositions"
+        / f"{composition['composition_id']}.json"
+    )
+    if not path.is_file():
+        raise SystemExit(
+            "Raw create_composition is sealed to exact historical replay; "
+            "prospective writes require the composition intent compiler."
+        )
+    existing = validate_composition(read_object(path, "authority composition"))
+    if existing != composition:
+        raise SystemExit(
+            "Historical composition replay differs from registered bytes."
+        )
+    return {
+        "composition": existing,
+        "ref": path.relative_to(root).as_posix(),
+        "sha256": sha256_file(path),
+    }
+
+
+def _create_compiled_composition(
+    root: Path,
+    raw: dict[str, Any],
+    *,
+    producer_capability: object,
+) -> dict[str, Any]:
+    _require_authority_producer_capability(producer_capability)
     root = root.resolve()
     composition = validate_composition(raw)
     source_path = verify_binding(

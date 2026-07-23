@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from ..acceptance_contract import acceptance_verifier_contract
 from .packet_io import non_empty, scope_fidelity_records, truthy
 from .prerequisite_chain import validate_item_prerequisite_chain
 from .validation_acceptance import (
@@ -34,12 +35,9 @@ def validate_item_scope(
         has_target = non_empty(original_target)
         narrowed = truthy(record.get("narrowed"))
         residual_item_id = str(record.get("residual_item_id") or "").strip()
-        verifier_contract = (
-            record.get("acceptance_verifier_contract")
-            if isinstance(record.get("acceptance_verifier_contract"), dict)
-            else item.get("acceptance_verifier_contract") if isinstance(item.get("acceptance_verifier_contract"), dict)
-            else {}
-        )
+        verifier_contract = acceptance_verifier_contract(
+            record
+        ) or acceptance_verifier_contract(item)
 
         if has_target and not directive_id:
             add(

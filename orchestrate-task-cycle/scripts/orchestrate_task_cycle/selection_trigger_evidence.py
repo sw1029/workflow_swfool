@@ -241,6 +241,32 @@ def validate_publication_bootstrap(
     return expected
 
 
+def validate_prospective_publication_bootstrap(
+    root: Path,
+    cycle_id: str,
+    binding: dict[str, str],
+    current_task: dict[str, str],
+    task_index: dict[str, str],
+    value: Any,
+    *,
+    expected_active_prepare: Any = None,
+) -> None:
+    """Validate prospective canonical bytes without requiring prior persistence."""
+
+    normalized = normalize_binding(binding, "publication bootstrap")
+    _cycle_ref(cycle_id, normalized["ref"], "publication bootstrap")
+    expected = validate_publication_bootstrap(
+        root,
+        cycle_id,
+        current_task,
+        task_index,
+        value,
+        expected_active_prepare=expected_active_prepare,
+    )
+    if normalized["sha256"] != canonical_sha256(expected):
+        raise ValueError("prospective publication bootstrap binding differs")
+
+
 def _validate_committed_publication_head(
     root: Path,
     binding: dict[str, str],
@@ -338,5 +364,6 @@ __all__ = (
     "validate_cycle_finalization",
     "validate_derive_result",
     "validate_publication_head",
+    "validate_prospective_publication_bootstrap",
     "validate_schema_pre_derive",
 )

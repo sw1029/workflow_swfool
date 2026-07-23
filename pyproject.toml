@@ -5,7 +5,11 @@ description = "Deterministic contracts and tests for the governed Codex skill wo
 requires-python = ">=3.10"
 
 [project.optional-dependencies]
+root-authorization = [
+  "cryptography>=44",
+]
 test = [
+  "cryptography>=44",
   "pytest",
   "PyYAML",
 ]

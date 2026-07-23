@@ -18,6 +18,7 @@ from .contracts import rank_value
 from .contracts import risk_value
 from .contracts import validate_grant
 from .source_approval import load_source_approval
+from .source_approval import validate_source_decision_binding
 from .source_approval import validate_source_approval
 from .source_approval import validate_for_grant
 from .source_approval import validate_for_transition
@@ -27,9 +28,23 @@ from .projection_recovery import apply_projection_changes
 from .projection_recovery import projection_change
 from .projection_recovery import recover_projection_intents
 from .projection_recovery import validated_settled_intent
+from .producer_capability import _require_authority_producer_capability
 
 
 AUTHORIZATION_ROOT = Path(".task/authorization")
+
+
+def _effective_root_grant_state(
+    root: Path,
+    grant: dict[str, Any],
+    digest: str,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    # Lazy import keeps the receipt verifier free to reopen producer modules
+    # without making artifact-store initialization part of the trust boundary.
+    from .root_grant_visibility import effective_root_grant_state
+
+    return effective_root_grant_state(root, grant, digest, state)
 
 
 def _relative(path: Path, root: Path) -> str:
@@ -59,7 +74,19 @@ def snapshot_file(root: Path, source_ref: str, kind: str) -> dict[str, str]:
                 raise SystemExit("Source approval must be closed JSON.") from exc
             if not isinstance(raw_approval, dict):
                 raise SystemExit("Source approval must be a JSON object.")
-            validate_source_approval(raw_approval)
+            approval = validate_source_approval(raw_approval)
+            if approval["schema_version"] == 2:
+                raise SystemExit(
+                    "Historical schema-v2 source approvals are read-only and "
+                    "cannot be snapshotted prospectively."
+                )
+            else:
+                decision_kind = validate_source_decision_binding(root, approval)
+                if decision_kind == "authority_root_approval_decision":
+                    raise SystemExit(
+                        "Historical full-echo root decisions cannot be "
+                        "snapshotted prospectively."
+                    )
         extension = (
             source.suffix if source.suffix in {".md", ".json", ".txt"} else ".bin"
         )
@@ -133,6 +160,7 @@ def load_grant(root: Path, grant_id: str) -> tuple[dict[str, Any], str, dict[str
     state = read_object(projection, "authority grant state")
     if state.get("grant_sha256") != digest:
         raise SystemExit(f"Authority grant state digest mismatch: {grant_id}")
+    state = _effective_root_grant_state(root, grant, digest, state)
     return grant, digest, state
 
 
@@ -212,6 +240,33 @@ def _validate_child(
 def register_grant(
     root: Path, raw: dict[str, Any], *, parent_id: str | None = None
 ) -> dict[str, Any]:
+    """Read an exact existing grant replay; never publish prospective bytes."""
+
+    root = root.resolve()
+    grant = validate_grant(raw)
+    if parent_id != grant["parent_grant_id"]:
+        raise SystemExit("parent_id must exactly match parent_grant_id.")
+    artifact = grant_path(root, grant["grant_id"])
+    projection = state_path(root, grant["grant_id"])
+    if not artifact.is_file() or not projection.is_file():
+        raise SystemExit(
+            "Raw register_grant is sealed to exact historical replay; "
+            "prospective writes require a registered compiler/materializer."
+        )
+    existing, digest, state = load_grant(root, grant["grant_id"])
+    if existing != grant:
+        raise SystemExit("Historical grant replay differs from registered bytes.")
+    return {"grant": existing, "grant_sha256": digest, "state": state}
+
+
+def _register_compiled_grant(
+    root: Path,
+    raw: dict[str, Any],
+    *,
+    parent_id: str | None = None,
+    producer_capability: object,
+) -> dict[str, Any]:
+    _require_authority_producer_capability(producer_capability)
     root = root.resolve()
     grant = validate_grant(raw)
     if parent_id != grant["parent_grant_id"]:
@@ -222,6 +277,22 @@ def register_grant(
     projection = state_path(root, grant["grant_id"])
     with authority_lock(root):
         recover_projection_intents(root)
+        if artifact.is_file() or projection.is_file():
+            if not artifact.is_file() or not projection.is_file():
+                raise SystemExit(
+                    "Existing grant replay has an incomplete immutable/state pair."
+                )
+            existing = validate_grant(read_object(artifact, "authority grant"))
+            digest = sha256_file(artifact)
+            state = read_object(projection, "authority grant state")
+            if existing != grant or state.get("grant_sha256") != digest:
+                raise SystemExit(
+                    "Conflicting authority grant already exists for this grant ID."
+                )
+            state = _effective_root_grant_state(
+                root, existing, digest, state
+            )
+            return {"grant": existing, "grant_sha256": digest, "state": state}
         parent: dict[str, Any] | None = None
         if parent_id:
             parent, parent_digest, parent_state = load_grant(root, parent_id)
@@ -298,7 +369,11 @@ def transition_grants(
         recover_projection_intents(root)
         grant, _, state = load_grant(root, grant_id)
         validate_for_transition(
-            root, load_source_approval(source_path), grant, transitioned_at
+            root,
+            load_source_approval(source_path),
+            grant,
+            transitioned_at,
+            source_binding=source_approval,
         )
         transition_time = parse_time(transitioned_at, "transitioned_at")
         grant_expiry = (

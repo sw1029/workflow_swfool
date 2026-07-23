@@ -18,6 +18,13 @@ from .authority_boundary import (
     effective_authority_fingerprint,
     project_authority_packet,
 )
+from .ledger.support import (
+    canonical_json_bytes,
+    read_initialization_metadata,
+    validate_cycle_id,
+)
+from .ledger.workflow_contract import workflow_contract_state
+from .stage.artifact_store import write_stage_input
 
 
 def _binding(ref: str, sha256: str) -> dict[str, str]:
@@ -216,6 +223,149 @@ def build_authority_packet(
     return packet
 
 
+def publish_authority_packet(
+    root: str | Path,
+    cycle_id: str,
+    packet: dict[str, Any],
+) -> dict[str, Any]:
+    """Publish one verified packet as the authority stage's owner-result CAS."""
+
+    workspace = Path(root).expanduser().resolve(strict=True)
+    selected_cycle = validate_cycle_id(cycle_id)
+    metadata = read_initialization_metadata(workspace, selected_cycle)
+    if workflow_contract_state(metadata) in {
+        "historical_v1_read_only",
+        "historical_v2_read_only",
+        "invalid",
+    }:
+        raise ValueError(
+            "historical unmarked protocol-v2 cycles are read-only; "
+            "authority owner results cannot be published"
+        )
+    projection = project_authority_packet(packet)
+    findings = list(projection.findings)
+    findings.extend(validate_authority_artifacts(packet, workspace))
+    if findings:
+        codes = ", ".join(str(row["code"]) for row in findings)
+        raise ValueError(f"authority packet publication failed verification: {codes}")
+    rebuilt = _rebuild_authority_packet(workspace, packet)
+    if canonical_json_bytes(rebuilt) != canonical_json_bytes(packet):
+        raise ValueError(
+            "authority packet does not match exact compiler reconstruction"
+        )
+    validate_authority_packet_cycle(workspace, selected_cycle, packet)
+    published = write_stage_input(
+        workspace,
+        selected_cycle,
+        "authority",
+        "owner_result",
+        packet,
+    )
+    binding = {
+        key: published[key] for key in ("ref", "sha256", "size_bytes")
+    }
+    return {
+        "schema_version": 1,
+        "artifact_kind": "compiled_authority_owner_result_binding",
+        "cycle_id": selected_cycle,
+        "target": "authority",
+        "owner_result_binding": binding,
+        "publication_status": (
+            "reused" if published.get("duplicate") else "published"
+        ),
+        "effect_boundary": "preparation_only",
+        "mutation_performed": bool(
+            published["write_receipt"].get("mutation_performed")
+        ),
+        "idempotent_replay": bool(published.get("duplicate")),
+        "model_call_count": 0,
+        "model_visible_bytes": 0,
+        "model_authored_mechanical_bytes": 0,
+        "write_receipt": published["write_receipt"],
+    }
+
+
+def _rebuild_authority_packet(
+    root: Path,
+    packet: dict[str, Any],
+) -> dict[str, Any]:
+    decision_projection = packet.get("decision_binding")
+    if not isinstance(decision_projection, dict):
+        raise ValueError("authority packet has no decision binding")
+    decision_binding = _binding(
+        str(decision_projection.get("artifact_ref") or ""),
+        str(decision_projection.get("artifact_sha256") or ""),
+    )
+    decision = read_bound_authority_json(root, decision_binding, "decision")
+    reservation = packet.get("reservation_binding")
+    preflight = packet.get("dispatch_preflight")
+    reservation_binding = (
+        _binding(
+            str(reservation.get("artifact_ref") or ""),
+            str(reservation.get("artifact_sha256") or ""),
+        )
+        if isinstance(reservation, dict)
+        and reservation.get("applicability") == "required"
+        else None
+    )
+    verification_binding = (
+        _binding(
+            str(preflight.get("artifact_ref") or ""),
+            str(preflight.get("artifact_sha256") or ""),
+        )
+        if isinstance(preflight, dict) and preflight.get("status") == "verified"
+        else None
+    )
+    axes = packet.get("axes")
+    supplied_local = (
+        axes.get("local_resolution") if isinstance(axes, dict) else None
+    )
+    original_local = owner_axis_projection(decision).get("local_resolution")
+    local_resolution: str | None = None
+    local_evidence_ids: tuple[str, ...] = ()
+    if supplied_local != original_local and isinstance(supplied_local, dict):
+        local_resolution = str(supplied_local.get("status") or "")
+        evidence = supplied_local.get("evidence_ids")
+        if isinstance(evidence, list):
+            local_evidence_ids = tuple(str(item) for item in evidence)
+    return build_authority_packet(
+        root,
+        decision_binding,
+        reservation_binding=reservation_binding,
+        verification_binding=verification_binding,
+        local_resolution=local_resolution,
+        local_evidence_ids=local_evidence_ids,
+    )
+
+
+def validate_authority_packet_cycle(
+    root: Path, cycle_id: str, packet: dict[str, Any]
+) -> None:
+    decision_projection = packet.get("decision_binding")
+    if not isinstance(decision_projection, dict):
+        raise ValueError("authority packet has no decision binding")
+    decision = read_bound_authority_json(
+        root,
+        _binding(
+            str(decision_projection.get("artifact_ref") or ""),
+            str(decision_projection.get("artifact_sha256") or ""),
+        ),
+        "decision",
+    )
+    request = (
+        decision.get("request")
+        if isinstance(decision.get("request"), dict)
+        else {}
+    )
+    if request.get("cycle_id") != cycle_id:
+        raise ValueError("authority decision cycle does not match selected cycle")
+    initialization = read_initialization_metadata(root, cycle_id)
+    if request.get("task_id") != initialization.get("task_id"):
+        raise ValueError(
+            "authority decision task does not match selected cycle initialization"
+        )
+
+
 def _load_binding(value: str) -> dict[str, str]:
     try:
         path = Path(value)
@@ -235,11 +385,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--verification-binding")
     parser.add_argument("--local-resolution", choices=("available",))
     parser.add_argument("--local-evidence-id", action="append", default=[])
+    parser.add_argument("--cycle-id")
+    parser.add_argument("--publish", action="store_true")
     parser.add_argument("--output")
     args = parser.parse_args(list(argv) if argv is not None else None)
     try:
+        workspace = Path(args.root).expanduser().resolve(strict=True)
+        if not args.cycle_id:
+            raise ValueError("authority-packet requires explicit --cycle-id")
+        if args.publish and args.output:
+            raise ValueError("--publish writes the owner-result CAS and forbids --output")
+        selected_cycle = validate_cycle_id(args.cycle_id)
+        metadata = read_initialization_metadata(workspace, selected_cycle)
+        state = workflow_contract_state(metadata)
+        if not args.publish and state in {
+            "enforced",
+            "historical_v2_read_only",
+        }:
+            raise ValueError(
+                "protocol-v2 cycles forbid full authority packet stdout/--output; "
+                "new compiler-first cycles require --publish and historical "
+                "unmarked v2 cycles are read-only"
+            )
         packet = build_authority_packet(
-            args.root,
+            workspace,
             _load_binding(args.decision_binding),
             reservation_binding=_load_binding(args.reservation_binding)
             if args.reservation_binding
@@ -250,9 +419,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             local_resolution=args.local_resolution,
             local_evidence_ids=args.local_evidence_id,
         )
+        publication = (
+            publish_authority_packet(workspace, selected_cycle, packet)
+            if args.publish
+            else None
+        )
+        if publication is None:
+            validate_authority_packet_cycle(workspace, selected_cycle, packet)
     except ValueError as exc:
         parser.error(str(exc))
-    body = json.dumps(packet, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    body = json.dumps(
+        publication if publication is not None else packet,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    ) + "\n"
     if args.output:
         Path(args.output).write_text(body, encoding="utf-8")
     else:
@@ -260,7 +441,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-__all__ = ("build_authority_packet", "main")
+__all__ = (
+    "build_authority_packet",
+    "main",
+    "publish_authority_packet",
+    "validate_authority_packet_cycle",
+)
 
 
 if __name__ == "__main__":

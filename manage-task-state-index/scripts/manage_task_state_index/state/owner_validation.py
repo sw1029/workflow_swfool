@@ -28,6 +28,7 @@ from .transition_recovery import committed_boundary_valid, event_payload
 
 
 PHASES = {"current", "historical"}
+COMPILER_FIRST_PROFILE = "compiler_first_enforced_v1"
 RECEIPT_FIELDS = frozenset("""schema_version artifact_kind operation
 validation_status outcome owner_result reservation pre_commit_verification phase
 subject projection plan event_batch descendant_event_count validated_at
@@ -60,6 +61,42 @@ def _read_bound(
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"{label} must contain JSON") from exc
     return binding, payload, decoded
+
+
+def _reservation_cycle_profile(
+    root: Path, reservation: dict[str, Any]
+) -> tuple[str | None, str | None]:
+    decision_binding = reservation.get("decision")
+    if not isinstance(decision_binding, dict):
+        return None, None
+    _binding, _payload, decision = _read_bound(
+        root, decision_binding, "authority decision"
+    )
+    request = (
+        decision.get("request")
+        if isinstance(decision, dict)
+        and isinstance(decision.get("request"), dict)
+        else {}
+    )
+    cycle_id = request.get("cycle_id")
+    if not isinstance(cycle_id, str) or not cycle_id:
+        return None, None
+    initialization = workspace_path(
+        root, f".task/cycle/{cycle_id}/initialization.json"
+    )
+    # Reservations created before cycle initialization became a required
+    # compiler-first boundary remain readable.  Only an existing initialization
+    # can opt a cycle into the enforced profile.
+    if not initialization.exists() and not initialization.is_symlink():
+        return cycle_id, None
+    try:
+        value = json.loads(regular_payload(initialization))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Cycle initialization must contain JSON") from exc
+    if not isinstance(value, dict) or value.get("cycle_id") != cycle_id:
+        raise ValueError("Cycle initialization differs from authority decision")
+    profile = value.get("workflow_contract_profile")
+    return cycle_id, str(profile) if profile is not None else None
 
 
 def seal_owner_validation_receipt(body: dict[str, Any]) -> dict[str, Any]:
@@ -243,8 +280,13 @@ def validate_owner_result(
     if phase not in PHASES:
         raise ValueError("Task-state validation phase must be current or historical")
     root = root.resolve()
-    reservation_binding, _reservation_payload, _reservation = _read_bound(
+    reservation_binding, _reservation_payload, reservation_value = _read_bound(
         root, reservation, "authority reservation"
+    )
+    if not isinstance(reservation_value, dict):
+        raise ValueError("Authority reservation must be a JSON object")
+    _cycle_id, cycle_profile = _reservation_cycle_profile(
+        root, reservation_value
     )
     precommit_binding, _precommit_payload, precommit = _read_bound(
         root, pre_commit_verification, "authority pre-commit verification"
@@ -268,6 +310,10 @@ def validate_owner_result(
     elif value.get("receipt_kind") == "task_state_transition_no_effect_receipt":
         validated = _validate_no_effect_result(root, binding, payload, value)
     else:
+        if cycle_profile == COMPILER_FIRST_PROFILE:
+            raise ValueError(
+                "Compiler-first cycle rejects opaque legacy task-state owner results"
+            )
         subject = value.get("subject") if isinstance(value.get("subject"), dict) else None
         projection = value.get("projection") if isinstance(value.get("projection"), dict) else None
         validated = {

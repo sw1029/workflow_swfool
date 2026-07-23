@@ -162,6 +162,46 @@ def test_exact_match_reuses_only_while_stored_evidence_hash_matches(tmp_path: Pa
     assert missing["classification"] == "unsafe_to_reuse"
 
 
+def test_cache_check_reads_existing_file_without_creating_lock_residue(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = tmp_path / "input.json"
+    source.write_text("{}\n", encoding="utf-8")
+    cache = evidence_cache.cache_path(tmp_path, None)
+    cache.parent.mkdir(parents=True)
+    cache.write_bytes(b"")
+    lock = evidence_cache.cache_lock_path(cache)
+    before = {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+
+    assert (
+        evidence_cache.main(
+            [
+                "check",
+                "--root",
+                str(tmp_path),
+                "--command",
+                "pytest -q",
+                "--input",
+                "input.json",
+            ]
+        )
+        == 0
+    )
+    output = json.loads(capsys.readouterr().out)
+    after = {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    assert output["classification"] == "fresh_required"
+    assert not lock.exists()
+    assert before == after
+
+
 def test_store_requires_existing_hashed_evidence(tmp_path: Path) -> None:
     source = tmp_path / "input.json"
     source.write_text("{}\n", encoding="utf-8")

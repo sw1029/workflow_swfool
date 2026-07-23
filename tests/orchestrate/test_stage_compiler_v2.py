@@ -6,13 +6,25 @@ from pathlib import Path
 
 import pytest
 
-from orchestrate_task_cycle.cycle_ledger import append_event, init_cycle, read_events
-from orchestrate_task_cycle.repo_skill_adapter import scan_repo_skill_adapters
-from orchestrate_task_cycle.stage.artifact_store import load_usage_observation
+from orchestrate_task_cycle.cycle_ledger import (
+    append_event as _public_append_event,
+    init_cycle,
+    read_events,
+)
+from orchestrate_task_cycle.ledger.compiled_events import (
+    append_compiled_system_stage,
+)
+from orchestrate_task_cycle.ledger.support import read_initialization_metadata
+from orchestrate_task_cycle.ledger.workflow_contract import workflow_contract_state
+from orchestrate_task_cycle.stage.artifact_store import (
+    load_usage_observation,
+)
+from orchestrate_task_cycle.stage.contracts import preparation_identity
 from orchestrate_task_cycle.stage.preparation_store import publish_preparation
 from orchestrate_task_cycle.stage.cli import _parser as stage_parser, _run as stage_run
 from orchestrate_task_cycle.stage.service import advance_stage, prepare_stage, submit_stage
 from orchestrate_task_cycle.stage.specs import TARGET_COMPILE_SPECS
+from compiler_first_fixture_support import append_fixture_event
 
 
 def _init_v2(root: Path) -> str:
@@ -33,17 +45,21 @@ def _init_v2(root: Path) -> str:
 
 
 def _append_completed(root: Path, cycle_id: str, step: str) -> None:
-    append_event(
-        root,
-        cycle_id,
-        {
-            "step": step,
-            "status": "completed",
-            "event_id": f"fixture-v2-{step}",
-            "reason": "v2 dependency fixture",
-            "task_id": "task-stage-v2",
-        },
-    )
+    event = {
+        "step": step,
+        "status": "completed",
+        "event_id": f"fixture-v2-{step}",
+        "reason": "v2 dependency fixture",
+        "task_id": "task-stage-v2",
+    }
+    state = workflow_contract_state(read_initialization_metadata(root, cycle_id))
+    if state != "enforced":
+        _public_append_event(root, cycle_id, event)
+        return
+    if step in {"context", "route_plan", "result_contract", "ledger_append"}:
+        append_compiled_system_stage(root, cycle_id, step)
+        return
+    append_fixture_event(root, cycle_id, event)
 
 
 def _write_exact_json(root: Path, name: str, value: dict) -> tuple[str, str]:
@@ -91,11 +107,52 @@ def test_v2_prepare_is_write_free_compact_and_publish_binds_cas(
         "authority",
         persist_compiler_artifacts=True,
     )
-    publication = publish_preparation(tmp_path, persisted)
+    dynamic_metric_fields = {
+        "cas_newly_written_bytes",
+        "cas_reused_bytes",
+        "files_written_count",
+    }
+    persisted_metrics = persisted["compiler_metrics"]
+    preparation_metrics = preparation["compiler_metrics"]
 
-    assert persisted == preparation
+    assert preparation_identity(persisted) == preparation_identity(preparation)
+    assert {
+        key: value for key, value in persisted.items() if key != "compiler_metrics"
+    } == {
+        key: value for key, value in preparation.items() if key != "compiler_metrics"
+    }
+    assert {
+        key: value
+        for key, value in persisted_metrics.items()
+        if key not in dynamic_metric_fields
+    } == preparation_metrics
+    assert dynamic_metric_fields.isdisjoint(preparation_metrics)
+    assert dynamic_metric_fields <= persisted_metrics.keys()
+
+    intent_dir = (
+        tmp_path
+        / ".task"
+        / "cycle"
+        / cycle_id
+        / "compiler"
+        / "publication-origin"
+        / persisted["preparation_id"]
+    )
+    intent_paths = sorted(intent_dir.glob("*.intent.json"))
+    assert len(intent_paths) == 2
+    binding_labels = ("context_binding", "work_order_binding")
+    expected_new_bytes = sum(
+        int(persisted[label]["size_bytes"]) for label in binding_labels
+    ) + sum(path.stat().st_size for path in intent_paths)
+    assert persisted_metrics["cas_newly_written_bytes"] == expected_new_bytes
+    assert persisted_metrics["cas_reused_bytes"] == 0
+    assert persisted_metrics["files_written_count"] == (
+        len(binding_labels) + len(intent_paths)
+    )
+
+    publication = publish_preparation(tmp_path, persisted)
     assert publication["preparation_bytes"] < 256 * 1024
-    for label in ("context_binding", "work_order_binding"):
+    for label in binding_labels:
         assert (tmp_path / persisted[label]["ref"]).is_file()
 
 
@@ -164,7 +221,7 @@ def test_v2_advance_materializes_canonical_system_stage(tmp_path: Path) -> None:
     assert output["actions"][0]["kind"] == "append_system_stage"
 
 
-def test_v2_exact_owner_input_keeps_large_body_out_of_output(tmp_path: Path) -> None:
+def test_v2_acceptance_rejects_uncompiled_large_owner_body(tmp_path: Path) -> None:
     cycle_id = _init_v2(tmp_path)
     for step in ("authority", "repo_skill_adapter_scan"):
         _append_completed(tmp_path, cycle_id, step)
@@ -208,82 +265,40 @@ def test_v2_exact_owner_input_keeps_large_body_out_of_output(tmp_path: Path) -> 
         },
     )
 
-    output = submit_stage(
-        tmp_path,
-        preparation,
-        owner_result_ref=owner_ref,
-        owner_result_sha256=owner_sha,
-        usage_ref=usage_ref,
-        usage_sha256=usage_sha,
-    )
-    encoded = json.dumps(output, ensure_ascii=False, sort_keys=True)
-
-    assert output["input_bindings"]["owner_result_binding"]["sha256"] == owner_sha
-    assert "result" not in output
-    assert "large-owner-body-sentinel" not in encoded
-    assert output["compiler_metrics"]["model_authored_mechanical_bytes"] == 0
-    assert output["compiler_metrics"]["inline_payload_bytes"] == 0
-    assert output["compiler_metrics"]["input_tokens"] == 1200
-    assert output["compiler_metrics"]["cached_input_tokens"] == 900
-    assert output["compiler_metrics"]["output_tokens"] == 80
-    assert output["input_bindings"]["usage_binding"]["sha256"] == usage_sha
-
-
-def test_v2_imports_native_deterministic_repo_scan_packet(tmp_path: Path) -> None:
-    cycle_id = _init_v2(tmp_path)
-    _append_completed(tmp_path, cycle_id, "authority")
-    preparation = prepare_stage(
-        tmp_path,
-        cycle_id,
-        "repo_skill_adapter_scan",
-        persist_compiler_artifacts=True,
-    )
-    publish_preparation(tmp_path, preparation)
-    native = scan_repo_skill_adapters(tmp_path, cycle_id=cycle_id)
-    owner_ref, owner_sha = _write_exact_json(
-        tmp_path, "native-repo-adapter-scan.json", native
-    )
-
-    output = submit_stage(
-        tmp_path,
-        preparation,
-        owner_result_ref=owner_ref,
-        owner_result_sha256=owner_sha,
-        apply=True,
-    )
-
-    assert output["status"] == "ok"
-    assert output["applied"] is True
-    result_path = tmp_path / output["result_artifact_ref"]
-    result = json.loads(result_path.read_text(encoding="utf-8"))
-    assert result["step"] == "repo_skill_adapter_scan"
-    assert result["cycle_id"] == cycle_id
-    assert result["evidence_paths"] == [owner_ref]
-    assert "artifact_kind" not in result
-    assert "scan_packet_sha256" not in result
-
-
-def test_v2_rejects_tampered_native_deterministic_packet(tmp_path: Path) -> None:
-    cycle_id = _init_v2(tmp_path)
-    _append_completed(tmp_path, cycle_id, "authority")
-    preparation = prepare_stage(
-        tmp_path,
-        cycle_id,
-        "repo_skill_adapter_scan",
-        persist_compiler_artifacts=True,
-    )
-    native = scan_repo_skill_adapters(tmp_path, cycle_id=cycle_id)
-    native["scan_packet_sha256"] = "0" * 64
-    owner_ref, owner_sha = _write_exact_json(
-        tmp_path, "tampered-native-repo-adapter-scan.json", native
-    )
-
-    with pytest.raises(ValueError, match="packet integrity failed"):
+    with pytest.raises(
+        ValueError,
+        match="producer CAS",
+    ):
         submit_stage(
             tmp_path,
             preparation,
             owner_result_ref=owner_ref,
             owner_result_sha256=owner_sha,
+            usage_ref=usage_ref,
+            usage_sha256=usage_sha,
+        )
+
+
+def test_v2_deterministic_prepare_requires_schema_v3(tmp_path: Path) -> None:
+    cycle_id = _init_v2(tmp_path)
+    _append_completed(tmp_path, cycle_id, "authority")
+    with pytest.raises(ValueError, match="preparation_v3_required"):
+        prepare_stage(
+            tmp_path,
+            cycle_id,
+            "repo_skill_adapter_scan",
+            persist_compiler_artifacts=True,
+        )
+
+
+def test_v2_rejects_tampered_native_deterministic_packet(tmp_path: Path) -> None:
+    cycle_id = _init_v2(tmp_path)
+    _append_completed(tmp_path, cycle_id, "authority")
+    with pytest.raises(ValueError, match="preparation_v3_required"):
+        prepare_stage(
+            tmp_path,
+            cycle_id,
+            "repo_skill_adapter_scan",
         )
 
 

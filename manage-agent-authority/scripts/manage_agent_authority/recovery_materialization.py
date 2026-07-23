@@ -11,10 +11,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .artifact_store import register_grant, snapshot_file, verify_binding
+from .artifact_store import (
+    _register_compiled_grant,
+    snapshot_file,
+    verify_binding,
+)
 from .canonical import object_sha256, parse_time, read_object, sha256_file
 from .canonical import write_immutable_json
 from .evaluator import evaluate
+from .producer_capability import _AUTHORITY_PRODUCER_CAPABILITY
 from .source_recovery import _validated_recipe_path
 
 
@@ -89,11 +94,13 @@ def _load_validated_recipe(
 
 
 def _source_approval(
-    recipe: dict[str, Any], decision: dict[str, Any]
+    recipe: dict[str, Any],
+    decision: dict[str, Any],
+    decision_binding: dict[str, str],
 ) -> dict[str, Any]:
     requirement = recipe["source_approval_requirements"]
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "artifact_kind": "authority_source_approval",
         "approval_id": requirement["approval_id"],
         "source_kind": requirement["source_kind_required"],
@@ -113,7 +120,8 @@ def _source_approval(
         "not_before": decision["decided_at"],
         "expires_at": requirement["expires_at_ceiling"],
         "evidence_id": decision["evidence_id"],
-        "integrity_status": "verified",
+        "decision_binding": decision_binding,
+        "decision_trust_class": "caller_asserted_exact_echo",
     }
 
 
@@ -159,6 +167,12 @@ def materialize_approved_recovery(
 ) -> dict[str, Any]:
     root = root.resolve()
     user_path = verify_binding(root, user_decision_binding, "recovery user decision")
+    normalized_user_decision_binding = {
+        "ref": user_path.relative_to(root).as_posix(),
+        "sha256": sha256_file(user_path),
+    }
+    if normalized_user_decision_binding != user_decision_binding:
+        raise SystemExit("Recovery user decision binding is not canonical.")
     raw_user_decision = read_object(user_path, "recovery user decision")
     decided_at = str(raw_user_decision.get("decided_at") or "")
     recipe_path, recipe = _load_validated_recipe(
@@ -180,14 +194,20 @@ def materialize_approved_recovery(
     )
     identity = recipe["recovery_identity"]
     directory = root / ".task/authorization/recovery_materializations" / identity
-    source = _source_approval(recipe, user_decision)
+    source = _source_approval(
+        recipe, user_decision, normalized_user_decision_binding
+    )
     source_path = directory / "source_approval.json"
     write_immutable_json(source_path, source, "approved recovery source approval")
     source_binding = snapshot_file(
         root, source_path.relative_to(root).as_posix(), "source_approval"
     )
     grant = _grant(recipe, user_decision, source_binding)
-    registered = register_grant(root, grant)
+    registered = _register_compiled_grant(
+        root,
+        grant,
+        producer_capability=_AUTHORITY_PRODUCER_CAPABILITY,
+    )
 
     exhausted_decision = recipe["exhausted_authority"]["decision"]
     original_path = verify_binding(

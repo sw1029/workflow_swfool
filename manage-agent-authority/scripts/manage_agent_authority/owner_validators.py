@@ -7,7 +7,6 @@ returns a closed validation receipt that authority binds into settlement.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
@@ -21,9 +20,13 @@ from .owner_validation_io import read_bound_owner_validation_receipt
 from .owner_validator_process import MAX_OWNER_VALIDATOR_STDERR_BYTES
 from .owner_validator_process import MAX_OWNER_VALIDATOR_STDOUT_BYTES
 from .owner_validator_process import run_bounded_owner_validator
+from .owner_validator_registry import (
+    OWNER_VALIDATORS,
+    OperationIdentity,
+    OwnerValidatorSpec,
+)
 
 
-OperationIdentity = tuple[str, str, str, str]
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
 RECEIPT_REQUIRED_KEYS = {
@@ -52,77 +55,6 @@ EVENT_BATCH_KEYS = {
 }
 BINDING_KEYS = {"ref", "sha256"}
 OUTCOMES = {"confirmed_effect", "confirmed_no_effect", "unknown_effect"}
-
-
-@dataclass(frozen=True)
-class OwnerValidatorSpec:
-    identity: OperationIdentity
-    owner_skill: str
-    module: str
-    argv_prefix: tuple[str, ...]
-    import_skills: tuple[str, ...]
-
-
-TASK_INDEX_IDENTITY: OperationIdentity = (
-    "manage-task-state-index",
-    "2.0.0",
-    "mutate_task_state_index",
-    "1",
-)
-PUBLISH_SELECTED_SUCCESSOR_IDENTITY: OperationIdentity = (
-    "orchestrate-task-cycle",
-    "2.0.0",
-    "publish_selected_successor_topology",
-    "1",
-)
-SETTLE_SELECTED_SUCCESSOR_IDENTITY: OperationIdentity = (
-    "orchestrate-task-cycle",
-    "2.0.0",
-    "settle_selected_successor_task_state",
-    "1",
-)
-
-OWNER_VALIDATORS = {
-    TASK_INDEX_IDENTITY: OwnerValidatorSpec(
-        identity=TASK_INDEX_IDENTITY,
-        owner_skill="manage-task-state-index",
-        module="manage_task_state_index",
-        argv_prefix=("index", "validate-owner-result"),
-        import_skills=("manage-task-state-index", "record-agent-work-log"),
-    ),
-    PUBLISH_SELECTED_SUCCESSOR_IDENTITY: OwnerValidatorSpec(
-        identity=PUBLISH_SELECTED_SUCCESSOR_IDENTITY,
-        owner_skill="orchestrate-task-cycle",
-        module="orchestrate_task_cycle",
-        argv_prefix=(
-            "selected-successor",
-            "validate-owner-result",
-            "--operation",
-            "publish_selected_successor_topology",
-        ),
-        import_skills=(
-            "orchestrate-task-cycle",
-            "manage-task-state-index",
-            "record-agent-work-log",
-        ),
-    ),
-    SETTLE_SELECTED_SUCCESSOR_IDENTITY: OwnerValidatorSpec(
-        identity=SETTLE_SELECTED_SUCCESSOR_IDENTITY,
-        owner_skill="orchestrate-task-cycle",
-        module="orchestrate_task_cycle",
-        argv_prefix=(
-            "selected-successor",
-            "validate-owner-result",
-            "--operation",
-            "settle_selected_successor_task_state",
-        ),
-        import_skills=(
-            "orchestrate-task-cycle",
-            "manage-task-state-index",
-            "record-agent-work-log",
-        ),
-    ),
-}
 
 
 def operation_identity(request: dict[str, Any]) -> OperationIdentity:
@@ -191,17 +123,9 @@ def _sha(value: Any, label: str) -> str:
     return digest
 
 
-def validate_owner_validation_receipt(
-    receipt: Any,
-    *,
-    request: dict[str, Any],
-    owner_result: dict[str, str],
-    reservation: dict[str, str],
-    pre_commit_verification: dict[str, str],
-    phase: str,
+def _validate_receipt_header(
+    receipt: Any, request: dict[str, Any], phase: str
 ) -> dict[str, Any]:
-    """Validate the common authority-facing envelope of an owner receipt."""
-
     if not isinstance(receipt, dict):
         raise SystemExit("Owner validator did not return a JSON object.")
     keys = set(receipt)
@@ -220,6 +144,15 @@ def validate_owner_validation_receipt(
         raise SystemExit("Owner validation receipt header is invalid.")
     if receipt["validation_status"] == "legacy_opaque" and receipt["outcome"] != "unknown_effect":
         raise SystemExit("Legacy opaque owner results cannot confirm an effect outcome.")
+    return receipt
+
+
+def _validate_receipt_inputs(
+    receipt: dict[str, Any],
+    owner_result: dict[str, str],
+    reservation: dict[str, str],
+    pre_commit_verification: dict[str, str],
+) -> None:
     if (
         _binding(receipt.get("owner_result"), "owner validation owner_result")
         != _binding(owner_result, "owner_result")
@@ -232,20 +165,30 @@ def validate_owner_validation_receipt(
         != _binding(pre_commit_verification, "pre_commit_verification")
     ):
         raise SystemExit("Owner validation receipt binds different authority inputs.")
-    if receipt["validation_status"] == "legacy_opaque":
-        if (
-            receipt.get("event_batch") is not None
-            or receipt.get("plan") is not None
-            or receipt.get("descendant_event_count") != 0
-        ):
-            raise SystemExit("Legacy opaque owner validation claims typed effect proof.")
-        supplied_digest = _sha(
-            receipt.get("receipt_sha256"), "owner validation receipt_sha256"
-        )
-        core = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
-        if supplied_digest != object_sha256(core):
-            raise SystemExit("Owner validation receipt_sha256 is invalid.")
-        return receipt
+
+
+def _validate_receipt_digest(receipt: dict[str, Any]) -> None:
+    supplied_digest = _sha(
+        receipt.get("receipt_sha256"), "owner validation receipt_sha256"
+    )
+    core = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+    if supplied_digest != object_sha256(core):
+        raise SystemExit("Owner validation receipt_sha256 is invalid.")
+
+
+def _validate_legacy_receipt(receipt: dict[str, Any]) -> None:
+    if (
+        receipt.get("event_batch") is not None
+        or receipt.get("plan") is not None
+        or receipt.get("descendant_event_count") != 0
+    ):
+        raise SystemExit("Legacy opaque owner validation claims typed effect proof.")
+    _validate_receipt_digest(receipt)
+
+
+def _validate_receipt_subject(
+    receipt: dict[str, Any], request: dict[str, Any]
+) -> tuple[str, str]:
     subject = receipt.get("subject")
     if not isinstance(subject, dict) or set(subject) != SUBJECT_KEYS:
         raise SystemExit("Owner validation receipt subject is not closed.")
@@ -288,8 +231,31 @@ def validate_owner_validation_receipt(
             raise SystemExit(
                 "Owner validation receipt does not bind the authorized publication prepare."
             )
+    elif request_subject.get("kind") in {
+        "selection_publication_gc_plan",
+        "selection_publication_gc_receipt",
+    }:
+        if (
+            receipt.get("plan")
+            != {
+                "ref": request_subject.get("ref"),
+                "sha256": request_subject.get("digest"),
+            }
+            or subject.get("kind") != "selection_publication_cas_set"
+            or subject.get("ref") != ".task/selection_publication/blobs/sha256"
+        ):
+            raise SystemExit(
+                "Owner validation receipt does not bind the authorized "
+                "selection-publication retention boundary."
+            )
     else:
         raise SystemExit("Registered owner validation received an unsupported subject kind.")
+    return before, after
+
+
+def _validate_receipt_effect(
+    receipt: dict[str, Any], before: str, after: str
+) -> None:
     if receipt["outcome"] == "confirmed_no_effect" and after != before:
         raise SystemExit("Confirmed no-effect owner validation changed the subject digest.")
     event_batch = receipt.get("event_batch")
@@ -324,12 +290,29 @@ def validate_owner_validation_receipt(
     ] < 0:
         raise SystemExit("Owner validation descendant_event_count is invalid.")
     parse_time(receipt.get("validated_at"), "owner validation validated_at")
-    supplied_digest = _sha(
-        receipt.get("receipt_sha256"), "owner validation receipt_sha256"
+    _validate_receipt_digest(receipt)
+
+
+def validate_owner_validation_receipt(
+    receipt: Any,
+    *,
+    request: dict[str, Any],
+    owner_result: dict[str, str],
+    reservation: dict[str, str],
+    pre_commit_verification: dict[str, str],
+    phase: str,
+) -> dict[str, Any]:
+    """Validate the common authority-facing envelope of an owner receipt."""
+
+    receipt = _validate_receipt_header(receipt, request, phase)
+    _validate_receipt_inputs(
+        receipt, owner_result, reservation, pre_commit_verification
     )
-    core = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
-    if supplied_digest != object_sha256(core):
-        raise SystemExit("Owner validation receipt_sha256 is invalid.")
+    if receipt["validation_status"] == "legacy_opaque":
+        _validate_legacy_receipt(receipt)
+        return receipt
+    before, after = _validate_receipt_subject(receipt, request)
+    _validate_receipt_effect(receipt, before, after)
     return receipt
 
 

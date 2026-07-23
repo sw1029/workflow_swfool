@@ -1,6 +1,7 @@
 """Forward-recoverable publication of one canonical task selection."""
 from __future__ import annotations
 
+from contextlib import nullcontext
 import json
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,10 @@ from .selection_publication_state import (
     write_empty_state,
     write_state,
 )
+from .selection_publication_migration_contract import MigrationBudget
+from .selection_publication_producer_capability import (
+    _SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
+)
 from .selection_publication_store import (
     TRANSACTION_ID,
     _atomic_write,
@@ -45,11 +50,11 @@ from .selection_publication_store import (
     _display_json,
     _lock,
     _prepare_path,
-    _receipts_root,
+    _receipts_root,  # noqa: F401 - retained for migration/test compatibility
     _receipt_path,
     _sha256_bytes,
     _sha256_file,
-    _transactions_root,
+    _transactions_root,  # noqa: F401 - retained for migration/test compatibility
     _write_once,
 )
 from .selection_publication_v2 import (
@@ -119,7 +124,10 @@ def prepare_publication(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
 
     root = root.expanduser().resolve(strict=True)
     normalized = _normalize_plan(root, plan)
-    with _lock(root):
+    with _lock(
+        root,
+        producer_capability=_SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
+    ):
         state = _load_or_initialize_state(root)
         replay = pending_replay(
             root,
@@ -140,17 +148,13 @@ def prepare_publication(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
         )
 
 
-def prepare_publication_intent(
-    root: Path, intent: dict[str, Any]
-) -> dict[str, Any]:
+def prepare_publication_intent(root: Path, intent: dict[str, Any]) -> dict[str, Any]:
     from .selection_publication_intent_service import prepare_publication_intent as run
 
     return run(root, intent)
 
 
-def prepare_drift_reconciliation(
-    root: Path, plan: dict[str, Any]
-) -> dict[str, Any]:
+def prepare_drift_reconciliation(root: Path, plan: dict[str, Any]) -> dict[str, Any]:
     """Journal the exact current task bytes as a successor to one drifted head."""
 
     root = root.expanduser().resolve(strict=True)
@@ -238,37 +242,65 @@ def _repair_existing_receipt(
     return {**response, "storage_schema_version": STORAGE_SCHEMA_VERSION}
 
 
+def _recover_state_for_transaction(
+    root: Path, transaction_id: str
+) -> dict[str, Any]:
+    try:
+        state = load_state(root)
+    except ValueError as exc:
+        if "migration required" not in str(exc):
+            raise
+        state = None
+    if state is not None:
+        return state
+    if not _prepare_path(root, transaction_id).is_file():
+        raise ValueError("selection-publication prepare journal is missing")
+    receipts = _committed_receipts(root)
+    pending = _deep_pending_transaction_ids(root)
+    return write_state(root, receipts, pending, load_prepare=_load_prepare)
+
+
 def publish_prepared(
     root: Path,
     transaction_id: str,
     *,
+    execution_lease: dict[str, str] | None = None,
     _selected_successor_execution_token: object | None = None,
 ) -> dict[str, Any]:
+    """Publish an exact prepare under its durable selected-successor lease."""
     root = root.expanduser().resolve(strict=True)
-    with _lock(root):
-        try:
-            state = load_state(root)
-        except ValueError as exc:
-            if "migration required" not in str(exc):
-                raise
-            state = None
-        if state is None:
-            # An explicit transaction ID is a recovery instruction. It may
-            # perform the one permitted deep scan needed to bind legacy history.
-            if not _prepare_path(root, transaction_id).is_file():
-                raise ValueError("selection-publication prepare journal is missing")
-            receipts = _committed_receipts(root)
-            pending = _deep_pending_transaction_ids(root)
-            state = write_state(root, receipts, pending, load_prepare=_load_prepare)
+    prepare, prepare_path, prepare_sha = _load_prepare(root, transaction_id)
+    receipt_path = _receipt_path(root, transaction_id)
+    if receipt_path.is_file():
+        effect_guard = nullcontext()
+    elif prepare.get("schema_version") != 3:
+        raise ValueError(
+            "Legacy schema-v1/v2 selection prepares are immutable recovery "
+            "evidence; new publication effects are forbidden"
+        )
+    else:
+        from manage_task_state_index.state.selected_successor_guard import (
+            guard_selected_successor_effect,
+        )
+        effect_guard = guard_selected_successor_effect(
+            root,
+            execution_lease,
+            action="publish_selected_successor_topology",
+            effect_inputs={
+                "prepare": {
+                    "ref": prepare_path.relative_to(root).as_posix(),
+                    "sha256": prepare_sha,
+                },
+                "transaction_id": transaction_id,
+            },
+            legacy_token=_selected_successor_execution_token,
+        )
+    with _lock(
+        root,
+        producer_capability=_SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
+    ), effect_guard:
+        state = _recover_state_for_transaction(root, transaction_id)
         prepare, prepare_path, prepare_sha = _load_prepare(root, transaction_id)
-        if prepare.get("schema_version") == 3:
-            from manage_task_state_index.state.selected_successor_guard import (
-                require_selected_successor_execution,
-            )
-
-            require_selected_successor_execution(
-                _selected_successor_execution_token
-            )
         receipt_path = _receipt_path(root, transaction_id)
         if receipt_path.is_file():
             return _repair_existing_receipt(
@@ -311,7 +343,11 @@ def publish_prepared(
                 if prepare.get("schema_version") in {2, 3}
                 else _decode_payload(target)
             )
-            _atomic_write(path, payload)
+            _atomic_write(
+                path,
+                payload,
+                producer_capability=_SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
+            )
             if _sha256_file(path) != target["after_sha256"]:
                 raise ValueError(
                     "selection-publication target failed post-write verification"
@@ -324,7 +360,10 @@ def publish_prepared(
             pending_binding=pending_binding,
         )
         receipt_sha = _write_once(
-            receipt_path, _display_json(receipt), "selection-publication receipt"
+            receipt_path,
+            _display_json(receipt),
+            "selection-publication receipt",
+            producer_capability=_SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
         )
         verified = validate_receipt(root, transaction_id, require_current_targets=True)
         record_committed(root, state, prepare, prepare_sha, receipt_sha)
@@ -374,24 +413,14 @@ def pending_transaction_ids(root: Path) -> list[str]:
     return []
 
 
-def _deep_pending_transaction_ids(root: Path) -> list[str]:
-    """Enumerate history only for explicit deep audit/migration."""
+def _deep_pending_transaction_ids(
+    root: Path, *, budget: MigrationBudget | None = None
+) -> list[str]:
+    from .selection_publication_migration_scan import (
+        deep_pending_transaction_ids,
+    )
 
-    root = root.expanduser().resolve(strict=True)
-    directory = _transactions_root(root)
-    if not directory.is_dir():
-        return []
-    pending: list[str] = []
-    for child in sorted(directory.iterdir()):
-        if not child.is_dir() or not TRANSACTION_ID.fullmatch(child.name):
-            continue
-        if not (child / "prepare.json").is_file():
-            continue
-        try:
-            validate_receipt(root, child.name)
-        except (OSError, ValueError):
-            pending.append(child.name)
-    return pending
+    return deep_pending_transaction_ids(root, budget=budget)
 
 
 def _state_pending_ids(state: dict[str, Any]) -> list[str]:
@@ -410,16 +439,12 @@ def _reject_competing_pending(state: dict[str, Any], transaction_id: str) -> Non
         )
 
 
-def _committed_receipts(root: Path) -> list[dict[str, Any]]:
-    directory = _receipts_root(root)
-    if not directory.is_dir():
-        return []
-    receipts: list[dict[str, Any]] = []
-    for path in sorted(directory.glob("selection-*.json")):
-        transaction_id = path.stem
-        if TRANSACTION_ID.fullmatch(transaction_id):
-            receipts.append(validate_receipt(root, transaction_id))
-    return receipts
+def _committed_receipts(
+    root: Path, *, budget: MigrationBudget | None = None
+) -> list[dict[str, Any]]:
+    from .selection_publication_migration_scan import committed_receipts
+
+    return committed_receipts(root, budget=budget)
 
 
 def _load_or_initialize_state(root: Path) -> dict[str, Any]:

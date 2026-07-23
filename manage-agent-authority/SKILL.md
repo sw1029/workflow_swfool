@@ -1,6 +1,6 @@
 ---
 name: manage-agent-authority
-description: Manage deterministic workspace authority policy, grants, leases, exact operation settlement, exhausted-source recovery recipes, and workflow-aware approval state without expanding active permissions. Use when Codex must summarize or update `.agent_goal/agent_authority.md`; distinguish approval from goal truth, risk acceptance, external input, and design choice; evaluate or resolve a versioned operation; reserve, verify, consume, release, or reconcile authority; prepare a non-authoritative exact recovery projection; resume an existing reservation instead of re-prompting; transition a grant; or validate legacy and immutable receipts.
+description: Manage deterministic workspace authority policy, compiler-owned semantic contexts and operation batches, plan-bound root grants, leases, exact operation settlement, exhausted-source recovery recipes, and workflow-aware approval state without expanding active permissions. Use when Codex must summarize or update `.agent_goal/agent_authority.md`; compile authority inputs; prepare or materialize a plan-bound caller approval; distinguish approval from goal truth, risk acceptance, external input, and design choice; evaluate or resolve a versioned operation; reserve, verify, consume, release, or reconcile authority; resume an existing reservation instead of re-prompting; transition a grant; or validate legacy and immutable receipts.
 ---
 
 # Manage Agent Authority
@@ -50,19 +50,168 @@ Route unsupplyable external input to a local-data alternative, descope, or an ex
 
 ## Deterministic workflow
 
-### Compile mechanical fields first
+### Use the shared compiler path by default
 
-Prefer the non-authoritative operation compiler whenever a caller has a compact semantic intent. It derives the manifest floor, exact subject binding, IDs, request, and evaluation context, then revalidates those closed inputs through the existing evaluator.
+For every new operation, including a one-operation cycle, publish one cycle-shared
+semantic context and one canonical operation set, then compile the batch. The
+compiler derives manifest floors, exact subject bindings, versions, IDs, requests,
+evaluation contexts, and CAS paths.
 
 ```bash
-python3 -P -m manage_agent_authority authority compile-operation \
-  --root . --seed operation-seed.json --at 2026-01-01T00:00:00Z --publish
+SKILLS_ROOT="${CODEX_HOME:-$HOME/.codex}/skills"
+PYTHONPATH="$SKILLS_ROOT/orchestrate-task-cycle/scripts" \
+  python3 -P -m orchestrate_task_cycle workflow authority \
+  compile-semantic-context --root . \
+  --initialization '{"ref":"...","sha256":"..."}' \
+  --semantic semantic-context.json
 
-python3 -P -m manage_agent_authority authority evaluate --root . \
-  --compiled-operation compiled-operation.json --at 2026-01-01T00:00:00Z
+PYTHONPATH="$SKILLS_ROOT/orchestrate-task-cycle/scripts" \
+  python3 -P -m orchestrate_task_cycle workflow authority \
+  publish-operation-set --root . --operations operation-seeds.json
+
+PYTHONPATH="$SKILLS_ROOT/orchestrate-task-cycle/scripts" \
+  python3 -P -m orchestrate_task_cycle workflow authority \
+  compile-operation-batch --root . \
+  --semantic-context '{"ref":"...","sha256":"..."}' \
+  --operation-set '{"ref":"...","sha256":"..."}' \
+  --at 2026-01-01T00:00:00Z
 ```
 
-Without `--publish`, the command preserves the legacy full-JSON stdout result. With `--publish`, it writes that same non-authoritative compilation once under its content-addressed workspace path and returns only `{ref, sha256, compilation_fingerprint}`; pass the referenced file to authority consumers, or pass the compact receipt directly to a task-doctor intent. Treat either form as preparation only. It cannot create a source approval, grant, decision, reservation, or settlement, and it cannot lower an operation manifest. Reuse the same compilation only while its subject and manifest bindings still rehash exactly. Use hand-authored full request/context JSON only for legacy compatibility or contract diagnostics.
+The following full `compile-operation` seed is historical compatibility and contract
+diagnostics only. Do not use it as the normal single-operation path:
+
+```json
+{
+  "skill_id": "task-doctor",
+  "operation_id": "mutate_task_scope",
+  "subject": {"ref": "plans/task-transition.json", "revision": "plan-1"},
+  "scope": {"cycle_id": "cycle-1", "task_id": "task-1", "pack_id": null},
+  "actor_rank": "S0",
+  "context": {
+    "external_input_status": "not_required",
+    "goal_truth_status": "aligned",
+    "risk_acceptance_status": "not_required",
+    "design_selection_status": "not_required"
+  },
+  "session_ceiling": {
+    "capabilities": ["task.scope.mutate"],
+    "risk_ceiling": "R3",
+    "mutation_classes": ["local_mutation"],
+    "evidence_id": "session-1"
+  },
+  "goal_autonomy_envelope": {
+    "envelope_id": "envelope-1",
+    "capabilities": ["task.scope.mutate"],
+    "risk_ceiling": "R3",
+    "decision_classes": ["D2"],
+    "subjects": ["<sha256-of-plans/task-transition.json>"],
+    "operations": ["task-doctor:2.2.0:mutate_task_scope:1"],
+    "source_ref": ".agent_goal/goal_architecture.md"
+  }
+}
+```
+
+The semantic seed uses the workspace-relative string `source_ref`; the compiler reopens it and derives the final `source_binding`. Omit optional evidence-ref keys when evidence is not required—do not send them as `null`.
+
+For that diagnostic path, invoke `workflow authority compile-operation`; without
+`--publish` it emits legacy full JSON, and with `--publish` it returns only
+`{ref, sha256, compilation_fingerprint}`. Both forms are preparation only. They
+cannot create approval, a grant, reservation, or settlement. Hand-authored full
+request/context JSON is historical/diagnostic-only.
+
+Derive cycle and task IDs from the exact canonical cycle `initialization.json`
+binding; reject a copied initialization or conflicting caller echo. Keep the semantic
+file limited to actor rank, four request-status axes and their evidence refs, actual
+session ceiling, and actual goal-autonomy envelope.
+Keep each operation-set seed limited to `skill_id`, `operation_id`,
+subject/revision, scope, cardinality/budgets, upward-only classification, and optional
+composition receipt. Derive both operation versions and fixed
+`intent_type=grant_authority` from the current contract. Publish those seeds once and let the batch compiler
+accept only the resulting producer-owned operation-set binding. Accept context,
+operation set, and batch only from their producer-owned CAS stores; a byte-identical
+arbitrary-path copy is not a compiler result. Reuse one context across the cycle. Do
+not repeat its full JSON in every operation seed. Operation sets are canonical
+order-independent sets: reject duplicates, more than 128 members, or more than
+256 KiB of canonical semantic bytes. Re-render every batch compilation from the
+bound set, context, timestamp, defaults, classification, and fixed provenance.
+
+For ordinary S3 user root grants, snapshot and activate the current policy, then render
+one exact approval plan from the compiled batch and compact source/holder/time
+semantics. Reject any caller-selected stale non-current policy snapshot:
+
+```bash
+PYTHONPATH="$SKILLS_ROOT/orchestrate-task-cycle/scripts" \
+  python3 -P -m orchestrate_task_cycle workflow authority \
+  prepare-root-approval \
+  --root . --operation-batch '{"ref":"...","sha256":"..."}' \
+  --policy-snapshot '{"ref":"...","sha256":"..."}' \
+  --grant-semantics root-grant-semantics.json --at 2026-01-01T00:00:00Z
+
+PYTHONPATH="$SKILLS_ROOT/orchestrate-task-cycle/scripts" \
+  python3 -P -m orchestrate_task_cycle workflow authority \
+  publish-root-authorization-evidence --root . \
+  --evidence host-user-signed-exact-plan-evidence.json
+
+PYTHONPATH="$SKILLS_ROOT/orchestrate-task-cycle/scripts" \
+  python3 -P -m orchestrate_task_cycle workflow authority \
+  compile-root-decision-seed --root . \
+  --approval-plan '{"ref":"...","sha256":"..."}' \
+  --authorization-evidence '{"ref":"...","sha256":"..."}'
+
+PYTHONPATH="$SKILLS_ROOT/orchestrate-task-cycle/scripts" \
+  python3 -P -m orchestrate_task_cycle workflow authority \
+  materialize-plan-bound-root-grant --root . \
+  --approval-plan '{"ref":"...","sha256":"..."}' \
+  --decision-seed '{"ref":"...","sha256":"..."}'
+```
+
+Require a host/user-signed closed evidence envelope containing `approved=true`, the
+exact plan binding, decision time, evidence ID, issuer, key ID, and root-grant
+audience. Verify its RSA/SHA-256 signature against an active public key in the
+trusted skill-owned `root-authorization.trust.json`, then publish only the verified
+bytes through `publish-root-authorization-evidence`. The shipped registry is empty:
+until the host or administrator provisions a public key, ordinary root issuance
+fails closed. Never accept a caller-selected registry, unsigned scalar approval, or
+workspace self-fingerprint as authority.
+
+For host-local key bootstrap, public-key registration, rotation, revocation, or exact
+plan signing, read
+[root-authorization-host-contract.md](references/root-authorization-host-contract.md).
+Invoke only the isolated `root_authority_admin` and `root_authorization_signer`
+modules described there. Never add secret-bearing options or expose those modules
+through the ordinary authority CLI. Treat agent-managed local custody as a same-OS-
+user procedural boundary, not independent host/user isolation. The signer only
+creates a verified outbox candidate; continue to publish, compile, or materialize
+through the ordinary producer-CAS commands when the active task authorizes them.
+
+`compile-root-decision-seed` accepts only the verified evidence CAS binding and exact
+plan, derives its schema-v3 compact seed, and emits only an immutable CAS binding.
+The materializer
+accepts only that producer-CAS binding, reopens and re-renders the plan, never accepts
+caller-authored decision JSON or a full projection, and never infers approval. It
+derives schema-v5 source approval bytes with
+`decision_trust_class=host_user_signed_exact_plan`, one request-bound schema-v3
+grant per compilation, snapshots, IDs, paths, hashes, a write-ahead prepare, and the
+completion receipt. Every source preserves the exact per-grant projection, including
+request digest and task/improvement/session/policy scope. Registration compares a
+grant only with its own projection; the aggregate source union never authorizes a
+Cartesian-product recombination. Materialization preflights all conflicts before its
+first write, stages every grant as `draft`, and recovers an exact interrupted
+transaction before reporting all grants active.
+The transaction effect API accepts only the exact plan and decision-seed bindings.
+Inside the authority lock it boundedly reopens the plan, signed host/user evidence,
+and decision seed, re-renders source approval, capability coverage, source binding,
+every grant, and the deterministic materialization identity, then reopens the staged
+immutable bytes before activation and receipt publication. Never treat an importable
+producer-capability object, private helper, or caller-supplied source/grant payload as
+that boundary. Receipt visibility independently repeats the signed-chain derivation
+under bounded reads and requires exact prepare, source materialization, source
+snapshot/metadata, grant bytes, and receipt equality before exposing an active state.
+Continue reading schema-v2 and caller-asserted schema-v4 sources as historical
+artifacts, but never issue a new grant from either one.
+Exact replay of an already registered byte-identical grant remains readable.
+The ordinary caller path cannot select `platform_session_ceiling/S4`; S4 needs a
+separate platform-owned producer and attestation contract.
 
 For an owner batch renderer such as `selected-successor prepare-authority`, keep
 compilation, evaluation, and lifecycle publication separate even when one command
@@ -119,36 +268,78 @@ classification, and composition receipt.
    - Keep external-input, GT-alignment, risk-acceptance, and design-selection status explicit.
    - Bind asserted available/missing external input, resolved risk acceptance, and resolved design selection to exact immutable `{ref, sha256}` evidence. Keep the evidence field `null` for unverified, unresolved, or not-required states.
 
-3. Snapshot mutable authority sources before issuing prospective authority.
+3. Use manual source/grant flows only for historical inspection or producer-specific
+   diagnostics. Ordinary new root authority must use the compiler plan path above.
 
 ```bash
-SKILLS_ROOT="${CODEX_HOME:-$HOME/.codex}/skills"
-PYTHONPATH="$SKILLS_ROOT/manage-agent-authority/scripts" \
-  python3 -P -m manage_agent_authority authority snapshot-policy \
+PYTHONPATH="$SKILLS_ROOT/orchestrate-task-cycle/scripts" \
+  python3 -P -m orchestrate_task_cycle workflow authority snapshot-policy \
   --root . --policy-ref .agent_goal/agent_authority.md --expected-version 0
 
-PYTHONPATH="$SKILLS_ROOT/manage-agent-authority/scripts" \
-  python3 -P -m manage_agent_authority authority snapshot-source \
+PYTHONPATH="$SKILLS_ROOT/orchestrate-task-cycle/scripts" \
+  python3 -P -m orchestrate_task_cycle workflow authority snapshot-source \
   --root . --source-ref .task/authorization/source-id.json
 ```
 
-`snapshot-source` accepts only a closed `authority_source_approval` JSON document for authority issuance. It must bind the source kind/rank, exact grant and lineage IDs, capabilities, subjects, operations, risk/decision/cardinality ceilings, use limit, validity window, and any delegated approval binding. Before using an S1/S2 source, resolve and rehash its exact higher-rank source-approval binding, require a finite strictly rank-increasing lineage to S3/S4, and prove that every scope and time window only narrows. It cannot encode goal ratification, risk acceptance, design selection, or external-input supply.
+`snapshot-source` accepts only a closed producer-verifiable
+`authority_source_approval`. Historical schema v2 remains loadable but this command
+rejects it. New ordinary roots use schema v5 and
+`host_user_signed_exact_plan`; historical caller-asserted schema v4 remains
+read-only, and registered recovery producers may retain schema v3.
+Before using an S1/S2 source, resolve and rehash its exact higher-rank binding and
+prove that every scope and time window only narrows.
+For schema v3/v4/v5, reopen and rehash the decision, require a registered root-plan or
+recovery-recipe verifier, and prove the exact source-field relationship before
+snapshot or grant registration. A generic, missing, or merely self-hashed decision
+binding is not approval.
 
-4. Register one closed grant or a valid subset delegation.
-   - Require immutable policy/source bindings.
-   - Require issuer rank above holder rank.
-   - For a child, preserve lineage and make capabilities, subjects, operations, risk ceiling, decision classes, expiry, task/improvement scope, and budget no broader than the parent.
+Never use a workspace-authored marker, timestamp, or self-fingerprint to upgrade a
+schema-v2 source into prospective authority. Continue reading old v2 artifacts and
+evaluating existing grants. Permit only exact idempotent replay of an already
+registered grant.
+
+4. Create child delegation and composition only from closed semantic intent.
+   - `delegate` accepts a parent grant ID, an explicit time, and only the child
+     narrowing fields. The compiler reopens the active parent and derives the parent
+     digest/source binding, policy binding, issuer, lineage, grant ID, idempotency
+     key, schema envelope, CAS path, and compact result.
+   - Keep capabilities, subjects, operations, risk ceiling, decision classes,
+     expiry, session/task/improvement scope, cardinality, budget, and holder rank no
+     broader than the parent.
+   - `compose` accepts a producer-owned operation-batch binding, one exact base
+     request digest, exact grant IDs, a prospective producer-verifiable typed source
+     binding, and an explicit time. The compiler derives the composition ID,
+     idempotency key, request envelope, grant digests, receipt bytes, and CAS path.
+   - `register-grant --grant` is sealed to exact replay of an already registered
+     grant and cannot publish a missing prospective grant. Raw `delegate --grant`
+     and `compose --composition` inputs are not workflow interfaces.
 
 ```bash
-PYTHONPATH="$SKILLS_ROOT/manage-agent-authority/scripts" \
-  python3 -P -m manage_agent_authority authority register-grant --root . --grant grant.json
+PYTHONPATH="$SKILLS_ROOT/orchestrate-task-cycle/scripts" \
+  python3 -P -m orchestrate_task_cycle workflow authority \
+  delegate --root . --parent-grant-id authg-parent \
+  --semantics child-delegation-semantics.json --at 2026-01-01T00:00:00Z
+
+PYTHONPATH="$SKILLS_ROOT/orchestrate-task-cycle/scripts" \
+  python3 -P -m orchestrate_task_cycle workflow authority \
+  compose --root . --operation-batch '{"ref":"...","sha256":"..."}' \
+  --request-sha256 <base-request-sha256> \
+  --grant-id authg-a --grant-id authg-b \
+  --source-approval '{"ref":"...","sha256":"..."}' \
+  --at 2026-01-01T00:00:00Z
 ```
+
+The delegation semantics object contains exactly `holder_rank`, `capabilities`,
+`subjects`, `operations`, `risk_ceiling`, `decision_classes`, `cardinality`,
+`max_uses`, `expires_at`, `session_id`, `task_id`, and `improvement_id`. It never
+contains an artifact kind/schema, grant or lineage ID, parent/source/policy binding,
+creation time, or idempotency key.
 
 5. Evaluate and persist the decision.
 
 ```bash
-PYTHONPATH="$SKILLS_ROOT/manage-agent-authority/scripts" \
-  python3 -P -m manage_agent_authority authority evaluate --root . \
+PYTHONPATH="$SKILLS_ROOT/orchestrate-task-cycle/scripts" \
+  python3 -P -m orchestrate_task_cycle workflow authority evaluate --root . \
   --request request.json --context evaluation-context.json \
   --at 2026-01-01T00:00:00Z
 ```
@@ -159,7 +350,12 @@ Before prompting, run `authority resolve` or inspect `authority status`. For rep
 
 Select workflow state in this order: unknown-effect quarantine; settled consumed or released reservation; usable reserved operation; reserved operation whose selected or ancestor authority is no longer usable; current exact allowed decision; exact source approval with a usable or cleanly materializable grant ID; source-authority defect; exhausted source authority; genuine approval wait. Return `should_prompt=false` for every system-recovery or reusable-authority state. A released reservation is terminal only with an exact release or reconciliation receipt proving no effect; return `already_released` and never redispatch it. Keep an unusable reserved projection reserved, preserve unknown-effect safety, return `reserved_authority_recovery`, and do not silently release it.
 
-For an exact source approval, classify a missing grant ID as materializable only when both its grant and state paths are absent and safe. Reuse an existing grant only when its exact source binding, scope, lineage, time, status, and budget remain usable. Treat an orphan or conflicting projection as `source_authority_defect`. Treat an exhausted, revoked, expired, or source-binding-conflicted existing ID as `source_authority_exhausted`: supersede the old wait, do not prompt, and route the system to `prepare_exact_recovery_recipe`.
+For a current producer-verifiable source approval, classify a missing grant ID as
+materializable only when both its grant and state paths are absent and safe. A
+historical schema-v2 source can reuse an existing exact grant but can never
+materialize a missing one. Treat that read-only absence, or an exhausted/revoked/
+expired/source-conflicted ID, as `source_authority_exhausted` and route to
+`prepare_exact_recovery_recipe`.
 
 Run `authority prepare-source-recovery` against the exact persisted exhausted decision binding. It publishes one immutable, prepare-only `authority_source_recovery_recipe` under `.task/authorization/recovery_recipes/`. The recipe binds the old decision, source snapshot, exhausted grant, and exact grant-state evidence; allocates distinct unused replacement request, attempt, source-approval, grant, lineage, and replay IDs; and includes a closed replacement request plus non-artifact source-approval and grant requirements. Exact replay is idempotent, while conflicting content for the same recovery identity fails closed. The recipe is neither approval nor authority. It must not contain any nested object accepted as `authority_source_approval` or `authority_grant`, any projected source-snapshot binding, or any claim that approval integrity is already verified. Materialize a source only from the actual later user-decision evidence and bind a grant only to the resulting immutable snapshot bytes; until then snapshot, registration, reserve, dispatch, and commit must fail closed.
 
@@ -167,18 +363,20 @@ Treat recipe `prepared_at` as T1 preparation evidence, never as the later user-d
 
 After a valid recipe exists, `status` and `resolve` supersede the system repair state with exactly one `needs_user_approval` result whose action is `approve_exact_recovery_projection`. Use the recovery projection, replay key, and effective-authority fingerprint as its new wait identity. Never revive the old projection or reuse an exhausted request, attempt, source, grant, lineage, or replay identity.
 
-Preserve the machine-readable `post_approval_handoff` in prepare, status, and resolve output. After the exact user decision arrives, bind a closed `authority_recovery_user_decision` that echoes the whole recipe projection, recipe binding, decision time, and external evidence ID. Pass it to `materialize-approved-recovery`; the registered renderer creates and validates the exact source approval, snapshot, grant, replacement request, and allowed decision. The command cannot create or infer the user decision. From that point, poll `status` or `resolve` with `continuation_request_sha256`, not the exhausted original request digest.
+Preserve the machine-readable `post_approval_handoff` in prepare, status, and resolve output. After the exact user decision arrives, bind a closed `authority_recovery_user_decision` that echoes the whole recipe projection, recipe binding, decision time, and external evidence ID. Pass it to `materialize-approved-recovery`; the registered renderer creates and validates the schema-v3 `caller_asserted_exact_echo` source approval, snapshot, grant, replacement request, and allowed decision. The command cannot create or infer the user decision and must not label its caller echo as verified. From that point, poll `status` or `resolve` with `continuation_request_sha256`, not the exhausted original request digest.
 
 Discover an existing recipe from its immutable historical decision/source/grant/state evidence before classifying a current generic approval wait. A later source expiry or other loss of current coverage must never revive the original approval projection or wait identity. If the recipe remains within its exact continuation window, preserve its one recovery prompt. If its expiry ceiling has closed, reuse `source_authority_exhausted` with reason `source_recovery_window_closed`, `should_prompt=false`, action `prepare_fresh_recovery_plan`, the exact recipe binding, and a non-authoritative closed-window handoff. Every non-prompt status or resolution exposes `approval_projection=null`.
 
 ```bash
-PYTHONPATH="$SKILLS_ROOT/manage-agent-authority/scripts" \
-  python3 -P -m manage_agent_authority authority prepare-source-recovery \
+PYTHONPATH="$SKILLS_ROOT/orchestrate-task-cycle/scripts" \
+  python3 -P -m orchestrate_task_cycle workflow authority \
+  prepare-source-recovery \
   --root . --decision-ref .task/authorization/decisions/authd-id.json \
   --decision-sha256 <sha256> --at 2026-01-01T00:00:00Z
 
-PYTHONPATH="$SKILLS_ROOT/manage-agent-authority/scripts" \
-  python3 -P -m manage_agent_authority authority materialize-approved-recovery \
+PYTHONPATH="$SKILLS_ROOT/orchestrate-task-cycle/scripts" \
+  python3 -P -m orchestrate_task_cycle workflow authority \
+  materialize-approved-recovery \
   --root . --recovery-recipe '{"ref":"...","sha256":"..."}' \
   --user-decision '{"ref":"...","sha256":"..."}'
 ```

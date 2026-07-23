@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from pathlib import Path
-import hashlib
 from typing import Any
 
 from ..cycle_ledger import (
-    append_event,
+    append_event as _append_legacy_event,
     cycle_dir,
     immutable_write_bytes,
     ledger_path,
@@ -15,33 +15,41 @@ from ..cycle_ledger import (
     read_events_raw,
     write_current,
 )
-from ..ledger.support import normalize_list, rel_path
-from ..ledger.result_hydration import (
-    COMPACT_COMPILER_METRIC_FIELDS,
-    COMPACT_RESULT_EVENT_KIND,
-    hydrate_result_event,
-    project_result_scalars,
+from ..ledger.compiled_events import append_compiled_stage_result_binding
+from ..ledger.compiler_binding import (
+    CompiledEventBinding,
+    compile_stage_result_binding,
+)
+from ..ledger.support import ledger_lock, rel_path
+from ..ledger.support import read_initialization_metadata
+from ..ledger.workflow_contract import workflow_contract_state
+from ..ledger.result_hydration import hydrate_result_event
+from ..ledger.stage_result_compiler import (
+    derive_stage_result_event,
+    preflight_stage_result_publication,
 )
 from .contracts import (
     canonical_bytes,
     canonical_sha256,
     preparation_binding_sha256,
+    validate_preparation,
 )
 from .artifact_store import cas_write_receipt, merge_compiler_io_metrics
+from .protocol import cycle_preparation_version
 
 
-def _compact_metrics(value: dict[str, Any] | None) -> dict[str, Any]:
-    metrics: dict[str, Any] = {}
-    for key, item in (value or {}).items():
-        if key not in COMPACT_COMPILER_METRIC_FIELDS or item is None:
-            continue
-        if isinstance(item, bool):
-            metrics[key] = item
-        elif isinstance(item, int) and item >= 0:
-            metrics[key] = item
-        elif isinstance(item, str) and len(item.encode("utf-8")) <= 512:
-            metrics[key] = item
-    return metrics
+def _append_compiled_result_binding(
+    root: Path, cycle_id: str, binding: CompiledEventBinding
+) -> dict[str, Any]:
+    """Patchable enforced-cycle seam backed by exact result CAS revalidation."""
+
+    metadata = read_initialization_metadata(root, cycle_id)
+    contract_state = workflow_contract_state(metadata)
+    if contract_state != "enforced":
+        raise ValueError(
+            "compiled result binding publication requires an enforced cycle"
+        )
+    return append_compiled_stage_result_binding(root, cycle_id, binding)
 
 
 def result_path(root: Path, cycle_id: str, target: str, digest: str) -> Path:
@@ -56,64 +64,15 @@ def result_event(
     compiler_metrics: dict[str, Any] | None = None,
     input_bindings_sha256: str | None = None,
 ) -> dict[str, Any]:
-    preparation_binding = preparation_binding_sha256(preparation)
-    event_identity = {
-        "preparation_id": preparation["preparation_id"],
-        "result_sha256": result_sha256,
-    }
-    event_id = (
-        "stage-"
-        + str(preparation["target"])
-        + "-"
-        + canonical_sha256(event_identity)[:32]
+    return derive_stage_result_event(
+        preparation,
+        result,
+        result_ref,
+        result_sha256,
+        compiler_metrics,
+        {},
+        input_bindings_sha256=input_bindings_sha256,
     )
-    if preparation.get("schema_version") == 1:
-        legacy = dict(result)
-        legacy.update(
-            {
-                "step": preparation["target"],
-                "status": "completed",
-                "event_id": event_id,
-                "reason": "validated compiled stage result",
-                "preparation_id": preparation["preparation_id"],
-                "preparation_binding_sha256": preparation_binding,
-                "result_artifact_ref": result_ref,
-                "result_artifact_sha256": result_sha256,
-            }
-        )
-        legacy["artifacts"] = normalize_list(result.get("artifacts"), result_ref)
-        return legacy
-    payload = canonical_bytes(result) + b"\n"
-    raw_sha256 = hashlib.sha256(payload).hexdigest()
-    scalars = project_result_scalars(result)
-    event = {
-        "format_version": 2,
-        "event_kind": COMPACT_RESULT_EVENT_KIND,
-        "step": preparation["target"],
-        "status": "completed",
-        "event_id": event_id,
-        "reason": "validated compiled stage result",
-        "preparation_id": preparation["preparation_id"],
-        "preparation_binding_sha256": preparation_binding,
-        "input_bindings_sha256": input_bindings_sha256 or canonical_sha256({}),
-        "result_artifact_ref": result_ref,
-        "result_artifact_sha256": result_sha256,
-        "result_artifact_raw_sha256": raw_sha256,
-        "result_artifact_binding": {
-            "ref": result_ref,
-            "sha256": raw_sha256,
-            "size_bytes": len(payload),
-            "body_sha256": result_sha256,
-        },
-        "compiler_metrics": _compact_metrics(compiler_metrics),
-        "result_projection": scalars,
-        "artifacts": [result_ref],
-        **scalars,
-    }
-    event["compiler_metrics"]["compact_payload_bytes"] = (
-        len(canonical_bytes(event)) + 1
-    )
-    return event
 
 
 def existing_publication(
@@ -209,52 +168,113 @@ def publish_result(
     digest: str,
     compiler_metrics: dict[str, Any] | None = None,
     input_bindings: dict[str, Any] | None = None,
+    *,
+    max_files: int = 12,
+    max_paths: int = 40,
 ) -> dict[str, Any]:
-    target = str(preparation["target"])
-    path = result_path(root, cycle_id, target, digest)
-    relative = rel_path(root, path)
-    existing = existing_publication(
-        root,
-        cycle_id,
-        target,
-        preparation,
-        result,
-        digest,
-        input_bindings,
-        repair_projection=True,
+    preparation = validate_preparation(preparation)
+    if preparation.get("cycle_id") != cycle_id:
+        raise ValueError("stage result preparation belongs to another cycle")
+    if not isinstance(result, dict) or canonical_sha256(result) != digest:
+        raise ValueError("stage result digest does not match canonical result bytes")
+    metadata = read_initialization_metadata(root, cycle_id)
+    state = workflow_contract_state(metadata)
+    if state in {"historical_v1_read_only", "historical_v2_read_only", "invalid"}:
+        raise ValueError(
+            "non-enforced protocol-v2 or invalid cycles are read-only; "
+            "stage results cannot be published"
+        )
+    if state == "enforced":
+        cycle_preparation_version(
+            root, cycle_id, int(preparation["schema_version"])
+        )
+    mutation_scope = (
+        ledger_lock(root, cycle_id, exclusive=True)
+        if state == "enforced"
+        else nullcontext()
     )
-    if existing is not None:
-        return existing
-    payload = canonical_bytes(result) + b"\n"
-    mutation_performed = immutable_write_bytes(path, payload)
-    result_write_receipt = cas_write_receipt(len(payload), mutation_performed)
-    persisted_metrics = merge_compiler_io_metrics(
-        compiler_metrics, result_write_receipt
-    )
-    persisted_metrics["result_bytes"] = len(payload)
-    publication = append_event(
-        root,
-        cycle_id,
-        result_event(
+    with mutation_scope:
+        target = str(preparation["target"])
+        path = result_path(root, cycle_id, target, digest)
+        relative = rel_path(root, path)
+        previous_events = (
+            read_events_raw(root, cycle_id) if state == "enforced" else []
+        )
+        if state == "enforced":
+            preflight_stage_result_publication(
+                root,
+                cycle_id,
+                preparation,
+                result,
+                input_bindings,
+                {"max_files": max_files, "max_paths": max_paths},
+                previous_events,
+            )
+        existing = existing_publication(
+            root,
+            cycle_id,
+            target,
             preparation,
             result,
-            relative,
             digest,
-            persisted_metrics,
-            canonical_sha256(input_bindings or {}),
-        ),
-    )
-    hydrated = hydrate_result_event(root, cycle_id, publication["event"])
-    return {
-        "event": hydrated,
-        "event_duplicate": bool(publication.get("event_duplicate")),
-        "ledger_path": publication["ledger_path"],
-        "result_artifact_ref": relative,
-        "ledger_event_bytes": len(canonical_bytes(publication["event"])) + 1,
-        "result_artifact_bytes": len(payload),
-        "result_write_receipt": result_write_receipt,
-        "compiler_metrics": dict(publication["event"].get("compiler_metrics") or {}),
-    }
+            input_bindings,
+            repair_projection=True,
+        )
+        if existing is not None:
+            return existing
+        payload = canonical_bytes(result) + b"\n"
+        mutation_performed = immutable_write_bytes(path, payload)
+        result_write_receipt = cas_write_receipt(
+            len(payload), mutation_performed
+        )
+        persisted_metrics = merge_compiler_io_metrics(
+            compiler_metrics, result_write_receipt
+        )
+        persisted_metrics["result_bytes"] = len(payload)
+        if state == "enforced":
+            binding = compile_stage_result_binding(
+                preparation,
+                result,
+                relative,
+                digest,
+                persisted_metrics,
+                input_bindings,
+                {"max_files": max_files, "max_paths": max_paths},
+                previous_events,
+            )
+            publication = _append_compiled_result_binding(
+                root, cycle_id, binding
+            )
+        else:
+            event = result_event(
+                preparation,
+                result,
+                relative,
+                digest,
+                persisted_metrics,
+                canonical_sha256(input_bindings or {}),
+            )
+            publication = _append_legacy_event(root, cycle_id, event)
+        hydrated = hydrate_result_event(
+            root, cycle_id, publication["event"]
+        )
+        output = {
+            "event": hydrated,
+            "event_duplicate": bool(publication.get("event_duplicate")),
+            "ledger_path": publication["ledger_path"],
+            "result_artifact_ref": relative,
+            "ledger_event_bytes": len(canonical_bytes(publication["event"])) + 1,
+            "result_artifact_bytes": len(payload),
+            "result_write_receipt": result_write_receipt,
+            "compiler_metrics": dict(
+                publication["event"].get("compiler_metrics") or {}
+            ),
+        }
+        if publication.get("workflow_contract_warning") is not None:
+            output["workflow_contract_warning"] = publication[
+                "workflow_contract_warning"
+            ]
+        return output
 
 
 __all__ = [

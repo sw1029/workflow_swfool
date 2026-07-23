@@ -13,7 +13,12 @@ import pytest
 from orchestrate_task_cycle.prerequisite_chain_contract import receipt_sha256
 from orchestrate_task_cycle.task_pack import api as task_pack_queue
 from orchestrate_task_cycle.task_pack import consumption as task_pack_consumption
-from orchestrate_task_cycle.task_pack import mutation_create, mutation_finalize
+from orchestrate_task_cycle.task_pack import (
+    creation as task_pack_creation,
+    mutation_create,
+    mutation_finalize,
+    mutation_replace_draft,
+)
 from orchestrate_task_cycle.task_pack.mutation_actions import apply_terminal_block
 
 
@@ -891,12 +896,19 @@ def test_create_rejects_invalid_item_kind_without_expanding_progress_enums(
 
 
 def test_replace_pack_dry_run_is_clean_and_preserves_seven_item_tail(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     old_path, plan = replacement_fixture(tmp_path)
     before = old_path.read_bytes()
     args = mutation_args(tmp_path, plan)
     args.dry_run = True
+    monkeypatch.setattr(
+        mutation_replace_draft,
+        "persist_creation_snapshot",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("replace dry-run reached creation snapshot writer")
+        ),
+    )
     assert task_pack_queue.command_apply_mutation(args) == 0
     assert old_path.read_bytes() == before
     assert not (tmp_path / ".task" / "task_pack" / "pack-successor.json").exists()
@@ -1552,7 +1564,7 @@ def test_status_reports_closed_pack_terminal_blocker(
 
 
 def test_create_with_initial_selection_commits_one_coherent_state(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     (tmp_path / "task.md").write_text("# task-1\n", encoding="utf-8")
     selected_at = "2026-01-01T00:00:00+00:00"
@@ -1645,7 +1657,22 @@ def test_create_with_initial_selection_commits_one_coherent_state(
     }
     dry_run_args = mutation_args(tmp_path, plan)
     dry_run_args.dry_run = True
-    assert task_pack_queue.command_apply_mutation(dry_run_args) == 0
+    with monkeypatch.context() as dry_run_patch:
+        dry_run_patch.setattr(
+            mutation_create,
+            "persist_creation_snapshot",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("create dry-run reached creation snapshot writer")
+            ),
+        )
+        dry_run_patch.setattr(
+            task_pack_creation,
+            "write_content_addressed_file",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("create dry-run reached task snapshot writer")
+            ),
+        )
+        assert task_pack_queue.command_apply_mutation(dry_run_args) == 0
     creation_receipt_ref = (
         f".task/task_pack/creation_receipts/pack-atomic-{snapshot_digest[:16]}.json"
     )

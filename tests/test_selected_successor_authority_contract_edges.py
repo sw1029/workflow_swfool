@@ -23,7 +23,12 @@ from orchestrate_task_cycle.selected_successor_authority_validation import (
 )
 from orchestrate_task_cycle.selected_successor_cli import main as successor_cli
 from orchestrate_task_cycle.selection_publication_store import _canonical_json
-from selected_successor_authority_support import AT, SKILLS_ROOT
+from selected_successor_authority_support import (
+    AT,
+    SKILLS_ROOT,
+    _snapshot_historical_source,
+    register_grant,
+)
 from test_selected_successor_authority_preparation import (
     _prepare_authority,
     _prepared,
@@ -114,8 +119,6 @@ def _write_owner_json(
 def _register_unrelated_grant(
     root: Path, packet: dict[str, Any]
 ) -> dict[str, Any]:
-    from manage_agent_authority.artifact_store import register_grant, snapshot_file
-
     action = "settle_selected_successor_task_state"
     template_path = root / packet["grants"][action]["binding"]["ref"]
     template = json.loads(template_path.read_text(encoding="utf-8"))
@@ -131,9 +134,7 @@ def _register_unrelated_grant(
     )
     unrelated_source = root / ".task/authorization/unrelated-approval.json"
     _write_owner_json(root, unrelated_source, source)
-    source_binding = snapshot_file(
-        root, unrelated_source.relative_to(root).as_posix(), "source_approval"
-    )
+    source_binding = _snapshot_historical_source(root, unrelated_source)
     grant = {
         **template,
         "grant_id": "selected-compiler-unrelated-grant",

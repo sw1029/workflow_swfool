@@ -13,7 +13,10 @@ from .selection_publication_store import (
     _sha256_bytes,
     _successor_authority_evaluation_context_path,
     _successor_authority_request_context_path,
-    _write_once,
+    _write_once_with_status,
+)
+from .selection_publication_producer_capability import (
+    _SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
 )
 from .selected_successor import load_selected_successor_bundle
 from .selected_successor_authority_context import (
@@ -236,21 +239,25 @@ def prepare_selected_successor_authority_contexts(
     evaluation_path = _successor_authority_evaluation_context_path(
         root, evaluation_content_sha
     )
-    request_created = _target_is_new(
+    _target_is_new(
         request_path, request_payload, "selected-successor authority request context"
     )
-    evaluation_created = _target_is_new(
+    _target_is_new(
         evaluation_path,
         evaluation_payload,
         "selected-successor authority evaluation context",
     )
-    request_sha = _write_once(
-        request_path, request_payload, "selected-successor authority request context"
+    request_sha, request_created = _write_once_with_status(
+        request_path,
+        request_payload,
+        "selected-successor authority request context",
+        producer_capability=_SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
     )
-    evaluation_sha = _write_once(
+    evaluation_sha, evaluation_created = _write_once_with_status(
         evaluation_path,
         evaluation_payload,
         "selected-successor authority evaluation context",
+        producer_capability=_SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
     )
     mutation = request_created or evaluation_created
     return {

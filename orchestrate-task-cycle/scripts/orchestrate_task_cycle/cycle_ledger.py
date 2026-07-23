@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .cli_errors import emit_contract_error
 from .ledger.artifact_evidence import annotate_artifact_refs, prior_artifact_refs
 from .ledger.candidate_validation import (
     authoritative_final_from_axes,
@@ -44,6 +45,11 @@ from .ledger.constants import (
     TERMINAL_OBSERVATION_FIELDS,
     VERDICT_AXES,
     VERDICT_AXIS_STATUSES,
+    COMPILED_STAGE_OBSERVATION_EVENT_KIND,
+    COMPILED_STAGE_RESULT_EVENT_KIND,
+    COMPILED_SYSTEM_EVENT_KIND,
+    COMPILED_TERMINAL_LIFECYCLE_EVENT_KIND,
+    COMPILER_FIRST_WORKFLOW_CONTRACT_PROFILE,
 )
 from .ledger.event_model import (
     complete_event,
@@ -66,8 +72,9 @@ from .ledger.pending_finalization import (
     load_pending_finalization_conflicts,
     pending_finalizations_dir,
     pending_resolutions_dir,
-    resolve_pending_finalization_conflict,
+    resolve_pending_finalization_conflict as _resolve_pending_finalization_conflict,
 )
+from .ledger.workflow_contract import require_cycle_mutation_contract
 from .ledger.operation_contract import (
     build_durable_operation,
     build_no_durable_state_change_candidate,
@@ -91,7 +98,6 @@ from .ledger.repository import (
     read_events_unlocked,
     read_current_expanded,
     write_current as _write_current,
-    write_current_unlocked as _write_current_unlocked,
 )
 from .ledger.support import (
     artifact_path,
@@ -157,6 +163,11 @@ __all__ = [
     "TERMINAL_OBSERVATION_FIELDS",
     "VERDICT_AXES",
     "VERDICT_AXIS_STATUSES",
+    "COMPILED_STAGE_OBSERVATION_EVENT_KIND",
+    "COMPILED_STAGE_RESULT_EVENT_KIND",
+    "COMPILED_SYSTEM_EVENT_KIND",
+    "COMPILED_TERMINAL_LIFECYCLE_EVENT_KIND",
+    "COMPILER_FIRST_WORKFLOW_CONTRACT_PROFILE",
     "annotate_artifact_refs",
     "absent_target_state_digest",
     "build_durable_operation",
@@ -228,32 +239,17 @@ __all__ = [
     "verify_finalization_receipt",
     "verify_terminal_reopen_receipt",
     "write_current",
-    "write_current_unlocked",
 ]
-
-
-def write_current_unlocked(
-    root: Path,
-    cycle_id: str,
-    events: list[dict[str, Any]],
-    *,
-    stage_compiler_protocol_version: int = 1,
-) -> dict[str, Any]:
-    return _write_current_unlocked(
-        root,
-        cycle_id,
-        events,
-        protocol_version=stage_compiler_protocol_version,
-        atomic_writer=atomic_write_text,
-    )
 
 
 def write_current(
     root: Path,
     cycle_id: str,
-    events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    return _write_current(root, cycle_id, events, atomic_writer=atomic_write_text)
+    require_cycle_mutation_contract(
+        read_initialization_metadata(root, cycle_id), "current projection refresh"
+    )
+    return _write_current(root, cycle_id, atomic_writer=atomic_write_text)
 
 
 def append_event(
@@ -281,6 +277,7 @@ def init_cycle(
     allow_missing_task_for_bootstrap: bool = False,
     stage_compiler_protocol_version: int | None = None,
     stage_preparation_schema_version: int | None = None,
+    workflow_contract_profile: str | None = None,
 ) -> dict[str, Any]:
     return _init_cycle(
         root,
@@ -291,18 +288,36 @@ def init_cycle(
         allow_missing_task_for_bootstrap,
         stage_compiler_protocol_version,
         stage_preparation_schema_version,
+        workflow_contract_profile,
         atomic_writer=atomic_write_text,
-        append_event=append_event,
+        append_event=_append_event,
     )
 
 
 def finalize_candidate(root: Path, cycle_id: str, candidate: dict[str, Any]) -> dict[str, Any]:
+    require_cycle_mutation_contract(
+        read_initialization_metadata(root, cycle_id), "finalize"
+    )
     return _finalize_candidate(
         root,
         cycle_id,
         candidate,
         atomic_writer=atomic_write_text,
         immutable_writer=immutable_write_bytes,
+    )
+
+
+def resolve_pending_finalization_conflict(
+    root: Path,
+    cycle_id: str,
+    pending_conflict_id: str,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    require_cycle_mutation_contract(
+        read_initialization_metadata(root, cycle_id), "resolve pending finalization"
+    )
+    return _resolve_pending_finalization_conflict(
+        root, cycle_id, pending_conflict_id, **kwargs
     )
 
 
@@ -346,25 +361,48 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     args.root = Path(args.root).resolve()
     if args.command == "init":
-        result = init_cycle(
+        init_protocol = _cli_init_protocol(
             args.root,
             args.cycle_id,
-            args.task_id,
-            args.reason,
-            load_json_value(args.terminal_state_json),
-            args.allow_missing_task_for_bootstrap,
-            _cli_init_protocol(
+            args.stage_compiler_protocol_version,
+        )
+        try:
+            result = init_cycle(
                 args.root,
                 args.cycle_id,
-                args.stage_compiler_protocol_version,
-            ),
-            args.stage_preparation_schema_version,
-        )
+                args.task_id,
+                args.reason,
+                load_json_value(args.terminal_state_json),
+                args.allow_missing_task_for_bootstrap,
+                init_protocol,
+                args.stage_preparation_schema_version,
+                (
+                    COMPILER_FIRST_WORKFLOW_CONTRACT_PROFILE
+                    if init_protocol == STAGE_COMPILER_PROTOCOL_VERSION
+                    and (
+                        args.cycle_id is None
+                        or not initialization_path(args.root, args.cycle_id).is_file()
+                    )
+                    else None
+                ),
+            )
+        except ValueError as exc:
+            return emit_contract_error("cycle_ledger_contract_rejected", exc)
     elif args.command == "append":
-        result = _append_cli_event(args)
+        try:
+            result = _append_cli_event(args)
+        except ValueError as exc:
+            return emit_contract_error("cycle_ledger_contract_rejected", exc)
     elif args.command == "render":
         summary = summarize(read_events(args.root, args.cycle_id))
         if args.write_dashboard:
+            try:
+                require_cycle_mutation_contract(
+                    read_initialization_metadata(args.root, args.cycle_id),
+                    "dashboard write",
+                )
+            except ValueError as exc:
+                return emit_contract_error("cycle_ledger_contract_rejected", exc)
             dashboard = cycle_dir(args.root, args.cycle_id) / "dashboard.md"
             atomic_write_text(dashboard, render_markdown(summary))
             summary["dashboard_path"] = rel_path(args.root, dashboard)
@@ -373,9 +411,17 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         result = summary
     elif args.command == "current":
-        result = write_current(args.root, args.cycle_id)
+        try:
+            result = write_current(args.root, args.cycle_id)
+        except ValueError as exc:
+            return emit_contract_error("cycle_ledger_contract_rejected", exc)
     elif args.command == "finalize":
-        result = finalize_candidate(args.root, args.cycle_id, load_json_value(args.candidate_json))
+        try:
+            result = finalize_candidate(
+                args.root, args.cycle_id, load_json_value(args.candidate_json)
+            )
+        except ValueError as exc:
+            return emit_contract_error("cycle_ledger_contract_rejected", exc)
     elif args.command == "verify-finalization":
         receipt_value = load_json_value(args.receipt_json)
         if receipt_value.get("kind") == FINALIZATION_POINTER_KIND and isinstance(receipt_value.get("receipt"), dict):
@@ -389,17 +435,20 @@ def main(argv: list[str] | None = None) -> int:
             "pending_finalization_conflicts": pending,
         }
     else:
-        result = resolve_pending_finalization_conflict(
-            args.root,
-            args.cycle_id,
-            args.pending_conflict_id,
-            disposition=args.disposition,
-            resolution_evidence_id=args.resolution_evidence_id,
-            resolution_evidence_digest=args.resolution_evidence_digest,
-            resolution_evidence_ref=args.resolution_evidence_ref,
-            resolution_rationale_id=args.resolution_rationale_id,
-            committed_finalization_token=args.committed_finalization_token,
-        )
+        try:
+            result = resolve_pending_finalization_conflict(
+                args.root,
+                args.cycle_id,
+                args.pending_conflict_id,
+                disposition=args.disposition,
+                resolution_evidence_id=args.resolution_evidence_id,
+                resolution_evidence_digest=args.resolution_evidence_digest,
+                resolution_evidence_ref=args.resolution_evidence_ref,
+                resolution_rationale_id=args.resolution_rationale_id,
+                committed_finalization_token=args.committed_finalization_token,
+            )
+        except ValueError as exc:
+            return emit_contract_error("cycle_ledger_contract_rejected", exc)
 
     json.dump(result, sys.stdout, ensure_ascii=False, indent=2, sort_keys=True)
     sys.stdout.write("\n")

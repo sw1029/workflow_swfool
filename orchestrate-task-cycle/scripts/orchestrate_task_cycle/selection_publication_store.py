@@ -12,6 +12,11 @@ import stat
 import tempfile
 from typing import Any, Iterator
 
+from .selection_publication_producer_capability import (
+    _require_selection_publication_lock,
+    _require_selection_publication_producer,
+)
+
 
 try:
     import fcntl
@@ -24,16 +29,17 @@ SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _canonical_json(value: Any) -> bytes:
-    return (
-        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        + "\n"
-    ).encode("utf-8")
+    rendered = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    return (rendered + "\n").encode("utf-8")
 
 
 def _display_json(value: Any) -> bytes:
-    return (
-        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    ).encode("utf-8")
+    rendered = json.dumps(
+        value, ensure_ascii=False, indent=2, sort_keys=True
+    )
+    return (rendered + "\n").encode("utf-8")
 
 
 def _sha256_bytes(payload: bytes) -> str:
@@ -58,9 +64,7 @@ def _sha256_file(path: Path) -> str | None:
     return digest.hexdigest()
 
 
-def _bounded_file_sha256(
-    path: Path, expected_size: int, label: str
-) -> str | None:
+def _bounded_file_sha256(path: Path, expected_size: int, label: str) -> str | None:
     """Hash one exact-size regular leaf without following a leaf symlink."""
 
     try:
@@ -137,7 +141,43 @@ def _fsync_dir(path: Path) -> None:
         os.close(descriptor)
 
 
-def _atomic_write(path: Path, payload: bytes) -> None:
+def _selection_store_write(
+    path: Path, producer_capability: object | None
+) -> contextlib.AbstractContextManager[None]:
+    # Classify lexically: resolving a symlinked store first erases its protected
+    # path markers and would bypass the capability gate.
+    lexical = Path(os.path.abspath(os.fspath(path)))
+    parts = lexical.parts
+    protected = any(
+        parts[index : index + 2] == (".task", "selection_publication")
+        for index in range(len(parts) - 1)
+    )
+    if not protected:
+        return contextlib.nullcontext()
+    _require_selection_publication_producer(producer_capability)
+    store_index = next(
+        index
+        for index in range(len(parts) - 1)
+        if parts[index : index + 2] == (".task", "selection_publication")
+    )
+    root = Path(*parts[:store_index])
+    from .selection_publication_reference_barrier import (
+        registered_producer_barrier,
+    )
+
+    return registered_producer_barrier(
+        root, producer_capability=producer_capability
+    )
+
+
+def _atomic_write(
+    path: Path, payload: bytes, *, producer_capability: object | None = None
+) -> None:
+    with _selection_store_write(path, producer_capability):
+        _atomic_write_unlocked(path, payload)
+
+
+def _atomic_write_unlocked(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_value = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
@@ -154,16 +194,29 @@ def _atomic_write(path: Path, payload: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _write_once(path: Path, payload: bytes, label: str) -> str:
-    digest = _sha256_bytes(payload)
+def _write_once_with_status(
+    path: Path, payload: bytes, label: str, *,
+    producer_capability: object | None = None
+) -> tuple[str, bool]:
+    from .selection_publication_store_immutable import (
+        _verify_exact,
+        _write_once_unlocked_with_status,
+    )
+
+    write_context = _selection_store_write(path, producer_capability)
     if path.exists() or path.is_symlink():
-        if _bounded_file_sha256(path, len(payload), label) != digest:
-            raise ValueError(f"{label} conflicts with immutable transaction evidence")
-        return digest
-    _atomic_write(path, payload)
-    if _bounded_file_sha256(path, len(payload), label) != digest:
-        raise ValueError(f"{label} failed post-write verification")
-    return digest
+        _verify_exact(path, payload, _sha256_bytes(payload), label)
+    with write_context:
+        return _write_once_unlocked_with_status(path, payload, label)
+
+
+def _write_once(
+    path: Path, payload: bytes, label: str, *,
+    producer_capability: object | None = None
+) -> str:
+    return _write_once_with_status(
+        path, payload, label, producer_capability=producer_capability
+    )[0]
 
 
 def _safe_directory(path: Path, label: str) -> None:
@@ -242,6 +295,15 @@ def _state_path(root: Path) -> Path:
     return path
 
 
+def _migration_path(root: Path, name: str) -> Path:
+    if name not in {"prepare", "complete"}:
+        raise ValueError("invalid selection-publication migration artifact kind")
+    directory = _safe_store_directory(root, ("migrations", "storage-v4"))
+    path = directory / f"{name}.json"
+    _safe_regular_file(path, f"selection-publication migration {name}")
+    return path
+
+
 def _intent_index_path(root: Path, digest: str, name: str) -> Path:
     """Return one immutable O(1) intent lookup path.
 
@@ -262,9 +324,7 @@ def _intent_index_path(root: Path, digest: str, name: str) -> Path:
 def _successor_bundle_path(root: Path, digest: str) -> Path:
     if not SHA256.fullmatch(digest):
         raise ValueError("invalid selected-successor bundle digest")
-    directory = _safe_store_directory(
-        root, ("successor_bundles", "sha256")
-    )
+    directory = _safe_store_directory(root, ("successor_bundles", "sha256"))
     path = directory / f"{digest}.json"
     _safe_regular_file(path, "selected-successor bundle")
     return path
@@ -273,9 +333,7 @@ def _successor_bundle_path(root: Path, digest: str) -> Path:
 def _successor_prepare_index_path(root: Path, digest: str) -> Path:
     if not SHA256.fullmatch(digest):
         raise ValueError("invalid selected-successor prepare-input digest")
-    directory = _safe_store_directory(
-        root, ("successor_prepare_indexes", "sha256")
-    )
+    directory = _safe_store_directory(root, ("successor_prepare_indexes", "sha256"))
     path = directory / f"{digest}.json"
     _safe_regular_file(path, "selected-successor prepare-input index")
     return path
@@ -284,9 +342,7 @@ def _successor_prepare_index_path(root: Path, digest: str) -> Path:
 def _successor_gate_path(root: Path, digest: str) -> Path:
     if not SHA256.fullmatch(digest):
         raise ValueError("invalid selected-successor authority-gate digest")
-    directory = _safe_store_directory(
-        root, ("successor_authority_gates", "sha256")
-    )
+    directory = _safe_store_directory(root, ("successor_authority_gates", "sha256"))
     path = directory / f"{digest}.json"
     _safe_regular_file(path, "selected-successor authority gate")
     return path
@@ -317,9 +373,7 @@ def _successor_authority_evaluation_context_path(root: Path, digest: str) -> Pat
 def _successor_authority_packet_path(root: Path, digest: str) -> Path:
     if not SHA256.fullmatch(digest):
         raise ValueError("invalid selected-successor authority-packet digest")
-    directory = _safe_store_directory(
-        root, ("successor_authority_packets", "sha256")
-    )
+    directory = _safe_store_directory(root, ("successor_authority_packets", "sha256"))
     path = directory / f"{digest}.json"
     _safe_regular_file(path, "selected-successor authority packet")
     return path
@@ -328,9 +382,7 @@ def _successor_authority_packet_path(root: Path, digest: str) -> Path:
 def _successor_authority_index_path(root: Path, digest: str) -> Path:
     if not SHA256.fullmatch(digest):
         raise ValueError("invalid selected-successor authority-input digest")
-    directory = _safe_store_directory(
-        root, ("successor_authority_indexes", "sha256")
-    )
+    directory = _safe_store_directory(root, ("successor_authority_indexes", "sha256"))
     path = directory / f"{digest}.json"
     _safe_regular_file(path, "selected-successor authority-input index")
     return path
@@ -350,9 +402,7 @@ def _successor_authority_projection_path(root: Path, digest: str) -> Path:
 def _successor_authority_locator_path(root: Path, digest: str) -> Path:
     if not SHA256.fullmatch(digest):
         raise ValueError("invalid selected-successor authority-locator digest")
-    directory = _safe_store_directory(
-        root, ("successor_authority_locators", "sha256")
-    )
+    directory = _safe_store_directory(root, ("successor_authority_locators", "sha256"))
     path = directory / f"{digest}.json"
     _safe_regular_file(path, "selected-successor authority locator")
     return path
@@ -361,17 +411,24 @@ def _successor_authority_locator_path(root: Path, digest: str) -> Path:
 def _create_store_directories(root: Path) -> Path:
     store = _store_root(root)
     task_root = root / ".task"
-    if not task_root.exists():
+    try:
         task_root.mkdir()
+    except FileExistsError:
+        pass
     _safe_directory(task_root, "selection-publication .task root")
-    if not store.exists():
+    try:
         store.mkdir()
+    except FileExistsError:
+        pass
     _safe_directory(store, "selection-publication store root")
     return store
 
 
 @contextlib.contextmanager
-def _lock(root: Path) -> Iterator[None]:
+def _publication_lock(
+    root: Path, *, producer_capability: object
+) -> Iterator[None]:
+    _require_selection_publication_lock(producer_capability, root)
     store = _create_store_directories(root)
     path = store / "publication.lock"
     _safe_regular_file(path, "selection-publication lock")
@@ -385,6 +442,24 @@ def _lock(root: Path) -> Iterator[None]:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
+@contextlib.contextmanager
+def _lock(root: Path, *, producer_capability: object) -> Iterator[None]:
+    # Every supported publication mutation can create or publish a reference to
+    # selection CAS.  It therefore takes the shared side before the narrower
+    # publication lock.  GC takes these locks in the same global order
+    # (reference barrier first, publication lock second).
+    from .selection_publication_reference_barrier import (
+        registered_producer_barrier,
+    )
+
+    _require_selection_publication_producer(producer_capability)
+    with registered_producer_barrier(
+        root, producer_capability=producer_capability
+    ):
+        with _publication_lock(root, producer_capability=producer_capability):
+            yield
+
+
 __all__ = (
     "TRANSACTION_ID",
     "_atomic_write",
@@ -394,6 +469,8 @@ __all__ = (
     "_canonical_json",
     "_display_json",
     "_lock",
+    "_migration_path",
+    "_publication_lock",
     "_intent_index_path",
     "_prepare_path",
     "_receipts_root",
@@ -413,4 +490,5 @@ __all__ = (
     "_store_root",
     "_transactions_root",
     "_write_once",
+    "_write_once_with_status",
 )

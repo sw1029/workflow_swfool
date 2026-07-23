@@ -98,8 +98,13 @@ def _compact_context(full: dict[str, Any], model: dict[str, Any]) -> dict[str, A
         task_binding["title"] = full_task.get("title")
     goal = _mapping(model.get("goal_truth"))
     advice = _mapping(model.get("advice"))
+    cycle_state = _mapping(full.get("cycle_state"))
     context = {
-        "workspace": model.get("workspace"),
+        "workspace": model.get("workspace") or full.get("workspace"),
+        "cycle_state": {
+            "latest_cycle_id": cycle_state.get("latest_cycle_id")
+            or _mapping(cycle_state.get("current_stage")).get("cycle_id")
+        },
         "task_md": task_binding,
         "agent_goal": {
             "available_goal_truth": list(goal.get("available_goal_truth") or []),
@@ -117,6 +122,7 @@ def _compact_context(full: dict[str, Any], model: dict[str, Any]) -> dict[str, A
 
 def _compact_stage(stage: dict[str, Any]) -> dict[str, Any]:
     return {
+        "cycle_id": stage.get("cycle_id"),
         "authority_policy": authority_policy(stage),
         "model_effort_routing": _routing_projection(stage.get("model_effort_routing")),
     }

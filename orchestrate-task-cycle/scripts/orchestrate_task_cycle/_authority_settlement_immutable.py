@@ -113,7 +113,7 @@ def _verify_grants(
 
 def _grant_mismatch(grant: dict[str, Any], row: dict[str, Any]) -> bool:
     return bool(
-        grant.get("schema_version") != 2
+        grant.get("schema_version") not in {2, 3}
         or grant.get("artifact_kind") != "authority_grant"
         or grant.get("grant_id") != row.get("grant_id")
         or grant.get("policy_snapshot") != row.get("policy_snapshot")

@@ -21,7 +21,16 @@ def _identity(argv: list[str] | None) -> int:
     return main(argv)
 
 
-COMMANDS = (CommandSpec("identity", _identity),)
+def _compile(argv: list[str] | None) -> int:
+    from .acceptance_compiler import main
+
+    return main(argv)
+
+
+COMMANDS = (
+    CommandSpec("compile", _compile),
+    CommandSpec("identity", _identity),
+)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

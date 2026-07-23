@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -80,6 +81,35 @@ def test_target_skill_docs_prefer_the_public_compiler_surfaces() -> None:
         body = (ROOT / skill_name / "SKILL.md").read_text(encoding="utf-8")
         for token in tokens:
             assert token in body, (skill_name, token)
+
+
+def test_authority_packet_publication_has_a_bounded_compiler_operation() -> None:
+    manifest = json.loads(
+        (
+            ROOT / "orchestrate-task-cycle/authority.operations.json"
+        ).read_text(encoding="utf-8")
+    )
+    operation = next(
+        row
+        for row in manifest["operations"]
+        if row["operation_id"] == "publish_authority_packet_binding"
+    )
+    assert operation["authority_applicability"] == "none"
+    assert operation["authorization_mechanism"] == "none"
+    assert operation["mutation_class"] == "local_mutation"
+    assert operation["source_rank_floor"] == "S0"
+    assert operation["risk_floor"] == "R1"
+    assert operation["effect_classes"] == [
+        "publish_validated_authority_owner_result_binding"
+    ]
+
+    skill = (ROOT / "orchestrate-task-cycle/SKILL.md").read_text(encoding="utf-8")
+    for token in (
+        "publish_authority_packet_binding",
+        "authority-packet --cycle-id <cycle> --publish",
+        "effect_boundary: preparation_only",
+    ):
+        assert token in skill
 
 
 def test_selected_successor_docs_sanction_guarded_route_without_api_overclaim() -> None:

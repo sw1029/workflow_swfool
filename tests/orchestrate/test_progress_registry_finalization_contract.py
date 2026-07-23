@@ -12,6 +12,9 @@ import pytest
 
 sys.dont_write_bytecode = True
 SKILLS_ROOT = Path(__file__).resolve().parents[2]
+TEST_SUPPORT_ROOT = SKILLS_ROOT / "tests"
+if str(TEST_SUPPORT_ROOT) not in sys.path:
+    sys.path.insert(0, str(TEST_SUPPORT_ROOT))
 SUBPROCESS_ENV = {
     **os.environ,
     "PYTHONPATH": os.pathsep.join(
@@ -29,6 +32,9 @@ from orchestrate_task_cycle.progress.registry import (  # noqa: E402
     append_feature_symbol_registry,
     load_symbol_registry_state,
     prepare_feature_symbol_registry_update,
+)
+from historical_cycle_test_support import (  # noqa: E402
+    create_sealed_legacy_v1_cycle,
 )
 
 
@@ -112,7 +118,12 @@ def test_finalizer_rejects_unsigned_axis_alias_and_favorable_body_divergence(
     tmp_path: Path,
 ) -> None:
     cycle_id = "cycle_alias_A"
-    cycle_ledger.init_cycle(tmp_path, cycle_id, "task_T", "fixture initialization")
+    create_sealed_legacy_v1_cycle(
+        tmp_path,
+        cycle_id,
+        "task_T",
+        "fixture initialization",
+    )
     prepared = prepare_feature_symbol_registry_update(tmp_path, observed_item())
     durable_state = prepared["durable_mutation_candidate"]
 
@@ -202,7 +213,12 @@ def test_same_path_with_changed_hash_is_fresh_evidence_not_unchanged_ref(
     cycle_id = "cycle_evidence_A"
     artifact = tmp_path / "artifact_A.json"
     artifact.write_text('{"revision":1}\n', encoding="utf-8")
-    cycle_ledger.init_cycle(tmp_path, cycle_id, "task_T", "fixture initialization")
+    create_sealed_legacy_v1_cycle(
+        tmp_path,
+        cycle_id,
+        "task_T",
+        "fixture initialization",
+    )
     cycle_ledger.append_event(
         tmp_path,
         cycle_id,

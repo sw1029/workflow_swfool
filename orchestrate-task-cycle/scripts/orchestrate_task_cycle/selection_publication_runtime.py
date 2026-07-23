@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import stat
 from typing import Any
 
 from .selection_publication_state import load_state, status_from_state
@@ -83,6 +85,51 @@ def _apply_external_settlement_gate(
     return status
 
 
+def _migration_required_status() -> dict[str, Any]:
+    return {
+        "status": "migration_required",
+        "pending_transaction_ids": [],
+        "selection_journal_initialized": False,
+        "selection_consumption_allowed": False,
+        "selection_consumption_reason": "explicit_selection_state_migration_required",
+        "current_head": {
+            "status": "unknown_until_migrated",
+            "head_transaction_id": None,
+            "head_count": 0,
+            "lineage_mode": "legacy_unscanned",
+        },
+        "mutation_performed": False,
+    }
+
+
+def _publication_data_exists(root: Path) -> bool:
+    """Distinguish lock-only bootstrap state from state-less durable data."""
+
+    store = root / ".task/selection_publication"
+    try:
+        observed = store.lstat()
+    except FileNotFoundError:
+        return False
+    if not stat.S_ISDIR(observed.st_mode) or store.is_symlink():
+        return True
+    control_leaves = {"publication.lock"}
+    try:
+        with os.scandir(store) as entries:
+            for count, entry in enumerate(entries, start=1):
+                if count > 16:
+                    return True
+                metadata = entry.stat(follow_symlinks=False)
+                if (
+                    entry.name not in control_leaves
+                    or not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_size != 0
+                ):
+                    return True
+    except OSError:
+        return True
+    return False
+
+
 def publication_status(root: Path, *, deep: bool = False) -> dict[str, Any]:
     from .selection_publication import (
         _committed_receipts,
@@ -90,30 +137,17 @@ def publication_status(root: Path, *, deep: bool = False) -> dict[str, Any]:
     )
 
     root = root.expanduser().resolve(strict=True)
+    try:
+        state = load_state(root)
+    except ValueError as exc:
+        if "migration required" not in str(exc):
+            raise
+        return _migration_required_status()
+    if state is None and _publication_data_exists(root):
+        return _migration_required_status()
     if not deep:
-        try:
-            state = load_state(root)
-        except ValueError as exc:
-            if "migration required" not in str(exc):
-                raise
-            state = None
         if state is not None:
             return _apply_external_settlement_gate(root, status_from_state(root, state))
-        if (root / ".task/selection_publication").exists():
-            return {
-                "status": "migration_required",
-                "pending_transaction_ids": [],
-                "selection_journal_initialized": False,
-                "selection_consumption_allowed": False,
-                "selection_consumption_reason": "explicit_selection_state_migration_required",
-                "current_head": {
-                    "status": "unknown_until_migrated",
-                    "head_transaction_id": None,
-                    "head_count": 0,
-                    "lineage_mode": "legacy_unscanned",
-                },
-                "mutation_performed": False,
-            }
         return status_from_state(
             root,
             {"head": None, "active_transaction": None},

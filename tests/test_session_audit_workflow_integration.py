@@ -13,6 +13,7 @@ from orchestrate_task_cycle.result_contract.legacy_revision_bridge import (
     legacy_revision_bridge_sha256,
 )
 from validate_task_completion import collect_completion_evidence as completion_evidence
+from historical_cycle_test_support import create_sealed_legacy_v1_cycle
 
 
 def packet(
@@ -430,6 +431,12 @@ def test_clean_packet_never_upgrades_validation() -> None:
 
 
 def test_collectors_and_renderer_exclude_raw_logs_and_finding_messages(tmp_path: Path) -> None:
+    create_sealed_legacy_v1_cycle(
+        tmp_path,
+        "cycle-1",
+        "task-1",
+        "session audit packet fixture",
+    )
     secret = "SESSION-RAW-SECRET-DO-NOT-COLLECT"
     raw_dir = tmp_path / "logs" / "codex"
     raw_dir.mkdir(parents=True)

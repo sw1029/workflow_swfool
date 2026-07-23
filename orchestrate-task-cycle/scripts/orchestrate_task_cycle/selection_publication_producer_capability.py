@@ -1,0 +1,87 @@
+"""Opaque capabilities and in-process barrier proofs for store producers."""
+
+from __future__ import annotations
+
+import contextlib
+from contextvars import ContextVar
+from pathlib import Path
+from typing import Any, Iterator
+
+
+_SELECTION_PUBLICATION_PRODUCER_CAPABILITY = object()
+_SELECTION_PUBLICATION_GC_EXCLUSIVE_CAPABILITY = object()
+_ACTIVE_REFERENCE_BARRIERS: ContextVar[tuple[tuple[str, str], ...]] = (
+    ContextVar("selection_publication_reference_barriers", default=())
+)
+
+
+def _root_key(root: Path) -> str:
+    return str(root.expanduser().resolve(strict=True))
+
+
+def _require_selection_publication_producer(value: Any) -> None:
+    if value is not _SELECTION_PUBLICATION_PRODUCER_CAPABILITY:
+        raise ValueError(
+            "selection-publication mutation requires a registered producer "
+            "capability"
+        )
+
+
+@contextlib.contextmanager
+def _reference_barrier_proof(
+    root: Path, mode: str
+) -> Iterator[None]:
+    if mode not in {"shared", "exclusive"}:
+        raise ValueError("selection-publication barrier proof mode is invalid")
+    stack = _ACTIVE_REFERENCE_BARRIERS.get()
+    token = _ACTIVE_REFERENCE_BARRIERS.set(
+        (*stack, (_root_key(root), mode))
+    )
+    try:
+        yield
+    finally:
+        _ACTIVE_REFERENCE_BARRIERS.reset(token)
+
+
+def _active_reference_barrier_mode(root: Path) -> str | None:
+    key = _root_key(root)
+    modes = [
+        mode
+        for observed_root, mode in _ACTIVE_REFERENCE_BARRIERS.get()
+        if observed_root == key
+    ]
+    if "exclusive" in modes:
+        return "exclusive"
+    return "shared" if "shared" in modes else None
+
+
+def _require_selection_publication_gc_exclusive(
+    value: Any, root: Path
+) -> None:
+    if value is not _SELECTION_PUBLICATION_GC_EXCLUSIVE_CAPABILITY:
+        raise ValueError(
+            "selection-publication GC mutation requires the exclusive "
+            "producer capability"
+        )
+    if _active_reference_barrier_mode(root) != "exclusive":
+        raise ValueError(
+            "selection-publication GC mutation requires a held exclusive "
+            "reference barrier"
+        )
+
+
+def _require_selection_publication_lock(
+    value: Any, root: Path
+) -> None:
+    if value is _SELECTION_PUBLICATION_GC_EXCLUSIVE_CAPABILITY:
+        _require_selection_publication_gc_exclusive(value, root)
+        return
+    _require_selection_publication_producer(value)
+    if _active_reference_barrier_mode(root) != "shared":
+        raise ValueError(
+            "selection-publication lock requires a held shared reference "
+            "barrier"
+        )
+
+
+__all__: tuple[str, ...] = ()

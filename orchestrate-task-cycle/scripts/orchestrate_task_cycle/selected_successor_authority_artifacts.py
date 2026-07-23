@@ -15,7 +15,10 @@ from .selection_publication_store import (
     _successor_authority_locator_path,
     _successor_authority_packet_path,
     _successor_authority_projection_path,
-    _write_once,
+    _write_once_with_status,
+)
+from .selection_publication_producer_capability import (
+    _SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
 )
 
 
@@ -118,8 +121,12 @@ def _publish_content_addressed(
     value = {**body, field: digest}
     payload = _bounded_payload(_canonical_json(value), max_bytes, label)
     path = path_factory(root, digest)
-    created = not path.exists() and not path.is_symlink()
-    raw_sha = _write_once(path, payload, label)
+    raw_sha, created = _write_once_with_status(
+        path,
+        payload,
+        label,
+        producer_capability=_SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
+    )
     return value, {"ref": path.relative_to(root).as_posix(), "sha256": raw_sha}, created
 
 
@@ -245,8 +252,12 @@ def publish_locator(
         "selected-successor authority locator",
     )
     path = _successor_authority_locator_path(root, input_sha256)
-    created = not path.exists() and not path.is_symlink()
-    _write_once(path, payload, "selected-successor authority locator")
+    _digest, created = _write_once_with_status(
+        path,
+        payload,
+        "selected-successor authority locator",
+        producer_capability=_SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
+    )
     return created
 
 
@@ -353,8 +364,12 @@ def publish_index(
         "selected-successor authority index",
     )
     path = _successor_authority_index_path(root, input_sha256)
-    created = not path.exists() and not path.is_symlink()
-    _write_once(path, payload, "selected-successor authority index")
+    _digest, created = _write_once_with_status(
+        path,
+        payload,
+        "selected-successor authority index",
+        producer_capability=_SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
+    )
     return created
 
 

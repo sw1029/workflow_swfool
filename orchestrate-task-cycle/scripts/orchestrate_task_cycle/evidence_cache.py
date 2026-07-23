@@ -220,9 +220,13 @@ def durable_append_json(path: Path, value: dict[str, Any]) -> None:
     existed = path.exists()
     payload = (json.dumps(value, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
     with path.open("ab") as handle:
-        handle.write(payload)
-        handle.flush()
-        os.fsync(handle.fileno())
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
     if not existed:
         fsync_directory(path.parent)
 
@@ -242,35 +246,48 @@ def validate_stored_record(value: Any, line_no: int) -> dict[str, Any]:
     return value
 
 
+def _read_record_lines(handle: Any) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    seen_record_ids: set[str] = set()
+    for line_no, line in enumerate(handle, start=1):
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"malformed evidence cache JSON on line {line_no}: {exc}"
+            ) from exc
+        record = validate_stored_record(value, line_no)
+        record_id = record.get("record_id")
+        if record_id:
+            record_id = str(record_id)
+            if record_id in seen_record_ids:
+                raise ValueError(
+                    f"duplicate evidence cache record_id `{record_id}` "
+                    f"on line {line_no}"
+                )
+            seen_record_ids.add(record_id)
+        records.append(record)
+    return records
+
+
 def read_records_unlocked(path: Path) -> list[dict[str, Any]]:
     if not path.is_file():
         return []
-    records: list[dict[str, Any]] = []
-    seen_record_ids: set[str] = set()
     with path.open("r", encoding="utf-8", errors="replace") as handle:
-        for line_no, line in enumerate(handle, start=1):
-            if not line.strip():
-                continue
-            try:
-                value = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"malformed evidence cache JSON on line {line_no}: {exc}") from exc
-            record = validate_stored_record(value, line_no)
-            record_id = record.get("record_id")
-            if record_id:
-                record_id = str(record_id)
-                if record_id in seen_record_ids:
-                    raise ValueError(f"duplicate evidence cache record_id `{record_id}` on line {line_no}")
-                seen_record_ids.add(record_id)
-            records.append(record)
-    return records
+        return _read_record_lines(handle)
 
 
 def read_records(path: Path) -> list[dict[str, Any]]:
     if not path.is_file():
         return []
-    with cache_lock(path, exclusive=False):
-        return read_records_unlocked(path)
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
+        try:
+            return _read_record_lines(handle)
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def verify_record_evidence(root: Path, record: dict[str, Any]) -> dict[str, Any]:

@@ -6,6 +6,11 @@ from pathlib import Path
 from typing import Any
 
 from ..cycle_ledger import append_event, read_events, read_initialization_metadata
+from ..ledger.compiled_events import append_compiled_system_stage
+from ..ledger.workflow_contract import (
+    require_cycle_mutation_contract,
+    workflow_contract_state,
+)
 from .contracts import (
     PREPARATION_SCHEMA_VERSION_V2,
     PREPARATION_SCHEMA_VERSION_V3,
@@ -31,10 +36,15 @@ def execute_deterministic_stage(
     max_paths: int = 40,
     preparation_schema_version: int | None = None,
 ) -> dict[str, Any]:
-    from .deterministic_dispatch import dispatch_deterministic
-    from .service import prepare_stage, submit_stage
+    from .deterministic_execution import apply_prepared_deterministic
+    from .service import prepare_stage
 
     workspace = Path(root).resolve(strict=True)
+    if apply:
+        require_cycle_mutation_contract(
+            read_initialization_metadata(workspace, cycle_id),
+            "execute deterministic stage",
+        )
     preparation = prepare_stage(
         workspace,
         cycle_id,
@@ -43,7 +53,7 @@ def execute_deterministic_stage(
         max_files=max_files,
         max_paths=max_paths,
         preparation_schema_version=preparation_schema_version,
-        persist_compiler_artifacts=apply,
+        persist_compiler_artifacts=False,
     )
     if preparation.get("schema_version") != PREPARATION_SCHEMA_VERSION_V3:
         raise ValueError("deterministic dispatcher requires preparation schema v3")
@@ -63,31 +73,21 @@ def execute_deterministic_stage(
             "model_visible_bytes": 0,
             "applied": False,
         }
-    dispatched = dispatch_deterministic(
+    output, committed = apply_prepared_deterministic(
         workspace,
         preparation,
+        operation="execute deterministic stage",
         max_files=max_files,
         max_paths=max_paths,
     )
-    if dispatched.get("status") == "block":
-        dispatched["deterministic_execution"] = {
+    if committed is None:
+        output["deterministic_execution"] = {
             "model_call_count": 0,
             "model_visible_bytes": 0,
             "files_written_count": 0,
         }
-        return dispatched
-    binding = dispatched["owner_result_binding"]
-    output = submit_stage(
-        workspace,
-        preparation,
-        mode="block",
-        apply=True,
-        max_files=max_files,
-        max_paths=max_paths,
-        owner_result_ref=str(binding["ref"]),
-        owner_result_sha256=str(binding["sha256"]),
-    )
-    output["deterministic_execution"] = dispatched
+        return output
+    output["deterministic_execution"] = committed
     return output
 
 
@@ -121,6 +121,25 @@ def _blocked(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+def _deterministic_disposition(
+    schema_version: int,
+    target: str,
+    actions: list[dict[str, Any]],
+    apply: bool,
+) -> bool | dict[str, Any]:
+    deterministic = (
+        TARGET_COMPILE_SPECS[target].executor_kind == "deterministic"
+    )
+    if schema_version == PREPARATION_SCHEMA_VERSION_V2 and deterministic:
+        return {
+            "status": "block",
+            "stop_reason": "preparation_v3_required",
+            "actions": actions,
+            "applied": bool(actions and apply),
+        }
+    return schema_version == PREPARATION_SCHEMA_VERSION_V3 and deterministic
+
+
 def _append_system(
     workspace: Path,
     cycle_id: str,
@@ -137,11 +156,32 @@ def _append_system(
             "actions": actions,
             "applied": False,
         }
-    publication = append_event(workspace, cycle_id, event)
+    metadata = read_initialization_metadata(workspace, cycle_id)
+    contract_state = workflow_contract_state(metadata)
+    if contract_state in {"historical_v1_read_only", "historical_v2_read_only"}:
+        raise ValueError(
+            "historical unmarked protocol-v2 cycles are read-only; "
+            "initialize a new compiler-first cycle"
+        )
+    publication = (
+        append_compiled_system_stage(
+            workspace,
+            cycle_id,
+            str(event["step"]),
+        )
+        if contract_state == "enforced"
+        else append_event(workspace, cycle_id, event)
+    )
+    if contract_state == "enforced":
+        actions[-1]["event"] = publication["event"]
     actions[-1]["publication"] = {
         "event_id": publication["event"].get("event_id"),
         "event_duplicate": bool(publication.get("event_duplicate")),
     }
+    if publication.get("workflow_contract_warning") is not None:
+        actions[-1]["publication"]["workflow_contract_warning"] = publication[
+            "workflow_contract_warning"
+        ]
     return None
 
 
@@ -154,8 +194,7 @@ def _execute_prepared(
     max_files: int,
     max_paths: int,
 ) -> dict[str, Any] | None:
-    from .deterministic_dispatch import dispatch_deterministic
-    from .service import submit_stage
+    from .deterministic_execution import apply_prepared_deterministic
 
     target = str(preparation["target"])
     actions.append(
@@ -173,42 +212,33 @@ def _execute_prepared(
             "preparation": preparation,
             "applied": False,
         }
-    dispatched = dispatch_deterministic(
+    execution, committed = apply_prepared_deterministic(
         workspace,
         preparation,
+        operation="advance deterministic stage",
         max_files=max_files,
         max_paths=max_paths,
     )
-    if dispatched.get("status") == "block":
+    if committed is None:
         actions[-1]["execution"] = {
             "status": "block",
-            "stop_reason": dispatched.get("stop_reason"),
+            "stop_reason": execution.get("stop_reason"),
             "model_call_count": 0,
             "files_written_count": 0,
         }
         return {
             "status": "block",
-            "stop_reason": dispatched.get("stop_reason"),
+            "stop_reason": execution.get("stop_reason"),
             "actions": actions,
-            "execution": dispatched,
+            "execution": execution,
             "applied": False,
         }
-    binding = dispatched["owner_result_binding"]
-    execution = submit_stage(
-        workspace,
-        preparation,
-        mode="block",
-        apply=True,
-        max_files=max_files,
-        max_paths=max_paths,
-        owner_result_ref=str(binding["ref"]),
-        owner_result_sha256=str(binding["sha256"]),
-    )
     actions[-1]["execution"] = {
         "status": execution.get("status"),
         "event_id": (execution.get("event") or {}).get("event_id"),
         "result_artifact_ref": execution.get("result_artifact_ref"),
         "model_call_count": 0,
+        "effect_committed": committed.get("effect_committed"),
     }
     if execution.get("status") != "block" and execution.get("applied"):
         return None
@@ -237,7 +267,16 @@ def advance_stage(
     if max_steps < 1 or max_steps > 32:
         raise ValueError("max_steps must be between 1 and 32")
     workspace = Path(root).resolve(strict=True)
-    read_initialization_metadata(workspace, cycle_id)
+    metadata = read_initialization_metadata(workspace, cycle_id)
+    if workflow_contract_state(metadata) in {
+        "historical_v1_read_only",
+        "historical_v2_read_only",
+        "invalid",
+    }:
+        raise ValueError(
+            "historical unsealed or invalid cycles cannot advance; "
+            "initialize a new compiler-first cycle"
+        )
     schema_version = cycle_preparation_version(
         workspace, cycle_id, preparation_schema_version
     )
@@ -253,9 +292,7 @@ def advance_stage(
                 "blocking_event_ids": [event.get("event_id") for event in blocked],
                 "actions": actions,
             }
-        full, model = _context(
-            workspace, cycle_id, schema_version, max_files, max_paths
-        )
+        full, model = _context(workspace, cycle_id, schema_version, max_files, max_paths)
         fingerprint = canonical_sha256(
             {
                 "state": state_fingerprint(model),
@@ -314,10 +351,11 @@ def advance_stage(
             if ready:
                 return ready
             continue
-        deterministic = (
-            schema_version == PREPARATION_SCHEMA_VERSION_V3
-            and TARGET_COMPILE_SPECS[target].executor_kind == "deterministic"
+        deterministic = _deterministic_disposition(
+            schema_version, target, actions, apply
         )
+        if isinstance(deterministic, dict):
+            return deterministic
         preparation = prepare_stage(
             workspace,
             cycle_id,
@@ -326,7 +364,7 @@ def advance_stage(
             max_files=max_files,
             max_paths=max_paths,
             preparation_schema_version=schema_version,
-            persist_compiler_artifacts=apply and deterministic,
+            persist_compiler_artifacts=False,
         )
         if deterministic:
             stopped = _execute_prepared(

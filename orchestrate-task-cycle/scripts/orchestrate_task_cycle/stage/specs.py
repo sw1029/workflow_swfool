@@ -191,6 +191,25 @@ OPTIONAL_SEMANTIC_FIELDS: dict[str, tuple[str, ...]] = {
     ),
 }
 OPTIONAL_OWNER_FIELDS: dict[str, tuple[str, ...]] = {
+    "index_pre_validate": (
+        "audit_observation_scope",
+        "live_revalidation_required",
+        "prevalidation_owner_result_binding",
+    ),
+    "authority": (
+        "selected_grants",
+        "lineage_grants",
+        "approval_projection",
+        "composition_receipt",
+    ),
+    "acceptance": (
+        "acceptance_contract",
+        "acceptance_scenarios",
+        "validation_predicate_contract",
+        "producer_directives",
+        "mutually_unsatisfiable_contract",
+        "unverifiable_acceptance_contract",
+    ),
     "repo_skill_adapter_validate": (
         "adapter_consumability_status",
         "adapter_architecture_status",
@@ -200,6 +219,14 @@ OPTIONAL_OWNER_FIELDS: dict[str, tuple[str, ...]] = {
         "field_origins",
     ),
     "code_structure_audit": ("field_origins",),
+    "index": (
+        "audit_blockers",
+        "index_snapshot_id",
+        "audit_input_manifest",
+        "post_audit_owner_result_binding",
+        "audit_observation_scope",
+        "live_revalidation_required",
+    ),
     "run": (
         "run_id",
         "owner_task_id",

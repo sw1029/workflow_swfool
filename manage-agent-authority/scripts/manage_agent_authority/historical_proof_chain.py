@@ -117,7 +117,12 @@ def _validate_grant_bases(root: Path, records: GrantRecords) -> None:
             source_path = verify_binding(
                 root, grant["source_approval"], f"{grant_id} source_approval"
             )
-            validate_for_grant(root, load_source_approval(source_path), grant)
+            validate_for_grant(
+                root,
+                load_source_approval(source_path),
+                grant,
+                prospective=False,
+            )
             continue
         parent_record = records.get(parent_id)
         if parent_record is None:

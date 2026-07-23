@@ -264,6 +264,9 @@ def build_index_pre_validate(ctx: PacketBuildContext) -> dict[str, Any]:
             "index_status",
             "index_snapshot_id",
             "blockers including explicit []",
+            "audit_observation_scope",
+            "live_revalidation_required",
+            "prevalidation_owner_result_binding",
             "evidence_paths",
         ],
     }

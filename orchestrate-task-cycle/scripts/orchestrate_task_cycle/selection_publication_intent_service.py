@@ -32,10 +32,13 @@ from .selection_publication_state import (
     record_committed,
     record_prepared,
 )
+from .selection_publication_payload import persist_blob
+from .selection_publication_producer_capability import (
+    _SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
+)
 from .selection_publication_v2 import (
     compile_intent,
     external_intent_identity,
-    persist_blob,
 )
 
 
@@ -252,7 +255,15 @@ def prepare_publication_intent(
     """Compile and journal one compact v2 intent without inline payloads."""
 
     root = root.expanduser().resolve(strict=True)
-    with _lock(root):
+    if intent.get("schema_version") != 2:
+        raise ValueError(
+            "Legacy schema-v1 selection publication intents are recovery-only "
+            "and cannot compile new prepares"
+        )
+    with _lock(
+        root,
+        producer_capability=_SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
+    ):
         state = publication._load_or_initialize_state(root)
         replay = _prepared_external_intent_replay(root, intent, state)
         if replay is not None:
@@ -301,12 +312,19 @@ def prepare_publication_intent(
             _canonical_json(transaction_material)
         )
         prepare = {**transaction_material, "transaction_id": transaction_id}
-        _blob, blob_sha256, blob_created = persist_blob(root, task_payload)
+        _blob, blob_sha256, blob_created = persist_blob(
+            root,
+            task_payload,
+            producer_capability=_SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
+        )
         if blob_sha256 != normalized["targets"][0]["payload_sha256"]:
             raise ValueError("selection publication compiler produced another task blob")
         path = _prepare_path(root, transaction_id)
         digest = _write_once(
-            path, _display_json(prepare), "selection-publication prepare journal"
+            path,
+            _display_json(prepare),
+            "selection-publication prepare journal",
+            producer_capability=_SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
         )
         publication._load_prepare(root, transaction_id)
         intent_sha256 = prepare.get("intent_sha256")

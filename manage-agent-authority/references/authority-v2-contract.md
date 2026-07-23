@@ -16,6 +16,8 @@
 - [Transition and revocation](#transition-and-revocation)
 - [Typed decisions](#typed-decisions)
 - [Operation compilation](#operation-compilation)
+- [Shared context, batches, and root approval](#shared-context-batches-and-root-approval)
+  - [Legacy implement-seed migration](#legacy-implement-seed-migration)
 - [CLI surface](#cli-surface)
 - [Migration](#migration)
 - [Required invariants](#required-invariants)
@@ -27,6 +29,12 @@ Use this workspace-local layout:
 ```text
 .task/authorization/
 ├── operation_compilations/ immutable non-authoritative preparation artifacts
+├── semantic_contexts/      producer-owned cycle-shared semantic context CAS
+├── operation_sets/         producer-owned semantic operation-set CAS
+├── operation_batches/      producer-owned compiled operation-batch CAS
+├── root_approval_plans/    immutable ordinary root-grant projections
+├── root_grant_materializations/ plan-bound source/grant transactions
+├── root_decision_seeds/ producer-owned compact approval seeds
 ├── policy_snapshots/       immutable content-addressed policy bytes and metadata
 ├── source_snapshots/       immutable content-addressed approval/evidence bytes
 ├── grants/                 immutable closed grant contracts
@@ -192,7 +200,10 @@ Derive the autonomy envelope from ratified concept IDs and exact revisions. Keep
 
 ## Source approval and bootstrap
 
-A root grant, explicit grant composition, or lifecycle transition must trace to a closed, immutable authority source rather than to prose or an inferred user preference. Snapshot this JSON before use:
+A root grant, explicit grant composition, or lifecycle transition must trace to a
+closed, immutable authority source rather than to prose or an inferred user
+preference. The following schema-v2 shape is historical and is shown only for
+interpretation:
 
 ```json
 {
@@ -220,13 +231,77 @@ A root grant, explicit grant composition, or lifecycle transition must trace to 
 }
 ```
 
+Treat the example above as historical schema v2. Read
+`integrity_status=verified` only under that schema. Never snapshot a new schema-v2
+source, register a new root grant from one, or use one for a transition. Exact replay
+of an already registered byte-identical grant remains available.
+
+Registered recovery producers may emit schema v3, remove `integrity_status`, and add:
+
+```json
+{
+  "schema_version": 3,
+  "decision_binding": {"ref":"immutable decision JSON","sha256":"64 lowercase hex"},
+  "decision_trust_class": "caller_asserted_exact_echo"
+}
+```
+
+That compatibility trust class proves exact equality to supplied recovery bytes, not
+user identity, host mediation, runtime attestation, or verified provenance.
+
+Before snapshotting or using a schema-v3/v4 source prospectively, reopen the decision
+binding and run its registered producer verifier. Schema-v4 root decisions must be
+producer-CAS compact seeds, rehash their plan, and derive every source field and
+per-grant mapping from that plan. Schema-v3 recovery decisions must rehash their
+producer-owned recipe and derive every source field from its exact requirements.
+Reject a generic, missing, copied, or self-fingerprinted decision binding.
+
+Historical root plans may contain schema-v4 source approvals with
+`decision_trust_class=caller_asserted_plan_decision`. Keep them readable for exact
+existing-grant replay, but never prospectively issue a grant from them.
+
+Current ordinary root plans emit schema-v5 source approvals with
+`decision_trust_class=host_user_signed_exact_plan`. The schema-v3 compact decision
+seed binds a verified authorization-evidence CAS object signed for the exact plan
+and `manage-agent-authority/root-grant` audience by an active public key in the
+skill-owned trust registry. The default registry is empty and therefore fails
+closed. The CLI cannot select another registry, and unsigned approval flags,
+timestamps, evidence IDs, workspace markers, or self-fingerprints cannot substitute
+for the signed binding. Every current source binds the producer-CAS decision seed
+and an exact per-grant projection list. Every projection binds its own
+grant/lineage/replay IDs, request digest, capabilities, subject, operation, risk,
+decision class, cardinality/budget, task/improvement/session scope, policy snapshot,
+and deterministic materialization receipt ref. Aggregate coverage is only the exact
+union of those projections and cannot authorize a cross-product recombination.
+
+Schema-v2 sources remain structurally readable. No mutable workspace inventory,
+timestamp, or self-fingerprint can make one prospective. Existing exact grants remain
+usable and replayable; a missing grant ID under a schema-v2 source is read-only
+exhaustion, not a materialization opportunity.
+
 The `source_kind`/rank pairs are fixed: `platform_session_ceiling/S4`, `explicit_user_instruction/S3`, `delegated_policy_steward/S2`, and `cycle_coordination_grant/S1`. Require `decision_type=grant_authority`; another typed decision cannot be smuggled through this object. Root-grant issuance requires `authority.grant.issue` in the effective source approval. S1/S2 approvals require an immutable `delegation_binding`. Resolve that exact workspace-relative source-approval artifact, rehash its bytes, and require a strictly higher rank. Follow the lineage until S3 or S4 while rejecting a repeated approval/binding, a missing artifact, digest mismatch, equal/lower rank, or an approval that is not effective at the administrative action time. Every delegated approval must be an exact subset of its parent across capabilities, subjects, operations, grant IDs, request digests, lineage IDs, risk, decision classes, cardinalities, budget, and validity window; therefore the issuance capability must also be present in every parent. This rank-monotone, finite lineage prevents an S1/S2 label or self-reference from becoming a new root of trust. Root grant creation must occur during the complete approval-lineage window and may only narrow it.
 
-For composition, additionally require capability `authority.grant.compose`, source rank at least S3, the exact base-request digest in `request_digests`, and every composed grant ID. For transition, require `authority.grant.transition`, exact grant and lineage IDs, and a source rank above the holder. A source below the original issuer is valid only when its immutable higher-rank delegation binding covers that same transition capability, grant, lineage, and time window. These typed-source checks are the root of trust for authority administration; do not recursively ask the ordinary grant evaluator to authorize them.
+For composition, additionally require capability `authority.grant.compose`, source
+rank at least S3, the exact base-request digest in `request_digests`, and every
+composed grant ID. Prospective composition accepts only a producer-owned
+operation-batch binding plus the selected base-request digest, exact grant IDs, a
+producer-verifiable typed-source binding, and an explicit time. The compiler reopens
+and rehashes those inputs and derives the composition ID, idempotency key, grant
+digests, closed receipt, and CAS path. Caller-authored full composition receipts are
+not prospective inputs. For transition, require `authority.grant.transition`, exact
+grant and lineage IDs, and a source rank above the holder. A source below the
+original issuer is valid only when its immutable higher-rank delegation binding
+covers that same transition capability, grant, lineage, and time window. These
+typed-source checks are the root of trust for authority administration; do not
+recursively ask the ordinary grant evaluator to authorize them.
 
 ## Grant and delegation
 
-Use a closed grant:
+The following is the closed historical/read contract, not a prospective
+caller-authored workflow input. Root and recovery materializers render root grants;
+the delegation compiler renders child grants. `register-grant` accepts this full
+object only when the same grant and state are already registered and the object is
+an exact replay:
 
 ```json
 {
@@ -260,7 +335,12 @@ Require `issuer_rank > holder_rank`. For `single_use`, require `max_uses=1`. For
 
 Cardinality coverage is directional. A `single_use` request may consume one use from any cardinality. A `bounded_reusable` request requires bounded-reusable or standing authority; a task lease requires task or standing authority; an improvement lease requires improvement or standing authority; standing-policy reuse requires standing authority. Independently enforce every non-null `session_id`, `task_id`, and `improvement_id`, including when the grant cardinality itself is not a lease.
 
-For delegation, require:
+For prospective delegation, supply only the closed child semantics
+`holder_rank`, `capabilities`, `subjects`, `operations`, `risk_ceiling`,
+`decision_classes`, `cardinality`, `max_uses`, `expires_at`, `session_id`,
+`task_id`, and `improvement_id`, together with parent grant ID and explicit
+delegation time. The compiler derives every envelope, identity, parent/source/policy
+binding, issuer, lineage, creation time, idempotency key, and artifact path. Require:
 
 - child parent and lineage IDs match;
 - child issuer rank equals parent holder rank, and child holder rank is lower;
@@ -487,22 +567,140 @@ into the input index and pre-index packet locator; preserve any custom skills ro
 generated replay argv. Exact input replay may return the same packet or projection. Drift in a
 bundle, context, subject, manifest, grant, or grant state requires reevaluation.
 
+## Shared context, batches, and root approval
+
+### Legacy implement-seed migration
+
+Treat a legacy
+`.task/cycle/<cycle-id>/authority/implement-seed.json` as read-only historical
+semantic input, never as a producer artifact or an authorization decision. Migrate
+its fields through the compiler-first pipeline as follows:
+
+| Legacy field | Compiler-first destination |
+|---|---|
+| `actor_rank` | `compile-semantic-context` input `actor_rank` |
+| `context` | Rename to the shared semantic input `request_context`; the compiler reopens and hashes every required evidence ref |
+| `session_ceiling` | Shared semantic input `session_ceiling` |
+| `goal_autonomy_envelope` | Shared semantic input `goal_autonomy_envelope`; the compiler replaces `source_ref` with its exact binding |
+| `skill_id`, `operation_id`, `subject` | One compact `publish-operation-set` row |
+| `scope`, `cardinality_requested`, `use_budget_requested`, `reservation_units`, `composition_receipt` | The same compact operation-set row |
+| `intent_type` | Drop it; batch compilation fixes the intent to `grant_authority` |
+| Any caller classification | Put only justified upward overrides under `classification`; omit it to use the current manifest |
+
+Bind the canonical `.task/cycle/<cycle-id>/initialization.json` when compiling the
+shared context. The compiler derives cycle and task identity from that binding.
+Legacy `scope.cycle_id` and `scope.task_id` may be carried only as exact compact
+scope echoes and must match the derived identity; they cannot establish it.
+
+Do not copy, rename, or re-publish the legacy JSON into a CAS directory. Extract the
+two bounded semantic inputs, then run `compile-semantic-context`,
+`publish-operation-set`, and `compile-operation-batch`. The producers derive
+skill/operation versions, fixed intent, schema and provenance fields, current
+manifest classifications and digest, subject/evidence/goal-source digests, request
+and idempotency identities, fingerprints, bindings, and canonical CAS paths. A
+legacy seed remains useful as contemporaneous evidence only; neither its filename
+nor its former full-object shape grants authority.
+
+Use `compile-semantic-context` for every new cycle, including a one-operation cycle.
+Require the exact canonical `.task/cycle/<cycle-id>/initialization.json` binding and
+derive both cycle and task ID from it. Reject an arbitrary-path copy or a caller
+cycle/task echo that conflicts. Accept one closed semantic input containing `actor_rank`,
+`request_context`, `session_ceiling`, and `goal_autonomy_envelope`. Let the compiler
+hash evidence and the goal source, normalize ordering, add schema/provenance fields,
+derive the fingerprint, and publish the result under
+`.task/authorization/semantic_contexts/sha256/<fingerprint>.json`. Enforce a 64 KiB
+canonical payload bound. The artifact is non-authoritative.
+
+Use `publish-operation-set` to normalize a non-empty semantic JSON list into
+`.task/authorization/operation_sets/sha256/`. Use `compile-operation-batch` only with
+that exact operation-set binding and the shared-context binding. Each seed may contain
+only `skill_id`, `operation_id`, subject/revision, scope, cardinality/budgets,
+upward-only classification, and composition receipt. Derive skill/operation versions
+from the current manifest and fix intent to `grant_authority`. Reject an arbitrary copied set,
+repeated context/ceiling fields, cross-cycle/task scope, duplicate compiled identity,
+stale evidence, stale subjects, and stale manifests. Publish each ordinary
+operation compilation first, then one batch that references those producer bindings
+under `.task/authorization/operation_batches/sha256/`. A copied context, compilation,
+batch, or plan at an arbitrary path is not producer output even when its bytes match.
+Treat the operation input as a true set: sort by canonical bytes, reject duplicates,
+cap it at 128 operations and 256 KiB, and cap the compiled batch at 2 MiB. Validation
+must recompile every row from the exact set/context/timestamp, including defaults,
+upward classification, and fixed provenance.
+
+Use `prepare-root-approval` only with a producer batch and the exact policy snapshot
+selected by `.task/authorization/state/current_policy.json`. Reject a stale but
+otherwise valid snapshot. Accept closed grant semantics:
+
+```json
+{
+  "source_kind": "explicit_user_instruction",
+  "holder_rank": "S0",
+  "expires_at": "RFC3339",
+  "session_id": "exact ID or null"
+}
+```
+
+Require `explicit_user_instruction/S3`, a lower holder rank matching every compiled
+actor, and an expiry after preparation. The ordinary plan-bound path must reject
+`platform_session_ceiling/S4`; S4 requires a distinct platform-owned producer and
+attestation. Derive cardinality, use budget, task/improvement scope,
+capabilities, subject, operation, risk, and decision class separately from each
+compilation. Emit one grant projection and unique grant/lineage/replay IDs per
+compilation. Never create one grant from the batch-wide capability × subject ×
+operation union. The schema-v5 source preserves the exact per-grant mapping in
+addition to its aggregate coverage. The plan creates no authority.
+
+`publish-root-authorization-evidence` accepts a closed host/user-signed envelope,
+verifies its exact plan/audience/window and RSA/SHA-256 signature against an active
+skill-owned trust anchor, and publishes the verified bytes in producer CAS.
+`compile-root-decision-seed` accepts only that exact evidence binding plus the same
+plan, derives the approval/time/evidence ID, canonicalizes the closed schema-v3 seed,
+and publishes it under
+`.task/authorization/root_decision_seeds/sha256/`; stdout contains only its compact
+binding. `materialize-plan-bound-root-grant` accepts only that producer-CAS binding
+and the same exact plan. It never accepts hand-authored decision JSON or a caller
+projection echo.
+
+The materializer revalidates the batch, subjects, current manifests, policy snapshot,
+plan, and decision seed before writes. It preflights every target, publishes an
+immutable write-ahead prepare, stages every grant as `draft`, activates the exact
+states, and publishes the completion receipt. A schema-v3 root grant carries its
+deterministic receipt ref; all loaders project it as `draft` until that exact receipt
+and full signed chain verifies. The transaction writer accepts only plan and
+decision-seed CAS bindings; inside its lock it boundedly reopens the exact plan,
+host/user-signed evidence, and seed, then deterministically re-derives source
+approval, capability coverage, source binding, per-request grants, and
+materialization identity. Caller-supplied source/grant bytes and importable
+producer-capability objects are not authority. Before activation it reopens every
+staged immutable byte. Receipt visibility independently performs bounded reads,
+repeats that derivation, and requires exact prepare, source materialization,
+source snapshot/metadata, all grant artifacts, and receipt bytes. Thus a crash
+between grant activations or a structurally resealed forged transaction exposes no
+usable partial authority, and exact replay completes the transaction.
+
 ## CLI surface
 
 Invoke through:
 
 ```bash
-PYTHONPATH="<skills-root>/manage-agent-authority/scripts" \
-  python3 -P -m manage_agent_authority authority <command> ...
+PYTHONPATH="<skills-root>/orchestrate-task-cycle/scripts" \
+  python3 -P -m orchestrate_task_cycle workflow authority <command> ...
 ```
 
 Use:
 
-- `compile-operation` for mechanical request/context preparation;
+- `compile-semantic-context` for the cycle-shared producer CAS context;
+- `publish-operation-set` for one producer-owned semantic operation set;
+- `compile-operation-batch` for one or more operation seeds;
+- `compile-operation` only for historical compatibility or contract diagnostics;
+- `prepare-root-approval`, `publish-root-authorization-evidence`,
+  `compile-root-decision-seed`, and
+  `materialize-plan-bound-root-grant` for ordinary root grants;
 - owner batch renderers such as `selected-successor prepare-authority` for closed
   compile/evaluate/reserve/verify orchestration over explicit existing grants;
 - `snapshot-policy`, `snapshot-source`;
-- `register-grant`, `delegate`, `compose`;
+- `delegate` and `compose` for compiler-owned prospective child/composition
+  artifacts; `register-grant` only for exact already-registered replay;
 - `evaluate`, `resolve`, `prepare-source-recovery`, `reserve`, `verify`, `consume`, `release`, `prepare-reconciliation-evidence`, `reconcile`;
 - `transition`, `status`.
 
@@ -514,7 +712,10 @@ Do not rewrite a legacy receipt or grant in place.
 
 1. Classify it as verified legacy, partial historical, invalid, or unclassified.
 2. Preserve v1 current-file digest semantics when validating a v1 receipt.
-3. Issue v2 only prospectively from immutable snapshots.
+3. Preserve schema-v2 and caller-asserted schema-v4 source approvals as read-only
+   historical artifacts. Ordinary roots use schema v5 with signed exact-plan
+   schema-v3 decision seeds; registered recovery compatibility may use schema-v3
+   exact-echo source decisions.
 4. Reconstruct historical authority only from immutable contemporaneous evidence.
 5. Never turn later completion, validation, current approval, or a migration script into an earlier permission.
 6. Mark legacy interview policy without authority questions as migration-needed; do not claim retroactive user confirmation.

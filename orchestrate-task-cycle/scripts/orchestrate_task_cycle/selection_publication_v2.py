@@ -16,13 +16,11 @@ from .selection_decision_store import (
 from .selection_publication_plan import MAX_TARGET_BYTES, OPAQUE_ID, SHA256
 from .selection_publication_payload import (
     payload_for_target,
-    persist_blob,
     task_id as _task_id,
 )
 from .selection_publication_external import (
     external_intent_identity,
     prospective_plan_assertion as _prospective_plan_assertion,
-    task_event_matches as _task_event_matches,
     validate_external_pending_assertion,
     validate_external_settlement_assertion,
 )
@@ -261,138 +259,50 @@ def validate_selected_source(root: Path, source_binding_value: Any) -> tuple[dic
     return binding, receipt
 
 
-def compile_intent(
-    root: Path, raw: dict[str, Any]
-) -> tuple[dict[str, Any], bytes]:
+def compile_intent(root: Path, raw: dict[str, Any]) -> tuple[dict[str, Any], bytes]:
     """Compile one exact intent into canonical v2 prepare material without writing."""
 
     root = root.expanduser().resolve(strict=True)
-    if raw.get("schema_version") == 2:
-        intent, intent_sha256 = external_intent_identity(raw)
-        source_binding, selected = _selected_source(root, intent["source_decision"])
-        task_binding = normalize_binding(intent["task_source"], "selection task source")
-        _, task_payload = read_bound_bytes(root, task_binding, "selection task source")
-        selection_id = _task_id(task_payload)
-        if selection_id != selected.get("selected_task_id"):
-            raise ValueError("selected task source differs from the decision task ID")
-        plan_binding = _prospective_plan_assertion(
-            root, intent["task_state_plan"], task_binding, selection_id
+    if raw.get("schema_version") != 2:
+        raise ValueError(
+            "Legacy schema-v1 selection publication intents are recovery-only "
+            "and cannot compile new prepares"
         )
-        if len(task_payload) > MAX_TARGET_BYTES:
-            raise ValueError("selection task source exceeds the size limit")
-        task_sha = _sha256_bytes(task_payload)
-        normalized = {
-            "schema_version": 3,
-            "kind": "selection_publication_prepare",
-            "selection_id": selection_id,
-            "source_decision_id": str(selected["receipt_id"]),
-            "source_decision_sha256": source_binding["sha256"],
-            "source_decision": source_binding,
-            "publication_mode": "selected_successor_external_settlement",
-            "owner_assertions": [],
-            "task_state_plan": plan_binding,
-            "intent_sha256": intent_sha256,
-            "targets": [
-                {
-                    "role": "task_alias",
-                    "target_ref": "task.md",
-                    "before_sha256": _sha256_file(root / "task.md"),
-                    "after_sha256": task_sha,
-                    "payload_ref": f".task/selection_publication/blobs/sha256/{task_sha}",
-                    "payload_sha256": task_sha,
-                    "payload_size": len(task_payload),
-                }
-            ],
-            "compiler_metrics": {
-                "inline_payload_bytes": 0,
-                "model_authored_mechanical_bytes": 0,
-                "task_payload_bytes": len(task_payload),
-            },
-        }
-        return normalized, task_payload
-
-    intent = _closed(raw, INTENT_KEYS, "selection publication intent")
-    if (
-        intent.get("schema_version") != 1
-        or intent.get("kind") != "selection_publication_intent"
-        or not isinstance(intent.get("owner_receipts"), list)
-    ):
-        raise ValueError("selection publication intent contract is invalid")
-
-    source_binding = normalize_binding(
-        intent.get("source_decision"), "selection publication source decision"
+    intent, intent_sha256 = external_intent_identity(raw)
+    source_binding, selected = _selected_source(root, intent["source_decision"])
+    task_binding = normalize_binding(intent["task_source"], "selection task source")
+    _, task_payload = read_bound_bytes(root, task_binding, "selection task source")
+    selection_id = _task_id(task_payload)
+    if selection_id != selected.get("selected_task_id"):
+        raise ValueError("selected task source differs from the decision task ID")
+    plan_binding = _prospective_plan_assertion(
+        root, intent["task_state_plan"], task_binding, selection_id
     )
-    _, source = read_bound_json(
-        root, source_binding, "selection publication source decision"
-    )
-    task_binding_value = intent.get("task_source")
-    owner_values = intent["owner_receipts"]
-    publication_mode: str
-    owner_assertions: list[dict[str, Any]]
-
-    if source.get("artifact_kind") == "selection_decision_receipt":
-        source_binding, selected = _selected_source(root, source_binding)
-        if task_binding_value is None or len(owner_values) != 1:
-            raise ValueError(
-                "selected publication requires one task source and one task-state owner receipt"
-            )
-        task_binding = normalize_binding(task_binding_value, "selection task source")
-        _, task_payload = read_bound_bytes(root, task_binding, "selection task source")
-        selection_id = _task_id(task_payload)
-        if selection_id != selected.get("selected_task_id"):
-            raise ValueError("selected task source differs from the decision task ID")
-        assertion, plan = _transition_assertion(root, owner_values[0])
-        if not _task_event_matches(plan, selection_id, task_binding["sha256"]):
-            raise ValueError(
-                "task-state transition does not bind the exact selected task bytes"
-            )
-        owner_assertions = [assertion]
-        source_decision_id = str(selected["receipt_id"])
-        publication_mode = "selected_successor"
-    elif source.get("receipt_kind") == "task_state_transition_apply_receipt":
-        if task_binding_value is not None or owner_values:
-            raise ValueError(
-                "task-transition reconciliation requires null task_source and no owner_receipts"
-            )
-        assertion, plan = _transition_assertion(root, source_binding)
-        task_path = root / "task.md"
-        current_sha = _sha256_file(task_path)
-        if current_sha is None:
-            raise ValueError("task-transition reconciliation requires current task.md")
-        task_payload = task_path.read_bytes()
-        selection_id = _task_id(task_payload)
-        if not _task_event_matches(plan, selection_id, current_sha):
-            raise ValueError(
-                "task-transition reconciliation source does not bind current task.md"
-            )
-        owner_assertions = [assertion]
-        source_decision_id = str(source["plan_id"])
-        publication_mode = "task_state_reconciliation"
-    else:
-        raise ValueError("selection publication source decision kind is unsupported")
-
     if len(task_payload) > MAX_TARGET_BYTES:
         raise ValueError("selection task source exceeds the size limit")
     task_sha = _sha256_bytes(task_payload)
-    target = {
-        "role": "task_alias",
-        "target_ref": "task.md",
-        "before_sha256": _sha256_file(root / "task.md"),
-        "after_sha256": task_sha,
-        "payload_ref": f".task/selection_publication/blobs/sha256/{task_sha}",
-        "payload_sha256": task_sha,
-        "payload_size": len(task_payload),
-    }
     normalized = {
-        "schema_version": 2,
+        "schema_version": 3,
         "kind": "selection_publication_prepare",
         "selection_id": selection_id,
-        "source_decision_id": source_decision_id,
+        "source_decision_id": str(selected["receipt_id"]),
         "source_decision_sha256": source_binding["sha256"],
         "source_decision": source_binding,
-        "publication_mode": publication_mode,
-        "owner_assertions": owner_assertions,
-        "targets": [target],
+        "publication_mode": "selected_successor_external_settlement",
+        "owner_assertions": [],
+        "task_state_plan": plan_binding,
+        "intent_sha256": intent_sha256,
+        "targets": [
+            {
+                "role": "task_alias",
+                "target_ref": "task.md",
+                "before_sha256": _sha256_file(root / "task.md"),
+                "after_sha256": task_sha,
+                "payload_ref": f".task/selection_publication/blobs/sha256/{task_sha}",
+                "payload_sha256": task_sha,
+                "payload_size": len(task_payload),
+            }
+        ],
         "compiler_metrics": {
             "inline_payload_bytes": 0,
             "model_authored_mechanical_bytes": 0,
@@ -490,7 +400,6 @@ __all__ = (
     "external_intent_identity",
     "normalize_prepare",
     "payload_for_target",
-    "persist_blob",
     "validate_external_pending_assertion",
     "validate_external_settlement_assertion",
     "validate_owner_assertion",

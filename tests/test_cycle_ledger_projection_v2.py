@@ -6,6 +6,10 @@ from pathlib import Path
 import pytest
 
 from orchestrate_task_cycle import cycle_ledger
+from orchestrate_task_cycle.ledger.compiled_events import (
+    append_compiled_system_stage,
+)
+from historical_cycle_test_support import create_sealed_legacy_v1_cycle
 
 
 def _current_path(root: Path, cycle_id: str) -> Path:
@@ -13,32 +17,30 @@ def _current_path(root: Path, cycle_id: str) -> Path:
 
 
 def _append_context(root: Path, cycle_id: str, *, sentinel: str) -> dict:
-    return cycle_ledger.append_event(
-        root,
-        cycle_id,
-        {
-            "event_id": f"{cycle_id}-context",
-            "step": "context",
-            "status": "complete",
-            "task_id": "task-1",
-            "reason": "context established",
-            "structured_context": {
-                "sentinel": sentinel,
-                "nested": {"body": "x" * 200_000},
-            },
+    metadata = cycle_ledger.read_initialization_metadata(root, cycle_id)
+    event = {
+        "event_id": f"{cycle_id}-context",
+        "step": "context",
+        "status": "complete",
+        "task_id": "task-1",
+        "reason": "context established",
+        "structured_context": {
+            "sentinel": sentinel,
+            "nested": {"body": "x" * 200_000},
         },
-    )
+    }
+    if metadata.get("workflow_contract_profile") == "compiler_first_enforced_v1":
+        return append_compiled_system_stage(root, cycle_id, "context")
+    return cycle_ledger.append_event(root, cycle_id, event)
 
 
 def test_legacy_cycle_preserves_full_current_stage_shape(tmp_path: Path) -> None:
     cycle_id = "cycle-legacy-projection"
-    initialized = cycle_ledger.init_cycle(
+    initialized = create_sealed_legacy_v1_cycle(
         tmp_path,
         cycle_id,
         "task-1",
         "legacy projection",
-        stage_compiler_protocol_version=1,
-        stage_preparation_schema_version=1,
     )
     assert initialized["initialization"]["stage_compiler_protocol_version"] == 1
     assert initialized["initialization"]["stage_preparation_schema_version"] == 1
@@ -65,6 +67,10 @@ def test_protocol_v2_stores_compact_refs_and_hydrates_exact_events(
         stage_compiler_protocol_version=2,
     )
     assert initialized["initialization"]["stage_compiler_protocol_version"] == 2
+    assert (
+        initialized["initialization"]["workflow_contract_profile"]
+        == "compiler_first_enforced_v1"
+    )
     assert initialized["current_stage"]["projection_version"] == 2
 
     _append_context(tmp_path, cycle_id, sentinel="must-not-be-projected")
@@ -86,9 +92,8 @@ def test_protocol_v2_stores_compact_refs_and_hydrates_exact_events(
     expanded = cycle_ledger.read_current_expanded(tmp_path, cycle_id)
     assert expanded["latest_event"] == events[0]
     assert expanded["steps"]["context"] == events[0]
-    assert expanded["latest_event"]["structured_context"]["sentinel"] == (
-        "must-not-be-projected"
-    )
+    assert isinstance(expanded["latest_event"]["context_fingerprint"], str)
+    assert expanded["latest_event"]["context_fingerprint"]
 
 
 def test_protocol_v2_current_projection_is_replay_stable(tmp_path: Path) -> None:
@@ -192,15 +197,17 @@ def test_cli_defaults_new_cycles_to_v2_but_preserves_existing_v1(
     )
     created = json.loads(capsys.readouterr().out)
     assert created["initialization"]["stage_compiler_protocol_version"] == 2
+    assert (
+        created["initialization"]["workflow_contract_profile"]
+        == "compiler_first_enforced_v1"
+    )
     assert created["current_stage"]["projection_version"] == 2
 
-    cycle_ledger.init_cycle(
+    create_sealed_legacy_v1_cycle(
         tmp_path,
         "cycle-cli-v1",
         "task-1",
         "cli v1",
-        stage_compiler_protocol_version=1,
-        stage_preparation_schema_version=1,
     )
     assert (
         cycle_ledger.main(

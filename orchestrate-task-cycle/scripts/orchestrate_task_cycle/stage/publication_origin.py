@@ -212,7 +212,7 @@ def load_origin_intent(
     }
 
 
-def publish_origin_object(
+def _publish_origin_object(
     root: Path,
     cycle_id: str,
     origin_id: str,
@@ -294,8 +294,99 @@ def publish_origin_object(
     }
 
 
+def publish_compiler_artifact_origin(
+    root: Path,
+    preparation: dict[str, Any],
+    object_kind: str,
+    target: Path,
+    payload: bytes,
+) -> dict[str, Any]:
+    """Publish only an artifact bound to a freshly re-derived preparation."""
+
+    if object_kind not in {"context", "work_order", "machine_input"}:
+        raise ValueError("compiler artifact origin kind is invalid")
+    from .preparation_store import (
+        _validate_compiled_preparation_for_publication,
+    )
+
+    validated = _validate_compiled_preparation_for_publication(
+        root, preparation
+    )
+    binding_field = f"{object_kind}_binding"
+    expected = validated.get(binding_field)
+    digest = hashlib.sha256(payload).hexdigest()
+    actual = {
+        "artifact_type": object_kind,
+        "ref": rel_path(root, target),
+        "sha256": digest,
+        "size_bytes": len(payload),
+    }
+    if expected != actual:
+        raise ValueError(
+            "compiler artifact origin differs from exact compiler derivation"
+        )
+    return _publish_origin_object(
+        root,
+        str(validated["cycle_id"]),
+        str(validated["preparation_id"]),
+        object_kind,
+        target,
+        payload,
+    )
+
+
+def publish_preparation_origin(
+    root: Path,
+    cycle_id: str,
+    origin_id: str,
+    target: Path,
+    payload: bytes,
+) -> dict[str, Any]:
+    """Publish only the exact current compiler preparation projection."""
+
+    try:
+        value = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("preparation origin payload is invalid JSON") from exc
+    if (
+        not isinstance(value, dict)
+        or canonical_bytes(value) + b"\n" != payload
+    ):
+        raise ValueError("preparation origin payload is not canonical JSON")
+    from .preparation_store import (
+        _validate_compiled_preparation_for_publication,
+        preparation_path,
+    )
+
+    validated = _validate_compiled_preparation_for_publication(root, value)
+    digest = hashlib.sha256(payload).hexdigest()
+    expected_path = preparation_path(
+        root,
+        str(validated["cycle_id"]),
+        str(validated["target"]),
+        digest,
+    )
+    if (
+        cycle_id != validated.get("cycle_id")
+        or origin_id != validated.get("preparation_id")
+        or target != expected_path
+    ):
+        raise ValueError(
+            "preparation origin differs from exact compiler derivation"
+        )
+    return _publish_origin_object(
+        root,
+        cycle_id,
+        origin_id,
+        "preparation",
+        target,
+        payload,
+    )
+
+
 __all__ = [
     "INTENT_KIND",
     "load_origin_intent",
-    "publish_origin_object",
+    "publish_compiler_artifact_origin",
+    "publish_preparation_origin",
 ]

@@ -297,6 +297,7 @@ def _bound_preparation(
             "target": preparation["target"],
             "dependency_selectors": list(spec.dependency_selectors),
             "state_fingerprint": preparation["state_fingerprint"],
+            "collection_limits": context_metrics["collection_limits"],
             "context_metrics": context_metrics,
             "precondition_fingerprints": fingerprints,
             "model_context": model,

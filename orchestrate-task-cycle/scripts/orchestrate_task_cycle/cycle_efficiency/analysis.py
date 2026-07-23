@@ -14,6 +14,7 @@ from .common import (
     first_present,
 )
 from .compiler_metrics import compiler_efficiency_projection
+from .compiler_contract_lint import lint_compiler_contract
 from .findings import append_budget_findings, base_findings, recommendations
 from .observations import observation_state
 from .scope import scope_state
@@ -172,6 +173,9 @@ def analyze(
         else current_cycle_events(events)
     )
     compiler_efficiency = compiler_efficiency_projection(root, metric_events)
+    compiler_efficiency["contract_lint"] = lint_compiler_contract(
+        root, metric_events
+    )
     return _result(
         events,
         task_id,

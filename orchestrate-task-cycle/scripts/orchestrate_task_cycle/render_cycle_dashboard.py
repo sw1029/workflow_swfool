@@ -30,6 +30,8 @@ from .dashboard.constants import (
 from .dashboard.errors import DashboardDataError
 from .dashboard.io import atomic_write, load_current, load_events
 from .dashboard.rendering import render_summary
+from .ledger.support import read_initialization_metadata
+from .ledger.workflow_contract import require_cycle_mutation_contract
 
 
 __all__ = [
@@ -125,6 +127,20 @@ def _safe_cycle_paths(root: Path, cycle_id: str) -> tuple[Path, Path, Path, Path
     return cycle_directory, ledger, current, dashboard
 
 
+def _safe_result_path(root: Path, value: str | None) -> Path | None:
+    if value is None:
+        return None
+    path = Path(value)
+    path = (path if path.is_absolute() else root / path).resolve(strict=False)
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise DashboardDataError(
+            "result output must stay inside workspace root"
+        ) from exc
+    return path
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Render a fail-closed .task/cycle dashboard and result contract."
@@ -146,8 +162,12 @@ def main(argv: list[str] | None = None) -> int:
         _cycle_directory, ledger, current_path, dashboard_path = _safe_cycle_paths(
             root, args.cycle_id
         )
+        result_path = _safe_result_path(root, args.result_output)
+        if args.write or result_path is not None:
+            metadata = read_initialization_metadata(root, args.cycle_id)
+            require_cycle_mutation_contract(metadata, "render cycle dashboard")
         events = load_events(ledger)
-    except DashboardDataError as exc:
+    except (DashboardDataError, ValueError) as exc:
         _write_error(str(exc), args.format)
         return 2
     current, current_load_status = load_current(current_path)
@@ -170,18 +190,7 @@ def main(argv: list[str] | None = None) -> int:
         + ([summary["dashboard_path"]] if args.write else [])
         + summary["artifacts"]
     )
-    if args.result_output:
-        result_path = Path(args.result_output)
-        result_path = (
-            result_path if result_path.is_absolute() else root / result_path
-        ).resolve(strict=False)
-        try:
-            result_path.relative_to(root)
-        except ValueError:
-            sys.stderr.write(
-                "dashboard blocked: result output must stay inside workspace root\n"
-            )
-            return 2
+    if result_path is not None:
         summary["result_path"] = result_path.relative_to(root).as_posix()
         summary["evidence_paths"] = unique(
             summary["evidence_paths"] + [summary["result_path"]]

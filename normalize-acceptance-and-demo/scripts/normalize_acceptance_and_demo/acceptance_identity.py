@@ -12,6 +12,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from .acceptance_contract_registry import required_verifier_is_unverifiable
+
 
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 ACCEPTANCE_STATUSES = {"normalized", "partial", "blocked", "needs_review"}
@@ -172,7 +174,36 @@ def build_satisfiability_row(
 
 
 def recompute_contract_satisfiability(packet: dict[str, Any]) -> None:
-    if "validation_predicate_contract" not in packet and "producer_directives" not in packet:
+    acceptance_contract = packet.get("acceptance_contract")
+    verifier_declared = isinstance(acceptance_contract, dict) and isinstance(
+        acceptance_contract.get("acceptance_verifier_contract"), dict
+    )
+    gate_unverifiable = required_verifier_is_unverifiable(
+        acceptance_contract
+    )
+    if (
+        "validation_predicate_contract" not in packet
+        and "producer_directives" not in packet
+    ):
+        if not verifier_declared:
+            return
+        supplied_unverifiable = packet.get("unverifiable_acceptance_contract")
+        if (
+            supplied_unverifiable is not None
+            and type(supplied_unverifiable) is not bool
+        ):
+            raise AcceptanceIdentityError(
+                "unverifiable_acceptance_contract must be a JSON boolean"
+            )
+        if (
+            supplied_unverifiable is not None
+            and supplied_unverifiable != gate_unverifiable
+        ):
+            raise AcceptanceIdentityError(
+                "caller-provided unverifiable_acceptance_contract contradicts "
+                "recomputed verifier completeness"
+            )
+        packet["unverifiable_acceptance_contract"] = gate_unverifiable
         return
     contract = packet.get("validation_predicate_contract")
     criteria = contract_records(contract, "criteria")
@@ -225,7 +256,9 @@ def recompute_contract_satisfiability(packet: dict[str, Any]) -> None:
     supplied_unverifiable = packet.get("unverifiable_acceptance_contract")
     if supplied_unverifiable is not None and type(supplied_unverifiable) is not bool:
         raise AcceptanceIdentityError("unverifiable_acceptance_contract must be a JSON boolean")
-    derived_unverifiable = any(row["evaluation_status"] == "not_evaluated" for row in rows)
+    derived_unverifiable = gate_unverifiable or any(
+        row["evaluation_status"] == "not_evaluated" for row in rows
+    )
     if supplied_unverifiable is not None and supplied_unverifiable != derived_unverifiable:
         raise AcceptanceIdentityError("caller-provided unverifiable_acceptance_contract contradicts recomputed satisfiability")
     packet["unverifiable_acceptance_contract"] = derived_unverifiable
@@ -294,6 +327,15 @@ def validate_final_packet(packet: dict[str, Any]) -> None:
         raise AcceptanceIdentityError("normalized acceptance cannot retain blockers")
     if status in {"blocked", "needs_review"} and not blockers:
         raise AcceptanceIdentityError("blocked/needs_review acceptance requires a concrete blocker")
+    if packet.get("unverifiable_acceptance_contract") is True:
+        if status == "normalized":
+            raise AcceptanceIdentityError(
+                "normalized acceptance cannot require an unevaluated verifier or gate hook"
+            )
+        if not blockers:
+            raise AcceptanceIdentityError(
+                "unverifiable acceptance requires a concrete blocker or residual scope"
+            )
     if not isinstance(packet.get("evidence_paths"), list):
         raise AcceptanceIdentityError("final acceptance packet requires explicit evidence_paths list")
     contract = packet.get("validation_predicate_contract")

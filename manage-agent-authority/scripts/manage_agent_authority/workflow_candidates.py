@@ -15,6 +15,7 @@ from .projection_io import safe_json
 from .projection_io import safe_owned_directory
 from .projection_io import validate_grant_state
 from .projection_reservations import current_operation_manifest_blockers
+from .root_grant_visibility import effective_root_grant_state
 
 
 GrantRecord = tuple[dict[str, Any], str, dict[str, Any], dict[str, str]]
@@ -44,6 +45,7 @@ def validated_grants(root: Path) -> GrantRecords:
         )
         state, state_digest = safe_json(root, state_path, "authority grant state")
         state = validate_grant_state(state, grant, digest, "authority grant state")
+        state = effective_root_grant_state(root, grant, digest, state)
         if grant["grant_id"] in records:
             raise SystemExit("Authority grant identities must be unique.")
         records[grant["grant_id"]] = (

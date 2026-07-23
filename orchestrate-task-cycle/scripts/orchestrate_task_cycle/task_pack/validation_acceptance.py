@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from ..acceptance_contract import acceptance_verifier_contract
 from .packet_io import non_empty, truthy
 
 FindingAdder = Callable[..., None]
@@ -11,11 +12,7 @@ FindingAdder = Callable[..., None]
 
 def validate_verifier_acceptance(record: dict[str, Any], item: dict[str, Any], result: dict[str, Any], verifier_contract: dict[str, Any], explicit_descope: bool, item_id: str, directive_id: str, add: FindingAdder) -> None:
     verifier_gate = result.get("acceptance_verifier_gate") if isinstance(result.get("acceptance_verifier_gate"), dict) else {}
-    verifier_gate = verifier_gate or (
-        result.get("acceptance_verifier_contract")
-        if isinstance(result.get("acceptance_verifier_contract"), dict)
-        else {}
-    )
+    verifier_gate = verifier_gate or acceptance_verifier_contract(result)
     verifier_required = truthy(
         verifier_contract.get("verifier_required")
         or verifier_contract.get("required")
@@ -240,4 +237,3 @@ def validate_residual_acceptance(record: dict[str, Any], item: dict[str, Any], r
             "Consumed pack items cannot treat task/advice/pack/cycle/run/date/hash/version churn as a new family or stall reset.",
             {"item_id": item_id, "directive_id": directive_id or None},
         )
-

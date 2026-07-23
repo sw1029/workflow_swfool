@@ -349,8 +349,39 @@ def monitor(data: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
 
 def append_ledger(root: Path, cycle_id: str, event: dict[str, Any]) -> dict[str, Any]:
     from .cycle_ledger import append_event
+    from .ledger.compiled_events import append_compiled_stage_observation
+    from .ledger.semantic_seeds import make_stage_observation_seed
+    from .ledger.support import read_initialization_metadata
+    from .ledger.workflow_contract import workflow_contract_state
 
-    return append_event(root, cycle_id, event)
+    metadata = read_initialization_metadata(root, cycle_id)
+    state = workflow_contract_state(metadata)
+    if state == "protocol_v1_unchanged":
+        return append_event(root, cycle_id, event)
+    if state != "enforced":
+        raise ValueError(
+            "historical unmarked protocol-v2 cycles are read-only; "
+            "initialize a new compiler-first cycle"
+        )
+    semantic = dict(event)
+    semantic["observation_kind"] = semantic.pop(
+        "event_kind", "long_run_monitor"
+    )
+    for field in (
+        "cycle_id",
+        "event_id",
+        "format_version",
+        "step",
+        "status",
+        "created_at",
+        "producer_kind",
+        "request_fingerprint",
+        "ledger_sequence",
+    ):
+        semantic.pop(field, None)
+    return append_compiled_stage_observation(
+        root, cycle_id, make_stage_observation_seed(semantic)
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

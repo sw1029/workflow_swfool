@@ -51,12 +51,13 @@ Construct the packet from owner bindings instead of copying fields by hand:
 
 ```bash
 python3 -P -m orchestrate_task_cycle authority-packet --root . \
+  --cycle-id <cycle> --publish \
   --decision-binding '{"ref":".task/authorization/decisions/<id>.json","sha256":"<sha>"}' \
   --reservation-binding '{"ref":".task/authorization/reservations/<id>.json","sha256":"<sha>"}' \
   --verification-binding '{"ref":".task/authorization/verifications/<id>.json","sha256":"<sha>"}'
 ```
 
-Omit reservation and verification only for observe or non-allowed decisions. The constructor derives operation, subject, scope, independent owner axes, selected and lineage grants, approval projection, and composition from the reopened decision; it derives mutable CAS bindings from the reopened reservation and verification; then it runs both closed-packet and artifact-bound validation before emitting JSON. A repository adapter may conservatively override `local_resolution` to evidence-backed `available` with repeated `--local-evidence-id`; it may not assert `unavailable`, alter an owner decision, or widen any other axis.
+Omit reservation and verification only for observe or non-allowed decisions. The constructor derives operation, subject, scope, independent owner axes, selected and lineage grants, approval projection, and composition from the reopened decision; it derives mutable CAS bindings from the reopened reservation and verification; then it runs both closed-packet and artifact-bound validation before publishing the canonical cycle-local owner-result CAS binding. Consume that returned binding, not a copied full packet. A repository adapter may conservatively override `local_resolution` to evidence-backed `available` with repeated `--local-evidence-id`; it may not assert `unavailable`, alter an owner decision, or widen any other axis.
 
 ## Independent axes
 

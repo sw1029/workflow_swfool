@@ -9,6 +9,7 @@ import pytest
 
 from selection_publication_legacy_support import (
     prepare_legacy_publication as prepare_publication,
+    seal_historical_legacy_publication_fixture,
 )
 
 from orchestrate_task_cycle.selection_decision_receipt import (
@@ -18,9 +19,6 @@ from orchestrate_task_cycle.selection_decision_receipt import (
 from orchestrate_task_cycle.selection_tick import build_selection_tick
 from orchestrate_task_cycle.selection_tick_contract import validate_selection_tick_v2
 from orchestrate_task_cycle.selection_tick_policy import EVIDENCE_CLASSES
-from orchestrate_task_cycle.selection_publication import (
-    publish_prepared,
-)
 from selection_synthesis_support import persisted_selection_synthesis
 
 
@@ -660,7 +658,7 @@ def test_selection_tick_routes_pending_publication_to_recovery(tmp_path: Path) -
 def test_selection_tick_blocks_committed_selection_head_drift(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     task = (root / "task.md").read_bytes()
-    prepared = prepare_publication(
+    seal_historical_legacy_publication_fixture(
         root,
         {
             "schema_version": 1,
@@ -680,7 +678,6 @@ def test_selection_tick_blocks_committed_selection_head_drift(tmp_path: Path) ->
             ],
         },
     )
-    publish_prepared(root, prepared["transaction_id"])
     _write(root / "task.md", "# Drifted\n")
 
     packet = build_selection_tick(root)

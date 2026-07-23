@@ -42,6 +42,27 @@ def _operation_input(parser: argparse.ArgumentParser) -> None:
 
 
 def _compilation(subparsers: Any, handlers: dict[str, Handler]) -> None:
+    context = subparsers.add_parser(
+        "compile-semantic-context",
+        help="Publish one cycle-shared semantic context CAS artifact.",
+    )
+    _root(context)
+    context.add_argument("--initialization", required=True)
+    context.add_argument(
+        "--semantic", required=True, help="Semantic JSON object, JSON file, or -"
+    )
+    context.set_defaults(func=handlers["compile_semantic_context"])
+
+    operation_set = subparsers.add_parser(
+        "publish-operation-set",
+        help="Publish semantic operation seeds into a producer-owned CAS.",
+    )
+    _root(operation_set)
+    operation_set.add_argument(
+        "--operations", required=True, help="Semantic JSON list, JSON file, or -"
+    )
+    operation_set.set_defaults(func=handlers["publish_operation_set"])
+
     parser = subparsers.add_parser("compile-operation")
     _root(parser)
     _at(parser)
@@ -54,6 +75,56 @@ def _compilation(subparsers: Any, handlers: dict[str, Handler]) -> None:
         help="immutably publish the non-authoritative compilation and emit its binding",
     )
     parser.set_defaults(func=handlers["compile_operation"])
+
+    batch = subparsers.add_parser(
+        "compile-operation-batch",
+        help="Compile producer-owned operation inputs from one shared context.",
+    )
+    _root(batch)
+    _at(batch)
+    _skills_root(batch)
+    batch.add_argument("--semantic-context", required=True)
+    batch.add_argument("--operation-set", required=True)
+    batch.set_defaults(func=handlers["compile_operation_batch"])
+
+    approval = subparsers.add_parser(
+        "prepare-root-approval",
+        help="Render an ordinary exact root-grant approval projection.",
+    )
+    _root(approval)
+    _at(approval)
+    _skills_root(approval)
+    approval.add_argument("--operation-batch", required=True)
+    approval.add_argument("--policy-snapshot", required=True)
+    approval.add_argument("--grant-semantics", required=True)
+    approval.set_defaults(func=handlers["prepare_root_approval"])
+
+    evidence = subparsers.add_parser(
+        "publish-root-authorization-evidence",
+        help=(
+            "Verify signed host/user exact-plan authorization and publish it "
+            "into producer CAS."
+        ),
+    )
+    _root(evidence)
+    _skills_root(evidence)
+    evidence.add_argument("--evidence", required=True)
+    evidence.set_defaults(
+        func=handlers["publish_root_authorization_evidence"]
+    )
+
+    decision = subparsers.add_parser(
+        "compile-root-decision-seed",
+        help=(
+            "Compile a compact root-plan decision from verified signed "
+            "authorization evidence."
+        ),
+    )
+    _root(decision)
+    _skills_root(decision)
+    decision.add_argument("--approval-plan", required=True)
+    decision.add_argument("--authorization-evidence", required=True)
+    decision.set_defaults(func=handlers["compile_root_decision_seed"])
 
 
 def _reconciliation(subparsers: Any, handlers: dict[str, Handler]) -> None:
@@ -102,15 +173,26 @@ def _policy_registration(subparsers: Any, handlers: dict[str, Handler]) -> None:
     snapshot_source.add_argument("--source-ref", required=True)
     snapshot_source.set_defaults(func=handlers["snapshot_source"])
 
-    register = subparsers.add_parser("register-grant")
+    register = subparsers.add_parser(
+        "register-grant",
+        help="Read an exact already-registered historical grant replay.",
+    )
     _root(register)
     register.add_argument("--grant", required=True)
     register.set_defaults(func=handlers["register_grant"])
 
-    delegate = subparsers.add_parser("delegate")
+    delegate = subparsers.add_parser(
+        "delegate",
+        help="Compile and register a child from closed narrowing semantics.",
+    )
     _root(delegate)
+    _at(delegate)
     delegate.add_argument("--parent-grant-id", required=True)
-    delegate.add_argument("--grant", required=True)
+    delegate.add_argument(
+        "--semantics",
+        required=True,
+        help="Closed child-delegation semantic JSON object, file, or -.",
+    )
     delegate.set_defaults(func=handlers["delegate"])
 
 
@@ -122,9 +204,19 @@ def _evaluation(subparsers: Any, handlers: dict[str, Handler]) -> None:
     _operation_input(evaluate)
     evaluate.set_defaults(func=handlers["evaluate"])
 
-    compose = subparsers.add_parser("compose")
+    compose = subparsers.add_parser(
+        "compose",
+        help="Compile a composition from one producer-owned operation batch.",
+    )
     _root(compose)
-    compose.add_argument("--composition", required=True)
+    _at(compose)
+    _skills_root(compose)
+    compose.add_argument("--operation-batch", required=True)
+    compose.add_argument("--request-sha256", required=True)
+    compose.add_argument(
+        "--grant-id", action="append", required=True, dest="grant_ids"
+    )
+    compose.add_argument("--source-approval", required=True)
     compose.set_defaults(func=handlers["compose"])
 
 def _lifecycle(subparsers: Any, handlers: dict[str, Handler]) -> None:
@@ -227,6 +319,33 @@ def _recovery_and_status(
     materialize.add_argument("--recovery-recipe", required=True)
     materialize.add_argument("--user-decision", required=True)
     materialize.set_defaults(func=handlers["materialize_approved_recovery"])
+
+    root_grant = subparsers.add_parser(
+        "materialize-plan-bound-root-grant",
+        help="Materialize exact grants from a compact plan-bound approval seed.",
+    )
+    _root(root_grant)
+    _skills_root(root_grant)
+    root_grant.add_argument("--approval-plan", required=True)
+    root_grant.add_argument("--decision-seed", required=True)
+    root_grant.set_defaults(func=handlers["materialize_plan_bound_root_grant"])
+
+    legacy_root_grant = subparsers.add_parser(
+        "materialize-exact-echo-root-grant",
+        help=argparse.SUPPRESS,
+    )
+    _root(legacy_root_grant)
+    _skills_root(legacy_root_grant)
+    legacy_root_grant.add_argument("--approval-plan", required=True)
+    legacy_root_grant.add_argument(
+        "--decision-seed",
+        "--approval-decision",
+        dest="decision_seed",
+        required=True,
+    )
+    legacy_root_grant.set_defaults(
+        func=handlers["materialize_plan_bound_root_grant"]
+    )
 
     transition = subparsers.add_parser("transition")
     _root(transition)

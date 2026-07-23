@@ -6,7 +6,9 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
+from .compiler_contract_lint import lint_owner_result
 from .owner_validation import validate_owner_result
+from .prevalidation_compiler import compile_prevalidation
 from .scan_transition import apply_scan, prepare_scan
 from .selected_successor import prepare_selected_successor
 from .storage import jsonl_path, markdown_path, now_iso
@@ -79,6 +81,34 @@ def cmd_validate_owner_result(args: argparse.Namespace) -> None:
     _print(result)
 
 
+def cmd_lint_owner_result(args: argparse.Namespace) -> None:
+    try:
+        result = lint_owner_result(
+            Path(args.root),
+            owner_result=_binding(
+                args.owner_result_ref, args.owner_result_sha256
+            ),
+            cycle_id=args.cycle_id,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    _print(result)
+    if result["lint_status"] == "block":
+        raise SystemExit(2)
+
+
+def cmd_compile_prevalidation(args: argparse.Namespace) -> None:
+    try:
+        result = compile_prevalidation(
+            Path(args.root),
+            at=args.at,
+            publish=not args.dry_run,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    _print(result)
+
+
 def run_scan_command(
     args: argparse.Namespace,
     legacy_scan: Callable[..., dict[str, Any]],
@@ -126,6 +156,23 @@ def register_compiler_parsers(subparsers: Any) -> None:
     apply.add_argument("--compilation-ref", required=True)
     apply.add_argument("--compilation-sha256", required=True)
     apply.set_defaults(func=cmd_apply_scan)
+
+    lint = subparsers.add_parser(
+        "lint-owner-result",
+        help="Bound-check one task-state owner-result compiler contract.",
+    )
+    lint.add_argument("--owner-result-ref", required=True)
+    lint.add_argument("--owner-result-sha256", required=True)
+    lint.add_argument("--cycle-id", required=True)
+    lint.set_defaults(func=cmd_lint_owner_result)
+
+    prevalidation = subparsers.add_parser(
+        "compile-prevalidation",
+        help="Compile one exact task-index prevalidation owner result.",
+    )
+    prevalidation.add_argument("--at", required=True)
+    prevalidation.add_argument("--dry-run", action="store_true")
+    prevalidation.set_defaults(func=cmd_compile_prevalidation)
 
     successor = subparsers.add_parser(
         "prepare-selected-successor",

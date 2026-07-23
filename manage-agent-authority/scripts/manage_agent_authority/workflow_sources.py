@@ -9,7 +9,11 @@ from .canonical import object_sha256, parse_time
 from .contracts import IDENTIFIER_RE, risk_value
 from .operations import load_operation
 from .projection_io import safe_json, safe_owned_directory
-from .source_approval import validate_delegation_lineage, validate_source_approval
+from .source_approval import (
+    validate_delegation_lineage,
+    validate_source_approval,
+    validate_source_decision_binding,
+)
 from .workflow_candidates import GrantRecords, grant_covers_request
 
 
@@ -22,6 +26,8 @@ def _materialization_candidates(
     evaluated_at: Any,
     rank_floor: str,
     grant_records: GrantRecords,
+    *,
+    allow_materialization: bool,
 ) -> tuple[list[str], list[str], list[dict[str, Any]]]:
     materializable: list[str] = []
     usable: list[str] = []
@@ -54,7 +60,15 @@ def _materialization_candidates(
                     }
                 )
             else:
-                materializable.append(grant_id)
+                if allow_materialization:
+                    materializable.append(grant_id)
+                else:
+                    unavailable.append(
+                        {
+                            "grant_id": grant_id,
+                            "blocker_codes": ["historical_source_read_only"],
+                        }
+                    )
             continue
         grant, grant_digest, grant_state, state_binding = grant_records[grant_id]
         covers, blocker_codes = grant_covers_request(
@@ -124,6 +138,19 @@ def source_approvals_covering(
         if digest != match.group(1):
             raise SystemExit("Source snapshot filename digest does not match its bytes.")
         approval = validate_source_approval(raw_approval)
+        approval_binding = {
+            "ref": path.relative_to(root).as_posix(),
+            "sha256": digest,
+        }
+        try:
+            if approval["schema_version"] == 2:
+                decision_kind = None
+            else:
+                decision_kind = validate_source_decision_binding(root, approval)
+                if decision_kind == "authority_root_approval_decision":
+                    continue
+        except SystemExit:
+            continue
         if now < parse_time(approval["not_before"], "source not_before"):
             continue
         if approval["expires_at"] and now >= parse_time(
@@ -156,19 +183,29 @@ def source_approvals_covering(
             )
         ):
             continue
-        approval_binding = {
-            "ref": path.relative_to(root).as_posix(),
-            "sha256": digest,
-        }
+        candidate_approval = approval
+        if approval["schema_version"] in {4, 5}:
+            exact = [
+                projection
+                for projection in approval["grant_projections"]
+                if projection["request_sha256"] == request_sha256
+            ]
+            if len(exact) != 1:
+                continue
+            candidate_approval = {
+                **approval,
+                "grant_ids": [exact[0]["grant_id"]],
+            }
         materializable, usable, unavailable = _materialization_candidates(
             root,
-            approval,
+            candidate_approval,
             approval_binding,
             request,
             context,
             now,
             operation_contract["source_rank_floor"],
             grant_records,
+            allow_materialization=approval["schema_version"] in {3, 5},
         )
         ready = bool(materializable or usable)
         internal_defect_codes = {

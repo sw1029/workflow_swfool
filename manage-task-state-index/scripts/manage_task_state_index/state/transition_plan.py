@@ -16,6 +16,7 @@ from .render import (
     _rebuild_markdown_unlocked,
     _render_markdown_payload,
 )
+from .selected_successor_guard import plan_requires_selected_successor_lease
 from .storage import (
     jsonl_path,
     now_iso,
@@ -28,6 +29,7 @@ from .transition_plan_contract import (
     RESULT_SCHEMA_VERSION,
     canonical_bytes as _canonical_bytes,
     canonical_plan_output_path,
+    owned_transition_file,
     publish_immutable as _publish_immutable,
     regular_payload as _regular_payload,
     sha256_bytes as _sha256_bytes,
@@ -254,11 +256,23 @@ def publish_transition_plan(
         raise ValueError(
             "Task-state plan output must be an exact canonical plan-id path"
         )
-    path = canonical_plan_output_path(
-        root,
-        expected_output,
-    )
     payload = _canonical_bytes(plan) + b"\n"
+    recovery_path = owned_transition_file(
+        root,
+        "transition_plans",
+        f"{plan['plan_id']}.json",
+        create_parent=False,
+    )
+    if (
+        plan.get("schema_version") == PLAN_SCHEMA_VERSION
+        and plan_requires_selected_successor_lease(plan)
+        and not recovery_path.is_file()
+    ):
+        raise ValueError(
+            "Legacy schema-v1 task-alias transition plans are recovery-only; "
+            "new selected successors require the guarded owner compiler"
+        )
+    path = canonical_plan_output_path(root, expected_output)
     validate_transition_plan_semantics(root, plan)
     if not path.exists():
         planning_current, planning_defects = _cas_status(
@@ -290,6 +304,7 @@ def apply_transition_plan(
     path_value: str | Path,
     *,
     external_prepare: dict[str, str] | None = None,
+    execution_lease: dict[str, str] | None = None,
     _selected_successor_execution_token: object | None = None,
 ) -> dict[str, Any]:
     from .transition_apply import apply_transition_plan as apply
@@ -298,6 +313,7 @@ def apply_transition_plan(
         root,
         path_value,
         external_prepare=external_prepare,
+        execution_lease=execution_lease,
         _selected_successor_execution_token=_selected_successor_execution_token,
         rebuild_markdown=_rebuild_markdown_unlocked,
     )
@@ -326,6 +342,7 @@ def settle_transition_external(
     path_value: str | Path,
     external_commit: dict[str, str],
     *,
+    execution_lease: dict[str, str] | None = None,
     _selected_successor_execution_token: object | None = None,
 ) -> dict[str, Any]:
     from .transition_external import settle_external_transition
@@ -334,6 +351,7 @@ def settle_transition_external(
         root,
         path_value,
         external_commit,
+        execution_lease=execution_lease,
         _selected_successor_execution_token=_selected_successor_execution_token,
     )
 

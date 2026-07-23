@@ -6,16 +6,38 @@ from pathlib import Path
 
 import pytest
 
-from manage_agent_authority.artifact_store import register_grant
+from authority_historical_fixture_support import (
+    register_historical_grant,
+    snapshot_historical_source,
+)
 from manage_agent_authority.artifact_store import snapshot_file
 from manage_agent_authority.authority_cli import command_verify
 from manage_agent_authority.canonical import sha256_file
 from manage_agent_authority.canonical import write_immutable_json
 from manage_agent_authority.evaluator import evaluate
 from manage_agent_authority.lifecycle import reserve
-from orchestrate_task_cycle.authority_boundary import project_authority_packet
-from orchestrate_task_cycle.authority_packet import build_authority_packet
+from orchestrate_task_cycle.authority_boundary import (
+    canonical_sha256,
+    project_authority_packet,
+)
+from orchestrate_task_cycle.authority_packet import (
+    build_authority_packet,
+    main as authority_packet_main,
+    publish_authority_packet,
+)
+from orchestrate_task_cycle.cycle_ledger import (
+    COMPILER_FIRST_WORKFLOW_CONTRACT_PROFILE,
+    init_cycle,
+)
 from orchestrate_task_cycle.result_contract.api import validate
+from orchestrate_task_cycle.stage.artifact_store import write_stage_input
+from orchestrate_task_cycle.stage.input_compilers import publish_owner_result
+from orchestrate_task_cycle.stage.preparation_store import publish_preparation
+from orchestrate_task_cycle.stage.service import (
+    advance_stage,
+    prepare_stage,
+    submit_stage,
+)
 
 
 AT = "2026-07-18T00:00:00+00:00"
@@ -146,10 +168,8 @@ def _setup_owner(root: Path) -> tuple[dict[str, object], dict[str, object], Path
             "integrity_status": "verified",
         },
     )
-    source_binding = snapshot_file(
-        root, str(approval.relative_to(root)), "source_approval"
-    )
-    register_grant(
+    source_binding = snapshot_historical_source(root, approval)
+    register_historical_grant(
         root,
         {
             "schema_version": 2,
@@ -262,12 +282,286 @@ def test_real_owner_allowed_mutation_builds_verified_orchestrator_packet(
     assert packet["decision_binding"]["decision"] == "allowed"
     assert packet["reservation_binding"]["status"] == "reserved"
     assert packet["dispatch_preflight"]["stage"] == "pre_dispatch"
-    assert (
-        validate(
-            "authority",
-            packet,
-            "block",
-            {"workspace_root": str(tmp_path)},
-        )["status"]
-        == "ok"
+    validation = validate(
+        "authority",
+        packet,
+        "block",
+        {"workspace_root": str(tmp_path)},
     )
+    assert validation["status"] == "ok", validation
+
+    init_cycle(
+        tmp_path,
+        "cycle-owner-packet-integration",
+        "task-owner-packet-integration",
+        "authority owner publication",
+        workflow_contract_profile=COMPILER_FIRST_WORKFLOW_CONTRACT_PROFILE,
+    )
+    advanced = advance_stage(
+        tmp_path, "cycle-owner-packet-integration", apply=True
+    )
+    assert advanced["stop_reason"] == "awaiting_authority"
+    publication = publish_authority_packet(
+        tmp_path, "cycle-owner-packet-integration", packet
+    )
+    binding = publication["owner_result_binding"]
+    assert publication["target"] == "authority"
+    assert publication["effect_boundary"] == "preparation_only"
+    assert publication["mutation_performed"] is True
+    assert publication["idempotent_replay"] is False
+    assert publication["model_call_count"] == 0
+    assert publication["model_visible_bytes"] == 0
+    assert publication["model_authored_mechanical_bytes"] == 0
+    assert set(binding) == {"ref", "sha256", "size_bytes"}
+    assert binding["ref"].startswith(
+        ".task/cycle/cycle-owner-packet-integration/compiler/owner_result/sha256/"
+    )
+    persisted = json.loads((tmp_path / binding["ref"]).read_text(encoding="utf-8"))
+    assert persisted["artifact_kind"] == "stage_owner_result"
+    assert persisted["result"] == packet
+    owner_result_dir = (
+        tmp_path
+        / ".task/cycle/cycle-owner-packet-integration/compiler/owner_result/sha256"
+    )
+    before_owner_results = {
+        path.relative_to(tmp_path).as_posix()
+        for path in owner_result_dir.rglob("*.json")
+    }
+    for field in ("packet_id", "evidence_ids"):
+        tampered = json.loads(json.dumps(packet))
+        tampered[field] = (
+            "authop-" + "0" * 24
+            if field == "packet_id"
+            else ["fabricated-evidence"]
+        )
+        tampered["packet_sha256"] = canonical_sha256(
+            {
+                key: value
+                for key, value in tampered.items()
+                if key != "packet_sha256"
+            }
+        )
+        assert project_authority_packet(tampered).valid
+        with pytest.raises(ValueError, match="exact compiler reconstruction"):
+            publish_authority_packet(
+                tmp_path,
+                "cycle-owner-packet-integration",
+                tampered,
+            )
+        assert {
+            path.relative_to(tmp_path).as_posix()
+            for path in owner_result_dir.rglob("*.json")
+        } == before_owner_results
+    preparation = prepare_stage(
+        tmp_path,
+        "cycle-owner-packet-integration",
+        "authority",
+        persist_compiler_artifacts=True,
+    )
+    prepared = publish_preparation(tmp_path, preparation)
+    stage_binding = publish_owner_result(
+        tmp_path,
+        prepared["preparation_ref"],
+        prepared["preparation_sha256"],
+        source_ref=binding["ref"],
+        source_sha256=binding["sha256"],
+    )["owner_result_binding"]
+    compiled = submit_stage(
+        tmp_path,
+        preparation,
+        owner_result_ref=stage_binding["ref"],
+        owner_result_sha256=stage_binding["sha256"],
+        apply=True,
+    )
+    assert compiled["status"] == "ok"
+    assert compiled["applied"] is True
+    assert compiled["event"]["event_kind"] == "compiled_stage_result_ref"
+
+    init_cycle(
+        tmp_path,
+        "cycle-owner-packet-other",
+        "task-owner-packet-integration",
+        "cross-cycle authority rejection",
+        workflow_contract_profile=COMPILER_FIRST_WORKFLOW_CONTRACT_PROFILE,
+    )
+    assert (
+        advance_stage(tmp_path, "cycle-owner-packet-other", apply=True)[
+            "stop_reason"
+        ]
+        == "awaiting_authority"
+    )
+    cross_cycle_binding = write_stage_input(
+        tmp_path,
+        "cycle-owner-packet-other",
+        "authority",
+        "owner_result",
+        packet,
+    )
+    cross_cycle_preparation = prepare_stage(
+        tmp_path,
+        "cycle-owner-packet-other",
+        "authority",
+        persist_compiler_artifacts=True,
+    )
+    cross_published = publish_preparation(tmp_path, cross_cycle_preparation)
+    with pytest.raises(ValueError, match="decision cycle"):
+        publish_owner_result(
+            tmp_path,
+            cross_published["preparation_ref"],
+            cross_published["preparation_sha256"],
+            source_ref=cross_cycle_binding["ref"],
+            source_sha256=cross_cycle_binding["sha256"],
+        )
+
+    assert authority_packet_main(
+        [
+            "--root",
+            str(tmp_path),
+            "--cycle-id",
+            "cycle-owner-packet-integration",
+            "--publish",
+            "--decision-binding",
+            json.dumps(
+                {
+                    "ref": str(decision_path.relative_to(tmp_path)),
+                    "sha256": decision_sha,
+                }
+            ),
+            "--reservation-binding",
+            json.dumps(
+                {
+                    "ref": reserved["reservation_ref"],
+                    "sha256": reserved["reservation_sha256"],
+                }
+            ),
+            "--verification-binding",
+            json.dumps(
+                {
+                    "ref": verify_output["verification_ref"],
+                    "sha256": verify_output["verification_sha256"],
+                }
+            ),
+        ]
+    ) == 0
+    cli_publication = json.loads(capsys.readouterr().out)
+    assert cli_publication["owner_result_binding"] == binding
+    assert cli_publication["publication_status"] == "reused"
+    assert cli_publication["effect_boundary"] == "preparation_only"
+    assert cli_publication["mutation_performed"] is False
+    assert cli_publication["idempotent_replay"] is True
+    assert cli_publication["model_call_count"] == 0
+    assert cli_publication["model_visible_bytes"] == 0
+    assert cli_publication["model_authored_mechanical_bytes"] == 0
+    assert "decision_binding" not in cli_publication
+
+    initialization_path = (
+        tmp_path
+        / ".task/cycle/cycle-owner-packet-integration/initialization.json"
+    )
+    initialization = json.loads(initialization_path.read_text(encoding="utf-8"))
+    wrong_task_initialization = {**initialization, "task_id": "different-task"}
+    initialization_path.write_text(
+        json.dumps(wrong_task_initialization, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="immutable provenance"):
+        publish_authority_packet(
+            tmp_path, "cycle-owner-packet-integration", packet
+        )
+    initialization_path.write_text(
+        json.dumps(initialization, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    initialization.pop("workflow_contract_profile")
+    initialization.pop("initialization_provenance_version")
+    initialization_path.write_text(
+        json.dumps(initialization, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    initialization_path.with_name("initialization.provenance.json").unlink()
+    with pytest.raises(SystemExit) as caught:
+        authority_packet_main(
+            [
+                "--root",
+                str(tmp_path),
+                "--cycle-id",
+                "cycle-owner-packet-integration",
+                "--decision-binding",
+                json.dumps(
+                    {
+                        "ref": str(decision_path.relative_to(tmp_path)),
+                        "sha256": decision_sha,
+                    }
+                ),
+                "--reservation-binding",
+                json.dumps(
+                    {
+                        "ref": reserved["reservation_ref"],
+                        "sha256": reserved["reservation_sha256"],
+                    }
+                ),
+                "--verification-binding",
+                json.dumps(
+                    {
+                        "ref": verify_output["verification_ref"],
+                        "sha256": verify_output["verification_sha256"],
+                    }
+                ),
+            ]
+        )
+    assert caught.value.code == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "historical unmarked v2 cycles are read-only" in captured.err
+
+
+def test_enforced_cycle_rejects_arbitrary_authority_output(tmp_path: Path) -> None:
+    init_cycle(
+        tmp_path,
+        "cycle-authority-output",
+        "task-authority-output",
+        "authority output gate",
+        workflow_contract_profile=COMPILER_FIRST_WORKFLOW_CONTRACT_PROFILE,
+    )
+    output = tmp_path / "arbitrary-authority.json"
+    from orchestrate_task_cycle.authority_packet import main
+
+    with pytest.raises(SystemExit) as caught:
+        main(
+            [
+                "--root",
+                str(tmp_path),
+                "--decision-binding",
+                "{}",
+            ]
+        )
+    assert caught.value.code == 2
+
+    with pytest.raises(SystemExit) as caught:
+        main(
+            [
+                "--root",
+                str(tmp_path),
+                "--decision-binding",
+                "{}",
+                "--cycle-id",
+                "cycle-authority-output",
+            ]
+        )
+    assert caught.value.code == 2
+
+    with pytest.raises(SystemExit) as caught:
+        main(
+            [
+                "--root",
+                str(tmp_path),
+                "--decision-binding",
+                "{}",
+                "--cycle-id",
+                "cycle-authority-output",
+                "--output",
+                str(output),
+            ]
+        )
+    assert caught.value.code == 2
+    assert not output.exists()

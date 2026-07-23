@@ -20,7 +20,10 @@ from .selection_publication_store import (
     _canonical_json,
     _sha256_bytes,
     _successor_prepare_index_path,
-    _write_once,
+    _write_once_with_status,
+)
+from .selection_publication_producer_capability import (
+    _SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
 )
 
 
@@ -220,16 +223,16 @@ def write_prepare_index(
     }
     value = {**body, "index_content_sha256": _content(body)}
     path = _successor_prepare_index_path(root, input_sha256)
-    created = not path.exists() and not path.is_symlink()
     payload = _bounded_payload(
         _canonical_json(value),
         MAX_PREPARE_INDEX_BYTES,
         "selected-successor prepare-input index",
     )
-    _write_once(
+    _digest, created = _write_once_with_status(
         path,
         payload,
         "selected-successor prepare-input index",
+        producer_capability=_SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
     )
     return value, created
 

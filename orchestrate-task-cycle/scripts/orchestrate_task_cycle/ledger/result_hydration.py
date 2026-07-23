@@ -8,11 +8,11 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .constants import MIN_FIELDS
+from .constants import COMPILED_STAGE_RESULT_EVENT_KIND, MIN_FIELDS
 from .support import canonical_json_bytes, normalize_list
 
 
-COMPACT_RESULT_EVENT_KIND = "compiled_stage_result_ref"
+COMPACT_RESULT_EVENT_KIND = COMPILED_STAGE_RESULT_EVENT_KIND
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 MAX_RESULT_BYTES = 16 * 1024 * 1024
 COMPACT_COMPILER_METRIC_FIELDS = {
@@ -66,6 +66,8 @@ _RESULT_SCALARS = {
     "quality_verdict",
     "selection_outcome",
     "index_status",
+    "audit_observation_scope",
+    "live_revalidation_required",
     "commit_status",
     "completion_status",
 }
@@ -74,12 +76,14 @@ _COMPACT_FIELDS = set(MIN_FIELDS) | _RESULT_SCALARS | {
     "preparation_id",
     "preparation_binding_sha256",
     "input_bindings_sha256",
+    "deterministic_commit_binding",
     "result_artifact_ref",
     "result_artifact_sha256",
     "result_artifact_raw_sha256",
     "result_artifact_binding",
     "result_projection",
     "compiler_metrics",
+    "producer_kind",
     "request_fingerprint",
     "ledger_sequence",
     "source_status",
@@ -98,12 +102,14 @@ _LEDGER_OWNED_FIELDS = {
     "preparation_id",
     "preparation_binding_sha256",
     "input_bindings_sha256",
+    "deterministic_commit_binding",
     "result_artifact_ref",
     "result_artifact_sha256",
     "result_artifact_raw_sha256",
     "result_artifact_binding",
     "result_projection",
     "compiler_metrics",
+    "producer_kind",
     "request_fingerprint",
 }
 
@@ -184,6 +190,37 @@ def validate_compact_result_envelope(
         or not isinstance(event.get("preparation_id"), str)
     ):
         raise ValueError("compact stage result compatibility binding mismatch")
+    commit = event.get("deterministic_commit_binding")
+    if commit is not None:
+        commit_ref = commit.get("ref") if isinstance(commit, dict) else None
+        commit_sha = (
+            commit.get("sha256") if isinstance(commit, dict) else None
+        )
+        commit_size = (
+            commit.get("size_bytes") if isinstance(commit, dict) else None
+        )
+        expected_commit = (
+            Path(".task")
+            / "cycle"
+            / str(cycle_id or event.get("cycle_id") or "")
+            / "compiler"
+            / "deterministic_commit_receipt"
+            / "sha256"
+            / f"{commit_sha}.json"
+        ).as_posix()
+        if (
+            not isinstance(commit, dict)
+            or set(commit) != {"ref", "sha256", "size_bytes"}
+            or commit_ref != expected_commit
+            or not SHA256.fullmatch(str(commit_sha or ""))
+            or isinstance(commit_size, bool)
+            or not isinstance(commit_size, int)
+            or commit_size < 1
+            or commit_size > 64 * 1024
+        ):
+            raise ValueError(
+                "compact deterministic commit binding is invalid"
+            )
     projection = event.get("result_projection")
     metrics = event.get("compiler_metrics")
     if (

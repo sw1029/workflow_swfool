@@ -44,6 +44,7 @@ def _preparation_bindings(
     schema_version: int,
     persist: bool,
     origin_id: str | None = None,
+    origin_preparation: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], tuple[dict[str, Any], ...]]:
     registered = executor_spec(target)
     if (
@@ -66,6 +67,7 @@ def _preparation_bindings(
             machine_input,
             persist=persist,
             origin_id=origin_id,
+            origin_preparation=origin_preparation,
         )
         return (
             {"machine_input_binding": _stable_binding(raw_binding)},
@@ -79,6 +81,7 @@ def _preparation_bindings(
         "dependency_selectors": list(spec.dependency_selectors),
         "state_fingerprint": fingerprint,
         "model_context": model,
+        "collection_limits": context_metrics["collection_limits"],
     }
     if schema_version == PREPARATION_SCHEMA_VERSION_V3:
         context.update(
@@ -94,6 +97,7 @@ def _preparation_bindings(
         context,
         persist=persist,
         origin_id=origin_id,
+        origin_preparation=origin_preparation,
     )
     context_binding = _stable_binding(raw_context_binding)
     work_order = render_work_order(
@@ -117,6 +121,7 @@ def _preparation_bindings(
         work_order,
         persist=persist,
         origin_id=origin_id,
+        origin_preparation=origin_preparation,
     )
     return (
         {
@@ -284,7 +289,10 @@ def prepare_v2(
     context_metrics = dict(observed_metrics)
     precondition_fingerprints = context_metrics.pop("precondition_fingerprints")
     fingerprint = selected_state_fingerprint(model, spec.dependency_selectors)
-    transactional_v3 = schema_version == PREPARATION_SCHEMA_VERSION_V3
+    origin_bound_publication = schema_version in {
+        PREPARATION_SCHEMA_VERSION_V2,
+        PREPARATION_SCHEMA_VERSION_V3,
+    }
     bindings, compiler_io_receipts = _preparation_bindings(
         root,
         cycle_id,
@@ -296,7 +304,7 @@ def prepare_v2(
         context_metrics,
         precondition_fingerprints,
         schema_version=schema_version,
-        persist=persist_compiler_artifacts and not transactional_v3,
+        persist=persist_compiler_artifacts and not origin_bound_publication,
     )
     preparation = render_preparation(
         cycle_id,
@@ -308,9 +316,13 @@ def prepare_v2(
         bindings,
         precondition_fingerprints,
         schema_version=schema_version,
-        compiler_io_receipts=(compiler_io_receipts if transactional_v3 else ()),
+        compiler_io_receipts=(
+            compiler_io_receipts
+            if schema_version == PREPARATION_SCHEMA_VERSION_V3
+            else ()
+        ),
     )
-    if transactional_v3 and persist_compiler_artifacts:
+    if origin_bound_publication and persist_compiler_artifacts:
         persisted_bindings, persisted_receipts = _preparation_bindings(
             root,
             cycle_id,
@@ -324,6 +336,7 @@ def prepare_v2(
             schema_version=schema_version,
             persist=True,
             origin_id=str(preparation["preparation_id"]),
+            origin_preparation=preparation,
         )
         if persisted_bindings != bindings:
             raise RuntimeError("compiler artifact bindings changed during publication")

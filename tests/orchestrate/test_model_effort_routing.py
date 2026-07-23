@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from typing import Any
 
-from orchestrate_task_cycle import (
+TESTS_ROOT = Path(__file__).resolve().parents[1]
+if str(TESTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(TESTS_ROOT))
+
+from orchestrate_task_cycle import (  # noqa: E402
     assemble_cycle_report,
     model_effort_router,
     render_subskill_packet,
     validate_cycle_transition,
 )
-from orchestrate_task_cycle.result_contract import api as result_contract
+from orchestrate_task_cycle.result_contract import api as result_contract  # noqa: E402
+from legacy_packet_test_support import build_unbound_legacy_packet  # noqa: E402
 
 POLICY_ID = "configured-tiered-routing-v3"
 BALANCED_MODEL_REF = "model_ref:balanced"
@@ -97,10 +104,10 @@ def test_policy_has_expected_abstract_tier_models() -> None:
 
 
 def test_renderer_uses_role_specific_configured_profiles() -> None:
-    governance = render_subskill_packet.packet_for("governance", {}, {})
-    derive = render_subskill_packet.packet_for("derive", {}, {})
-    review = render_subskill_packet.packet_for("qualitative_review", {}, {})
-    commit = render_subskill_packet.packet_for("commit", {}, {})
+    governance = build_unbound_legacy_packet("governance", {}, {})
+    derive = build_unbound_legacy_packet("derive", {}, {})
+    review = build_unbound_legacy_packet("qualitative_review", {}, {})
+    commit = build_unbound_legacy_packet("commit", {}, {})
 
     assert governance["routing"]["code_worker"] == {
         "dynamic_routing": False,
@@ -439,7 +446,7 @@ def test_reference_only_route_cannot_claim_enforced_execution() -> None:
 
 
 def test_renderer_applies_structured_dynamic_signal() -> None:
-    packet = render_subskill_packet.packet_for(
+    packet = build_unbound_legacy_packet(
         "schema_pre_derive",
         {
             "model_effort_routing": {
@@ -463,7 +470,7 @@ def test_renderer_applies_structured_dynamic_signal() -> None:
 
 
 def test_renderer_ignores_unscoped_global_direction_signal() -> None:
-    packet = render_subskill_packet.packet_for(
+    packet = build_unbound_legacy_packet(
         "governance",
         {"model_effort_routing": {"signals": {"architecture_direction_change": True}}},
         {},
@@ -633,7 +640,7 @@ def test_final_synthesis_cannot_self_escalate_to_max() -> None:
 
 
 def test_renderer_preserves_context_max_evidence() -> None:
-    packet = render_subskill_packet.packet_for(
+    packet = build_unbound_legacy_packet(
         "derive",
         {
             "model_effort_routing": {

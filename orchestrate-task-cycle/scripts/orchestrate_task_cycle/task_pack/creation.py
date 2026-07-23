@@ -23,6 +23,106 @@ from .storage import (
 )
 from .validation import publication_findings
 
+
+def _initial_selection_findings(
+    root: Path,
+    path: Path,
+    pack_data: dict[str, Any],
+    *,
+    check_size: bool,
+    dry_run: bool,
+    task_digest: str,
+    task_snapshot_path: Path,
+    task_bytes: bytes,
+    durable_creation: dict[str, Any],
+    prospective_creation: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    return publication_findings(
+        pack_data,
+        path,
+        check_size=check_size,
+        prospective_task_digests={task_digest} if dry_run else None,
+        prospective_creation_snapshots=(
+            {
+                str(durable_creation["creation_snapshot_ref"]):
+                prospective_creation
+            }
+            if prospective_creation is not None
+            else None
+        ),
+        prospective_task_snapshots=(
+            {rel_path(root, task_snapshot_path): task_bytes}
+            if dry_run
+            else None
+        ),
+    )
+
+
+def _record_initial_promotion(
+    root: Path,
+    pack_data: dict[str, Any],
+    target: dict[str, Any],
+    initial_selection: dict[str, Any],
+    receipt: dict[str, Any],
+    verified: dict[str, Any],
+    *,
+    item_id: str,
+    task_id: str,
+    task_path: Path,
+    task_digest: str,
+    task_snapshot_path: Path,
+    origin: str,
+    durable_creation: dict[str, Any],
+) -> None:
+    inline_digest = sha256_bytes(
+        json.dumps(
+            verified,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    )
+    target["status"] = "promoted"
+    target["promotion"] = {
+        "task_id": task_id,
+        "task_path": rel_path(root, task_path),
+        "task_sha256": task_digest,
+        "task_snapshot_path": rel_path(root, task_snapshot_path),
+        "promoted_at": receipt.get("created_at"),
+        "mutation_evidence_paths": verify_evidence_files(
+            root,
+            initial_selection.get("evidence_paths"),
+            "Create/replace initial-selection evidence_paths",
+        )
+        if initial_selection.get("evidence_paths")
+        else [],
+        "promotion_origin": origin,
+        "initial_selection_receipt": verified,
+        "initial_selection_receipt_ref": f"inline:sha256:{inline_digest}",
+        "predecessor_completion_receipt_ref": None,
+    }
+    promote_entry = mutation_entry(
+        "promote",
+        initial_selection,
+        item_order(pack_data),
+        item_order(pack_data),
+    )
+    promote_entry.update(
+        {
+            "timestamp": receipt.get("created_at"),
+            "item_id": item_id,
+            "task_id": task_id,
+            "validated_task_id": None,
+            "promotion_origin": origin,
+            "before_pack_sha256": durable_creation.get(
+                "creation_snapshot_canonical_sha256"
+            ),
+        }
+    )
+    pack_data.setdefault("mutation_log", []).append(promote_entry)
+    refresh_current_item(pack_data)
+
+
 def apply_initial_selection_to_new_pack(
     root: Path,
     path: Path,
@@ -35,6 +135,7 @@ def apply_initial_selection_to_new_pack(
 ) -> tuple[bool, list[dict[str, Any]]]:
     if not isinstance(initial_selection, dict):
         return False, publication_findings(pack_data, path, check_size=check_size)
+    prospective_creation = copy.deepcopy(pack_data) if dry_run else None
     pack_id = str(pack_data.get("pack_id") or "")
     item_id = str(initial_selection.get("item_id") or "").strip()
     task_id = str(initial_selection.get("task_id") or "").strip()
@@ -95,7 +196,12 @@ def apply_initial_selection_to_new_pack(
         pack_dir(root),
         "Create/replace initial task snapshot path",
     )
-    write_content_addressed_file(task_snapshot_path, task_bytes, "Create/replace initial task snapshot")
+    if not dry_run:
+        write_content_addressed_file(
+            task_snapshot_path,
+            task_bytes,
+            "Create/replace initial task snapshot",
+        )
     supplied_receipt = initial_selection.get("initial_selection_receipt")
     if not isinstance(supplied_receipt, dict):
         raise SystemExit("Create/replace initial_selection requires initial_selection_receipt.")
@@ -112,48 +218,35 @@ def apply_initial_selection_to_new_pack(
         task_digest=task_digest,
         operation="promote",
         require_mutation_binding=False,
+        prospective_creation_snapshot=prospective_creation,
+        prospective_task_bytes=task_bytes if dry_run else None,
     )
-    inline_digest = sha256_bytes(
-        json.dumps(verified, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    )
-    target["status"] = "promoted"
-    target["promotion"] = {
-        "task_id": task_id,
-        "task_path": rel_path(root, task_path),
-        "task_sha256": task_digest,
-        "task_snapshot_path": rel_path(root, task_snapshot_path),
-        "promoted_at": supplied_receipt.get("created_at"),
-        "mutation_evidence_paths": verify_evidence_files(
-            root,
-            initial_selection.get("evidence_paths"),
-            "Create/replace initial-selection evidence_paths",
-        )
-        if initial_selection.get("evidence_paths")
-        else [],
-        "promotion_origin": origin,
-        "initial_selection_receipt": verified,
-        "initial_selection_receipt_ref": f"inline:sha256:{inline_digest}",
-        "predecessor_completion_receipt_ref": None,
-    }
-    promote_entry = mutation_entry("promote", initial_selection, item_order(pack_data), item_order(pack_data))
-    promote_entry.update(
-        {
-            "timestamp": supplied_receipt.get("created_at"),
-            "item_id": item_id,
-            "task_id": task_id,
-            "validated_task_id": None,
-            "promotion_origin": origin,
-            "before_pack_sha256": durable_creation.get("creation_snapshot_canonical_sha256"),
-        }
-    )
-    pack_data.setdefault("mutation_log", []).append(promote_entry)
-    refresh_current_item(pack_data)
-    allowed_prospective = {task_digest} if dry_run and prospective_bytes is not None else None
-    return True, publication_findings(
+    _record_initial_promotion(
+        root,
         pack_data,
+        target,
+        initial_selection,
+        supplied_receipt,
+        verified,
+        item_id=item_id,
+        task_id=task_id,
+        task_path=task_path,
+        task_digest=task_digest,
+        task_snapshot_path=task_snapshot_path,
+        origin=origin,
+        durable_creation=durable_creation,
+    )
+    return True, _initial_selection_findings(
+        root,
         path,
+        pack_data,
         check_size=check_size,
-        prospective_task_digests=allowed_prospective,
+        dry_run=dry_run,
+        task_digest=task_digest,
+        task_snapshot_path=task_snapshot_path,
+        task_bytes=task_bytes,
+        durable_creation=durable_creation,
+        prospective_creation=prospective_creation,
     )
 
 

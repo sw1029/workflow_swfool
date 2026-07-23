@@ -7,7 +7,11 @@ from typing import Any
 
 import pytest
 
-from manage_agent_authority.artifact_store import register_grant, snapshot_file
+from authority_historical_fixture_support import (
+    register_historical_grant,
+    snapshot_historical_source,
+)
+from manage_agent_authority.artifact_store import snapshot_file
 from manage_agent_authority.authority_cli import command_consume, command_verify
 from manage_agent_authority.canonical import sha256_file, write_immutable_json
 from manage_agent_authority.evaluator import evaluate
@@ -205,10 +209,8 @@ def _setup_workspace(
             "integrity_status": "verified",
         },
     )
-    source_binding = snapshot_file(
-        root, approval.relative_to(root).as_posix(), "source_approval"
-    )
-    register_grant(
+    source_binding = snapshot_historical_source(root, approval)
+    register_historical_grant(
         root,
         {
             "schema_version": 2,

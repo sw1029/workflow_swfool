@@ -17,6 +17,9 @@ from .selection_publication_store import (
     _sha256_file,
     _write_once,
 )
+from .selection_publication_producer_capability import (
+    _SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
+)
 
 
 INDEX_SCHEMA_VERSION = 1
@@ -121,7 +124,7 @@ def load_intent_index(
     )
 
 
-def write_prepare_index(
+def prepare_index_value(
     root: Path,
     intent_sha256: str,
     transaction_id: str,
@@ -135,16 +138,33 @@ def write_prepare_index(
         "transaction_id": transaction_id,
         "prepare": _binding(root, prepare_path, prepare_sha256),
     }
-    value = {**body, "index_content_sha256": _content(body)}
+    return {**body, "index_content_sha256": _content(body)}
+
+
+def write_prepare_index(
+    root: Path,
+    intent_sha256: str,
+    transaction_id: str,
+    prepare_path: Path,
+    prepare_sha256: str,
+) -> dict[str, Any]:
+    value = prepare_index_value(
+        root,
+        intent_sha256,
+        transaction_id,
+        prepare_path,
+        prepare_sha256,
+    )
     _write_once(
         _intent_index_path(root, intent_sha256, "prepare"),
         _canonical_json(value),
         "selection-publication intent prepare index",
+        producer_capability=_SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
     )
     return value
 
 
-def write_commit_index(
+def commit_index_value(
     root: Path,
     intent_sha256: str,
     transaction_id: str,
@@ -161,13 +181,40 @@ def write_commit_index(
         "prepare": _binding(root, prepare_path, prepare_sha256),
         "receipt": _binding(root, receipt_path, receipt_sha256),
     }
-    value = {**body, "index_content_sha256": _content(body)}
+    return {**body, "index_content_sha256": _content(body)}
+
+
+def write_commit_index(
+    root: Path,
+    intent_sha256: str,
+    transaction_id: str,
+    prepare_path: Path,
+    prepare_sha256: str,
+    receipt_path: Path,
+    receipt_sha256: str,
+) -> dict[str, Any]:
+    value = commit_index_value(
+        root,
+        intent_sha256,
+        transaction_id,
+        prepare_path,
+        prepare_sha256,
+        receipt_path,
+        receipt_sha256,
+    )
     _write_once(
         _intent_index_path(root, intent_sha256, "commit"),
         _canonical_json(value),
         "selection-publication intent commit index",
+        producer_capability=_SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
     )
     return value
 
 
-__all__ = ("load_intent_index", "write_commit_index", "write_prepare_index")
+__all__ = (
+    "commit_index_value",
+    "load_intent_index",
+    "prepare_index_value",
+    "write_commit_index",
+    "write_prepare_index",
+)

@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
+from .acceptance_contract import consumer_projection
 from .git_worktree_identity import (
     bind_git_worktree_identity,
     legacy_git_changed_paths,
@@ -39,6 +40,8 @@ DECISION_SCALARS = (
     "quality_verdict",
     "selection_outcome",
     "index_status",
+    "audit_observation_scope",
+    "live_revalidation_required",
     "commit_status",
 )
 
@@ -102,6 +105,15 @@ def _event_projection(value: Any) -> dict[str, Any]:
     }
     if decisions:
         projected["decision_scalars"] = decisions
+    if value.get("step") == "acceptance":
+        acceptance, _conflicts = consumer_projection(value)
+        contract = acceptance.get("acceptance_contract")
+        if isinstance(contract, dict):
+            projected["acceptance_contract"] = contract
+        if "unverifiable_acceptance_contract" in acceptance:
+            projected["unverifiable_acceptance_contract"] = acceptance[
+                "unverifiable_acceptance_contract"
+            ]
     return projected
 
 

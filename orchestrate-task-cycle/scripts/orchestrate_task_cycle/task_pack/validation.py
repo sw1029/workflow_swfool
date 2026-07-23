@@ -21,6 +21,8 @@ def _validate_items(
     items: list[Any],
     path: Path | None,
     prospective_task_digests: set[str] | None,
+    prospective_creation_snapshots: dict[str, dict[str, Any]] | None,
+    prospective_task_snapshots: dict[str, bytes] | None,
     add: FindingAdder,
 ) -> set[str]:
     seen_ids: set[str] = set()
@@ -53,7 +55,16 @@ def _validate_items(
         seen_orders.add(order) if isinstance(order, int) else None
         if item.get("status") not in ITEM_STATUSES:
             add("block", "invalid_item_status", "Invalid task pack item status.", {"item_id": item_id, "status": item.get("status")})
-        validate_item_promotion(data, item, item_id, path, prospective_task_digests, add)
+        validate_item_promotion(
+            data,
+            item,
+            item_id,
+            path,
+            prospective_task_digests,
+            prospective_creation_snapshots,
+            prospective_task_snapshots,
+            add,
+        )
         result = validate_item_verdicts(item, item_id, add)
         validate_item_scope(item, item_id, result, residual_links, add)
         chain = item.get("bounded_prerequisite_chain")
@@ -126,6 +137,8 @@ def validate_pack(
     path: Path | None = None,
     *,
     prospective_task_digests: set[str] | None = None,
+    prospective_creation_snapshots: dict[str, dict[str, Any]] | None = None,
+    prospective_task_snapshots: dict[str, bytes] | None = None,
 ) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
 
@@ -159,7 +172,15 @@ def validate_pack(
         add("block", "items_missing", "`items` must be a non-empty list.")
         return findings
 
-    seen_ids = _validate_items(data, items, path, prospective_task_digests, add)
+    seen_ids = _validate_items(
+        data,
+        items,
+        path,
+        prospective_task_digests,
+        prospective_creation_snapshots,
+        prospective_task_snapshots,
+        add,
+    )
     dependency_findings(data, add)
     lifecycle_findings(data, add)
     current = data.get("current_item_id")
@@ -177,8 +198,16 @@ def publication_findings(
     *,
     check_size: bool,
     prospective_task_digests: set[str] | None = None,
+    prospective_creation_snapshots: dict[str, dict[str, Any]] | None = None,
+    prospective_task_snapshots: dict[str, bytes] | None = None,
 ) -> list[dict[str, Any]]:
-    findings = validate_pack(data, path, prospective_task_digests=prospective_task_digests)
+    findings = validate_pack(
+        data,
+        path,
+        prospective_task_digests=prospective_task_digests,
+        prospective_creation_snapshots=prospective_creation_snapshots,
+        prospective_task_snapshots=prospective_task_snapshots,
+    )
     if check_size:
         items = data.get("items") if isinstance(data.get("items"), list) else []
         if not 2 <= len(items) <= 5:

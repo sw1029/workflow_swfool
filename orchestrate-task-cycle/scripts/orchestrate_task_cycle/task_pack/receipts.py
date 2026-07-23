@@ -20,6 +20,7 @@ from .packet_io import non_empty, require_file_digest, write_content_addressed_f
 from .storage import (
     _require_within,
     bounded_workspace_file,
+    bounded_workspace_path,
     canonical_pack_sha256,
     creation_receipt_dir,
     creation_snapshot_dir,
@@ -29,8 +30,29 @@ from .storage import (
     parse_rfc3339,
     rel_path,
     sha256_bytes,
-    sha256_file,
 )
+
+INITIAL_SELECTION_REQUIRED_FIELDS = (
+    "pack_ref",
+    "pack_creation_snapshot_kind",
+    "pack_creation_snapshot_ref",
+    "pack_creation_snapshot_sha256",
+    "pack_creation_canonical_sha256",
+    "pack_creation_canonicalization_version",
+    "creation_snapshot_state",
+    "initial_item_id",
+    "initial_order",
+    "task_id",
+    "task_snapshot_ref",
+    "task_snapshot_sha256",
+    "authority_receipt_ref",
+    "authority_receipt_sha256",
+    "authority_mode",
+    "historical_selection_authority_status",
+    "selection_reason",
+    "created_at",
+)
+
 
 def _forbidden_receipt_key_paths(value: Any, prefix: str = "$") -> list[str]:
     forbidden = {
@@ -69,9 +91,9 @@ def _required_sha256(value: Any, label: str) -> str:
     return normalized
 
 
-def persist_creation_snapshot(root: Path, pack_path: Path, data: dict[str, Any]) -> dict[str, Any]:
-    """Persist the exact planned creation body and a durable receipt."""
-
+def _creation_snapshot_material(
+    root: Path, pack_path: Path, data: dict[str, Any]
+) -> tuple[dict[str, Any], Path, bytes, Path, bytes]:
     payload = json_bytes(data)
     file_digest = sha256_bytes(payload)
     canonical_digest = canonical_pack_sha256(data)
@@ -81,7 +103,6 @@ def persist_creation_snapshot(root: Path, pack_path: Path, data: dict[str, Any])
         creation_snapshot_dir(root),
         "Creation snapshot path",
     )
-    write_content_addressed_file(snapshot_path, payload, "Creation snapshot")
     receipt = {
         "schema_version": 1,
         "receipt_kind": "task_pack_creation",
@@ -102,12 +123,39 @@ def persist_creation_snapshot(root: Path, pack_path: Path, data: dict[str, Any])
         creation_receipt_dir(root),
         "Creation receipt path",
     )
-    write_content_addressed_file(receipt_path, json_bytes(receipt), "Creation receipt")
-    return {
+    receipt_payload = json_bytes(receipt)
+    projection = {
         **receipt,
         "creation_receipt_ref": rel_path(root, receipt_path),
-        "creation_receipt_sha256": sha256_file(receipt_path),
+        "creation_receipt_sha256": sha256_bytes(receipt_payload),
     }
+    return projection, snapshot_path, payload, receipt_path, receipt_payload
+
+
+def render_creation_snapshot(
+    root: Path, pack_path: Path, data: dict[str, Any]
+) -> dict[str, Any]:
+    """Predict exact creation evidence without touching the filesystem."""
+
+    projection, _snapshot, _payload, _receipt, _receipt_payload = (
+        _creation_snapshot_material(root, pack_path, data)
+    )
+    return projection
+
+
+def persist_creation_snapshot(
+    root: Path, pack_path: Path, data: dict[str, Any]
+) -> dict[str, Any]:
+    """Persist the exact planned creation body and a durable receipt."""
+
+    projection, snapshot_path, payload, receipt_path, receipt_payload = (
+        _creation_snapshot_material(root, pack_path, data)
+    )
+    write_content_addressed_file(snapshot_path, payload, "Creation snapshot")
+    write_content_addressed_file(
+        receipt_path, receipt_payload, "Creation receipt"
+    )
+    return projection
 
 
 def load_bound_creation_snapshot(
@@ -255,6 +303,42 @@ def load_bound_authority_receipt(
     return authority, digest
 
 
+def _validate_initial_task_snapshot(
+    root: Path,
+    receipt: dict[str, Any],
+    *,
+    prospective_task_bytes: bytes | None,
+    task_digest: str,
+) -> None:
+    task_snapshot = (
+        bounded_workspace_file(
+            root, receipt.get("task_snapshot_ref"), "task_snapshot_ref"
+        )
+        if prospective_task_bytes is None
+        else bounded_workspace_path(
+            root, receipt.get("task_snapshot_ref"), "task_snapshot_ref"
+        )
+    )
+    _require_within(task_snapshot, pack_dir(root), "Initial task snapshot")
+    declared_digest = (
+        require_file_digest(
+            task_snapshot,
+            receipt.get("task_snapshot_sha256"),
+            "Initial task snapshot",
+        )
+        if prospective_task_bytes is None
+        else sha256_bytes(prospective_task_bytes)
+    )
+    if declared_digest != receipt.get("task_snapshot_sha256"):
+        raise SystemExit(
+            "Initial task snapshot SHA-256 does not match prospective bytes."
+        )
+    if declared_digest != task_digest:
+        raise SystemExit(
+            "Initial task snapshot SHA-256 differs from promotion task identity."
+        )
+
+
 def validate_initial_selection_receipt(
     root: Path,
     pack_path: Path,
@@ -265,36 +349,40 @@ def validate_initial_selection_receipt(
     task_digest: str,
     operation: str,
     require_mutation_binding: bool = True,
+    prospective_creation_snapshot: dict[str, Any] | None = None,
+    prospective_task_bytes: bytes | None = None,
 ) -> dict[str, Any]:
     if receipt.get("schema_version") != INITIAL_SELECTION_RECEIPT_VERSION:
         raise SystemExit("Initial selection receipt requires schema_version=1.")
-    required = (
-        "pack_ref",
-        "pack_creation_snapshot_kind",
-        "pack_creation_snapshot_ref",
-        "pack_creation_snapshot_sha256",
-        "pack_creation_canonical_sha256",
-        "pack_creation_canonicalization_version",
-        "creation_snapshot_state",
-        "initial_item_id",
-        "initial_order",
-        "task_id",
-        "task_snapshot_ref",
-        "task_snapshot_sha256",
-        "authority_receipt_ref",
-        "authority_receipt_sha256",
-        "authority_mode",
-        "historical_selection_authority_status",
-        "selection_reason",
-        "created_at",
-    )
-    missing = [field for field in required if not non_empty(receipt.get(field))]
+    missing = [
+        field
+        for field in INITIAL_SELECTION_REQUIRED_FIELDS
+        if not non_empty(receipt.get(field))
+    ]
     if missing:
         raise SystemExit(f"Initial selection receipt is incomplete: {', '.join(missing)}")
     expected_pack_ref = rel_path(root, pack_path)
     if receipt.get("pack_ref") != expected_pack_ref:
         raise SystemExit("Initial selection receipt references a different canonical pack.")
-    snapshot, _, snapshot_file_digest, snapshot_canonical_digest = load_bound_creation_snapshot(root, receipt)
+    if prospective_creation_snapshot is None:
+        snapshot, _, snapshot_file_digest, snapshot_canonical_digest = (
+            load_bound_creation_snapshot(root, receipt)
+        )
+    else:
+        snapshot = prospective_creation_snapshot
+        snapshot_payload = json_bytes(snapshot)
+        snapshot_file_digest = sha256_bytes(snapshot_payload)
+        snapshot_canonical_digest = canonical_pack_sha256(snapshot)
+        if (
+            receipt.get("pack_creation_snapshot_kind") != "workspace_file"
+            or receipt.get("pack_creation_snapshot_sha256")
+            != snapshot_file_digest
+            or receipt.get("pack_creation_canonical_sha256")
+            != snapshot_canonical_digest
+        ):
+            raise SystemExit(
+                "Prospective creation snapshot differs from the initial selection receipt."
+            )
     if snapshot.get("pack_id") != current_pack.get("pack_id"):
         raise SystemExit("Creation snapshot pack ID differs from the current pack.")
     ordered = sorted_items(snapshot)
@@ -312,11 +400,12 @@ def validate_initial_selection_receipt(
             raise SystemExit("Legacy creation snapshot does not identify the selected task.")
     elif receipt.get("creation_snapshot_state") != "pre_selection":
         raise SystemExit("Creation snapshot state is invalid.")
-    task_snapshot = bounded_workspace_file(root, receipt.get("task_snapshot_ref"), "task_snapshot_ref")
-    _require_within(task_snapshot, pack_dir(root), "Initial task snapshot")
-    declared_task_digest = require_file_digest(task_snapshot, receipt.get("task_snapshot_sha256"), "Initial task snapshot")
-    if declared_task_digest != task_digest:
-        raise SystemExit("Initial task snapshot SHA-256 differs from promotion task identity.")
+    _validate_initial_task_snapshot(
+        root,
+        receipt,
+        prospective_task_bytes=prospective_task_bytes,
+        task_digest=task_digest,
+    )
 
     expected_subject = {
         "pack_ref": expected_pack_ref,
@@ -387,4 +476,3 @@ def pack_paths(root: Path) -> list[Path]:
             raise SystemExit(f"Task pack path does not identify a file: {candidate}")
         paths.append(path)
     return sorted(paths, key=lambda path: path.stat().st_mtime, reverse=True)
-

@@ -21,6 +21,7 @@ from .provenance import (
 )
 from .receipts import (
     persist_creation_snapshot,
+    render_creation_snapshot,
 )
 from .rendering import write_render
 from .storage import (
@@ -71,7 +72,11 @@ def apply_create(args: argparse.Namespace, root: Path, plan: dict[str, Any]) -> 
         json.dump(output, sys.stdout, ensure_ascii=False, indent=2, sort_keys=True)
         sys.stdout.write("\n")
         return 2
-    durable_creation = persist_creation_snapshot(root, path, pack_data)
+    durable_creation = (
+        render_creation_snapshot(root, path, pack_data)
+        if getattr(args, "dry_run", False)
+        else persist_creation_snapshot(root, path, pack_data)
+    )
     initial_selection_applied, findings = apply_initial_selection_to_new_pack(
         root,
         path,

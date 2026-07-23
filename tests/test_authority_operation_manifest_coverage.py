@@ -40,12 +40,18 @@ REQUIRED_WORKFLOW_OPERATIONS = {
         "update_goal_conventions",
     },
     "manage-agent-authority": {
+        "compile_operation_batch",
+        "compile_root_decision_seed",
+        "compile_semantic_context",
         "compose_grants",
         "consume_use",
         "delegate_grant",
         "evaluate_operation",
         "issue_grant",
         "materialize_approved_source_authority_recovery",
+        "materialize_plan_bound_root_grant",
+        "prepare_root_approval_plan",
+        "publish_operation_set",
         "prepare_source_authority_recovery",
         "release_use",
         "reserve_use",
@@ -78,26 +84,36 @@ REQUIRED_WORKFLOW_OPERATIONS = {
     "manage-schema-contracts": {"inspect_contracts", "publish_contract"},
     "manage-task-state-index": {
         "mutate_task_state_index",
+        "publish_task_state_prevalidation_result",
         "prepare_task_state_transition_plan",
     },
     "monitor-running-execution": {
         "record_execution_monitor_event",
         "terminate_running_execution",
     },
-    "normalize-acceptance-and-demo": {"publish_acceptance_packet"},
+    "normalize-acceptance-and-demo": {
+        "compile_acceptance_owner_result",
+        "publish_acceptance_packet",
+    },
     "optimize-task-slice": {"classify_task_slice"},
     "orchestrate-task-cycle": {
+        "adopt_selection_publication_reference_barrier",
         "activate_terminal_wait_baseline_settlement",
         "activate_task_topology_settlement",
+        "apply_selection_publication_retention",
         "dispatch_external_operation",
         "dispatch_local_worker",
         "inspect_cycle",
         "materialize_selection_publication_subject",
         "materialize_terminal_wait_baseline_subject",
+        "migrate_selection_publication_state",
         "mutate_task_topology",
+        "publish_authority_packet_binding",
         "publish_compiled_stage_projection",
         "publish_selected_successor_topology",
         "publish_terminal_wait_baseline_binding",
+        "plan_selection_publication_retention",
+        "restore_selection_publication_retention",
         "retire_terminal_wait_baseline_successor",
         "settle_selected_successor_task_state",
         "validate_exact_subject_premise",
@@ -143,14 +159,26 @@ PROJECTION_ONLY_MUTATIONS = {
     ("audit-session-governance", "rebuild_session_audit_index"),
     ("deep-interview-goal-context", "draft_concept_graph"),
     ("manage-agent-authority", "evaluate_operation"),
+    ("manage-agent-authority", "compile_operation_batch"),
+    ("manage-agent-authority", "compile_root_decision_seed"),
+    ("manage-agent-authority", "compile_semantic_context"),
     ("manage-agent-authority", "prepare_source_authority_recovery"),
+    ("manage-agent-authority", "prepare_root_approval_plan"),
+    ("manage-agent-authority", "publish_root_authorization_evidence"),
+    ("manage-agent-authority", "publish_operation_set"),
     ("manage-agent-authority", "snapshot_policy"),
     ("manage-agent-authority", "snapshot_source_approval"),
     ("manage-evidence-cache", "append_evidence_cache_record"),
     ("manage-external-advice", "prepare_advice_intake_plan"),
+    ("manage-task-state-index", "publish_task_state_prevalidation_result"),
     ("manage-task-state-index", "prepare_task_state_transition_plan"),
+    ("normalize-acceptance-and-demo", "compile_acceptance_owner_result"),
     ("orchestrate-task-cycle", "materialize_terminal_wait_baseline_subject"),
     ("orchestrate-task-cycle", "materialize_selection_publication_subject"),
+    ("orchestrate-task-cycle", "adopt_selection_publication_reference_barrier"),
+    ("orchestrate-task-cycle", "migrate_selection_publication_state"),
+    ("orchestrate-task-cycle", "plan_selection_publication_retention"),
+    ("orchestrate-task-cycle", "publish_authority_packet_binding"),
     ("orchestrate-task-cycle", "publish_compiled_stage_projection"),
     ("record-agent-work-log", "publish_agent_work_log"),
     ("record-visible-increment", "publish_visible_increment"),
@@ -179,6 +207,34 @@ def test_governed_workflow_mutators_have_closed_operation_manifests() -> None:
         assert manifest["skill_id"] == skill_id
         observed = {row["operation_id"] for row in manifest["operations"]}
         assert required_operations <= observed
+
+
+def test_plan_bound_root_materialization_manifest_is_prospective_and_exact() -> None:
+    operations = {
+        row["operation_id"]: row
+        for row in _manifest("manage-agent-authority")["operations"]
+    }
+    assert "materialize_exact_echo_root_grant" not in operations
+    assert operations["materialize_plan_bound_root_grant"] == {
+        "operation_id": "materialize_plan_bound_root_grant",
+        "operation_version": "1",
+        "mutation_class": "local_mutation",
+        "required_capabilities": ["authority.grant.issue"],
+        "source_rank_floor": "S3",
+        "risk_floor": "R3",
+        "decision_class": "D1",
+        "effect_classes": ["materialize_plan_bound_root_grant"],
+        "data_classes": [
+            "authority_approval_decision",
+            "authority_approval_projection",
+            "authority_grant",
+            "authority_source_approval",
+        ],
+        "reversibility": "conditionally_reversible",
+        "subject_kinds": ["authority_approval_projection"],
+        "authority_applicability": "required",
+        "authorization_mechanism": "typed_source_approval",
+    }
 
 
 def test_authority_free_mutations_are_bounded_derived_projections_only() -> None:

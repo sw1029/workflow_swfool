@@ -101,6 +101,9 @@ def read_initialization_metadata(root: Path, cycle_id: str) -> dict[str, Any]:
         raise ValueError(f"cycle initialization metadata must be a JSON object: {path}")
     if str(value.get("cycle_id") or "") != cycle_id:
         raise ValueError(f"cycle initialization metadata does not match cycle `{cycle_id}`")
+    from .initialization_provenance import verify_initialization_provenance
+
+    verify_initialization_provenance(root, cycle_id, value)
     return value
 
 

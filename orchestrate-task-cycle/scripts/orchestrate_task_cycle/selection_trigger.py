@@ -59,11 +59,13 @@ def _validated_bindings(
     input_evidence_manifest_sha256: str,
     *,
     expected_active_prepare: Any = None,
+    prospective_publication_head: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, str]]:
     result: dict[str, dict[str, str]] = {}
     for field in BINDING_FIELDS:
         binding = normalize_binding(values.get(field), field.replace("_", " "))
-        read_bound_bytes(root, binding, field.replace("_", " "))
+        if field != "publication_head" or prospective_publication_head is None:
+            read_bound_bytes(root, binding, field.replace("_", " "))
         result[field] = binding
     validate_cycle_finalization(root, cycle_id, result["cycle_finalization"])
     validate_schema_pre_derive(root, cycle_id, result["schema_pre_derive"])
@@ -76,14 +78,29 @@ def _validated_bindings(
     validate_current_owner_bindings(
         root, result["current_task"], result["task_index"]
     )
-    validate_publication_head(
-        root,
-        cycle_id,
-        result["publication_head"],
-        result["current_task"],
-        result["task_index"],
-        expected_active_prepare=expected_active_prepare,
-    )
+    if prospective_publication_head is None:
+        validate_publication_head(
+            root,
+            cycle_id,
+            result["publication_head"],
+            result["current_task"],
+            result["task_index"],
+            expected_active_prepare=expected_active_prepare,
+        )
+    else:
+        from .selection_trigger_evidence import (
+            validate_prospective_publication_bootstrap,
+        )
+
+        validate_prospective_publication_bootstrap(
+            root,
+            cycle_id,
+            result["publication_head"],
+            result["current_task"],
+            result["task_index"],
+            prospective_publication_head,
+            expected_active_prepare=expected_active_prepare,
+        )
     return result
 
 
@@ -98,6 +115,7 @@ def render_normal_cycle_trigger(
     task_index: dict[str, str],
     publication_head: dict[str, str],
     input_evidence_manifest_sha256: str,
+    _prospective_publication_head: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     root = root.expanduser().resolve(strict=True)
     if not CYCLE_ID.fullmatch(cycle_id):
@@ -116,6 +134,7 @@ def render_normal_cycle_trigger(
             "publication_head": publication_head,
         },
         input_evidence_manifest_sha256,
+        prospective_publication_head=_prospective_publication_head,
     )
     core = {
         "schema_version": 1,
@@ -135,7 +154,11 @@ def render_normal_cycle_trigger(
 
 
 def validate_normal_cycle_trigger(
-    root: Path, value: Any, *, expected_active_prepare: Any = None
+    root: Path,
+    value: Any,
+    *,
+    expected_active_prepare: Any = None,
+    _prospective_publication_head: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     trigger = closed_object(value, TRIGGER_KEYS, "normal-cycle selection trigger")
     if (
@@ -158,6 +181,7 @@ def validate_normal_cycle_trigger(
         trigger,
         trigger["input_evidence_manifest_sha256"],
         expected_active_prepare=expected_active_prepare,
+        prospective_publication_head=_prospective_publication_head,
     )
     core = {
         "schema_version": 1,

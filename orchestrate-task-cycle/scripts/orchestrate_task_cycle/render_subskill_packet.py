@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from . import model_effort_router
+from .cli_errors import emit_contract_error
 from .packet.builder import PacketBuilder
 from .packet.context import (
     PacketBuildContext,
@@ -28,6 +29,10 @@ from .packet.context import (
     section_lines,
     section_text,
     task_summary,
+)
+from .packet.protocol import (
+    _mint_legacy_packet_permit,
+    packet_cycle_contract,
 )
 from .packet.registry import TARGET_BUILDERS
 from .packet.rendering import render_markdown
@@ -65,6 +70,7 @@ __all__ = [
     "load_json",
     "main",
     "output_delta_contract_packet",
+    "packet_cycle_contract",
     "packet_for",
     "parse_advice_document",
     "render_markdown",
@@ -93,6 +99,7 @@ def packet_for(
     stage: dict[str, Any],
     workflow_mode: str = "normal",
 ) -> dict[str, Any]:
+    permit = _mint_legacy_packet_permit(context, stage)
     build_context = PacketBuildContext(
         context=context,
         stage=stage,
@@ -102,7 +109,13 @@ def packet_for(
         route_selector=routing_profile,
         output_delta_contract_candidates=OUTPUT_DELTA_CONTRACT_CANDIDATES,
     )
-    return PacketBuilder().build(target, build_context, workflow_mode)
+    packet = PacketBuilder().build(
+        target,
+        build_context,
+        workflow_mode,
+        _legacy_v1_permit=permit,
+    )
+    return packet
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -120,7 +133,15 @@ def main(argv: list[str] | None = None) -> int:
 
     context = load_json(args.context)
     stage = load_json(args.stage)
-    packet = packet_for(args.target, context, stage, args.workflow_mode)
+    try:
+        packet = packet_for(
+            args.target,
+            context,
+            stage,
+            args.workflow_mode,
+        )
+    except ValueError as exc:
+        return emit_contract_error("generic_packet_contract_rejected", exc)
     if args.format == "json":
         json.dump(packet, sys.stdout, ensure_ascii=False, indent=2, sort_keys=True)
         sys.stdout.write("\n")

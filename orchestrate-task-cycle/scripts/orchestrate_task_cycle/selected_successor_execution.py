@@ -5,14 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .selection_decision_store import normalize_binding, read_bound_bytes
+from .selection_decision_store import normalize_binding
 from .selection_publication import publish_prepared, validate_receipt
-from .selection_publication_store import (
-    _canonical_json,
-    _sha256_bytes,
-    _successor_gate_path,
-    _write_once,
+from .selected_successor_execution_lease import (
+    authority_gate as _authority_gate,
+    publish_execution_lease,
 )
+from .selected_successor_execution_authority import authority_preflight
 from .selected_successor import load_selected_successor_bundle
 from .selected_successor_execution_support import (
     ACTIONS,
@@ -48,183 +47,6 @@ def _proofs(value: Any) -> dict[str, dict[str, Any]]:
             "expected_version": version,
         }
     return result
-
-
-def _authority_gate(
-    root: Path,
-    bundle_binding: dict[str, str],
-    rows: list[dict[str, Any]],
-    proofs: dict[str, dict[str, Any]],
-    *,
-    publish: bool,
-) -> tuple[dict[str, str], bool]:
-    body = {
-        "schema_version": 1,
-        "artifact_kind": "selected_successor_authority_gate",
-        "gate_status": "all_pre_commits_current_before_first_effect",
-        "bundle": normalize_binding(bundle_binding, "selected-successor bundle"),
-        "checked_operations": [
-            {
-                "action": row["action"],
-                "operation": row["operation"],
-                "subject": row["subject"],
-                "idempotency_key": row["idempotency_key"],
-                "reservation": proofs[row["action"]]["reservation"],
-                "pre_commit_verification": proofs[row["action"]][
-                    "pre_commit_verification"
-                ],
-                "expected_version": proofs[row["action"]]["expected_version"],
-            }
-            for row in rows
-        ],
-    }
-    content_sha256 = _sha256_bytes(_canonical_json(body))
-    gate = {**body, "gate_content_sha256": content_sha256}
-    payload = _canonical_json(gate)
-    path = _successor_gate_path(root, content_sha256)
-    created = not path.exists() and not path.is_symlink()
-    if publish:
-        digest = _write_once(
-            path, payload, "selected-successor pre-effect authority gate"
-        )
-    else:
-        binding = {
-            "ref": path.relative_to(root).as_posix(),
-            "sha256": _sha256_bytes(payload),
-        }
-        read_bound_bytes(root, binding, "selected-successor pre-effect authority gate")
-        digest = binding["sha256"]
-    return {"ref": path.relative_to(root).as_posix(), "sha256": digest}, (
-        publish and created
-    )
-
-
-def _authority_preflight(
-    root: Path,
-    rows: list[dict[str, Any]],
-    proofs: dict[str, dict[str, Any]],
-    *,
-    require_current: bool,
-    owner_results: tuple[dict[str, str], ...] | None = None,
-    settled_at: str | None = None,
-    skills_root: Path | None = None,
-) -> list[dict[str, Any]]:
-    from manage_agent_authority.execution_results import (
-        validate_pre_commit_verification,
-    )
-    from manage_agent_authority.historical_proof_chain import (
-        validate_historical_proof_chains,
-    )
-
-    checked: list[dict[str, Any]] = []
-    chains = validate_historical_proof_chains(
-        root,
-        [
-            (
-                proofs[action]["reservation"],
-                proofs[action]["pre_commit_verification"],
-                proofs[action]["expected_version"],
-            )
-            for action in ACTIONS
-        ],
-        skills_root=skills_root,
-    )
-    for row, chain in zip(rows, chains):
-        action = row["action"]
-        proof = proofs[action]
-        reservation_binding = proof["reservation"]
-        reservation = chain["reservation"]
-        state = chain["current_state"]
-        if chain["reservation_binding"] != reservation_binding:
-            raise ValueError(f"Selected-successor {action} reservation path differs")
-        decision = chain["decision"]
-        request = decision.get("request")
-        operation = row.get("operation")
-        if not isinstance(request, dict) or not isinstance(operation, dict):
-            raise ValueError(f"Selected-successor {action} authority request is invalid")
-        expected_operation = {
-            key: operation.get(key)
-            for key in (
-                "skill_id",
-                "skill_version",
-                "operation_id",
-                "operation_version",
-            )
-        }
-        if (
-            any(request.get(key) != value for key, value in expected_operation.items())
-            or request.get("subject") != row.get("subject")
-            or request.get("idempotency_key") != row.get("idempotency_key")
-            or reservation.get("idempotency_key") != row.get("idempotency_key")
-        ):
-            raise ValueError(
-                f"Selected-successor {action} reservation authorizes another operation"
-            )
-        expected_version = proof["expected_version"]
-        replayed = False
-        if require_current:
-            if state.get("status") != "reserved" or state.get("version") != expected_version:
-                raise ValueError(
-                    f"Selected-successor {action} reservation is not current before effect"
-                )
-        else:
-            if state.get("status") == "reserved" and state.get("version") == expected_version:
-                pass
-            elif (
-                state.get("status") == "consumed"
-                and state.get("version") == expected_version + 1
-            ):
-                if owner_results is None or settled_at is None:
-                    raise ValueError("Consumed authority replay inputs are missing")
-                from manage_agent_authority.settlement import settle_owner_result
-
-                replay = settle_owner_result(
-                    root,
-                    reservation_binding["ref"],
-                    reservation_binding["sha256"],
-                    owner_results[len(checked)],
-                    proof["pre_commit_verification"],
-                    settled_at=settled_at,
-                    expected_version=expected_version,
-                    idempotency_key=row["idempotency_key"],
-                    skills_root=skills_root,
-                )
-                if (
-                    replay.get("status") != "consumed"
-                    or replay.get("outcome") != "confirmed_effect"
-                ):
-                    raise ValueError(
-                        f"Selected-successor {action} consumed replay is invalid"
-                    )
-                replayed = True
-            else:
-                raise ValueError(
-                    f"Selected-successor {action} reservation is not replayable"
-                )
-        if chain["verification_binding"] != proof["pre_commit_verification"]:
-            raise ValueError(
-                f"Selected-successor {action} pre-commit verification path differs"
-            )
-        if state.get("status") == "reserved":
-            validate_pre_commit_verification(
-                root,
-                reservation,
-                reservation_binding,
-                proof["pre_commit_verification"],
-                expected_version=expected_version,
-                require_current_state=True,
-            )
-        checked.append(
-            {
-                "action": action,
-                "reservation": reservation_binding,
-                "pre_commit_verification": proof["pre_commit_verification"],
-                "expected_version": expected_version,
-                "state_status": state.get("status"),
-                "exact_v3_settlement_replayed": replayed,
-            }
-        )
-    return checked
 
 
 def _validate_existing_checkpoints(
@@ -280,35 +102,62 @@ def _validate_existing_checkpoints(
 
 def _apply_effects(
     root: Path,
+    bundle_binding: dict[str, str],
     bundle: dict[str, Any],
     rows: list[dict[str, Any]],
     states: list[str],
-) -> list[dict[str, Any]]:
+    proofs: dict[str, dict[str, Any]],
+    *,
+    skills_root: Path | None,
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    dict[str, str] | None,
+    bool,
+]:
     from manage_task_state_index.state.transition_plan import (
         apply_transition_plan,
         settle_transition_external,
     )
-    from manage_task_state_index.state.selected_successor_guard import (
-        _SELECTED_SUCCESSOR_EXECUTION_TOKEN,
-    )
 
     effects: list[dict[str, Any]] = []
+    leases: list[dict[str, Any]] = []
+    gate: dict[str, str] | None = None
+    gate_created = False
+
+    def lease_for(action: str) -> dict[str, str]:
+        nonlocal gate, gate_created
+        lease, current_gate, created = publish_execution_lease(
+            root,
+            bundle_binding,
+            rows,
+            proofs,
+            action=action,
+            skills_root=skills_root,
+        )
+        gate = current_gate
+        gate_created = gate_created or created
+        leases.append({"action": action, "lease": lease})
+        return lease
+
     if states[0] == "missing":
+        lease = lease_for(ACTIONS[0])
         result = apply_transition_plan(
             root,
             bundle["task_state_plan"]["ref"],
             external_prepare=bundle["selection_prepare"],
-            _selected_successor_execution_token=_SELECTED_SUCCESSOR_EXECUTION_TOKEN,
+            execution_lease=lease,
         )
         if result.get("execution_result_binding") != rows[0]["expected_result"]:
             raise ValueError("Selected-successor pending effect returned another checkpoint")
         effects.append({"action": ACTIONS[0], "result": result})
         states[0] = "exact"
     if states[1] == "missing":
+        lease = lease_for(ACTIONS[1])
         result = publish_prepared(
             root,
             bundle["transaction_id"],
-            _selected_successor_execution_token=_SELECTED_SUCCESSOR_EXECUTION_TOKEN,
+            execution_lease=lease,
         )
         binding = {"ref": result.get("receipt_ref"), "sha256": result.get("receipt_sha256")}
         if binding != rows[1]["expected_result"]:
@@ -321,7 +170,6 @@ def _apply_effects(
         result = publish_prepared(
             root,
             bundle["transaction_id"],
-            _selected_successor_execution_token=_SELECTED_SUCCESSOR_EXECUTION_TOKEN,
         )
         binding = {
             "ref": result.get("receipt_ref"),
@@ -332,17 +180,18 @@ def _apply_effects(
         if result.get("mutation_performed"):
             effects.append({"action": ACTIONS[1], "result": result})
     if states[2] == "missing":
+        lease = lease_for(ACTIONS[2])
         result = settle_transition_external(
             root,
             bundle["task_state_plan"]["ref"],
             rows[1]["expected_result"],
-            _selected_successor_execution_token=_SELECTED_SUCCESSOR_EXECUTION_TOKEN,
+            execution_lease=lease,
         )
         if result.get("execution_result_binding") != rows[2]["expected_result"]:
             raise ValueError("Selected-successor settlement returned another checkpoint")
         effects.append({"action": ACTIONS[2], "result": result})
         states[2] = "exact"
-    return effects
+    return effects, leases, gate, gate_created
 
 
 def execute_selected_successor_bundle(
@@ -373,11 +222,7 @@ def execute_selected_successor_bundle(
         rows[1]["expected_result"],
         rows[2]["expected_result"],
     )
-    if states != ["missing", "missing", "missing"]:
-        gate, gate_created = _authority_gate(
-            root, bundle_binding, rows, proofs, publish=False
-        )
-    authority = _authority_preflight(
+    authority = authority_preflight(
         root,
         rows,
         proofs,
@@ -386,13 +231,23 @@ def execute_selected_successor_bundle(
         settled_at=settled_at,
         skills_root=skills_root.resolve() if skills_root is not None else None,
     )
-    if states == ["missing", "missing", "missing"]:
-        gate, gate_created = _authority_gate(
-            root, bundle_binding, rows, proofs, publish=True
-        )
     _validate_existing_checkpoints(root, bundle, rows, states)
     initial_states = list(states)
-    effects = _apply_effects(root, bundle, rows, states)
+    effects, leases, gate, gate_created = _apply_effects(
+        root,
+        normalize_binding(bundle_binding, "selected-successor bundle"),
+        bundle,
+        rows,
+        states,
+        proofs,
+        skills_root=(
+            skills_root.resolve() if skills_root is not None else None
+        ),
+    )
+    if gate is None:
+        gate, gate_created = _authority_gate(
+            root, bundle_binding, rows, proofs, publish=False
+        )
     _validate_existing_checkpoints(root, bundle, rows, states)
     settlements = settle_authority(
         root,
@@ -419,6 +274,7 @@ def execute_selected_successor_bundle(
         },
         "authority_preflight": authority,
         "authority_gate": gate,
+        "execution_leases": leases,
         "authority_settlements": settlements,
         "effect_actions": [effect["action"] for effect in effects],
         "idempotent_replay": not (

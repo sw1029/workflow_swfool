@@ -6,9 +6,17 @@ from typing import Any
 
 import pytest
 from orchestrate_task_cycle import render_cycle_dashboard as dashboard
-from orchestrate_task_cycle.cycle_ledger import append_event, init_cycle
+from orchestrate_task_cycle.cycle_ledger import (
+    append_event,
+    init_cycle,
+    read_events_raw,
+    write_current,
+)
+from orchestrate_task_cycle.ledger.event_model import complete_event
+from orchestrate_task_cycle.ledger.support import durable_append_json, ledger_path
 from orchestrate_task_cycle.result_contract import api as result_contract
 from orchestrate_task_cycle.stage.service import advance_stage
+from historical_cycle_test_support import create_sealed_legacy_v1_cycle
 
 
 def events() -> list[dict[str, Any]]:
@@ -100,17 +108,17 @@ def test_dashboard_hydrates_compiled_format_v2_ledger_and_current_projection(
     (tmp_path / "task.md").write_text("# Task\n\nCompact dashboard.\n", encoding="utf-8")
     init_cycle(tmp_path, cycle_id, "task-dashboard", "compact dashboard")
     advance_stage(tmp_path, cycle_id, apply=True, max_steps=1)
-    append_event(
-        tmp_path,
-        cycle_id,
-        {
+    authority = {
             "step": "authority",
             "status": "completed",
             "event_id": "authority-dashboard-compact",
             "task_id": "task-dashboard",
             "reason": "authority fixture",
-        },
-    )
+        }
+    completed = complete_event(cycle_id, authority)
+    completed["ledger_sequence"] = len(read_events_raw(tmp_path, cycle_id)) + 1
+    durable_append_json(ledger_path(tmp_path, cycle_id), completed)
+    write_current(tmp_path, cycle_id)
     advance_stage(tmp_path, cycle_id, apply=True, max_steps=2)
     cycle_dir = tmp_path / ".task/cycle" / cycle_id
 
@@ -131,6 +139,85 @@ def test_dashboard_hydrates_compiled_format_v2_ledger_and_current_projection(
         in event.get("_dashboard_malformed_reasons", [])
         for event in summary["malformed_events"]
     )
+
+
+@pytest.mark.parametrize("protocol_version", [1, 2])
+def test_historical_cycle_dashboard_stdout_is_read_only_and_writes_fail_closed(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    protocol_version: int,
+) -> None:
+    cycle_id = f"cycle-dashboard-historical-v{protocol_version}"
+    if protocol_version == 1:
+        create_sealed_legacy_v1_cycle(
+            tmp_path,
+            cycle_id,
+            "task-dashboard-historical",
+            "historical dashboard",
+        )
+        append_event(
+            tmp_path,
+            cycle_id,
+            {
+                "step": "context",
+                "status": "complete",
+                "event_id": f"context-dashboard-v{protocol_version}",
+                "task_id": "task-dashboard-historical",
+            },
+        )
+    else:
+        init_cycle(
+            tmp_path,
+            cycle_id,
+            "task-dashboard-historical",
+            "historical dashboard",
+            stage_compiler_protocol_version=protocol_version,
+            stage_preparation_schema_version=3,
+        )
+        advance_stage(tmp_path, cycle_id, apply=True, max_steps=1)
+    cycle_dir = tmp_path / ".task" / "cycle" / cycle_id
+    initialization_path = cycle_dir / "initialization.json"
+    initialization = json.loads(
+        initialization_path.read_text(encoding="utf-8")
+    )
+    initialization.pop("initialization_provenance_version")
+    initialization.pop("workflow_contract_profile", None)
+    initialization_path.write_text(
+        json.dumps(initialization, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (cycle_dir / "initialization.provenance.json").unlink()
+
+    assert dashboard.main(
+        [
+            "--root",
+            str(tmp_path),
+            "--cycle-id",
+            cycle_id,
+            "--format",
+            "json",
+        ]
+    ) == 0
+    assert json.loads(capsys.readouterr().out)["step"] == "dashboard"
+    dashboard_path = cycle_dir / "dashboard.md"
+    result_path = tmp_path / "arbitrary-dashboard-result.json"
+
+    assert dashboard.main(
+        ["--root", str(tmp_path), "--cycle-id", cycle_id, "--write"]
+    ) == 2
+    assert not dashboard_path.exists()
+    capsys.readouterr()
+    assert dashboard.main(
+        [
+            "--root",
+            str(tmp_path),
+            "--cycle-id",
+            cycle_id,
+            "--result-output",
+            str(result_path),
+        ]
+    ) == 2
+    assert not result_path.exists()
 
 
 def test_noncanonical_event_and_stale_snapshot_remain_visible() -> None:

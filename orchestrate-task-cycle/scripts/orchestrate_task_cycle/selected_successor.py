@@ -17,7 +17,10 @@ from .selection_publication_store import (
     _display_json,
     _sha256_bytes,
     _successor_bundle_path,
-    _write_once,
+    _write_once_with_status,
+)
+from .selection_publication_producer_capability import (
+    _SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
 )
 from .selection_decision_store import normalize_binding, read_bound_bytes
 from .selected_successor_index import load_prepare_index, write_prepare_index
@@ -257,8 +260,12 @@ def _publish_bundle(
         "selected-successor preparation bundle",
     )
     path = _successor_bundle_path(root, content_sha)
-    created = not path.exists() and not path.is_symlink()
-    digest = _write_once(path, payload, "selected-successor preparation bundle")
+    digest, created = _write_once_with_status(
+        path,
+        payload,
+        "selected-successor preparation bundle",
+        producer_capability=_SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
+    )
     return bundle, {
         "ref": path.relative_to(root).as_posix(),
         "sha256": digest,

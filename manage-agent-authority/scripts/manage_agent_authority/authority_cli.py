@@ -6,12 +6,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .artifact_store import register_grant
 from .artifact_store import snapshot_file
 from .artifact_store import transition_grants
 from .artifact_store import update_current_policy
 from .canonical import load_object
-from .composition import create_composition
+from .composition_intent_compiler import compile_grant_composition
 from .decision_publication import evaluate_and_publish
 from .lifecycle import consume
 from .lifecycle import release
@@ -20,6 +19,18 @@ from .lifecycle import reserve
 from .operation_compiler import compilation_inputs
 from .operation_compiler import compile_operation
 from .operation_publication import publish_compilation
+from .operation_batch import publish_operation_batch, publish_operation_set
+from .root_grant import (
+    materialize_plan_bound_root_grant,
+    prepare_root_approval_plan,
+)
+from .root_decision_seed import compile_root_decision_seed
+from .root_authorization_evidence import publish_root_authorization_evidence
+from .grant_intent_compiler import (
+    compile_delegated_grant,
+    replay_registered_grant,
+)
+from .semantic_context import publish_shared_semantic_context
 from .workflow_status import resolve_operation
 from .workflow_status import status_snapshot
 from .reconciliation_evidence import prepare_reconciliation_evidence
@@ -54,16 +65,30 @@ def _binding(value: str, label: str) -> dict[str, str]:
     return {"ref": str(loaded["ref"]), "sha256": str(loaded["sha256"])}
 
 
-def _input_object(value: str) -> dict[str, Any]:
+def _input_json(value: str) -> Any:
     if value == "-":
         try:
             loaded = json.load(sys.stdin)
         except json.JSONDecodeError as exc:
             raise SystemExit(f"JSON input is invalid: {exc}") from exc
-        if not isinstance(loaded, dict):
-            raise SystemExit("JSON input must be an object.")
         return loaded
-    return load_object(value)
+    try:
+        candidate = Path(value)
+        is_file = candidate.is_file()
+    except OSError:
+        is_file = False
+    try:
+        source = candidate.read_text(encoding="utf-8") if is_file else value
+        return json.loads(source)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"JSON input is invalid: {exc}") from exc
+
+
+def _input_object(value: str) -> dict[str, Any]:
+    loaded = _input_json(value)
+    if not isinstance(loaded, dict):
+        raise SystemExit("JSON input must be an object.")
+    return loaded
 
 
 def _operation_inputs(
@@ -101,8 +126,9 @@ def command_snapshot_source(args: argparse.Namespace) -> int:
 
 
 def command_register_grant(args: argparse.Namespace) -> int:
-    result = register_grant(_root(args), load_object(args.grant), parent_id=None)
-    return _emit({"status": "registered", **result})
+    return _emit(
+        replay_registered_grant(_root(args), load_object(args.grant))
+    )
 
 
 def command_compile_operation(args: argparse.Namespace) -> int:
@@ -118,11 +144,94 @@ def command_compile_operation(args: argparse.Namespace) -> int:
     return _emit(compilation)
 
 
-def command_delegate(args: argparse.Namespace) -> int:
-    result = register_grant(
-        _root(args), load_object(args.grant), parent_id=args.parent_grant_id
+def command_compile_semantic_context(args: argparse.Namespace) -> int:
+    return _emit(
+        publish_shared_semantic_context(
+            _root(args),
+            _binding(args.initialization, "initialization"),
+            _input_object(args.semantic),
+        )
     )
-    return _emit({"status": "delegated", **result})
+
+
+def command_publish_operation_set(args: argparse.Namespace) -> int:
+    return _emit(
+        publish_operation_set(_root(args), _input_json(args.operations))
+    )
+
+
+def command_compile_operation_batch(args: argparse.Namespace) -> int:
+    return _emit(
+        publish_operation_batch(
+            _root(args),
+            _binding(args.semantic_context, "semantic_context"),
+            _binding(args.operation_set, "operation_set"),
+            compiled_at=args.at,
+            skills_root=_skills_root(args),
+        )
+    )
+
+
+def command_prepare_root_approval(args: argparse.Namespace) -> int:
+    return _emit(
+        prepare_root_approval_plan(
+            _root(args),
+            _binding(args.operation_batch, "operation_batch"),
+            _binding(args.policy_snapshot, "policy_snapshot"),
+            _input_object(args.grant_semantics),
+            prepared_at=args.at,
+            skills_root=_skills_root(args),
+        )
+    )
+
+
+def command_compile_root_decision_seed(args: argparse.Namespace) -> int:
+    return _emit(
+        compile_root_decision_seed(
+            _root(args),
+            _binding(args.approval_plan, "approval_plan"),
+            authorization_evidence=_binding(
+                args.authorization_evidence, "authorization_evidence"
+            ),
+            skills_root=_skills_root(args),
+        )
+    )
+
+
+def command_publish_root_authorization_evidence(
+    args: argparse.Namespace,
+) -> int:
+    return _emit(
+        publish_root_authorization_evidence(
+            _root(args),
+            _input_object(args.evidence),
+            skills_root=_skills_root(args),
+        )
+    )
+
+
+def command_materialize_plan_bound_root_grant(
+    args: argparse.Namespace,
+) -> int:
+    return _emit(
+        materialize_plan_bound_root_grant(
+            _root(args),
+            _binding(args.approval_plan, "approval_plan"),
+            _binding(args.decision_seed, "decision_seed"),
+            skills_root=_skills_root(args),
+        )
+    )
+
+
+def command_delegate(args: argparse.Namespace) -> int:
+    return _emit(
+        compile_delegated_grant(
+            _root(args),
+            args.parent_grant_id,
+            _input_object(args.semantics),
+            delegated_at=args.at,
+        )
+    )
 
 
 def command_evaluate(args: argparse.Namespace) -> int:
@@ -140,8 +249,17 @@ def command_evaluate(args: argparse.Namespace) -> int:
 
 
 def command_compose(args: argparse.Namespace) -> int:
-    result = create_composition(_root(args), load_object(args.composition))
-    return _emit({"status": "created", **result})
+    return _emit(
+        compile_grant_composition(
+            _root(args),
+            _binding(args.operation_batch, "operation_batch"),
+            args.request_sha256,
+            args.grant_ids,
+            _binding(args.source_approval, "source_approval"),
+            created_at=args.at,
+            skills_root=_skills_root(args),
+        )
+    )
 
 
 def command_reserve(args: argparse.Namespace) -> int:
@@ -337,7 +455,14 @@ def command_resolve(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     handlers = {
+        "compile_semantic_context": command_compile_semantic_context,
+        "publish_operation_set": command_publish_operation_set,
         "compile_operation": command_compile_operation,
+        "compile_operation_batch": command_compile_operation_batch,
+        "prepare_root_approval": command_prepare_root_approval,
+        "publish_root_authorization_evidence":
+            command_publish_root_authorization_evidence,
+        "compile_root_decision_seed": command_compile_root_decision_seed,
         "snapshot_policy": command_snapshot_policy,
         "snapshot_source": command_snapshot_source,
         "register_grant": command_register_grant,
@@ -353,6 +478,8 @@ def build_parser() -> argparse.ArgumentParser:
         "prepare_reconciliation_evidence": command_prepare_reconciliation_evidence,
         "prepare_source_recovery": command_prepare_source_recovery,
         "materialize_approved_recovery": command_materialize_approved_recovery,
+        "materialize_plan_bound_root_grant":
+            command_materialize_plan_bound_root_grant,
         "transition": command_transition,
         "status": command_status,
         "resolve": command_resolve,

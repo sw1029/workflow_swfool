@@ -4,6 +4,15 @@
 /.system
 /codex-skills-beginner-guide-and-skills-20260627.zip
 /codex-skills-beginner-guide-ko.md
+
+# Host-local root authorization material
+/.root-authorization/
+/root-authorization/
+*.root-authorization-private.pem
+*.root-authorization-public.pem
+*.root-authorization-passphrase
+root-authorization.trust.json
+root-authorization.trust.lock
 __pycache__
 *.py[cod]
 .pytest_cache/

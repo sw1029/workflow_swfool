@@ -94,7 +94,11 @@ def validate_transition(
         raise SystemExit("Authority transition root grant is missing.")
     grant = grants[root_grant_id]
     validate_for_transition(
-        root, load_source_approval(source_path), grant, event["transitioned_at"]
+        root,
+        load_source_approval(source_path),
+        grant,
+        event["transitioned_at"],
+        prospective=False,
     )
     if event["transition"] == "expired":
         if (

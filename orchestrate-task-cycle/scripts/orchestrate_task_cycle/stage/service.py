@@ -11,6 +11,7 @@ from ..cycle_ledger import (
     read_events,
     read_initialization_metadata,
 )
+from ..ledger.workflow_contract import workflow_contract_state
 from ..model_context import project_model_context
 from ..result_contract.api import validate as validate_result
 from ..transition.constants import BOOTSTRAP_ORDER, ORDER, TERMINAL_OK
@@ -60,6 +61,7 @@ STOP_REASONS = frozenset(
         "awaiting_effect_settlement",
         "model_context_budget_exceeded",
         "model_packet_budget_exceeded",
+        "preparation_v3_required",
         "stale_preparation",
         "blocked_transition",
         "rejected_result",
@@ -100,6 +102,16 @@ def prepare_stage(
 ) -> dict[str, Any]:
     workspace = Path(root).resolve(strict=True)
     cycle_dir(workspace, cycle_id)
+    metadata = read_initialization_metadata(workspace, cycle_id)
+    if persist_compiler_artifacts and workflow_contract_state(metadata) in {
+        "historical_v1_read_only",
+        "historical_v2_read_only",
+        "invalid",
+    }:
+        raise ValueError(
+            "historical unmarked protocol-v2 cycles are read-only; "
+            "compiler artifacts cannot be persisted"
+        )
     if target not in TARGET_COMPILE_SPECS:
         raise ValueError(f"unsupported stage target: {target}")
     if workflow_mode not in {"normal", "bootstrap"}:
@@ -107,6 +119,14 @@ def prepare_stage(
     preparation_schema_version = cycle_preparation_version(
         workspace, cycle_id, preparation_schema_version
     )
+    if (
+        preparation_schema_version == PREPARATION_SCHEMA_VERSION_V2
+        and TARGET_COMPILE_SPECS[target].executor_kind == "deterministic"
+    ):
+        raise ValueError(
+            "preparation_v3_required: deterministic execution requires "
+            "a schema-v3 preparation, machine input, and commit receipt"
+        )
     events = read_events(workspace, cycle_id)
     if not any(event.get("step") == "context" for event in events):
         raise ValueError("stage prepare requires the deterministic context event")
@@ -193,15 +213,40 @@ def submit_stage(
     semantic_ref: str | None = None, semantic_sha256: str | None = None,
     routing_ref: str | None = None, routing_sha256: str | None = None,
     usage_ref: str | None = None, usage_sha256: str | None = None,
+    deterministic_commit_ref: str | None = None,
+    deterministic_commit_sha256: str | None = None,
 ) -> dict[str, Any]:
     workspace = Path(root).resolve(strict=True)
     preparation = validate_preparation(preparation)
     cycle_id = str(preparation["cycle_id"])
+    metadata = read_initialization_metadata(workspace, cycle_id)
+    if apply and workflow_contract_state(metadata) in {
+        "historical_v1_read_only",
+        "historical_v2_read_only",
+        "invalid",
+    }:
+        raise ValueError(
+            "historical unmarked protocol-v2 cycles are read-only; "
+            "stage results cannot be published"
+        )
     cycle_preparation_version(workspace, cycle_id, preparation["schema_version"])
     if preparation["schema_version"] in {
         PREPARATION_SCHEMA_VERSION_V2,
         PREPARATION_SCHEMA_VERSION_V3,
     }:
+        if (
+            preparation["schema_version"] == PREPARATION_SCHEMA_VERSION_V2
+            and TARGET_COMPILE_SPECS[
+                str(preparation["target"])
+            ].executor_kind
+            == "deterministic"
+        ):
+            return {
+                "status": "block",
+                "stop_reason": "preparation_v3_required",
+                "preparation_id": preparation["preparation_id"],
+                "applied": False,
+            }
         if judgment is not None:
             raise ValueError("v2 stage submission forbids inline judgment JSON")
         return submit_v2(
@@ -215,6 +260,8 @@ def submit_stage(
             routing_ref=routing_ref,
             routing_sha256=routing_sha256,
             usage_ref=usage_ref, usage_sha256=usage_sha256,
+            deterministic_commit_ref=deterministic_commit_ref,
+            deterministic_commit_sha256=deterministic_commit_sha256,
             mode=mode,
             apply=apply,
             max_files=max_files,
@@ -229,6 +276,8 @@ def submit_stage(
         routing_sha256,
         usage_ref,
         usage_sha256,
+        deterministic_commit_ref,
+        deterministic_commit_sha256,
     )
     judgment = require_v1_judgment(judgment, *exact_bindings)
     return _submit_v1(

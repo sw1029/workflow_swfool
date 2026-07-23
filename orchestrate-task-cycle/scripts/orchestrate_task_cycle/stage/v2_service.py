@@ -5,14 +5,18 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from ..result_contract.api import validate as validate_result
-from .artifact_store import load_routing_receipt, load_stage_input, load_usage_observation
-from .builder import ResultBuilder
-from .contracts import (
-    canonical_bytes,
-    canonical_sha256,
-    leaf_count,
+from ..ledger.support import (
+    ledger_lock,
+    read_initialization_metadata,
 )
+from ..ledger.workflow_contract import require_cycle_mutation_contract
+from ..result_contract.api import validate as validate_result
+from .artifact_store import (
+    load_routing_receipt,
+    load_stage_input,
+    load_usage_observation,
+)
+from .contracts import canonical_sha256
 from .gates import validate_submission_transition
 from .publication import (
     existing_publication,
@@ -28,18 +32,15 @@ from .freshness import (
     validate_owner_post_effect_claims,
 )
 from .preparation_v3 import prepare_v2
-
-
-OUTPUT_SCALARS = (
-    "status",
-    "validation_verdict",
-    "progress_verdict",
-    "review_status",
-    "quality_verdict",
-    "selection_outcome",
-    "index_status",
-    "commit_status",
-    "completion_status",
+from .native_submission import publish_validated_projection
+from .deterministic_submission import (
+    build_receipted_result,
+    receipt_pair,
+)
+from .submission_output import (
+    build_submission_output,
+    record_precondition_metrics,
+    record_publication,
 )
 
 
@@ -69,6 +70,8 @@ def _exact_judgment(
     semantic_sha256: str | None,
     routing_ref: str | None,
     routing_sha256: str | None,
+    publish_native_artifacts: bool = False,
+    predict_native_artifacts: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
     target, cycle_id = str(preparation["target"]), str(preparation["cycle_id"])
     spec = TARGET_COMPILE_SPECS[target]
@@ -92,6 +95,10 @@ def _exact_judgment(
             cycle_id=cycle_id,
             target=target,
             input_kind="owner_result",
+            preparation_id=str(preparation["preparation_id"]),
+            state_fingerprint=str(preparation["state_fingerprint"]),
+            publish_native_artifacts=publish_native_artifacts,
+            predict_native_artifacts=predict_native_artifacts,
         )
         owner = loaded["owner_result"]
         for field, expected in (preparation.get("derived_values") or {}).items():
@@ -107,6 +114,8 @@ def _exact_judgment(
             cycle_id=cycle_id,
             target=target,
             input_kind="semantic",
+            preparation_id=str(preparation["preparation_id"]),
+            state_fingerprint=str(preparation["state_fingerprint"]),
         )
         judgment.update(loaded)
         bindings["semantic_binding"] = binding
@@ -137,7 +146,9 @@ def _exact_judgment(
                 "routing_tier": routing["routing_tier"],
                 "requested_model_ref": routing["requested_model_ref"],
                 "requested_model": routing["requested_model"],
-                "model_configuration_status": "reference_only",
+                "model_configuration_status": routing.get(
+                    "model_configuration_status", "reference_only"
+                ),
                 "requested_reasoning_effort": routing[
                     "requested_reasoning_effort"
                 ],
@@ -171,6 +182,8 @@ def _usage(
         *pair,
         cycle_id=str(preparation["cycle_id"]),
         target=str(preparation["target"]),
+        preparation_id=str(preparation["preparation_id"]),
+        state_fingerprint=str(preparation["state_fingerprint"]),
     )
 
 
@@ -213,29 +226,72 @@ def _submission_prestate(
     }
 
 
-def _record_precondition_metrics(
-    output: dict[str, Any],
-    validation: dict[str, Any],
+def _validate_candidate(
+    full: dict[str, Any],
+    preparation: dict[str, Any],
+    routing: dict[str, Any] | None,
+    work_order: dict[str, Any] | None,
+    result: dict[str, Any],
+    digest: str,
+    judgment: dict[str, Any],
+    input_bindings: dict[str, Any],
+    usage: dict[str, Any],
     freshness: dict[str, Any],
-) -> None:
-    changed = list(freshness["changed_precondition_selectors"])
-    status = str(freshness["freshness_status"])
-    if changed:
-        status = (
-            "owner_validated_post_effect"
-            if validation["status"] != "block"
-            else "post_effect_owner_validation_failed"
-        )
-    output["compiler_metrics"].update(
-        {
-            "precondition_validation_status": status,
-            "post_effect_changed_selector_count": len(changed),
-            "post_effect_changed_selectors_sha256": canonical_sha256(changed),
-        }
+    mode: str,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    transition = validate_submission_transition(
+        full, preparation, routing if routing is not None else work_order
+    )
+    if transition["status"] == "block":
+        return {
+            "status": "block",
+            "stop_reason": "blocked_transition",
+            "preparation_id": preparation["preparation_id"],
+            "transition_validation": transition,
+            "freshness_status": freshness["freshness_status"],
+            "changed_precondition_selectors": freshness[
+                "changed_precondition_selectors"
+            ],
+            "applied": False,
+        }, None
+    validation = validate_result(
+        str(preparation["target"]), result, mode, full
+    )
+    output = build_submission_output(
+        preparation,
+        judgment,
+        result,
+        digest,
+        input_bindings,
+        usage=usage,
+        validation=validation,
+    )
+    record_precondition_metrics(output, validation, freshness)
+    return output, validation
+
+
+def _preflight_deterministic_submission(
+    root: Path,
+    preparation: dict[str, Any],
+    prediction: dict[str, Any],
+    *,
+    mode: str = "block",
+    max_files: int,
+    max_paths: int,
+) -> dict[str, Any]:
+    from .deterministic_preflight import _preflight
+
+    return _preflight(
+        root,
+        preparation,
+        prediction,
+        mode=mode,
+        max_files=max_files,
+        max_paths=max_paths,
     )
 
 
-def submit_v2(
+def _submit_v2_locked(
     root: Path,
     preparation: dict[str, Any],
     *,
@@ -248,6 +304,7 @@ def submit_v2(
     routing_sha256: str | None,
     usage_ref: str | None,
     usage_sha256: str | None,
+    deterministic_commit_pair: tuple[str, str] | None,
     mode: str,
     apply: bool,
     max_files: int,
@@ -273,6 +330,7 @@ def submit_v2(
         semantic_sha256=semantic_sha256,
         routing_ref=routing_ref,
         routing_sha256=routing_sha256,
+        predict_native_artifacts=True,
     )
     if freshness is not None:
         claim_block = validate_owner_post_effect_claims(
@@ -285,8 +343,18 @@ def submit_v2(
     )
     if usage_binding is not None:
         input_bindings["usage_binding"] = usage_binding
-    result = ResultBuilder().build(preparation, judgment)
-    digest = canonical_sha256(result)
+    result, digest, commit_block = build_receipted_result(
+        root,
+        preparation,
+        judgment,
+        input_bindings,
+        deterministic_commit_pair,
+        replay=replay,
+        max_files=max_files,
+        max_paths=max_paths,
+    )
+    if commit_block is not None:
+        return commit_block
     existing = existing_publication(
         root,
         cycle_id,
@@ -298,7 +366,7 @@ def submit_v2(
         repair_projection=apply,
     )
     if existing is not None:
-        return _output(
+        return build_submission_output(
             preparation,
             judgment,
             result,
@@ -311,34 +379,40 @@ def submit_v2(
         return replay_mismatch(preparation)
     if full is None:
         raise RuntimeError("current stage context was not collected")
-    transition = validate_submission_transition(
-        full, preparation, routing if routing is not None else work_order
-    )
-    if transition["status"] == "block":
-        return {
-            "status": "block",
-            "stop_reason": "blocked_transition",
-            "preparation_id": preparation["preparation_id"],
-            "transition_validation": transition,
-            "freshness_status": freshness["freshness_status"],
-            "changed_precondition_selectors": freshness[
-                "changed_precondition_selectors"
-            ],
-            "applied": False,
-        }
-    validation = validate_result(target, result, mode, full)
-    output = _output(
+    output, validation = _validate_candidate(
+        full,
         preparation,
-        judgment,
+        routing,
+        work_order,
         result,
         digest,
+        judgment,
         input_bindings,
-        usage=usage,
-        validation=validation,
+        usage,
+        freshness,
+        mode,
     )
-    _record_precondition_metrics(output, validation, freshness)
-    if not apply or validation["status"] == "block":
+    if validation is None or not apply or validation["status"] == "block":
         return output
+    judgment, result = publish_validated_projection(
+        root,
+        preparation,
+        judgment,
+        routing,
+        result,
+        validation,
+        full,
+        mode,
+        exact_loader=_exact_judgment,
+        result_validator=validate_result,
+        owner_result_ref=owner_result_ref,
+        owner_result_sha256=owner_result_sha256,
+        semantic_ref=semantic_ref,
+        semantic_sha256=semantic_sha256,
+        routing_ref=routing_ref,
+        routing_sha256=routing_sha256,
+    )
+    digest = canonical_sha256(result)
     publication = publish_result(
         root,
         cycle_id,
@@ -347,135 +421,57 @@ def submit_v2(
         digest,
         output["compiler_metrics"],
         input_bindings,
+        max_files=max_files,
+        max_paths=max_paths,
     )
-    output.update(
-        {
-            "applied": True,
-            "event": publication["event"],
-            "event_duplicate": publication["event_duplicate"],
-            "ledger_path": publication["ledger_path"],
-        }
-    )
-    output["compiler_metrics"].update(publication["compiler_metrics"])
-    output["compiler_metrics"]["ledger_event_bytes"] = publication[
-        "ledger_event_bytes"
-    ]
-    return output
+    return record_publication(output, publication)
 
 
-def _output(
+def submit_v2(
+    root: Path,
     preparation: dict[str, Any],
-    judgment: dict[str, Any],
-    result: dict[str, Any],
-    digest: str,
-    input_bindings: dict[str, Any],
-    *,
-    usage: dict[str, Any] | None = None,
-    validation: dict[str, Any] | None = None,
-    existing: dict[str, Any] | None = None,
+    **submission: Any,
 ) -> dict[str, Any]:
-    validation = validation or {
-        "status": "ok",
-        "target": preparation["target"],
-        "mode": "replay",
-        "findings": [],
-        "missing_fields": [],
-    }
-    projection = {
-        key: result.get(key)
-        for key in OUTPUT_SCALARS
-        if result.get(key) is None
-        or isinstance(result.get(key), (bool, int, float))
-        or (
-            isinstance(result.get(key), str)
-            and len(result.get(key).encode("utf-8")) <= 256
+    """Run prediction, gates, auxiliary commit, and publication under one lock."""
+
+    cycle_id = str(preparation["cycle_id"])
+    apply = bool(submission.get("apply"))
+    commit_pair, receipt_block = receipt_pair(
+        preparation,
+        submission.get("deterministic_commit_ref"),
+        submission.get("deterministic_commit_sha256"),
+    )
+    if receipt_block is not None:
+        return receipt_block
+    locked_submission = dict(submission)
+    locked_submission.pop("deterministic_commit_ref", None)
+    locked_submission.pop("deterministic_commit_sha256", None)
+    locked_submission["deterministic_commit_pair"] = commit_pair
+    if apply:
+        require_cycle_mutation_contract(
+            read_initialization_metadata(root, cycle_id),
+            "submit compiled stage",
         )
-    }
-    preparation_metrics = preparation.get("compiler_metrics") or {}
-    if not isinstance(preparation_metrics, dict):
-        preparation_metrics = {}
-    opened_inputs = len(
-        [binding for binding in input_bindings.values() if isinstance(binding, dict)]
-    ) + (1 if preparation.get("machine_input_binding") else 2)
-    usage_binding = input_bindings.get("usage_binding") or {}
-    root_fields = {
-        "status": validation["status"],
-        "stop_reason": "rejected_result" if validation["status"] == "block" else None,
-        "preparation_id": preparation["preparation_id"],
-        "result_projection": projection,
-        "result_contract": validation,
-        "result_artifact_sha256": digest,
-        "applied": existing is not None,
-        "input_bindings": input_bindings,
-        "compiler_metrics": {
-            **preparation_metrics,
-            "semantic_leaf_count": leaf_count(judgment.get("semantic") or {}),
-            "owner_result_leaf_count": leaf_count(judgment.get("owner_result") or {}),
-            "compiled_result_leaf_count": leaf_count(result),
-            "model_authored_mechanical_bytes": 0,
-            "model_authored_mechanical_bytes_origin": "field_origin_registry",
-            "inline_payload_bytes": 0,
-            "owner_result_bytes": int(
-                (input_bindings.get("owner_result_binding") or {}).get(
-                    "size_bytes", 0
-                )
-            ),
-            "semantic_bytes": int(
-                (input_bindings.get("semantic_binding") or {}).get("size_bytes", 0)
-            ),
-            "raw_bytes_read": sum(
-                int(binding.get("size_bytes") or 0)
-                for binding in input_bindings.values()
-                if isinstance(binding, dict)
-            ),
-            "files_opened_count": int(
-                preparation_metrics.get("files_opened_count") or 0
-            )
-            + opened_inputs,
-            "files_written_count": int(
-                preparation_metrics.get("files_written_count") or 0
-            ),
-            "preparation_bytes": len(canonical_bytes(preparation)) + 1,
-            "model_visible_bytes": (
-                0
-                if preparation.get("executor_kind") == "deterministic"
-                else int(preparation_metrics.get("model_visible_bytes") or 0)
-                + int(
-                    (input_bindings.get("semantic_binding") or {}).get(
-                        "size_bytes", 0
-                    )
-                )
-            ),
-            "model_call_count": (
-                1
-                if input_bindings.get("routing_binding")
-                or input_bindings.get("semantic_binding")
-                else 0
-            ),
-            "usage_receipt_ref": usage_binding.get("ref"),
-            "usage_receipt_sha256": usage_binding.get("sha256"),
-            "usage_receipt_schema_version": usage_binding.get("schema_version"),
-            **(usage or {}),
-        },
-    }
-    if existing:
-        stored_metrics = existing["event"].get("compiler_metrics")
-        if isinstance(stored_metrics, dict):
-            root_fields["compiler_metrics"] = dict(stored_metrics)
-        root_fields.update(
-            {
-                "result_artifact_ref": existing["result_artifact_ref"],
-                "event": existing["event"],
-                "event_duplicate": True,
-                "ledger_path": existing["ledger_path"],
-            }
+    preview_input = {**locked_submission, "apply": False}
+    with ledger_lock(root, cycle_id, exclusive=False):
+        preview = _submit_v2_locked(root, preparation, **preview_input)
+    if (
+        not apply
+        or preview.get("status") == "block"
+    ):
+        return preview
+    with ledger_lock(root, cycle_id, exclusive=True):
+        require_cycle_mutation_contract(
+            read_initialization_metadata(root, cycle_id),
+            "submit compiled stage",
         )
-    else:
-        root_fields["result_artifact_ref"] = (
-            f".task/cycle/{preparation['cycle_id']}/packets/"
-            f"result-{preparation['target']}-{digest}.json"
+        return _submit_v2_locked(
+            root, preparation, **locked_submission
         )
-    return root_fields
 
 
-__all__ = ["prepare_v2", "require_v1_judgment", "submit_v2"]
+__all__ = [
+    "prepare_v2",
+    "require_v1_judgment",
+    "submit_v2",
+]

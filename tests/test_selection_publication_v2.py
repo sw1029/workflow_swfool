@@ -3,20 +3,29 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import stat
+from types import SimpleNamespace
 
 import pytest
 
 from orchestrate_task_cycle import selection_decision_receipt_cli
 from orchestrate_task_cycle import selection_publication as publication
+from orchestrate_task_cycle import selection_publication_migration as migration
+from orchestrate_task_cycle import (
+    selection_publication_migration_contract as migration_contract,
+)
 from orchestrate_task_cycle.selection_publication import (
     migrate_publication_state,
-    prepare_publication_intent,
     publication_status,
-    publish_prepared,
-    recover_publications,
 )
 from orchestrate_task_cycle.selection_tick import build_selection_tick
+from orchestrate_task_cycle.selection_publication_state import load_state
 from selection_synthesis_support import persisted_selection_synthesis
+from selection_publication_legacy_support import (
+    prepare_legacy_intent_fixture as prepare_publication_intent,
+    publish_legacy_prepared_fixture as publish_prepared,
+    recover_legacy_publications_fixture as recover_publications,
+)
 
 
 def _canonical(value: object) -> bytes:
@@ -339,6 +348,27 @@ def test_exact_replay_requires_explicit_missing_state_migration(
     assert state.is_file()
 
 
+def test_deep_status_preserves_schema_v1_migration_debt(tmp_path: Path) -> None:
+    (tmp_path / "task.md").write_text("# Task\n", encoding="utf-8")
+    _write(
+        tmp_path / ".task/selection_publication/state.json",
+        {
+            "schema_version": 1,
+            "kind": "selection_publication_state",
+            "pending_transaction_ids": [],
+            "receipts": [],
+            "state_content_sha256": "0" * 64,
+        },
+    )
+
+    compact = publication_status(tmp_path)
+    deep = publication_status(tmp_path, deep=True)
+
+    assert compact["status"] == "migration_required"
+    assert deep == compact
+    assert deep["current_head"]["lineage_mode"] == "legacy_unscanned"
+
+
 def test_v2_blob_tamper_fails_before_task_alias_write(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -427,3 +457,97 @@ def test_state_migration_rebuilds_projection_from_deep_validation(
     assert migrated["receipt_count"] == 1
     assert state_path.is_file()
     assert publication_status(tmp_path)["selection_consumption_allowed"] is True
+
+
+def test_state_migration_hides_state_until_completion_receipt_and_recovers(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    receipt, _ = _selected_inputs(tmp_path, capsys)
+    task_path = _write(
+        tmp_path / ".task/candidates/task-next.md",
+        b"# Task\n\n- Task ID: `task-next`\n",
+    )
+    prepared = prepare_publication_intent(
+        tmp_path,
+        _intent(
+            receipt,
+            _binding(tmp_path, task_path),
+            _transition_receipt(tmp_path, task_path, "task-next", "selected"),
+        ),
+    )
+    publish_prepared(tmp_path, prepared["transaction_id"])
+    state_path = tmp_path / ".task/selection_publication/state.json"
+    state_path.unlink()
+    crashed = False
+
+    def crash_after_state(stage: str, _path: Path) -> None:
+        nonlocal crashed
+        if stage == "after_state" and not crashed:
+            crashed = True
+            raise RuntimeError("simulated migration crash after state")
+
+    monkeypatch.setattr(migration, "_migration_hook", crash_after_state)
+    with pytest.raises(RuntimeError, match="simulated migration crash"):
+        migrate_publication_state(tmp_path)
+
+    assert state_path.is_file()
+    with pytest.raises(ValueError, match="completion receipt is absent"):
+        load_state(tmp_path)
+    assert not (
+        tmp_path
+        / ".task/selection_publication/migrations/storage-v4/complete.json"
+    ).exists()
+
+    monkeypatch.setattr(
+        migration, "_migration_hook", lambda _stage, _path: None
+    )
+    recovered = migrate_publication_state(tmp_path)
+
+    assert recovered["mutation_performed"] is True
+    assert recovered["migration_completion"]["ref"].endswith("complete.json")
+    assert load_state(tmp_path) is not None
+
+
+def test_state_migration_fails_before_wal_when_inventory_exceeds_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    receipts = tmp_path / ".task/selection_publication/receipts"
+    receipts.mkdir(parents=True)
+    for index in range(3):
+        (receipts / f"junk-{index}.json").write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(migration_contract, "MAX_MIGRATION_ENTRIES", 2)
+
+    with pytest.raises(ValueError, match="entry-count bound"):
+        migrate_publication_state(tmp_path)
+
+    assert not (
+        tmp_path
+        / ".task/selection_publication/migrations/storage-v4/prepare.json"
+    ).exists()
+    assert not (
+        tmp_path / ".task/selection_publication/state.json"
+    ).exists()
+
+
+def test_migration_file_bound_accepts_observed_legacy_size_and_rejects_overflow(
+) -> None:
+    assert migration_contract.MAX_MIGRATION_FILE_BYTES == 32 * 1024 * 1024
+    budget = migration_contract.MigrationBudget()
+    budget.consume_stat(
+        SimpleNamespace(
+            st_mode=stat.S_IFREG,
+            st_size=migration_contract.MAX_MIGRATION_FILE_BYTES,
+        ),
+        "legacy prepare",
+    )
+
+    with pytest.raises(ValueError, match="file-size bound"):
+        migration_contract.MigrationBudget().consume_stat(
+            SimpleNamespace(
+                st_mode=stat.S_IFREG,
+                st_size=migration_contract.MAX_MIGRATION_FILE_BYTES + 1,
+            ),
+            "oversized prepare",
+        )

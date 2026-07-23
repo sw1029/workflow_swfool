@@ -5,6 +5,30 @@
   "skill_version": "2.0.0",
   "operations": [
     {
+      "operation_id": "compile_acceptance_owner_result",
+      "operation_version": "1",
+      "authorization_mechanism": "none",
+      "mutation_class": "local_mutation",
+      "required_capabilities": [
+        "acceptance.packet.compile"
+      ],
+      "source_rank_floor": "S0",
+      "risk_floor": "R1",
+      "decision_class": "D3",
+      "effect_classes": [
+        "publish_noncanonical_compiled_acceptance_owner_result"
+      ],
+      "data_classes": [
+        "workflow_metadata",
+        "task_acceptance"
+      ],
+      "reversibility": "reversible",
+      "subject_kinds": [
+        "task_acceptance_compilation"
+      ],
+      "authority_applicability": "none"
+    },
+    {
       "operation_id": "publish_acceptance_packet",
       "operation_version": "1",
       "authorization_mechanism": "grant",

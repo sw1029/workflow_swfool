@@ -5,7 +5,15 @@ from pathlib import Path
 from typing import Any, Callable, TypeVar
 
 from .artifact_evidence import annotate_artifact_refs
-from .constants import CURRENT_STAGE_PROJECTION_VERSION
+from .compiler_binding import (
+    CompiledEventBinding,
+    open_compiled_event_binding,
+    validate_compiled_event_derivation,
+)
+from .constants import (
+    COMPILED_TERMINAL_LIFECYCLE_EVENT_KIND,
+    CURRENT_STAGE_PROJECTION_VERSION,
+)
 from .current_projection import (
     build_current_projection,
     expand_current_projection,
@@ -39,6 +47,11 @@ from .terminal import (
     compact_terminal_observation,
     terminal_latch_state,
     verify_terminal_reopen_receipt,
+)
+from .workflow_contract import (
+    PUBLIC_PRODUCER,
+    validate_ledger_producer,
+    workflow_contract_state,
 )
 
 
@@ -159,7 +172,7 @@ def read_all_cycle_events(root: Path) -> list[dict[str, Any]]:
     )
 
 
-def write_current_unlocked(
+def _write_current_unlocked(
     root: Path,
     cycle_id: str,
     events: list[dict[str, Any]],
@@ -180,23 +193,21 @@ def write_current_unlocked(
 def write_current(
     root: Path,
     cycle_id: str,
-    events: list[dict[str, Any]] | None = None,
     *,
     atomic_writer: AtomicTextWriter = atomic_write_text,
 ) -> dict[str, Any]:
     cycle_id = validate_cycle_id(cycle_id)
     with ledger_lock(root, cycle_id, exclusive=True):
         stored_events = read_events_unlocked(root, cycle_id)
-        effective_events = stored_events if ledger_path(root, cycle_id).is_file() else list(events or [])
         metadata = (
             read_initialization_metadata(root, cycle_id)
             if initialization_path(root, cycle_id).is_file()
             else None
         )
-        return write_current_unlocked(
+        return _write_current_unlocked(
             root,
             cycle_id,
-            effective_events,
+            stored_events,
             protocol_version=stage_compiler_protocol_version(metadata),
             atomic_writer=atomic_writer,
         )
@@ -345,49 +356,124 @@ def append_event(
     atomic_writer: AtomicTextWriter = atomic_write_text,
     json_appender: JsonAppender = durable_append_json,
 ) -> dict[str, Any]:
+    return _append_event(
+        root,
+        cycle_id,
+        event,
+        allow_noncanonical_step,
+        compiled_binding=None,
+        atomic_writer=atomic_writer,
+        json_appender=json_appender,
+    )
+
+
+def append_compiled_binding(
+    root: Path,
+    cycle_id: str,
+    binding: CompiledEventBinding,
+    allow_noncanonical_step: bool = False,
+    *,
+    atomic_writer: AtomicTextWriter = atomic_write_text,
+    json_appender: JsonAppender = durable_append_json,
+) -> dict[str, Any]:
+    return _append_event(
+        root,
+        cycle_id,
+        {},
+        allow_noncanonical_step,
+        compiled_binding=binding,
+        atomic_writer=atomic_writer,
+        json_appender=json_appender,
+    )
+
+
+def _append_event(
+    root: Path,
+    cycle_id: str,
+    event: dict[str, Any],
+    allow_noncanonical_step: bool,
+    *,
+    compiled_binding: CompiledEventBinding | None,
+    atomic_writer: AtomicTextWriter,
+    json_appender: JsonAppender,
+) -> dict[str, Any]:
     cycle_id = validate_cycle_id(cycle_id)
+    producer_kind = PUBLIC_PRODUCER
+    if compiled_binding is not None:
+        event, producer_kind = open_compiled_event_binding(compiled_binding)
     event = validate_event_envelope(cycle_id, event, allow_noncanonical_step)
     hydrate_result_event(root, cycle_id, event)
     fingerprint = request_fingerprint(cycle_id, event)
     path = ledger_path(root, cycle_id)
     with ledger_lock(root, cycle_id, exclusive=True):
         initialization = read_initialization_metadata(root, cycle_id)
+        compatibility_warning = validate_ledger_producer(
+            initialization, event, producer_kind
+        )
         previous_events = read_events_unlocked(root, cycle_id)
+        validate_compiled_event_derivation(
+            root,
+            cycle_id,
+            event,
+            producer_kind,
+            initialization,
+            previous_events,
+            compiled_binding,
+        )
         _validate_first_context(initialization, previous_events, event)
         (cycle_dir(root, cycle_id) / "packets").mkdir(parents=True, exist_ok=True)
         duplicate = duplicate_event(previous_events, event, fingerprint)
         if duplicate is not None:
-            current = write_current_unlocked(
+            current = _write_current_unlocked(
                 root,
                 cycle_id,
                 previous_events,
                 protocol_version=stage_compiler_protocol_version(initialization),
                 atomic_writer=atomic_writer,
             )
-            return {
+            result = {
                 "event": duplicate,
                 "event_duplicate": True,
                 "current_stage": current,
                 "ledger_path": rel_path(root, path),
                 "current_stage_path": rel_path(root, current_stage_path(root, cycle_id)),
             }
+            if compatibility_warning is not None:
+                result["workflow_contract_warning"] = compatibility_warning
+            return result
 
         latch = _verified_terminal_latch(root, previous_events, event)
         full_event_suppressed = bool(latch.get("suppress_full_cycle"))
         event_to_write = compact_terminal_observation(event, latch) if full_event_suppressed else {**event, **latch}
+        if (
+            full_event_suppressed
+            and workflow_contract_state(initialization) == "enforced"
+        ):
+            event_to_write["terminal_lifecycle_kind"] = (
+                "terminal_latch_observation"
+            )
+            event_to_write["event_kind"] = (
+                COMPILED_TERMINAL_LIFECYCLE_EVENT_KIND
+            )
+            event_to_write["producer_kind"] = "terminal_lifecycle_compiler"
+            validate_ledger_producer(
+                initialization,
+                event_to_write,
+                "terminal_lifecycle_compiler",
+            )
         event_to_write["request_fingerprint"] = fingerprint
         event_to_write["ledger_sequence"] = len(previous_events) + 1
         completed = complete_event(cycle_id, event_to_write)
         annotate_artifact_refs(root, completed, previous_events)
         json_appender(path, completed)
-        current = write_current_unlocked(
+        current = _write_current_unlocked(
             root,
             cycle_id,
             previous_events + [completed],
             protocol_version=stage_compiler_protocol_version(initialization),
             atomic_writer=atomic_writer,
         )
-        return {
+        result = {
             "event": completed,
             "event_suppressed": full_event_suppressed,
             "observation_appended": full_event_suppressed,
@@ -395,3 +481,6 @@ def append_event(
             "ledger_path": rel_path(root, path),
             "current_stage_path": rel_path(root, current_stage_path(root, cycle_id)),
         }
+        if compatibility_warning is not None:
+            result["workflow_contract_warning"] = compatibility_warning
+        return result

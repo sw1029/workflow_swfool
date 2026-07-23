@@ -34,12 +34,6 @@ from manage_task_state_index.state.scan_projection_repair import (  # noqa: E402
 from manage_task_state_index.state.selected_successor import (  # noqa: E402
     prepare_selected_successor,
 )
-from manage_task_state_index.state.selected_successor_guard import (  # noqa: E402
-    _SELECTED_SUCCESSOR_EXECUTION_TOKEN,
-)
-from manage_task_state_index.state.transition_plan import (  # noqa: E402
-    settle_transition_external,
-)
 
 
 AT = "2026-07-23T10:00:00+09:00"
@@ -746,10 +740,15 @@ def test_external_validator_allows_historical_task_drift_after_settlement(
         tmp_path / f".task/selection_publication/transactions/{transaction_id}/prepare.json",
         prepare,
     )
-    pending = task_index.apply_transition_plan(
-        tmp_path, selected["plan_binding"]["ref"],
-        external_prepare=_binding(tmp_path, prepare_path),
-        _selected_successor_execution_token=_SELECTED_SUCCESSOR_EXECUTION_TOKEN,
+    context, replay = transition_apply._preflight(
+        tmp_path,
+        selected["plan_binding"]["ref"],
+        _binding(tmp_path, prepare_path),
+        transition_apply._default_rebuild_markdown,
+    )
+    assert replay is None
+    pending = transition_apply._result(
+        context, transition_apply._apply_locked(context)
     )
     task.write_bytes(source.read_bytes())
     commit = {
@@ -768,13 +767,28 @@ def test_external_validator_allows_historical_task_drift_after_settlement(
     commit_path = _write_json(
         tmp_path / ".task/selection_publication/commit.json", commit
     )
-    settled = settle_transition_external(
+    from manage_task_state_index.state import transition_external
+
+    pending_value, pending_binding = transition_external.load_pending_receipt(
         tmp_path,
+        plan,
         selected["plan_binding"]["ref"],
-        _binding(tmp_path, commit_path),
-        _selected_successor_execution_token=_SELECTED_SUCCESSOR_EXECUTION_TOKEN,
+        selected["plan_binding"]["sha256"],
     )
-    receipt = settled["execution_result_binding"]
+    commit_binding = _binding(tmp_path, commit_path)
+    settled_value = transition_external.settled_receipt_for_plan(
+        plan,
+        selected["plan_binding"]["ref"],
+        selected["plan_binding"]["sha256"],
+        pending_binding,
+        pending_value["external_prepare"],
+        commit_binding,
+    )
+    settled_path = _write_json(
+        tmp_path / f".task/transition_receipts/{plan['plan_id']}.json",
+        settled_value,
+    )
+    receipt = _binding(tmp_path, settled_path)
     assert validate_external_transition_receipt(tmp_path, receipt)["status"] == "valid"
     task.write_text("# Later successor\n", encoding="utf-8")
     with pytest.raises(ValueError, match="no longer matches"):

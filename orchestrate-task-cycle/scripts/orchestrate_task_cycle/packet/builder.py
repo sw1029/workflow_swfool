@@ -23,7 +23,26 @@ class PacketState:
     target: str
     workflow_mode: str
     build_context: PacketBuildContext
+    _legacy_v1_permit: object = field(repr=False)
     packet: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        _require_packet_state(self)
+
+
+def _require_packet_state(state: object) -> PacketState:
+    if not isinstance(state, PacketState):
+        raise ValueError(
+            "packet stages require an authorized PacketState"
+        )
+    from .protocol import _validate_legacy_packet_permit
+
+    _validate_legacy_packet_permit(
+        state._legacy_v1_permit,
+        state.build_context.context,
+        state.build_context.stage,
+    )
+    return state
 
 
 class PacketStage(Protocol):
@@ -32,6 +51,7 @@ class PacketStage(Protocol):
 
 class BasePacketStage:
     def apply(self, state: PacketState) -> None:
+        state = _require_packet_state(state)
         ctx = state.build_context
         context = ctx.context
         policy = ctx.model_effort_policy
@@ -96,6 +116,7 @@ class BasePacketStage:
 
 class OptionalContextStage:
     def apply(self, state: PacketState) -> None:
+        state = _require_packet_state(state)
         context = state.build_context.context
         output_delta_packet = output_delta_contract_packet(
             context,
@@ -115,6 +136,7 @@ class OptionalContextStage:
 
 class TargetSpecificationStage:
     def apply(self, state: PacketState) -> None:
+        state = _require_packet_state(state)
         builder = TARGET_BUILDERS.get(state.target)
         if builder is not None:
             state.packet.update(builder(state.build_context))
@@ -122,6 +144,7 @@ class TargetSpecificationStage:
 
 class BootstrapDeriveStage:
     def apply(self, state: PacketState) -> None:
+        state = _require_packet_state(state)
         if state.target != "derive" or state.workflow_mode != "bootstrap":
             return
         state.packet.update(
@@ -158,7 +181,7 @@ class BootstrapDeriveStage:
         )
 
 
-DEFAULT_PIPELINE: tuple[PacketStage, ...] = (
+_DEFAULT_PIPELINE: tuple[PacketStage, ...] = (
     BasePacketStage(),
     OptionalContextStage(),
     TargetSpecificationStage(),
@@ -168,17 +191,32 @@ DEFAULT_PIPELINE: tuple[PacketStage, ...] = (
 
 @dataclass(frozen=True)
 class PacketBuilder:
-    stages: tuple[PacketStage, ...] = DEFAULT_PIPELINE
+    stages: tuple[PacketStage, ...] = _DEFAULT_PIPELINE
 
     def build(
         self,
         target: str,
         context: PacketBuildContext,
         workflow_mode: str,
+        *,
+        _legacy_v1_permit: object | None = None,
     ) -> dict[str, Any]:
+        from .protocol import _validate_legacy_packet_permit
+
+        _validate_legacy_packet_permit(
+            _legacy_v1_permit,
+            context.context,
+            context.stage,
+        )
         state = PacketState(
-            target=target, workflow_mode=workflow_mode, build_context=context
+            target=target,
+            workflow_mode=workflow_mode,
+            build_context=context,
+            _legacy_v1_permit=_legacy_v1_permit,
         )
         for stage in self.stages:
             stage.apply(state)
         return state.packet
+
+
+__all__ = ["PacketBuilder"]

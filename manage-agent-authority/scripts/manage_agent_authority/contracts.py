@@ -5,6 +5,7 @@ from typing import Any
 
 from .canonical import normalized_time
 from .canonical import parse_time
+from .grant_contract_fields import GRANT_KEYS, GRANT_V3_KEYS
 
 
 SOURCE_RANKS = ("S0", "S1", "S2", "S3", "S4")
@@ -99,31 +100,6 @@ CONTEXT_KEYS = {
     "external_input_evidence",
     "risk_acceptance_evidence",
     "design_selection_evidence",
-}
-GRANT_KEYS = {
-    "schema_version",
-    "artifact_kind",
-    "grant_id",
-    "lineage_id",
-    "parent_grant_id",
-    "issuer_rank",
-    "holder_rank",
-    "capabilities",
-    "subjects",
-    "operations",
-    "risk_ceiling",
-    "decision_classes",
-    "cardinality",
-    "max_uses",
-    "not_before",
-    "expires_at",
-    "session_id",
-    "task_id",
-    "improvement_id",
-    "source_approval",
-    "policy_snapshot",
-    "created_at",
-    "idempotency_key",
 }
 OPERATION_SCOPE_KEYS = {
     "skill_id",
@@ -360,14 +336,23 @@ def PathLikeUnsafe(value: str) -> bool:
 
 
 def validate_grant(value: dict[str, Any]) -> dict[str, Any]:
-    _closed(value, GRANT_KEYS, "authority grant")
-    _required(value, GRANT_KEYS, "authority grant")
+    schema_version = value.get("schema_version")
+    expected_keys = (
+        GRANT_KEYS
+        if schema_version == 2
+        else GRANT_V3_KEYS
+        if schema_version == 3
+        else set()
+    )
+    _closed(value, expected_keys, "authority grant")
+    _required(value, expected_keys, "authority grant")
     if (
-        value.get("schema_version") != 2
+        schema_version not in {2, 3}
         or value.get("artifact_kind") != "authority_grant"
     ):
         raise SystemExit(
-            "Authority grant requires schema_version=2 and artifact_kind=authority_grant."
+            "Authority grant requires schema_version=2 or 3 and "
+            "artifact_kind=authority_grant."
         )
     subjects = value.get("subjects")
     if not isinstance(subjects, list) or not subjects:
@@ -433,8 +418,8 @@ def validate_grant(value: dict[str, Any]) -> dict[str, Any]:
         raise SystemExit(
             "decision_classes must contain unique closed decision classes."
         )
-    return {
-        "schema_version": 2,
+    normalized = {
+        "schema_version": schema_version,
         "artifact_kind": "authority_grant",
         "grant_id": _identifier(value["grant_id"], "grant_id"),
         "lineage_id": _identifier(value["lineage_id"], "lineage_id"),
@@ -464,6 +449,26 @@ def validate_grant(value: dict[str, Any]) -> dict[str, Any]:
         "created_at": normalized_time(value["created_at"], "created_at"),
         "idempotency_key": _identifier(value["idempotency_key"], "idempotency_key"),
     }
+    if schema_version == 3:
+        normalized["request_sha256"] = _sha(
+            value["request_sha256"], "request_sha256"
+        )
+        root_materialization_ref = str(
+            value["root_materialization_ref"] or ""
+        ).strip()
+        if (
+            not root_materialization_ref
+            or PathLikeUnsafe(root_materialization_ref)
+            or not root_materialization_ref.startswith(
+                ".task/authorization/root_grant_materializations/"
+            )
+            or not root_materialization_ref.endswith("/receipt.json")
+        ):
+            raise SystemExit(
+                "root_materialization_ref must be an exact root receipt path."
+            )
+        normalized["root_materialization_ref"] = root_materialization_ref
+    return normalized
 
 
 def rank_value(rank: str) -> int:

@@ -15,7 +15,11 @@ from .creation import (
 from .ordering import item_order
 from .packet_io import load_json, non_empty
 from .provenance import mutation_entry
-from .receipts import pack_paths, persist_creation_snapshot
+from .receipts import (
+    pack_paths,
+    persist_creation_snapshot,
+    render_creation_snapshot,
+)
 from .rendering import bounded_render_path
 from .storage import parse_rfc3339, rel_path, resolve_pack_path
 from .store import active_pack_candidates, task_pack_store_findings
@@ -151,7 +155,11 @@ def _prepare_replacement_draft(args, root, plan):
         json.dump(output, sys.stdout, ensure_ascii=False, indent=2, sort_keys=True)
         sys.stdout.write("\n")
         return 2
-    durable_creation = persist_creation_snapshot(root, successor_path, successor)
+    durable_creation = (
+        render_creation_snapshot(root, successor_path, successor)
+        if getattr(args, "dry_run", False)
+        else persist_creation_snapshot(root, successor_path, successor)
+    )
     initial_selection_applied, successor_findings = apply_initial_selection_to_new_pack(
         root,
         successor_path,

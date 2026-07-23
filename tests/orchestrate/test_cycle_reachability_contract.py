@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import copy
 from pathlib import Path
+import sys
 import tempfile
 
 from audit_cycle_loopback.cycle_reachability import cycle_reachability_gate
@@ -22,6 +23,12 @@ from orchestrate_task_cycle.result_contract.rules.derive_checks.cycle_reachabili
     check_cycle_reachability,
 )
 from orchestrate_task_cycle.result_contract.rules.derive_checks.state import DeriveFacts
+
+
+TEST_SUPPORT_ROOT = Path(__file__).resolve().parents[1]
+if str(TEST_SUPPORT_ROOT) not in sys.path:
+    sys.path.insert(0, str(TEST_SUPPORT_ROOT))
+from historical_cycle_test_support import create_sealed_legacy_v1_cycle  # noqa: E402
 
 
 def unreachable_gate() -> dict[str, object]:
@@ -278,7 +285,12 @@ def test_monitor_and_ledger_preserve_reachability_contract_losslessly() -> None:
         (root / "run.log").write_text("heartbeat\n", encoding="utf-8")
         source["log_path"] = str(root / "run.log")
         output = monitor_running_execution.monitor(source, monitor_args(root))
-        cycle_ledger.init_cycle(root, "cycle-A", "task-A", "test")
+        create_sealed_legacy_v1_cycle(
+            root,
+            "cycle-A",
+            "task-A",
+            "test",
+        )
         cycle_ledger.append_event(
             root,
             "cycle-A",

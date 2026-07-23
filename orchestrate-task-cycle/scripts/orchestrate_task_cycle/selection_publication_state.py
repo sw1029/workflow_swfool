@@ -17,6 +17,9 @@ from .selection_publication_store import (
     _sha256_file,
     _state_path,
 )
+from .selection_publication_producer_capability import (
+    _SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
+)
 
 
 STORAGE_SCHEMA_VERSION = 4
@@ -97,7 +100,7 @@ def _record(
     }
 
 
-def _write(root: Path, *, head: Any, active: Any) -> dict[str, Any]:
+def _render(*, head: Any, active: Any) -> dict[str, Any]:
     body = {
         "schema_version": STATE_SCHEMA_VERSION,
         "storage_schema_version": STORAGE_SCHEMA_VERSION,
@@ -105,9 +108,48 @@ def _write(root: Path, *, head: Any, active: Any) -> dict[str, Any]:
         "head": head,
         "active_transaction": active,
     }
-    state = {**body, "state_content_sha256": _sha256_bytes(_canonical_json(body))}
-    _atomic_write(_state_path(root), _canonical_json(state))
+    return {
+        **body,
+        "state_content_sha256": _sha256_bytes(_canonical_json(body)),
+    }
+
+
+def write_compiled_state(root: Path, state: dict[str, Any]) -> dict[str, Any]:
+    body = {
+        key: value for key, value in state.items() if key != "state_content_sha256"
+    }
+    if (
+        set(state) != STATE_KEYS
+        or state.get("schema_version") != STATE_SCHEMA_VERSION
+        or state.get("storage_schema_version") != STORAGE_SCHEMA_VERSION
+        or state.get("kind") != "selection_publication_state"
+        or state.get("state_content_sha256")
+        != _sha256_bytes(_canonical_json(body))
+    ):
+        raise ValueError("selection publication compiled state is invalid")
+    payload = _canonical_json(state)
+    path = _state_path(root)
+    _atomic_write(
+        path,
+        payload,
+        producer_capability=_SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
+    )
+    from .selection_publication_reference_barrier import (
+        refresh_reference_barrier_state,
+    )
+
+    refresh_reference_barrier_state(
+        root,
+        {
+            "ref": path.relative_to(root).as_posix(),
+            "sha256": _sha256_bytes(payload),
+        },
+    )
     return state
+
+
+def _write(root: Path, *, head: Any, active: Any) -> dict[str, Any]:
+    return write_compiled_state(root, _render(head=head, active=active))
 
 
 def write_empty_state(root: Path) -> dict[str, Any]:
@@ -210,6 +252,11 @@ def load_state(root: Path) -> dict[str, Any] | None:
             raise ValueError("selection publication head and active transaction collide")
         if active.get("predecessor_transaction_id") != head.get("transaction_id"):
             raise ValueError("selection publication active predecessor differs from head")
+    from .selection_publication_migration import (
+        validate_migration_visibility,
+    )
+
+    validate_migration_visibility(root, state)
     return state
 
 
@@ -250,7 +297,7 @@ def record_committed(
     return _write(root, head=head, active=None)
 
 
-def write_state(
+def compile_state(
     root: Path,
     receipts: Sequence[dict[str, Any]],
     pending_transaction_ids: Sequence[str],
@@ -286,7 +333,23 @@ def write_state(
         expected = head_record["transaction_id"] if head_record is not None else None
         if prepare.get("predecessor_transaction_id") != expected:
             raise ValueError("legacy pending selection does not extend the unique head")
-    return _write(root, head=head_record, active=active_record)
+    return _render(head=head_record, active=active_record)
+
+
+def write_state(
+    root: Path,
+    receipts: Sequence[dict[str, Any]],
+    pending_transaction_ids: Sequence[str],
+    *,
+    load_prepare: Any,
+) -> dict[str, Any]:
+    state = compile_state(
+        root,
+        receipts,
+        pending_transaction_ids,
+        load_prepare=load_prepare,
+    )
+    return write_compiled_state(root, state)
 
 
 def head_receipts(state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -356,8 +419,10 @@ def status_from_state(root: Path, state: dict[str, Any]) -> dict[str, Any]:
 
 __all__ = (
     "STORAGE_SCHEMA_VERSION",
+    "compile_state",
     "head_receipts",
     "load_state",
+    "write_compiled_state",
     "record_committed",
     "record_prepared",
     "status_from_state",

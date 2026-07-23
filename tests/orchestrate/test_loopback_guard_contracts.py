@@ -14,6 +14,7 @@ SCRIPT_PATH = Path(__file__).resolve()
 ORCHESTRATE_ROOT = SCRIPT_PATH.parents[1]
 SKILLS_ROOT = ORCHESTRATE_ROOT.parent
 for package_root in (
+    SKILLS_ROOT / "tests",
     ORCHESTRATE_ROOT / "scripts",
     SKILLS_ROOT / "audit-cycle-loopback" / "scripts",
     SKILLS_ROOT / "run-task-code-and-log" / "scripts",
@@ -33,6 +34,9 @@ from orchestrate_task_cycle.progress import api as detect_progress_loop  # noqa:
 from orchestrate_task_cycle.result_contract import api as result_contract  # noqa: E402
 from orchestrate_task_cycle.task_pack import api as task_pack_queue  # noqa: E402
 from run_task_code_and_log import safe_failure_autopsy  # noqa: E402
+from historical_cycle_test_support import (  # noqa: E402
+    create_sealed_legacy_v1_cycle,
+)
 
 
 def bind_exact_artifact(root: Path, args: argparse.Namespace) -> dict[str, Any]:
@@ -1649,7 +1653,12 @@ def test_cycle_ledger_records_unchanged_ref_for_duplicate_artifact() -> None:
         root = Path(tmp)
         artifact = root / "packet.json"
         artifact.write_text(json.dumps({"same": True}, sort_keys=True), encoding="utf-8")
-        cycle_ledger.init_cycle(root, "cycle-1", "task-1", "test")
+        create_sealed_legacy_v1_cycle(
+            root,
+            "cycle-1",
+            "task-1",
+            "test",
+        )
         cycle_ledger.append_event(
             root,
             "cycle-1",
@@ -1767,7 +1776,12 @@ def test_validate_transition_blocks_pending_long_run_derive() -> None:
 def test_cycle_ledger_accepts_long_run_monitor_as_run_step() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        cycle_ledger.init_cycle(root, "cycle-long-1", "task-long-run", "test")
+        create_sealed_legacy_v1_cycle(
+            root,
+            "cycle-long-1",
+            "task-long-run",
+            "test",
+        )
         cycle_ledger.append_event(
             root,
             "cycle-long-1",
@@ -1922,7 +1936,12 @@ def test_repeated_terminal_tuple_latches_without_full_cycle() -> None:
     assert state["suppress_full_cycle"] is True
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        cycle_ledger.init_cycle(root, "cycle-terminal", "task-terminal", "test")
+        create_sealed_legacy_v1_cycle(
+            root,
+            "cycle-terminal",
+            "task-terminal",
+            "test",
+        )
         cycle_ledger.append_event(
             root,
             "cycle-terminal",

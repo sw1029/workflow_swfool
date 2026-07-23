@@ -16,16 +16,29 @@ from .selection_decision_receipt import (
     render_preliminary_selection_decision,
     render_selection_decision_receipt,
 )
+from .selection_decision_receipt_values import (
+    render_preliminary_selection_decision_from_values,
+    render_selection_decision_receipt_from_values,
+)
 from .selection_synthesis import render_selection_synthesis
 from .selection_decision_store import canonical_bytes
-from .selection_publication_store import _write_once
+from .selection_publication_producer_capability import (
+    _SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
+)
+from .selection_publication_reference_barrier import (
+    registered_producer_barrier,
+)
+from .selection_publication_store import (
+    _bounded_file_sha256,
+    _write_once_with_status,
+)
 from .selection_trigger import (
     render_normal_cycle_trigger,
     render_publication_bootstrap,
 )
 from .selection_decision_receipt_v2 import (
-    render_preliminary_selection_decision_v2,
-    render_selection_decision_receipt_v2,
+    render_preliminary_selection_decision_v2_from_values,
+    render_selection_decision_receipt_v2_from_values,
     validate_selection_decision_receipt_v2,
 )
 
@@ -82,7 +95,9 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _pipeline_directory(root: Path, cycle_id: str) -> Path:
+def _pipeline_directory(
+    root: Path, cycle_id: str, *, create: bool
+) -> Path:
     if not CYCLE_ID.fullmatch(cycle_id):
         raise ValueError("selection decision pipeline cycle ID is invalid")
     directory = root / ".task" / "cycle" / cycle_id / "agent_receipts" / "selection"
@@ -93,55 +108,93 @@ def _pipeline_directory(root: Path, cycle_id: str) -> Path:
             raise ValueError("selection decision pipeline cannot traverse symlinks")
         if current.exists() and not current.is_dir():
             raise ValueError("selection decision pipeline output parent is not a directory")
-    directory.mkdir(parents=True, exist_ok=True)
+    if create:
+        directory.mkdir(parents=True, exist_ok=True)
     return directory
 
 
-def _persist_pipeline_artifact(
+def _pipeline_artifact(
     root: Path, directory: Path, prefix: str, value: dict[str, Any]
-) -> tuple[dict[str, str], bool]:
+) -> dict[str, Any]:
     payload = canonical_bytes(value)
     digest = hashlib.sha256(payload).hexdigest()
     path = directory / f"{prefix}-{digest}.json"
-    created = not path.exists()
-    persisted = _write_once(path, payload, f"selection decision {prefix}")
+    existing = path.exists() or path.is_symlink()
+    if existing and _bounded_file_sha256(
+        path, len(payload), f"selection decision {prefix}"
+    ) != digest:
+        raise ValueError(
+            f"selection decision {prefix} conflicts with immutable evidence"
+        )
     return {
+        "prefix": prefix,
+        "value": value,
+        "binding": {
+            "ref": path.relative_to(root).as_posix(),
+            "sha256": digest,
+        },
+    }
+
+
+def _persist_pipeline_artifact(
+    root: Path, directory: Path, artifact: dict[str, Any]
+) -> bool:
+    prefix = artifact["prefix"]
+    value = artifact["value"]
+    payload = canonical_bytes(value)
+    digest = hashlib.sha256(payload).hexdigest()
+    path = directory / f"{prefix}-{digest}.json"
+    persisted, created = _write_once_with_status(
+        path,
+        payload,
+        f"selection decision {prefix}",
+        producer_capability=_SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
+    )
+    binding = {
         "ref": path.relative_to(root).as_posix(),
         "sha256": persisted,
-    }, created
+    }
+    if binding != artifact["binding"]:
+        raise ValueError("selection decision artifact binding drifted")
+    return created
 
 
-def _pipeline(root: Path, args: argparse.Namespace) -> dict[str, Any]:
-    root = root.expanduser().resolve(strict=True)
+def _required_normal_binding(
+    args: argparse.Namespace, prefix: str
+) -> dict[str, str]:
+    ref = getattr(args, prefix + "_ref")
+    digest = getattr(args, prefix + "_sha256")
+    if not ref or not digest:
+        option = prefix.replace("_", "-")
+        raise ValueError(
+            f"normal-cycle selection trigger requires --{option}-ref and SHA-256"
+        )
+    return _binding(ref, digest)
+
+
+def _compile_pipeline(
+    root: Path, args: argparse.Namespace
+) -> dict[str, Any]:
     source_binding = _binding(args.source_result_ref, args.source_result_sha256)
     _, source_result = read_bound_json(
         root, source_binding, "derive synthesis source result"
     )
     synthesis = render_selection_synthesis(root, source_result)
-    directory = _pipeline_directory(root, args.cycle_id)
-    synthesis_binding, synthesis_created = _persist_pipeline_artifact(
-        root, directory, "synthesis", synthesis
-    )
-    trigger_created = False
+    directory = _pipeline_directory(root, args.cycle_id, create=False)
+    artifacts = [
+        _pipeline_artifact(root, directory, "synthesis", synthesis)
+    ]
+    synthesis_binding = artifacts[0]["binding"]
     if args.trigger_kind == "normal_cycle":
-        def required_binding(prefix: str) -> dict[str, str]:
-            ref = getattr(args, prefix + "_ref")
-            digest = getattr(args, prefix + "_sha256")
-            if not ref or not digest:
-                raise ValueError(
-                    f"normal-cycle selection trigger requires --{prefix.replace('_', '-')}-ref and SHA-256"
-                )
-            return _binding(ref, digest)
-
-        current_task = required_binding("current_task")
-        task_index = required_binding("task_index")
+        prospective_publication_head = None
+        current_task = _required_normal_binding(args, "current_task")
+        task_index = _required_normal_binding(args, "task_index")
         publication_ref = args.publication_head_ref
         publication_sha = args.publication_head_sha256
         if bool(publication_ref) != bool(publication_sha):
             raise ValueError(
                 "normal-cycle publication head requires both ref and SHA-256"
             )
-        bootstrap_created = False
         if publication_ref:
             publication_head = _binding(publication_ref, publication_sha)
         else:
@@ -151,14 +204,21 @@ def _pipeline(root: Path, args: argparse.Namespace) -> dict[str, Any]:
                 current_task=current_task,
                 task_index=task_index,
             )
-            publication_head, bootstrap_created = _persist_pipeline_artifact(
+            bootstrap_artifact = _pipeline_artifact(
                 root, directory, "publication-bootstrap", bootstrap
             )
+            artifacts.append(bootstrap_artifact)
+            publication_head = bootstrap_artifact["binding"]
+            prospective_publication_head = bootstrap
         trigger = render_normal_cycle_trigger(
             root,
             cycle_id=args.cycle_id,
-            cycle_finalization=required_binding("cycle_finalization"),
-            schema_pre_derive=required_binding("schema_pre_derive"),
+            cycle_finalization=_required_normal_binding(
+                args, "cycle_finalization"
+            ),
+            schema_pre_derive=_required_normal_binding(
+                args, "schema_pre_derive"
+            ),
             derive_result=source_binding,
             current_task=current_task,
             task_index=task_index,
@@ -166,34 +226,75 @@ def _pipeline(root: Path, args: argparse.Namespace) -> dict[str, Any]:
             input_evidence_manifest_sha256=synthesis[
                 "input_evidence_manifest_sha256"
             ],
+            _prospective_publication_head=prospective_publication_head,
         )
-        trigger_binding, trigger_artifact_created = _persist_pipeline_artifact(
+        trigger_artifact = _pipeline_artifact(
             root, directory, "trigger", trigger
         )
-        trigger_created = bootstrap_created or trigger_artifact_created
-        decision = render_preliminary_selection_decision_v2(
-            root, trigger_binding, synthesis_binding
+        artifacts.append(trigger_artifact)
+        trigger_binding = trigger_artifact["binding"]
+        decision = render_preliminary_selection_decision_v2_from_values(
+            root,
+            trigger_binding,
+            trigger,
+            synthesis_binding,
+            synthesis,
+            prospective_publication_head=prospective_publication_head,
         )
     else:
         trigger_binding, trigger = _trigger(root, args)
-        decision = render_preliminary_selection_decision(
-            root, trigger, synthesis_binding
+        decision = render_preliminary_selection_decision_from_values(
+            root, trigger, synthesis_binding, synthesis
         )
-    decision_binding, decision_created = _persist_pipeline_artifact(
+    decision_artifact = _pipeline_artifact(
         root, directory, "decision", decision
     )
+    artifacts.append(decision_artifact)
+    decision_binding = decision_artifact["binding"]
     receipt = (
-        render_selection_decision_receipt_v2(
-            root, trigger_binding, decision_binding
+        render_selection_decision_receipt_v2_from_values(
+            root,
+            trigger_binding,
+            trigger,
+            decision_binding,
+            decision,
+            synthesis,
+            prospective_publication_head=prospective_publication_head,
         )
         if args.trigger_kind == "normal_cycle"
-        else render_selection_decision_receipt(
-            root, trigger, trigger_binding, decision_binding
+        else render_selection_decision_receipt_from_values(
+            root,
+            trigger,
+            trigger_binding,
+            decision_binding,
+            decision,
+            synthesis,
         )
     )
-    receipt_binding, receipt_created = _persist_pipeline_artifact(
+    receipt_artifact = _pipeline_artifact(
         root, directory, "receipt", receipt
     )
+    artifacts.append(receipt_artifact)
+    return {
+        "directory": directory,
+        "artifacts": artifacts,
+        "trigger": trigger,
+        "trigger_binding": trigger_binding,
+        "synthesis_binding": synthesis_binding,
+        "decision_binding": decision_binding,
+        "receipt_binding": receipt_artifact["binding"],
+    }
+
+
+def _publish_pipeline(
+    root: Path, args: argparse.Namespace, plan: dict[str, Any]
+) -> dict[str, Any]:
+    directory = _pipeline_directory(root, args.cycle_id, create=True)
+    created = [
+        _persist_pipeline_artifact(root, directory, artifact)
+        for artifact in plan["artifacts"]
+    ]
+    receipt_binding = plan["receipt_binding"]
     if args.trigger_kind == "normal_cycle":
         _, reopened_value = read_bound_json(
             root, receipt_binding, "selection decision receipt v2"
@@ -201,7 +302,9 @@ def _pipeline(root: Path, args: argparse.Namespace) -> dict[str, Any]:
         reopened = validate_selection_decision_receipt_v2(root, reopened_value)
     else:
         reopened = read_selection_decision_receipt(
-            root, receipt_binding, expected_trigger_tick=trigger
+            root,
+            receipt_binding,
+            expected_trigger_tick=plan["trigger"],
         )
     return {
         "status": "completed",
@@ -209,14 +312,27 @@ def _pipeline(root: Path, args: argparse.Namespace) -> dict[str, Any]:
         "outcome": reopened["outcome"],
         "selected_task_id": reopened["selected_task_id"],
         "trigger_kind": args.trigger_kind,
-        "trigger": trigger_binding,
-        "synthesis": synthesis_binding,
-        "decision": decision_binding,
+        "trigger": plan["trigger_binding"],
+        "synthesis": plan["synthesis_binding"],
+        "decision": plan["decision_binding"],
         "receipt": receipt_binding,
-        "mutation_performed": any(
-            (trigger_created, synthesis_created, decision_created, receipt_created)
-        ),
+        "mutation_performed": any(created),
     }
+
+
+def _pipeline(root: Path, args: argparse.Namespace) -> dict[str, Any]:
+    root = root.expanduser().resolve(strict=True)
+    preflight = _compile_pipeline(root, args)
+    with registered_producer_barrier(
+        root,
+        producer_capability=_SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
+    ):
+        refreshed = _compile_pipeline(root, args)
+        if refreshed != preflight:
+            raise ValueError(
+                "selection decision inputs changed during barrier acquisition"
+            )
+        return _publish_pipeline(root, args, refreshed)
 
 
 def _trigger(

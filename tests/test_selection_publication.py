@@ -7,7 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from selection_publication_legacy_support import prepare_legacy_publication
+from selection_publication_legacy_support import (
+    prepare_legacy_publication,
+    publish_legacy_prepared_fixture as publish_prepared,
+    recover_legacy_publications_fixture as recover_publications,
+)
 
 from orchestrate_task_cycle import selection_publication as publication
 from orchestrate_task_cycle.selection_publication import (
@@ -15,8 +19,6 @@ from orchestrate_task_cycle.selection_publication import (
     prepare_drift_reconciliation,
     prepare_publication,
     publication_status,
-    publish_prepared,
-    recover_publications,
 )
 
 

@@ -15,6 +15,7 @@ from orchestrate_task_cycle.result_contract.consumer_receipt_contract import (
     CONSUMER_REVISION_SHA256,
     VALIDATOR_SIGNATURE_SHA256,
 )
+from historical_cycle_test_support import create_sealed_legacy_v1_cycle
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -78,7 +79,12 @@ def test_long_inline_json_is_not_misclassified_as_a_path() -> None:
 def initialize_with_context(
     root: Path, cycle_id: str, task_id: str = "task-1", reason: str = "init"
 ) -> None:
-    cycle_ledger.init_cycle(root, cycle_id, task_id, reason)
+    create_sealed_legacy_v1_cycle(
+        root,
+        cycle_id,
+        task_id,
+        reason,
+    )
     cycle_ledger.append_event(
         root,
         cycle_id,
@@ -99,7 +105,12 @@ def test_append_requires_initialization_context_and_task_coherence(
             tmp_path, "cycle-missing-init", {"step": "context", "status": "complete"}
         )
 
-    cycle_ledger.init_cycle(tmp_path, "cycle-order", "task-1", "init")
+    create_sealed_legacy_v1_cycle(
+        tmp_path,
+        "cycle-order",
+        "task-1",
+        "init",
+    )
     with pytest.raises(ValueError, match="first canonical stage event"):
         cycle_ledger.append_event(
             tmp_path, "cycle-order", {"step": "authority", "status": "complete"}
@@ -111,7 +122,7 @@ def test_append_requires_initialization_context_and_task_coherence(
             {"step": "context", "status": "complete", "task_id": "task-other"},
         )
 
-    cycle_ledger.init_cycle(
+    create_sealed_legacy_v1_cycle(
         tmp_path,
         "cycle-bootstrap",
         None,
@@ -163,20 +174,27 @@ def test_default_cycle_and_event_ids_are_collision_resistant(tmp_path: Path) -> 
 
     assert first["cycle_id"] != second["cycle_id"]
     assert len(first["cycle_id"].rsplit("-", 1)[-1]) == 32
+    event_cycle_id = "cycle-event-id-collision"
+    create_sealed_legacy_v1_cycle(
+        tmp_path,
+        event_cycle_id,
+        "task-1",
+        "legacy event ID fixture",
+    )
     cycle_ledger.append_event(
         tmp_path,
-        first["cycle_id"],
+        event_cycle_id,
         {"step": "context", "status": "complete", "task_id": "task-1"},
     )
 
     one = cycle_ledger.append_event(
         tmp_path,
-        first["cycle_id"],
+        event_cycle_id,
         {"step": "run", "status": "complete"},
     )
     two = cycle_ledger.append_event(
         tmp_path,
-        first["cycle_id"],
+        event_cycle_id,
         {"step": "run", "status": "complete"},
     )
     assert one["event"]["event_id"] != two["event"]["event_id"]
@@ -271,7 +289,12 @@ def test_malformed_or_unsupported_jsonl_fails_closed_without_append(
     tmp_path: Path,
 ) -> None:
     cycle_id = "cycle-corrupt"
-    cycle_ledger.init_cycle(tmp_path, cycle_id, "task-1", "init")
+    create_sealed_legacy_v1_cycle(
+        tmp_path,
+        cycle_id,
+        "task-1",
+        "init",
+    )
     ledger = tmp_path / ".task" / "cycle" / cycle_id / "stage.jsonl"
     ledger.parent.mkdir(parents=True, exist_ok=True)
     valid = {

@@ -4,6 +4,7 @@ from typing import Any
 
 from .authority_rules import validate_authority_and_advice
 from .context import ValidationContext, ValidationStage
+from .index_snapshot_rules import validate_index_snapshot_revalidation
 from .ordering_rules import (
     validate_anti_loop_handoff,
     validate_finalization_receipt,
@@ -38,6 +39,7 @@ VALIDATION_STAGES: tuple[ValidationStage, ...] = (
     validate_finalization_receipt,
     validate_anti_loop_handoff,
     validate_ordering_gaps_and_bootstrap,
+    validate_index_snapshot_revalidation,
     validate_reasoned_statuses,
     validate_disposition_gate,
     validate_positive_delta_gates,

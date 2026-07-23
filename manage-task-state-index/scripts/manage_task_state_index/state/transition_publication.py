@@ -9,6 +9,7 @@ import stat
 
 
 OWNED_DIRECTORIES = {
+    "index_prevalidation",
     "scan_compilations",
     "scan_projection_intents",
     "scan_projection_receipts",

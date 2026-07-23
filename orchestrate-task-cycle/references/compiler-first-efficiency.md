@@ -8,6 +8,7 @@ publication plans, result envelopes, packets, hashes, projections, or receipts.
 - [Ownership boundary](#ownership-boundary)
 - [Persistent evidence and model work orders](#persistent-evidence-and-model-work-orders)
 - [Stage executors and field origins](#stage-executors-and-field-origins)
+- [Deterministic commit receipts](#deterministic-commit-receipts)
 - [Routing, semantic input, and usage](#routing-semantic-input-and-usage)
 - [Compact result ledger](#compact-result-ledger)
 - [Body-free selection publication](#body-free-selection-publication)
@@ -25,8 +26,9 @@ publication plans, result envelopes, packets, hashes, projections, or receipts.
 - Reject unknown fields and unknown source kinds. Never treat a hash-shaped string,
   caller assertion, or familiar schema ID as evidence.
 - Set `model_call_required: false` whenever the registered semantic field set is empty.
-- New cycles use compiler protocol v2 with preparation schema v3. Preserve the exact
-  initialized markers for existing cycles; never upgrade a legacy cycle by inference.
+- New cycles use compiler protocol v2 with preparation schema v3. CLI and API reject
+  every attempt to initialize a new protocol-v1 cycle before writing. Protocol v1 is
+  accepted only to reopen an exact pre-existing provenance-sealed cycle.
 
 ## Persistent evidence and model work orders
 
@@ -67,6 +69,12 @@ field set and require every compiler-artifact binding to contain exactly `artifa
 embedded executor specification must equal the registered projection for the target;
 recomputing `preparation_id` cannot authorize an added field or substituted command.
 Keep the established closed field sets for readable v1 and v2 artifacts.
+
+Before any v2/v3 preparation, context, work-order, or machine-input CAS write, rerun the
+dependency-ready compiler with the preparation's exact bound collection limits and
+require its trusted material byte-for-byte. Enforced cycles require that exact
+preparation as the artifact origin; direct unbound artifact persistence is unavailable.
+Only an explicit standalone legacy-recovery seam may replay an unbound historical CAS.
 
 ## Stage executors and field origins
 
@@ -114,7 +122,90 @@ Classify every required and optional result field exactly once as `derived`, `ow
 `semantic`, or explicitly permitted `reasoned_not_applicable`. Do not use a name-based
 semantic fallback. Reject semantic overlays that set derived or owner fields.
 
+## Deterministic commit receipts
+
+Treat deterministic execution as `predict -> preflight -> commit -> submit`, not as a
+model-authored owner-result shortcut. Prediction renders the complete owner result and
+any dashboard effect plan without writing. Preflight recollects the current selected
+context, byte-compares a fresh prediction, and runs transition plus result gates. A
+blocked prediction or gate returns before creating a cycle lock, compiler CAS object,
+dashboard file, result file, ledger row, or current projection. A passing apply then
+repeats prediction and preflight under the exclusive cycle lock before the first effect.
+
+The sole public commit operation accepts no injected transition/result validator,
+callback, permit, or permit-minter. It reopens the persisted machine input, re-predicts,
+and calls the fixed registered transition and result gates immediately before any
+effect. It then rederives after the effect, writes the owner-result wrapper, and
+publishes one immutable
+`deterministic_stage_commit_receipt`. The receipt's fixed cycle-local CAS path and
+closed body bind:
+
+- cycle, target, preparation ID/binding, state and precondition fingerprints;
+- exact machine-input and owner-result bindings plus the executor projection;
+- domain-separated full-prediction, raw-owner, and built-result digests;
+- an explicit `not_applicable` effect projection for six effectless renderers; or
+- for dashboard only, `{kind, ref, encoding, content_sha256, size_bytes}` and the same
+  no-follow stable-file observation.
+
+Do not duplicate dashboard content or Base64 bytes in the receipt. The prediction digest
+binds the renderer's full content in memory; the compact effect projection and stable
+observation bind the exact UTF-8 file bytes. The only allowed effect ref is
+`.task/cycle/<cycle-id>/dashboard.md`.
+
+Schema-v3 deterministic generic submission requires the exact receipt ref/SHA pair and
+forbids model usage. Missing, copied, cross-cycle, stale, self-hashed, owner-substituted,
+or renderer-divergent receipts block in the pure pre-lock check or read-only preview.
+Non-deterministic targets forbid this receipt. The compiled result input-binding set and
+compact ledger row retain its exact binding, and both result-CAS preflight and locked
+ledger append reopen the receipt and byte-exact renderer projection. Thus direct
+`publish_result` cannot bypass the gate. Replay may omit historical renderer
+recollection after the ledger has advanced, but it must always reopen the same receipt
+and verify dashboard bytes before projection repair.
+
+Preparation schema v2 has no machine-input/permit/receipt chain and therefore cannot
+execute deterministic targets. Such prepare/advance/submit attempts fail closed with
+`preparation_v3_required`; readable v2 owner/hybrid artifacts remain compatibility
+inputs. New work uses preparation v3.
+
 ## Routing, semantic input, and usage
+
+- Run every producer against the exact ref/raw-SHA pair returned by
+  `stage prepare --publish`. The producer reopens that preparation, rejects stale or
+  cross-cycle identity, validates the semantic body, and alone renders the closed
+  schema-v2 wrapper into the fixed cycle-local CAS path. Validation completes before
+  the immutable write, so invalid input leaves no producer artifact.
+- Use `stage publish-owner-result` for all twenty non-deterministic targets (sixteen
+  owner and four hybrid). Supply `--owner-result <json-or-file>` for ordinary owner
+  fields. The native `acceptance`, `authority`, `index_pre_validate`, and `index`
+  targets instead require `--owner-result-ref` plus `--owner-result-sha256`; the stage
+  loader reopens and revalidates that source before accepting its derived wrapper.
+- Use `stage publish-semantic` only for the four hybrid targets, and provide only the
+  registered semantic fields plus any explicit `reasoned_not_applicable` map. Use
+  `stage compile-routing` only where the executor registry requires routing; supply a
+  registered profile and bounded routing signals, never a preassembled receipt.
+- `stage publish-usage-observation` is optional and unavailable to deterministic
+  executors. It binds exact provider/runtime/model/request IDs and token counts but
+  always returns `caller_asserted_unverified` and aggregate-ineligible status.
+
+```bash
+python3 -P -m orchestrate_task_cycle workflow cycle stage publish-owner-result \
+  --root . --preparation-ref <ref> --preparation-sha256 <sha256> \
+  --owner-result <owner-fields.json>
+python3 -P -m orchestrate_task_cycle workflow cycle stage publish-semantic \
+  --root . --preparation-ref <ref> --preparation-sha256 <sha256> \
+  --semantic <semantic-fields.json>
+python3 -P -m orchestrate_task_cycle workflow cycle stage compile-routing \
+  --root . --preparation-ref <ref> --preparation-sha256 <sha256> \
+  --profile-id <registered-profile> --routing-request <signals.json>
+python3 -P -m orchestrate_task_cycle workflow cycle stage publish-usage-observation \
+  --root . --preparation-ref <ref> --preparation-sha256 <sha256> \
+  --observation <usage.json>
+```
+
+Pass each returned `<kind>_binding.ref` and `.sha256` to `stage submit`. Raw owner
+bodies, caller-authored wrappers, arbitrary CAS copies, and schema-v1 producer output
+remain compatibility diagnostics for explicitly initialized, provenance-sealed v1
+cycles; they are not writable inputs for compiler-first v2/v3 cycles.
 
 - A registry target with `routing_required: true` must submit one exact routing-receipt
   ref/raw-SHA pair. A target without routing must not submit one.
@@ -150,6 +241,11 @@ the result body in `stage.jsonl` or `current_stage.json`.
   and downstream semantic consumers use the verified expanded reader.
 - Missing, tampered, noncanonical, oversized, or mismatched result artifacts fail closed.
 - Exact replay returns the existing hydrated event and never appends a second row.
+- Public result publication runs complete no-write input reconstruction, deterministic
+  receipt, freshness, predecessor, transition, and result-contract gates before the
+  first result CAS link. The locked append repeats the same mutable-state gates.
+- `current_stage.json` is a ledger-only projection. Public refresh rereads stored events;
+  neither public locked nor unlocked APIs accept caller-supplied event arrays.
 - Derive CAS counters from the immutable writer's actual link outcome, not a pre-write
   existence check. Add context/work-order or machine-input, preparation, and result CAS
   receipts cumulatively. `files_written_count` counts actual newly linked files; a
@@ -177,6 +273,69 @@ the result body in `stage.jsonl` or `current_stage.json`.
 - If result CAS publication succeeds but ledger append fails, retry the exact result as
   reused bytes and append one event. If the event exists but current projection repair
   failed, return its stored metrics unchanged while repairing only the projection.
+
+Every new cycle created through the cycle CLI writes immutable
+`initialization.provenance.json`, which seals the complete canonical
+`initialization.json`. New protocol-v2 cycles also carry
+`workflow_contract_profile: compiler_first_enforced_v1`. For those cycles, the public
+append surface fails closed. Use only these registered internal producers:
+
+- result compiler → `compiled_stage_result_ref`;
+- system-event compiler → `compiled_system_event_ref`;
+- stage observer → `compiled_stage_observation_ref`;
+- terminal-lifecycle compiler → `compiled_terminal_lifecycle_ref`.
+
+The producer identity and event kind must match. A normal producer consumes an opaque
+compiler-owned binding created from its closed semantic seed or immutable result CAS;
+it does not accept a caller-authored event dictionary or public `producer_kind` string.
+The ledger consumer re-derives system-event semantics from current cycle state and
+revalidates result bindings under the exclusive ledger lock against the sealed
+preparation, its compiler artifacts, every supplied exact owner/semantic/routing/usage
+binding, the result CAS, the raw-ledger prefix, workflow predecessor order, and the
+expected compact projection. The compiler seals the preparation-time `max_files` and
+`max_paths` collection limits into its preparation evidence and result derivation, then
+re-runs freshness under that same lock. Allowed post-effect selectors remain provisional
+until the reopened exact owner result accounts for every changed path; stale state,
+unbound limit substitution, or an unclaimed owner effect aborts before append.
+Observation and terminal producers accept capability-backed
+closed semantic seeds only; they derive step, status, reason defaults, producer, and event
+kind mechanically.
+
+An explicit pre-existing protocol-v1 cycle is writable only when its original
+initialization is provenance-sealed. No new protocol-v1 initialization or rollback
+cycle can be created. Unsealed v1, unmarked v2, and unsealed v2 remain readable and
+renderable but are historical read-only debt: public/typed append, result or
+owner-result publication, effectful submit or renderer dispatch, dashboard prewrite,
+and stage advancement fail before their first write. Removing or changing the profile,
+protocol, provenance marker, or seal fails closed; a precreated legacy initialization
+cannot downgrade a compiler-first cycle into a writable compatibility path. Start a new
+sealed cycle; there is no implicit in-place migration. Missing protocol metadata is
+invalid/read-only rather than implicit v1.
+
+The generic full-packet renderer is diagnostics only for the exact initialized,
+provenance-sealed protocol-v1 cycle and task supplied to it. There is no public unbound
+packet path; context and stage cycle identifiers must agree, every supplied task
+identifier must match the seal, and every `PacketState` plus built-in stage revalidates
+the opaque legacy permit. The default pipeline is private. Use v3 work orders for v2.
+
+The authority owner follows the same boundary: run `authority-packet --cycle-id
+<cycle> --publish` after exact decision/reservation/verification validation. The
+publisher reopens those artifacts and any bounded local-resolution seed, rebuilds the
+complete packet, and requires byte-exact equality before checking its decision cycle.
+A self-consistent rehash after changing `packet_id`, top-level `evidence_ids`, or any
+other compiler projection is rejected. The publisher writes one canonical
+`stage_owner_result` object in the cycle-local owner-result CAS, and returns only its
+ref/SHA-256/size binding plus write status. The stage loader repeats artifact and exact
+cycle/task validation, so copying a valid packet from another cycle cannot bypass the
+publisher. In protocol-v2, reject full packet stdout or arbitrary
+`authority-packet --output`; it bypasses the compiler-owned location and cannot become
+an owner result.
+
+The standalone dashboard renderer is read-only when it writes only stdout. Both
+`--write` (`dashboard.md`) and `--result-output` are cycle mutations and must pass the
+sealed cycle mutation-contract guard before the first filesystem write. Historical
+unsealed v1 and unmarked or unsealed v2 cycles may still render stdout, but neither
+output surface may modify them.
 
 ## Body-free selection publication
 
@@ -257,10 +416,9 @@ bytes before `task.md` changes.
 1. **Contract gate:** require closed executor and field-origin registries, complete
    target/renderer/routing coverage, unknown-field rejection, exact-binding tamper
    tests, semantic-size tests, and dry-run write assertions.
-2. **Parity gate:** compare v1/v2/v3 canonical results on reusable fixtures before v3
-   becomes the default preparation. Never change the protocol or preparation marker of
-   an initialized cycle; explicit protocol-v1/preparation-v1 initialization remains the
-   bounded rollback path.
+2. **Parity gate:** compare historical sealed-v1 fixtures with v2/v3 canonical results.
+   Never change an initialized protocol/preparation marker and never create a v1
+   rollback cycle; rollback means read/recovery against an exact retained sealed fixture.
 3. **Operational gate:** monitor structural byte/file-read metrics and optional actual
    provider token observations. A wall-clock sample or estimated price is not a gate.
 4. **Retention gate:** retain v1 journals and packets indefinitely during this rollout.
@@ -282,8 +440,15 @@ Record provider-neutral observations without prompt or source bodies:
   separately defined trusted runtime issuer and verifiable attestation are implemented;
   report legacy usage-v1 and unattested usage-v2 in separate exclusion counts.
 
-The deterministic `cycle_efficiency_profile` aggregates these rows into
-`compiler_efficiency.structural_totals`. Under the current unattested usage schemas it
+The deterministic `cycle_efficiency_profile` separates these rows into
+`compiler_owner_totals`, `coordinator_transport_totals`, `potential_model_work`, and
+`actual_runtime`, while retaining `structural_totals` as a compatibility projection.
+Model-visible bytes and caller-declared calls stay potential; actual runtime totals
+require an issuer-bound trusted receipt. The bounded `contract_lint` checks typed
+producer envelopes, metric field/byte limits, unmarked-v2 debt, and unattested runtime
+claims.
+
+Under the current unattested usage schemas it
 does not aggregate any token claim: verified totals remain zero, usage-v1 increments the
 legacy exclusion count, and well-formed usage-v2 increments the unattested-v2 exclusion
 count. A hand-forged `usage_aggregate_eligible: true`, including one paired with an

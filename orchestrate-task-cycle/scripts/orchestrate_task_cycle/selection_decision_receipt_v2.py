@@ -92,6 +92,38 @@ def render_preliminary_selection_decision_v2(
 ) -> dict[str, Any]:
     trigger_binding, trigger = _trigger(root, trigger_binding_value)
     synthesis_binding, synthesis = _synthesis(root, synthesis_binding_value)
+    return render_preliminary_selection_decision_v2_from_values(
+        root,
+        trigger_binding,
+        trigger,
+        synthesis_binding,
+        synthesis,
+    )
+
+
+def render_preliminary_selection_decision_v2_from_values(
+    root: Path,
+    trigger_binding_value: dict[str, str],
+    trigger_value: dict[str, Any],
+    synthesis_binding_value: dict[str, str],
+    synthesis_value: dict[str, Any],
+    *,
+    prospective_publication_head: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Render from validated prospective bytes without requiring persistence."""
+
+    trigger_binding = normalize_binding(
+        trigger_binding_value, "normal-cycle selection trigger"
+    )
+    trigger = validate_normal_cycle_trigger(
+        root,
+        trigger_value,
+        _prospective_publication_head=prospective_publication_head,
+    )
+    synthesis_binding = normalize_binding(
+        synthesis_binding_value, "selection synthesis"
+    )
+    synthesis = validate_selection_synthesis(root, synthesis_value)
     outcome, selected_task_id = _outcome(
         synthesis["selection_outcome"], synthesis["selected_task_id"]
     )
@@ -113,6 +145,65 @@ def render_preliminary_selection_decision_v2(
     decision_id = "preliminary-selection-v2-" + canonical_sha256(core)[:24]
     body = {**core, "decision_id": decision_id}
     return {**body, "decision_sha256": canonical_sha256(body)}
+
+
+def render_selection_decision_receipt_v2_from_values(
+    root: Path,
+    trigger_binding_value: dict[str, str],
+    trigger_value: dict[str, Any],
+    decision_binding_value: dict[str, str],
+    decision_value: dict[str, Any],
+    synthesis_value: dict[str, Any],
+    *,
+    prospective_publication_head: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Render a receipt after validating a complete prospective dependency set."""
+
+    trigger_binding = normalize_binding(
+        trigger_binding_value, "normal-cycle selection trigger"
+    )
+    trigger = validate_normal_cycle_trigger(
+        root,
+        trigger_value,
+        _prospective_publication_head=prospective_publication_head,
+    )
+    decision_binding = normalize_binding(
+        decision_binding_value, "selection decision v2"
+    )
+    if not isinstance(decision_value, dict):
+        raise ValueError("selection decision v2 must be an object")
+    decision = render_preliminary_selection_decision_v2_from_values(
+        root,
+        trigger_binding,
+        trigger,
+        decision_value.get("selection_synthesis"),
+        synthesis_value,
+        prospective_publication_head=prospective_publication_head,
+    )
+    if decision_value != decision:
+        raise ValueError("selection decision v2 integrity failed")
+    core = {
+        "schema_version": 2,
+        "artifact_kind": "selection_decision_receipt",
+        "selection_trigger": trigger_binding,
+        "trigger_kind": trigger["trigger_kind"],
+        "trigger_id": trigger["trigger_id"],
+        "selection_decision": decision_binding,
+        "synthesis_receipt_id": decision["synthesis_receipt_id"],
+        "input_evidence_manifest_sha256": decision[
+            "evidence_manifest_sha256"
+        ],
+        "outcome": decision["outcome"],
+        "selected_task_id": decision["selected_task_id"],
+        "not_goal_truth": True,
+        "not_authority": True,
+        "not_validation_evidence": True,
+        "not_completion_evidence": True,
+        "mutation_performed": False,
+    }
+    receipt_id = "selection-decision-v2-" + canonical_sha256(core)[:24]
+    body = {**core, "receipt_id": receipt_id}
+    return {**body, "receipt_sha256": canonical_sha256(body)}
 
 
 def validate_preliminary_selection_decision_v2(
@@ -237,6 +328,8 @@ def validate_selection_decision_receipt_v2(
 
 __all__ = (
     "render_preliminary_selection_decision_v2",
+    "render_preliminary_selection_decision_v2_from_values",
     "render_selection_decision_receipt_v2",
+    "render_selection_decision_receipt_v2_from_values",
     "validate_selection_decision_receipt_v2",
 )

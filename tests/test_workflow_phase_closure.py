@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -10,11 +11,20 @@ from orchestrate_task_cycle import (
     validate_cycle_transition as transition,
 )
 from orchestrate_task_cycle.result_contract import api as result_contract
+from legacy_packet_test_support import build_unbound_legacy_packet
+from manage_task_state_index.state.prevalidation_compiler import (
+    compile_prevalidation,
+)
+from manage_task_state_index.state.scan_transition import (
+    apply_scan,
+    prepare_scan,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
 ORCHESTRATOR = ROOT / "orchestrate-task-cycle"
 PACKAGE_ROOT = ORCHESTRATOR / "scripts" / "orchestrate_task_cycle"
+AT = "2026-07-23T10:00:00+09:00"
 
 
 EXPECTED_ORDER = [
@@ -83,6 +93,48 @@ def scope_payload(target: str) -> dict[str, Any]:
     }
 
 
+def compiled_index_snapshot_events(
+    root: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    compiled = compile_prevalidation(root, at=AT)
+    binding = compiled["owner_result_binding"]
+    value = json.loads((root / binding["ref"]).read_text(encoding="utf-8"))
+    result = value["result"]
+    common = {
+        "status": "complete",
+        "index_status": (
+            "snapshot_current"
+            if result["index_status"] == "pass"
+            else result["index_status"]
+        ),
+        "index_snapshot_id": result["index_snapshot_id"],
+        "audit_observation_scope": result["audit_observation_scope"],
+        "live_revalidation_required": result["live_revalidation_required"],
+    }
+    return (
+        {
+            **common,
+            "blockers": result["blockers"],
+            "evidence_paths": result["evidence_paths"],
+            "prevalidation_owner_result_binding": binding,
+        },
+        {
+            **common,
+            "audit_blockers": result["blockers"],
+            "audit_input_manifest": value["index_snapshot"][
+                "audit_input_manifest"
+            ],
+            "post_audit_owner_result_binding": binding,
+        },
+    )
+
+
+def initialize_current_task_index(root: Path) -> None:
+    (root / "task.md").write_text("# Task\n", encoding="utf-8")
+    prepared = prepare_scan(root, at=AT)
+    apply_scan(root, prepared["compilation_binding"])
+
+
 def test_phase_order_is_identical_across_transition_dashboard_and_contract() -> None:
     assert transition.ORDER == EXPECTED_ORDER
     assert dashboard.DEFAULT_STEPS == EXPECTED_ORDER
@@ -111,12 +163,12 @@ def test_formal_packets_and_transitions_exist_for_new_phases() -> None:
     assert transition.ORDER.index("validate") < transition.ORDER.index("issue") < transition.ORDER.index("derive")
     assert {"validate", "issue", "schema_pre_derive"} <= set(transition.TRANSITION_REQUIREMENTS["pre_derive"])
     for target in formal_targets | {"validation_set_plan"}:
-        packet = packets.packet_for(target, {}, {})
+        packet = build_unbound_legacy_packet(target, {}, {})
         assert f"step: {target}" in packet["required_outputs"]
 
 
 def test_packet_routing_reference_is_workspace_relative_and_preindex_is_deterministic() -> None:
-    packet = packets.packet_for("index_pre_validate", {}, {})
+    packet = build_unbound_legacy_packet("index_pre_validate", {}, {})
     packet_source = (PACKAGE_ROOT / "render_subskill_packet.py").read_text(encoding="utf-8")
 
     assert Path(packet["routing_reference"]).resolve() == (ORCHESTRATOR / "references" / "workflow-routing.md").resolve()
@@ -125,10 +177,10 @@ def test_packet_routing_reference_is_workspace_relative_and_preindex_is_determin
 
 
 def test_packets_bind_validate_derive_dashboard_and_report_to_finalization_receipt() -> None:
-    validate_packet = packets.packet_for("validate", {}, {})
-    derive_packet = packets.packet_for("derive", {}, {})
-    dashboard_packet = packets.packet_for("dashboard", {}, {})
-    report_packet = packets.packet_for("report", {}, {})
+    validate_packet = build_unbound_legacy_packet("validate", {}, {})
+    derive_packet = build_unbound_legacy_packet("derive", {}, {})
+    dashboard_packet = build_unbound_legacy_packet("dashboard", {}, {})
+    report_packet = build_unbound_legacy_packet("report", {}, {})
 
     assert any("cycle_final_candidate" in item for item in validate_packet["required_outputs"])
     assert any("finalization_consumption" in item for item in derive_packet["required_outputs"])
@@ -286,6 +338,131 @@ def test_pending_long_run_allows_only_partial_validation_handoff() -> None:
     assert "long_run_pending_partial_validation_only" in finding_codes(before_validation)
     assert "long_run_pending_final_output_phase" not in finding_codes(before_validation)
     assert "long_run_pending_final_output_phase" in finding_codes(before_derive)
+
+
+def test_snapshot_scoped_index_marker_requires_exact_binding() -> None:
+    stage = completed_steps(*transition.TRANSITION_REQUIREMENTS["pre_validate"])
+    stage["steps"]["index_pre_validate"] = {
+        "status": "complete",
+        "index_status": "snapshot_current",
+        "audit_observation_scope": "immutable_bounded_input_snapshot",
+        "live_revalidation_required": True,
+    }
+
+    rejected = transition.validate({}, stage, "pre_validate")
+    assert "index_pre_validate_owner_result_binding_missing" in finding_codes(
+        rejected
+    )
+
+    del stage["steps"]["index_pre_validate"]["live_revalidation_required"]
+    historical = transition.validate({}, stage, "pre_validate")
+    assert "index_pre_validate_owner_result_binding_missing" not in finding_codes(
+        historical
+    )
+
+
+def test_commit_boundary_requires_post_audit_owner_result_binding() -> None:
+    stage = completed_steps(*transition.TRANSITION_REQUIREMENTS["pre_commit"])
+    stage["steps"]["index_pre_validate"] = {
+        "status": "complete",
+        "index_status": "snapshot_current",
+        "audit_observation_scope": "immutable_bounded_input_snapshot",
+        "live_revalidation_required": True,
+    }
+    stage["steps"]["index"] = {
+        "status": "complete",
+        "index_status": "snapshot_current",
+        "audit_observation_scope": "immutable_bounded_input_snapshot",
+        "live_revalidation_required": True,
+    }
+
+    rejected = transition.validate({}, stage, "pre_commit")
+    assert "index_owner_result_binding_missing" in finding_codes(rejected)
+
+
+def test_prevalidation_binding_rejects_mutation_after_audit(
+    tmp_path: Path,
+) -> None:
+    initialize_current_task_index(tmp_path)
+    prevalidation, _index = compiled_index_snapshot_events(tmp_path)
+    stage = completed_steps(*transition.TRANSITION_REQUIREMENTS["pre_validate"])
+    stage["steps"]["index_pre_validate"] = prevalidation
+    context = {"workspace": str(tmp_path.resolve()), "collected_at": AT}
+
+    accepted = transition.validate(context, stage, "pre_validate")
+    assert "index_pre_validate_owner_result_binding_invalid" not in finding_codes(
+        accepted
+    )
+
+    (tmp_path / "task.md").write_text("# Mutated after audit\n", encoding="utf-8")
+    rejected = transition.validate(context, stage, "pre_validate")
+    assert "index_pre_validate_owner_result_binding_invalid" in finding_codes(
+        rejected
+    )
+
+
+def test_intermediate_boundary_uses_fresh_unpublished_audit(
+    tmp_path: Path,
+) -> None:
+    initialize_current_task_index(tmp_path)
+    prevalidation, _index = compiled_index_snapshot_events(tmp_path)
+    issue = tmp_path / ".issue/issue-1.md"
+    issue.parent.mkdir()
+    issue.write_text("# Expected issue effect\n", encoding="utf-8")
+    stage = completed_steps(
+        *transition.TRANSITION_REQUIREMENTS["pre_schema_pre_derive"]
+    )
+    stage["steps"]["index_pre_validate"] = prevalidation
+    context = {"workspace": str(tmp_path.resolve()), "collected_at": AT}
+
+    accepted = transition.validate(
+        context,
+        stage,
+        "pre_schema_pre_derive",
+    )
+    assert "index_live_revalidation_not_current" not in finding_codes(accepted)
+    assert "index_pre_validate_owner_result_binding_invalid" not in finding_codes(
+        accepted
+    )
+
+    (tmp_path / "task.md").write_text(
+        "# Current task drift\n",
+        encoding="utf-8",
+    )
+    rejected = transition.validate(
+        context,
+        stage,
+        "pre_schema_pre_derive",
+    )
+    assert "index_live_revalidation_not_current" in finding_codes(rejected)
+
+
+def test_post_index_binding_supersedes_prevalidation_then_rejects_drift(
+    tmp_path: Path,
+) -> None:
+    initialize_current_task_index(tmp_path)
+    prevalidation, _initial_index = compiled_index_snapshot_events(tmp_path)
+    issue = tmp_path / ".issue/issue-1.md"
+    issue.parent.mkdir()
+    issue.write_text("# Expected issue effect\n", encoding="utf-8")
+    _unused_prevalidation, final_index = compiled_index_snapshot_events(tmp_path)
+    stage = completed_steps(*transition.TRANSITION_REQUIREMENTS["pre_commit"])
+    stage["steps"]["index_pre_validate"] = prevalidation
+    stage["steps"]["index"] = final_index
+    context = {"workspace": str(tmp_path.resolve()), "collected_at": AT}
+
+    accepted = transition.validate(context, stage, "pre_commit")
+    assert "index_owner_result_binding_invalid" not in finding_codes(accepted)
+    assert "index_pre_validate_owner_result_binding_invalid" not in finding_codes(
+        accepted
+    )
+
+    (tmp_path / "task.md").write_text(
+        "# Drift after final index\n",
+        encoding="utf-8",
+    )
+    rejected = transition.validate(context, stage, "pre_commit")
+    assert "index_owner_result_binding_invalid" in finding_codes(rejected)
 
 
 def test_initial_init_is_documented_as_a_separate_bootstrap_transaction() -> None:

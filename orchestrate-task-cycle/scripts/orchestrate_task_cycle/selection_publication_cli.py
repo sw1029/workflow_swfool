@@ -17,6 +17,13 @@ from .selection_publication import (
     publish_prepared,
     recover_publications,
 )
+from .selection_publication_gc import apply_gc, plan_gc, restore_gc
+from .selection_publication_gc_owner_validation import (
+    validate_gc_owner_result,
+)
+from .selection_publication_reference_barrier import (
+    adopt_reference_barrier,
+)
 
 
 def _read_plan(path: str) -> dict[str, Any]:
@@ -26,7 +33,25 @@ def _read_plan(path: str) -> dict[str, Any]:
     return value
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def _read_binding(value: str, label: str) -> dict[str, str]:
+    try:
+        path = Path(value)
+        raw = json.loads(
+            path.read_text(encoding="utf-8") if path.is_file() else value
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{label} must be JSON or a JSON file") from exc
+    if (
+        not isinstance(raw, dict)
+        or set(raw) != {"ref", "sha256"}
+        or not isinstance(raw.get("ref"), str)
+        or not isinstance(raw.get("sha256"), str)
+    ):
+        raise ValueError(f"{label} must contain exactly ref and sha256")
+    return {"ref": raw["ref"], "sha256": raw["sha256"]}
+
+
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", default=".")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -48,61 +73,154 @@ def main(argv: Sequence[str] | None = None) -> int:
     recover.add_argument("--transaction-id")
     prepare_intent = commands.add_parser(
         "prepare-intent",
-        help="Compile a canonical intent; normally called by selected-successor.",
+        help="Compile a current schema-v2 intent; normally called by selected-successor.",
     )
     prepare_intent.add_argument("--intent", required=True)
     apply_intent = commands.add_parser(
         "apply-intent",
-        help="Apply a canonical intent; selected-successor is the normal guarded route.",
+        help="Rejected owner-only effect; execute the selected-successor bundle.",
     )
     apply_intent.add_argument("--intent", required=True)
     reconcile_current = commands.add_parser(
-        "reconcile-current", help="Compile and apply current-state drift reconciliation."
+        "reconcile-current",
+        help="Rejected legacy schema-v1 path; retained as a diagnostic command.",
     )
     reconcile_current.add_argument("--source-ref", required=True)
     reconcile_current.add_argument("--source-sha256", required=True)
     commands.add_parser(
         "migrate-state", help="Validate and migrate legacy state to compact storage v4."
     )
+    commands.add_parser(
+        "adopt-reference-barrier",
+        help=(
+            "Adopt compiler-rendered cooperative writer mode after bounded "
+            "workspace preflight."
+        ),
+    )
+    commands.add_parser(
+        "gc-plan",
+        help="Plan conservative removal of unreferenced selection CAS artifacts.",
+    )
+    gc_apply = commands.add_parser(
+        "gc-apply", help="Archive and remove one exact retention plan."
+    )
+    gc_apply.add_argument("--plan-id", required=True)
+    gc_apply.add_argument("--authority-packet", required=True)
+    gc_apply.add_argument("--pre-commit-verification", required=True)
+    gc_restore = commands.add_parser(
+        "gc-restore", help="Restore one previously applied retention archive."
+    )
+    gc_restore.add_argument("--plan-id", required=True)
+    gc_restore.add_argument("--authority-packet", required=True)
+    gc_restore.add_argument("--pre-commit-verification", required=True)
+    gc_validate = commands.add_parser(
+        "gc-validate-owner-result",
+        help="Fixed authority owner-result validator for GC apply/restore.",
+    )
+    gc_validate.add_argument(
+        "--operation",
+        choices=(
+            "apply_selection_publication_retention",
+            "restore_selection_publication_retention",
+        ),
+        required=True,
+    )
+    gc_validate.add_argument("--owner-result-ref", required=True)
+    gc_validate.add_argument("--owner-result-sha256", required=True)
+    gc_validate.add_argument("--reservation-ref", required=True)
+    gc_validate.add_argument("--reservation-sha256", required=True)
+    gc_validate.add_argument("--pre-commit-ref", required=True)
+    gc_validate.add_argument("--pre-commit-sha256", required=True)
+    gc_validate.add_argument(
+        "--phase", choices=("current", "historical"), default="current"
+    )
     status = commands.add_parser(
         "status", help="Read compact pending/head state without enumerating history."
     )
     status.add_argument("--deep", action="store_true")
-    args = parser.parse_args(list(argv) if argv is not None else None)
+    return parser
+
+
+def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
     root = Path(args.root)
+    if args.command == "prepare":
+        return prepare_publication(root, _read_plan(args.plan))
+    if args.command == "apply":
+        prepared = prepare_publication(root, _read_plan(args.plan))
+        return publish_prepared(root, str(prepared["transaction_id"]))
+    if args.command == "reconcile":
+        prepared = prepare_drift_reconciliation(root, _read_plan(args.plan))
+        return publish_prepared(root, str(prepared["transaction_id"]))
+    if args.command == "recover":
+        return recover_publications(root, args.transaction_id)
+    if args.command == "prepare-intent":
+        return prepare_publication_intent(root, _read_plan(args.intent))
+    if args.command == "apply-intent":
+        raise ValueError(
+            "apply-intent is an owner-only selected-successor effect; "
+            "execute the authority-bound selected-successor bundle"
+        )
+    if args.command == "reconcile-current":
+        raise ValueError(
+            "reconcile-current is a retired schema-v1 downgrade path; "
+            "historical receipts remain readable but new effects are forbidden"
+        )
+    if args.command == "migrate-state":
+        return migrate_publication_state(root)
+    if args.command == "adopt-reference-barrier":
+        return adopt_reference_barrier(root)
+    if args.command == "gc-plan":
+        return plan_gc(root)
+    if args.command == "gc-apply":
+        return apply_gc(
+            root,
+            args.plan_id,
+            authority_packet=_read_binding(
+                args.authority_packet, "authority packet binding"
+            ),
+            pre_commit_verification=_read_binding(
+                args.pre_commit_verification,
+                "pre-commit verification binding",
+            ),
+        )
+    if args.command == "gc-restore":
+        return restore_gc(
+            root,
+            args.plan_id,
+            authority_packet=_read_binding(
+                args.authority_packet, "authority packet binding"
+            ),
+            pre_commit_verification=_read_binding(
+                args.pre_commit_verification,
+                "pre-commit verification binding",
+            ),
+        )
+    if args.command == "gc-validate-owner-result":
+        return validate_gc_owner_result(
+            root,
+            operation=args.operation,
+            owner_result={
+                "ref": args.owner_result_ref,
+                "sha256": args.owner_result_sha256,
+            },
+            reservation={
+                "ref": args.reservation_ref,
+                "sha256": args.reservation_sha256,
+            },
+            pre_commit_verification={
+                "ref": args.pre_commit_ref,
+                "sha256": args.pre_commit_sha256,
+            },
+            phase=args.phase,
+        )
+    return publication_status(root, deep=args.deep)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(list(argv) if argv is not None else None)
     try:
-        if args.command == "prepare":
-            result = prepare_publication(root, _read_plan(args.plan))
-        elif args.command == "apply":
-            prepared = prepare_publication(root, _read_plan(args.plan))
-            result = publish_prepared(root, str(prepared["transaction_id"]))
-        elif args.command == "reconcile":
-            prepared = prepare_drift_reconciliation(root, _read_plan(args.plan))
-            result = publish_prepared(root, str(prepared["transaction_id"]))
-        elif args.command == "recover":
-            result = recover_publications(root, args.transaction_id)
-        elif args.command == "prepare-intent":
-            result = prepare_publication_intent(root, _read_plan(args.intent))
-        elif args.command == "apply-intent":
-            prepared = prepare_publication_intent(root, _read_plan(args.intent))
-            result = publish_prepared(root, str(prepared["transaction_id"]))
-        elif args.command == "reconcile-current":
-            intent = {
-                "schema_version": 1,
-                "kind": "selection_publication_intent",
-                "source_decision": {
-                    "ref": args.source_ref,
-                    "sha256": args.source_sha256,
-                },
-                "task_source": None,
-                "owner_receipts": [],
-            }
-            prepared = prepare_publication_intent(root, intent)
-            result = publish_prepared(root, str(prepared["transaction_id"]))
-        elif args.command == "migrate-state":
-            result = migrate_publication_state(root)
-        else:
-            result = publication_status(root, deep=args.deep)
+        result = _dispatch(args)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(
             json.dumps(

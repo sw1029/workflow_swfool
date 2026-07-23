@@ -97,6 +97,45 @@ A committed legacy migration is the sole exception to ordinary whole-file curren
 
 ### Compiler-first scan and owner validation
 
+For the orchestration `index_pre_validate` stage, run
+`index --root . compile-prevalidation --at <RFC3339>`. The compiler performs the
+current global ID audit under the shared index read lock. It opens every path
+component with descriptor-relative no-follow semantics, enforces file/count/byte
+budgets plus one global visited-entry traversal budget before parsing, and
+captures the ledger, migration and agent-log
+sidecars, projection, `task.md`, every indexed path/snapshot, and every supported
+discovery root in a bounded Merkle manifest. The audit consumes a temporary
+view made only from those captured bytes; equal post-audit capture and a final
+pre-publication manifest check reject drift, symlink escape, and ABA-induced
+result/body mismatch. It publishes that manifest and one content-addressed
+`task_index.prevalidate.owner.v3` result with the derived snapshot
+ID/status/blockers/evidence. The stage loader re-runs the audit and full input
+capture at the bound timestamp and requires both canonical producer paths; a
+model-authored summary or a result whose task/artifact inputs drifted is rejected.
+A passing stage reports `index_status: snapshot_current`,
+`audit_observation_scope: immutable_bounded_input_snapshot`, and
+`live_revalidation_required: true`, plus the exact
+`prevalidation_owner_result_binding`: the receipt proves the bound point-in-time
+view, not perpetual live-workspace currency. At `pre_validate`, the transition
+gate boundedly reopens that canonical owner result and input manifest, checks its
+projection against the stage event, and rederives the current audit. At
+`pre_issue`, `pre_schema_pre_derive`, `pre_derive`,
+`pre_schema_post_derive`, and `pre_index`, run a fresh unpublished bounded audit
+using the collected context timestamp. Do not compare the original prevalidation
+manifest after expected issue or derive effects; require the fresh audit to pass
+instead. After the final `index` stage, `pre_commit`, `pre_dashboard`,
+`pre_report`, and `pre_closeout_commit` boundedly reopen
+`index.post_audit_owner_result_binding` and rederive its current manifest.
+The transition gate rejects a plain `pass`, malformed scope marker, missing or
+invalid required binding, projection mismatch, blocked fresh audit, or workspace
+drift after the applicable audit. Events without the live-revalidation marker
+remain historical-compatible and do not acquire a binding retroactively.
+Each boundary check replaces model-authored packet reconstruction with bounded
+deterministic file/count/byte work, but it still incurs real audit I/O. Current
+efficiency receipts do not attribute those transition-time reads, so do not
+report them as measured runtime, token, monetary, or net-I/O savings; profile
+them separately before making an actual-efficiency comparison.
+
 New governed scans use `prepare-scan` followed by `apply-scan`. Preparation inventories each standard artifact exactly once, fixes one timestamp, derives stable IDs and expanded event rows, and publishes immutable schema-v1 `task_state_index_scan_compilation` at `.task/scan_compilations/<scan-id>.json`. It records:
 
 - the exact ledger and Markdown prestate bindings;
@@ -108,7 +147,9 @@ New governed scans use `prepare-scan` followed by `apply-scan`. Preparation inve
 
 Preparation with `--dry-run` creates no directory, lock, snapshot, plan, or render. Published preparation is reversible metadata and is not mutation authority. `apply-scan` reopens the compilation by raw-file hash, repeats the inventory fingerprint and ledger CAS checks, materializes exact snapshots idempotently, and delegates an event batch to the ordinary transition-plan apply path. Thus one logical update may expand to several retirement/link/upsert rows, but the owner appends the complete event list in one ledger replacement and renders once. Projection-only repair appends no row; no-effect changes neither canonical projection.
 
-The canonical owner result is schema-v2 `task_state_index_scan_result` at `.task/scan_receipts/<scan-id>.json`. It includes `logical_update_count`, exact `event_batch {plan_id,before_event_count,event_count,event_payload_sha256}`, compilation/plan/transition-receipt bindings, subject and projection before/after digests, focused results, and a zero-change post-check. Artifact bodies are never in the compilation result, authority packet, or owner receipt.
+The canonical owner result is schema-v2 `task_state_index_scan_result` at `.task/scan_receipts/<scan-id>.json`. It includes `logical_update_count`, exact `event_batch {plan_id,before_event_count,event_count,event_payload_sha256}`, compilation/plan/transition-receipt bindings, subject and projection before/after digests, focused results, and a zero-change post-check. `apply-scan` returns this artifact's `owner_result_binding`; consumers pass that binding unchanged instead of rendering a second result packet. Artifact bodies are never in the compilation result, authority packet, or owner receipt.
+
+The orchestrator stage loader runs the equivalent of `index --root . lint-owner-result --cycle-id <cycle> --owner-result-ref <ref> --owner-result-sha256 <sha256>` before accepting an `index` owner result. It reopens the exact compilation, requires the canonical receipt path, rederives committed scan evidence, then runs the same bounded current audit snapshot and projects its real verdict/blockers/evidence; scan integrity alone never manufactures `pass`. A matching outer self-hash is insufficient. A model-authored small index result is rejected in compiler-first cycles. The command remains available for diagnostics. Only a closed canonical schema-v2 scan result returns `lint_status: pass`. Schema-v1 ad hoc results are historical read-only evidence; unsupported or oversized results and embedded full packet/context/event bodies block. Authority settlement applies the same rejection to opaque legacy results.
 
 For `projection_repair`, the published compilation is the immutable root intent. Apply additionally publishes `.task/scan_projection_intents/<scan-id>.json` before the first Markdown effect. While holding the task-index ledger lock, the owner reopens the exact compilation boundary, renders its prefix state with `created_at`, verifies the exact repaired SHA, and publishes `.task/scan_projection_receipts/<scan-id>.json`; the owner result binds that receipt in `transition_receipt`. If execution stops after the Markdown replace, a retry accepts exact-after only when the intent already exists and the ledger is still the compilation boundary, then completes the repair receipt and scan result without another replace. With later legal descendants, validation reconstructs the original prefix bytes and reopens the intent/receipt chain. A result-authored after digest, a current descendant render, or a receipt without its exact pre-effect intent cannot establish the historical repair.
 
@@ -166,21 +207,45 @@ Use this closed transaction:
    their planning prestate.
 2. Prepare a schema-v3 selection publication that binds the exact plan and prospective
    task source.
-3. Run `apply-plan` with that publication prepare. Under the task-state lock, verify the
+3. The selected-successor owner publishes execution-lease epoch 0, then applies the plan.
+   Under the task-state lock, verify the
    plan/prepare/CAS bindings, publish the usual transition intent, append the exact event
    batch, render the index, and publish
    `.task/transition_pending_receipts/<plan-id>.json`. Its schema version is 2, kind is
    `task_state_transition_pending_receipt`, and activation is
    `pending_external_settlement`. It binds the plan/file digests, ledger/render after
    digests, event count, and exact publication prepare. `task.md` remains unchanged.
-4. The selection-publication owner reopens that pending receipt, CAS-writes only
+4. Execution-lease epoch 1 lets the selection-publication owner reopen that pending
+   receipt, CAS-write only
    `task.md` last, verifies the prospective digest, and commits a schema-v3 receipt that
    echoes the pending receipt and plan ID.
-5. Run `settle-plan-external` with the exact committed publication binding. The task-state
+5. Execution-lease epoch 2 settles with the exact committed publication binding. The task-state
    owner reopens the pending/prepare/commit chain, verifies current `task.md`, its exact
    event batch, and current render, then publishes
    `.task/transition_receipts/<plan-id>.json` with schema version 2, kind
    `task_state_transition_apply_receipt`, and `activation_status: settled`.
+
+Each epoch is a canonical content-addressed
+`.task/selection_publication/successor_execution_leases/sha256/<sha256>.json`.
+It binds the exact selected-successor bundle, all three reservation and pre-commit
+proofs with expected versions, the complete three-row execution order, one action,
+its prior checkpoint, the authority gate, and the skills root. Both the lease writer
+and each owner guard reopen the bundle through the selected-successor validator and
+require byte-bound `execution_order` equality. A caller cannot substitute rows,
+inputs, subjects, idempotency keys, or expected results.
+
+Before every effect, not merely once before the sequence, the owner reopens the exact
+lease and all three historical proof chains, then verifies that every reservation is
+still current and every pre-commit still binds its current state. The authority lock
+remains held from this revalidation through that owner write. Thus a reservation
+change after orchestration preview but before an effect stops before target bytes
+change. The authority gate is immutable evidence of the closed proof set; an imported
+process token, producer capability, gate, or lease-shaped JSON is not authority.
+When an effect also touches selection storage, locks are always acquired as reference
+barrier (shared or exclusive), publication lock when used, then authority lock.
+Execution-lease publication holds the registered shared barrier before revalidation;
+topology publication holds both shared and publication locks before its per-effect
+authority guard. GC retains the exclusive form of the same outer barrier.
 
 The pending intent remains a barrier to unrelated task-state writers until step 5.
 `verify-plan` reports `pending_external_settlement` after step 3 and `already_applied`
@@ -195,6 +260,13 @@ committed publication without settlement keep that value false. External settlem
 the third independently grant-authorized effect in the selected-successor all-three
 gate. It must bind the exact task-state plan and committed publication; neither of the
 other grants nor a lifecycle artifact can substitute for it or widen its subject.
+
+Legacy boundaries are recovery-only. A schema-v1 selection intent cannot compile a
+new schema-v2 prepare, and a schema-v1 or schema-v2 uncommitted prepare cannot publish
+current target bytes. A new schema-v1 task-alias transition plan is likewise rejected.
+An already sealed matching receipt may still be read or used to repair its compact
+state/index entries; historical recovery never authorizes a new effect. Public
+`apply-intent` and `reconcile-current` routes cannot bypass these rules.
 
 Relationship object:
 

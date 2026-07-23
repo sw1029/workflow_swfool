@@ -15,6 +15,12 @@ from .service import (
     submit_stage,
 )
 from .preparation_store import load_published_preparation, publish_preparation
+from .input_compilers import (
+    compile_routing,
+    publish_owner_result,
+    publish_semantic,
+    publish_usage_observation,
+)
 from .specs import TARGET_COMPILE_SPECS
 
 
@@ -77,6 +83,8 @@ def _parser() -> argparse.ArgumentParser:
     submit.add_argument("--routing-sha256")
     submit.add_argument("--usage-ref")
     submit.add_argument("--usage-sha256")
+    submit.add_argument("--deterministic-commit-ref")
+    submit.add_argument("--deterministic-commit-sha256")
     submit.add_argument("--mode", choices=("block", "warn"), default="block")
     submit.add_argument("--apply", action="store_true")
     submit.add_argument("--max-files", type=int, default=12)
@@ -117,10 +125,95 @@ def _parser() -> argparse.ArgumentParser:
     execute.add_argument(
         "--preparation-schema-version", type=int, choices=(3,), default=3
     )
+    owner = sub.add_parser(
+        "publish-owner-result",
+        help="Validate owner fields and publish a preparation-bound CAS wrapper.",
+    )
+    owner.add_argument("--root", default=".")
+    owner.add_argument("--preparation-ref", required=True)
+    owner.add_argument("--preparation-sha256", required=True)
+    owner_input = owner.add_mutually_exclusive_group(required=True)
+    owner_input.add_argument("--owner-result")
+    owner_input.add_argument("--owner-result-ref")
+    owner.add_argument("--owner-result-sha256")
+    semantic = sub.add_parser(
+        "publish-semantic",
+        help="Validate hybrid semantic fields and publish a bound CAS wrapper.",
+    )
+    semantic.add_argument("--root", default=".")
+    semantic.add_argument("--preparation-ref", required=True)
+    semantic.add_argument("--preparation-sha256", required=True)
+    semantic.add_argument("--semantic", required=True)
+    semantic.add_argument("--reasoned-not-applicable")
+    routing = sub.add_parser(
+        "compile-routing",
+        help="Compile routing semantics into a policy-derived bound receipt.",
+    )
+    routing.add_argument("--root", default=".")
+    routing.add_argument("--preparation-ref", required=True)
+    routing.add_argument("--preparation-sha256", required=True)
+    routing.add_argument("--profile-id", required=True)
+    routing.add_argument("--routing-request")
+    usage = sub.add_parser(
+        "publish-usage-observation",
+        help="Publish unverified usage observations in a bound CAS wrapper.",
+    )
+    usage.add_argument("--root", default=".")
+    usage.add_argument("--preparation-ref", required=True)
+    usage.add_argument("--preparation-sha256", required=True)
+    usage.add_argument("--observation", required=True)
     return parser
 
 
 def _run(args: argparse.Namespace) -> dict[str, Any]:
+    if args.stage_command == "publish-owner-result":
+        if args.owner_result_ref and not args.owner_result_sha256:
+            raise ValueError(
+                "--owner-result-sha256 is required with --owner-result-ref"
+            )
+        if args.owner_result_sha256 and not args.owner_result_ref:
+            raise ValueError(
+                "--owner-result-sha256 is valid only with --owner-result-ref"
+            )
+        return publish_owner_result(
+            args.root,
+            args.preparation_ref,
+            args.preparation_sha256,
+            _load_json(args.owner_result) if args.owner_result else None,
+            source_ref=args.owner_result_ref,
+            source_sha256=args.owner_result_sha256,
+        )
+    if args.stage_command == "publish-semantic":
+        return publish_semantic(
+            args.root,
+            args.preparation_ref,
+            args.preparation_sha256,
+            _load_json(args.semantic),
+            reasoned_not_applicable=(
+                _load_json(args.reasoned_not_applicable)
+                if args.reasoned_not_applicable
+                else None
+            ),
+        )
+    if args.stage_command == "compile-routing":
+        return compile_routing(
+            args.root,
+            args.preparation_ref,
+            args.preparation_sha256,
+            args.profile_id,
+            (
+                _load_json(args.routing_request)
+                if args.routing_request
+                else None
+            ),
+        )
+    if args.stage_command == "publish-usage-observation":
+        return publish_usage_observation(
+            args.root,
+            args.preparation_ref,
+            args.preparation_sha256,
+            _load_json(args.observation),
+        )
     if args.stage_command == "prepare":
         prepared = prepare_stage(
             args.root,
@@ -163,6 +256,8 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             routing_sha256=args.routing_sha256,
             usage_ref=args.usage_ref,
             usage_sha256=args.usage_sha256,
+            deterministic_commit_ref=args.deterministic_commit_ref,
+            deterministic_commit_sha256=args.deterministic_commit_sha256,
         )
     if args.stage_command == "execute":
         return execute_deterministic_stage(

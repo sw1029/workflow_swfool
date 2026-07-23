@@ -9,15 +9,54 @@ description: "Normalize task acceptance criteria and demo evidence before govern
 
 Use this skill to turn an active `task.md` into a concise acceptance packet that code-writing and validation steps can follow.
 
-Publishing the packet is the exact `publish_acceptance_packet` operation in `authority.operations.json`. Apply the shared [authority v2 contract](../manage-agent-authority/references/authority-v2-contract.md); acceptance content, task status, or normalization success does not itself grant the publication operation or any later implementation action.
+The new compiler's immutable, noncanonical owner-result CAS is the preparation-only
+`compile_acceptance_owner_result` operation in `authority.operations.json`; it grants
+nothing and changes no canonical task state. The legacy caller-assembled publication
+path remains `publish_acceptance_packet` and requires its exact grant. Apply the shared
+[authority v2 contract](../manage-agent-authority/references/authority-v2-contract.md);
+acceptance content, task status, compilation success, or a CAS binding does not itself
+grant stage publication or any later implementation action.
 
-Use the `identity` module command to bind the final packet to the exact active task revision. The helper emits a deterministic `acceptance_id` plus `acceptance_provenance.source_task_id`, root-relative `source_task_path`, and SHA-256 `source_task_fingerprint`. It refuses a missing/empty task, task-ID mismatch, workspace path escape, semantically empty criteria, inconsistent status/blocker state, an unresolved satisfiability row presented as normalized acceptance, and a final packet without explicit criteria, blockers, status, and evidence paths.
+Use the `compile` command for new workflow cycles. Give it only an exact, bounded semantic-draft binding containing `acceptance_status`, `acceptance_criteria`, `blockers`, `evidence_paths`, and optional `acceptance_scenarios`, `validation_predicate_contract`, `producer_directives`, or `acceptance_contract`. The compiler derives the task-bound ID and provenance, recomputes satisfiability rows and booleans, builds the final schema, and publishes one immutable CAS owner result. Its stdout contains only bindings and scalar metrics. It rejects caller-authored IDs, provenance, task identity, envelopes, and satisfiability conclusions.
+
+`acceptance_contract` is the closed namespace for every rich preservation field
+named below: non-goals, visible/demo surfaces, validation commands, quantifiers,
+evidence kind and freshness, baseline/lane identity, comparison/parity/adoption,
+evidence resolution, scale/throughput, harvest, residual-gap, proxy, and
+envelope-thaw fields. Unless a field is one of the core top-level fields listed
+above, an unqualified field name in this workflow means
+`acceptance_contract.<field>`. This keeps the semantic draft and stage result
+closed without dropping the existing acceptance contract.
+
+The versioned
+[acceptance contract registry](references/acceptance-contract-registry-v1.json)
+is the single canonical field/path allowlist used by the compiler and downstream
+workflow consumers. Core semantic fields remain top-level, compiler conclusions
+remain derived top-level fields, and every registered rich field remains under
+`acceptance_contract`. Do not maintain a second prose or code allowlist.
+
+The smallest valid semantic draft is:
+
+```json
+{
+  "acceptance_status": "normalized",
+  "acceptance_criteria": ["The requested bounded behavior is observable."],
+  "blockers": [],
+  "evidence_paths": []
+}
+```
+
+Store those exact bytes in a workspace file, hash that file, and pass only its ref/digest below. Omit unknown optional fields; do not add `null` placeholders or any compiler-derived field.
 
 ```bash
 SKILLS_ROOT="${CODEX_HOME:-$HOME/.codex}/skills"
 PYTHONPATH="$SKILLS_ROOT/normalize-acceptance-and-demo/scripts" \
-  python3 -m normalize_acceptance_and_demo identity [arguments]
+  python3 -m normalize_acceptance_and_demo compile \
+    --root . --task-id <active-task-id> --task-path task.md \
+    --draft-ref <semantic-draft-ref> --draft-sha256 <sha256>
 ```
+
+Use `identity` only to inspect or recover legacy caller-assembled packets. Do not use it as the normal owner-result publication path.
 
 Use the closed `acceptance_status` vocabulary `normalized | partial | blocked | needs_review`; acceptance normalization is not completion validation and therefore never emits `complete` or `passed`.
 
@@ -71,13 +110,13 @@ Do not hardcode proxy names, new-behavior definitions, sample thresholds, freshn
 22. When `unreachable_within_cycle=true` implies a long-run launch and the adapter/caller supplies `harvest_gate_inventory`, attach `harvest_contract_preflight` to the launch acceptance. Preserve non-degradable `lane_incompatible`, `scale_incompatible`, and `contract_conflict` findings. If any are present, require repair/mitigation before launch or explicit `harvest_risk_accepted=true`; do not silently consume launch acceptance.
 23. When acceptance creates or changes a validation predicate, floor, inclusion check, required output class, or producer directive, build criterion-bound satisfiability rows inside the existing `validation_predicate_contract`; do not add a separate gate.
    - Give each criterion and producer directive an opaque ID. Map every criterion to exactly one directive and preserve required/permitted output classes, required/guaranteed-non-empty output classes, required/allowed task mutation surfaces, freshness and producer-execution permission when fresh execution is required, body-movement requirement and permission when body movement is required, required/verifier-observable input classes, a non-empty satisfying execution path, and local repair routes for conflicts.
-   - Let the `identity` command recompute `satisfiability_rows` with the closed `evaluation_status: pass | fail | not_evaluated`. Treat prohibited output, non-empty population that cannot be produced, forbidden required mutation, forbidden fresh producer execution, or forbidden required body movement as `fail`. Treat missing mappings, ambiguous directive binding, an unobservable required verifier input, or a missing execution path as `not_evaluated`.
+   - Let the `compile` command recompute `satisfiability_rows` with the closed `evaluation_status: pass | fail | not_evaluated`. Treat prohibited output, non-empty population that cannot be produced, forbidden required mutation, forbidden fresh producer execution, or forbidden required body movement as `fail`. Treat missing mappings, ambiguous directive binding, an unobservable required verifier input, or a missing execution path as `not_evaluated`.
    - Derive the existing `mutually_unsatisfiable_contract` boolean from failed rows; do not accept a caller-provided contradictory value. Preserve `unverifiable_acceptance_contract=true` when any row is `not_evaluated`.
    - A failed or not-evaluated row cannot coexist with `acceptance_status: normalized`. Keep a concrete blocker and repair route or residual scope. Green direct tests, empty fixtures, and report-only evidence do not repair the contract.
-   - For every failed row, require the uniquely bound producer directive to provide at least one non-empty `local_repair_routes` entry before emitting a final packet. A blocker label alone is not a repair route; let the `identity` command reject that packet.
+   - For every failed row, require the uniquely bound producer directive to provide at least one non-empty `local_repair_routes` entry before emitting a final packet. A blocker label alone is not a repair route; let the `compile` command reject that draft.
    - Keep output-class meanings, field supply, thresholds, verifier mappings, and permitted mutation surfaces adapter- or caller-owned. When those mappings are unavailable, return `not_evaluated`; do not invent them.
 24. Mark unclear, missing, or unverifiable criteria as blockers or assumptions rather than silently widening scope.
-25. Before handoff, run `python3 -m normalize_acceptance_and_demo identity --root . --task-id <active-task-id> --task-path task.md --packet-json <draft.json> --final --output .task/cycle/<cycle-id>/packets/acceptance.json` under the package `PYTHONPATH`. Save a human-readable view as `acceptance.md` when useful, but treat the bound JSON as the result-contract and ledger source. A later task edit invalidates the fingerprint and requires renormalization.
+25. Before handoff, run `python3 -m normalize_acceptance_and_demo compile` with the exact semantic-draft ref/digest and active task identity. Pass its `owner_result_binding` directly to orchestration. Do not copy the compiled body into another packet path. A later task edit invalidates the binding and requires recompilation.
 26. Pass the packet to `$task-md-agent-governance`, `$plan-validation-scope`, and `$build-validation-set-with-agents` when `acceptance_scenarios`, Part M harvest preflight, or comparison/adoption validation fixtures are needed.
 
 ## Guardrails
@@ -113,3 +152,4 @@ Do not hardcode proxy names, new-behavior definitions, sample thresholds, freshn
 - Do not leave a cycle-unreachable scale target as generic `indeterminate` when both required scale and throughput evidence are available. Preserve `unreachable_within_cycle` and the long-run/throughput/descope/terminal/escalation routing options.
 - Do not drop harvest-gate preflight findings, harvest risk acceptance, predicate/directive satisfiability, or closed-world collection requirements when normalizing long-run or validator-changing acceptance. Keep repository-specific check ids, thresholds, directive classes, and aliases adapter-owned.
 - Do not trust self-declared satisfiability. Recompute criterion/directive rows, and do not emit normalized acceptance when any required row fails or remains not evaluated.
+- Do not ask a model to write `acceptance_id`, task provenance, satisfiability rows/booleans, final packet envelopes, CAS paths, or owner-result bindings.

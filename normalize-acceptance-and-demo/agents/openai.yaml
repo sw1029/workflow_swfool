@@ -1,4 +1,4 @@
 interface:
   display_name: "Normalize Acceptance And Demo"
-  short_description: "Normalize acceptance and demo evidence"
-  default_prompt: "Use $normalize-acceptance-and-demo to turn task criteria into explicit acceptance and demo requirements."
+  short_description: "Compile semantic acceptance into bound results"
+  default_prompt: "Use $normalize-acceptance-and-demo to compile semantic acceptance criteria into a deterministic task-bound owner result."

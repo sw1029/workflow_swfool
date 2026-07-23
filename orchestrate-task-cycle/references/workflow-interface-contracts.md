@@ -75,6 +75,11 @@ Use these ownership rules:
 | Commit packet | `$repo-change-commit` | Dashboard, report, closeout | `commit_role`, created/skipped/blocked status, commit hash/subject when created, skipped reason when not. |
 | Dashboard result | `$render-cycle-dashboard` | Report, closeout | Current task ID, `dashboard_status`, ledger `event_count`, explicit `current_stage_event_count`, finalization receipt/token and authoritative projection digest, snapshot status, finalized validation/progress verdicts and axes, issue/commit summaries, blockers, malformed/noncanonical event visibility, dashboard path, and evidence paths. It references the verified projection and never recomputes a completion verdict. |
 
+The acceptance row's canonical field paths are defined only by the versioned
+[acceptance contract registry](../../normalize-acceptance-and-demo/references/acceptance-contract-registry-v1.json).
+Compiler, stage/model projection, task-pack, derive, and completion consumers
+must load that registry; prose examples are not independent allowlists.
+
 ## Core Packet Contracts
 
 ### Scoped Progress and Retained Change
@@ -500,11 +505,11 @@ Module commands provide decision-support evidence. They do not replace owning sk
 | --- | --- | --- | --- |
 | `python3 -P -m orchestrate_task_cycle context` | `--root`, optional Git/file limits | Compact JSON for `task.md`, `.agent_goal`, `.agent_advice`, `.task`, `.issue`, `.agent_log`, `.schema`, `.contract`, validation, Git | Context, packets, report |
 | `python3 -P -m orchestrate_task_cycle mode-profile` | `validate|resolve`, tracked profile registry, optional reducing override, explicit activation source | Closed non-GT mode resolution with capture/consume/reaction effects and exact derived-index repair scope | Coordinator before optional session observation behavior |
-| `python3 -P -m orchestrate_task_cycle ledger` | `init`, `append`, `render`, `current`; stage JSON or explicit `--step` | `initialization.json` storage bootstrap; `stage.jsonl` beginning with canonical `context`; `current_stage.json`, packets, dashboard support | Dashboard, report, transition checks |
-| `python3 -P -m orchestrate_task_cycle packet` | `--target <phase>`, context/stage evidence | Markdown or JSON packet with routing, required inputs/outputs, GT/advice separation | Every owning subskill |
+| `python3 -P -m orchestrate_task_cycle ledger` | `init`, protocol-v1 compatibility `append`, `render`, `current`; stage JSON or explicit `--step` | `initialization.json` storage bootstrap; compiler-owned v2 `stage.jsonl`; `current_stage.json`, dashboard support | Dashboard, report, transition checks |
+| `python3 -P -m orchestrate_task_cycle packet` | Protocol-v1 diagnostic `--target <phase>`, context/stage evidence | Legacy Markdown or JSON packet; protocol-v2 rejects this surface | Historical diagnosis only; v2 uses `stage prepare` |
 | `python3 -P -m orchestrate_task_cycle transition` | `--transition <name>`, accumulated `--stage`, separate current `--routing-json`, optional `--workflow-mode bootstrap` | Transition `pass|warn|block` findings without reading a prior stage's route as the current target route | Orchestrator before major phases |
 | `python3 -P -m orchestrate_task_cycle result-contract` | `--target <target>`, `--mode warn|block`, result JSON, optional long-run `--context`; stable facade over the `result_contract` rule registry | Contract findings, ledger-envelope readiness, closed `authority` packet/axis/reservation/pre-dispatch checks, pending-long-run pass/advanced and ordinary-derive blocks, plus target gate findings | Orchestrator before advancing stages; focused consumers may instantiate a target rule through `RuleContext`/`RuleRegistry` |
-| `python3 -P -m orchestrate_task_cycle authority-packet` | `--root`, exact decision binding, mutation-only reservation and verification bindings, optional evidence-backed local-available override | Artifact-reopened, closed and verified authority-phase packet; no grant or policy mutation | Existing authority phase before result-contract validation and dispatch |
+| `python3 -P -m orchestrate_task_cycle authority-packet` | `--root`, required `--cycle-id --publish`, exact decision binding, mutation-only reservation and verification bindings, optional evidence-backed local-available override | Artifact-reopened, closed and verified cycle-local owner-result CAS binding; no grant or policy mutation | `stage submit` at the authority boundary |
 | `$plan-validation-scope` helpers | Planned files/surfaces before governance; actual changed files afterward | `validation_scope_plan` followed by authoritative `validation_scope_finalize` | Governance, pre-validation index, validation, derive, report |
 | `python3 -P -m orchestrate_task_cycle code-structure` | `--root`, changed-file list or input JSON, optional `--convention-json` | Scalar audit packet with size, responsibility, semantic structure, and convention-conformance fields; no source bodies; no patches | Run, derive, validation, report |
 | `python3 -P -m orchestrate_task_cycle gt-conflict` | `--root`, task/GT/behavior evidence | GT/task conflict packet | Derive |
@@ -514,7 +519,7 @@ Module commands provide decision-support evidence. They do not replace owning sk
 | `python3 -P -m orchestrate_task_cycle visible-increment` | Completed evidence, cycle ID, task ID | Formal `visible_increment` envelope; optional `.task/delta/<cycle-id>-visible-delta.{md,json}` with `not_validation_evidence: true` | Report only; not validation |
 | `python3 -P -m orchestrate_task_cycle dashboard` | Cycle ledger evidence | Korean `dashboard.md` snapshot | Report, closeout |
 | `python3 -P -m orchestrate_task_cycle efficiency` | Task ID and cycle ledger evidence through repo skill gap analysis | Formal `cycle_efficiency_profile` envelope with cycle-cost and `execution_starvation` fields when applicable | Scope finalization, validation, derive, report |
-| `python3 -P -m orchestrate_task_cycle monitor` | Running process/log metadata, optional tmux session and completion artifact paths | Running-state verification without success promotion; optional `step: run` ledger append with `event_kind: long_run_monitor` | Validation, report |
+| `python3 -P -m orchestrate_task_cycle monitor` | Running process/log metadata, optional tmux session and completion artifact paths | Running-state verification without success promotion; optional compiler-bound `step: run` observation | Validation, report |
 | `python3 -P -m orchestrate_task_cycle report` | Context, validation, progress, commit JSON | Korean report draft/check in required field order | Final report |
 
 ## Fail-Closed Consumer Rules

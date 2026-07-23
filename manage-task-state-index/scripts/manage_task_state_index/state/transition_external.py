@@ -7,7 +7,7 @@ from typing import Any
 
 from .events import load_events_read_only, merge_state
 from .render import _markdown_projection_matches
-from .selected_successor_guard import require_selected_successor_execution
+from .selected_successor_guard import guard_selected_successor_effect
 from .storage import index_lock, rel_path, sha256_file
 from .transition_plan_contract import (
     canonical_bytes,
@@ -298,49 +298,68 @@ def settle_external_transition(
     path_value: str | Path,
     external_commit_value: Any,
     *,
+    execution_lease: dict[str, str] | None = None,
     _selected_successor_execution_token: object | None = None,
 ) -> dict[str, Any]:
-    require_selected_successor_execution(_selected_successor_execution_token)
     root = root.resolve()
     plan_path, plan, plan_file_sha256 = load_transition_plan(root, path_value)
     if not is_external_plan(plan):
         raise ValueError("Task-state transition plan has no external settlement")
     plan_ref = rel_path(root, plan_path)
-    created = False
-    with index_lock(root):
-        pending_receipt, pending_binding = load_pending_receipt(
-            root, plan, plan_ref, plan_file_sha256
-        )
-        commit_binding = _validate_publication_commit(
-            root,
-            plan,
-            pending_binding,
-            pending_receipt["external_prepare"],
-            external_commit_value,
-        )
-        events, _ = load_events_read_only(root)
-        exact, conflict = matching_events(events, plan)
-        if conflict or not exact or not committed_boundary_valid(root, plan, events):
-            raise ValueError("Task-state external settlement lacks its exact event batch")
-        if not _markdown_projection_matches(root, merge_state(events)):
-            raise ValueError("Task-state external settlement projection is stale")
-        receipt = _settled_receipt(
-            plan,
-            plan_ref,
-            plan_file_sha256,
-            pending_binding,
-            pending_receipt["external_prepare"],
-            commit_binding,
-        )
-        path = owned_transition_file(
-            root,
-            "transition_receipts",
-            f"{plan['plan_id']}.json",
-            create_parent=True,
-        )
-        payload = canonical_bytes(receipt) + b"\n"
-        created = publish_immutable(path, payload)
-        digest = sha256_bytes(payload)
+    pending_receipt, pending_binding = load_pending_receipt(
+        root, plan, plan_ref, plan_file_sha256
+    )
+    requested_commit = _binding(
+        external_commit_value, "selection publication receipt"
+    )
+    with guard_selected_successor_effect(
+        root,
+        execution_lease,
+        action="settle_selected_successor_task_state",
+        effect_inputs={
+            "plan": {"ref": plan_ref, "sha256": plan_file_sha256},
+            "pending": pending_binding,
+            "publication": requested_commit,
+        },
+        legacy_token=_selected_successor_execution_token,
+    ):
+        created = False
+        with index_lock(root):
+            pending_receipt, pending_binding = load_pending_receipt(
+                root, plan, plan_ref, plan_file_sha256
+            )
+            commit_binding = _validate_publication_commit(
+                root,
+                plan,
+                pending_binding,
+                pending_receipt["external_prepare"],
+                external_commit_value,
+            )
+            events, _ = load_events_read_only(root)
+            exact, conflict = matching_events(events, plan)
+            if conflict or not exact or not committed_boundary_valid(root, plan, events):
+                raise ValueError(
+                    "Task-state external settlement lacks its exact event batch"
+                )
+            if not _markdown_projection_matches(root, merge_state(events)):
+                raise ValueError("Task-state external settlement projection is stale")
+            receipt = _settled_receipt(
+                plan,
+                plan_ref,
+                plan_file_sha256,
+                pending_binding,
+                pending_receipt["external_prepare"],
+                commit_binding,
+            )
+            path = owned_transition_file(
+                root,
+                "transition_receipts",
+                f"{plan['plan_id']}.json",
+                create_parent=True,
+            )
+            payload = canonical_bytes(receipt) + b"\n"
+            created = publish_immutable(path, payload)
+            digest = sha256_bytes(payload)
     return {
         "result_kind": "task_state_transition_external_settlement_result",
         "schema_version": 2,

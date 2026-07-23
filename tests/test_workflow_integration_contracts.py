@@ -348,9 +348,8 @@ def test_fabricated_visible_and_efficiency_envelopes_fail_closed() -> None:
 
 
 def test_missing_task_bootstrap_is_explicit_and_not_a_fake_normal_cycle() -> None:
-    packet = packets.packet_for("derive", {}, {}, "bootstrap")
-    assert packet["mode"] == "initial_init"
-    assert "no fabricated completed_task_id" in packet["required_outputs"]
+    with pytest.raises(ValueError, match="explicitly bound legacy cycle"):
+        packets.packet_for("derive", {}, {}, "bootstrap")
 
     derive = contracts.validate(
         "derive",
@@ -427,10 +426,10 @@ def test_ledger_init_is_storage_metadata_and_context_is_first_stage(tmp_path: Pa
     assert "ledger_init" not in ledger.DEFAULT_STEPS
     assert not (tmp_path / ".task" / "cycle" / "cycle-1" / "stage.jsonl").exists()
 
-    ledger.append_event(
-        tmp_path,
-        "cycle-1",
-        {"step": "context", "status": "complete", "task_id": "task-1"},
+    from orchestrate_task_cycle.ledger.compiled_events import (
+        append_compiled_system_stage,
     )
+
+    append_compiled_system_stage(tmp_path, "cycle-1", "context")
     rows = ledger.read_events(tmp_path, "cycle-1")
     assert rows[0]["step"] == "context"

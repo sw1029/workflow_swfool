@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from contextlib import contextmanager
 import hashlib
 import json
 from pathlib import Path
@@ -9,7 +10,7 @@ from typing import Any
 import pytest
 
 from selection_publication_legacy_support import (
-    prepare_legacy_publication as prepare_publication,
+    seal_historical_legacy_publication_fixture,
 )
 
 from manage_task_state_index import index as task_state
@@ -250,6 +251,57 @@ def _selected_receipt(
     return result["receipt"]
 
 
+def test_invalid_normal_cycle_pipeline_is_write_free(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _initialize_active_task(tmp_path)
+    inputs = _normal_cycle_inputs(tmp_path)
+    before = {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+
+    code = selection_decision_receipt_cli.main(
+        [
+            "--root",
+            str(tmp_path),
+            "pipeline",
+            "--cycle-id",
+            str(inputs["cycle_id"]),
+            "--trigger-kind",
+            "normal_cycle",
+            "--source-result-ref",
+            inputs["source_binding"]["ref"],
+            "--source-result-sha256",
+            inputs["source_binding"]["sha256"],
+            "--cycle-finalization-ref",
+            inputs["finalization"]["ref"],
+            "--cycle-finalization-sha256",
+            inputs["finalization"]["sha256"],
+            "--schema-pre-derive-ref",
+            inputs["schema_pre"]["ref"],
+            "--schema-pre-derive-sha256",
+            inputs["schema_pre"]["sha256"],
+            "--current-task-ref",
+            inputs["current_task"]["ref"],
+            "--current-task-sha256",
+            inputs["current_task"]["sha256"],
+        ]
+    )
+    result = json.loads(capsys.readouterr().out)
+    after = {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+
+    assert code == 2
+    assert result["mutation_performed"] is False
+    assert "task-index-ref" in result["error"]
+    assert after == before
+
+
 def test_selected_successor_prepare_renders_body_free_authority_bundle(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -472,6 +524,320 @@ def _authorized_successor(
     )
     bundle = load_selected_successor_bundle(root, prepared["bundle"])
     return prepared, bundle, prepare_authority_proofs(root, bundle)
+
+
+def _workspace_bytes(root: Path) -> dict[str, bytes]:
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+
+
+def _selected_successor_target_bytes(root: Path) -> dict[str, bytes]:
+    return {
+        relative: (root / relative).read_bytes()
+        for relative in ("task.md", ".task/index.jsonl", ".task/index.md")
+    }
+
+
+def test_imported_token_and_producer_capability_do_not_authorize_effects(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _prepared, bundle, _proofs = _authorized_successor(tmp_path, capsys)
+    from orchestrate_task_cycle.selection_publication_producer_capability import (
+        _SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
+    )
+
+    before = _selected_successor_target_bytes(tmp_path)
+    with pytest.raises(ValueError, match="durable execution lease"):
+        publish_prepared(
+            tmp_path,
+            bundle["transaction_id"],
+            _selected_successor_execution_token=_SELECTED_SUCCESSOR_EXECUTION_TOKEN,
+        )
+    assert _selected_successor_target_bytes(tmp_path) == before
+
+    with pytest.raises(ValueError):
+        publish_prepared(
+            tmp_path,
+            bundle["transaction_id"],
+            execution_lease=_SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
+        )
+    assert _selected_successor_target_bytes(tmp_path) == before
+    assert not (
+        tmp_path / bundle["execution_order"][1]["expected_result"]["ref"]
+    ).exists()
+    assert not hasattr(publication, "_publish_prepared_effect")
+
+
+def test_execution_lease_writer_and_guard_reopen_exact_bundle_rows(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    prepared, bundle, proofs = _authorized_successor(tmp_path, capsys)
+    from orchestrate_task_cycle.selected_successor_execution_lease import (
+        publish_execution_lease,
+    )
+    from orchestrate_task_cycle.selection_publication_store import _canonical_json
+
+    forged_rows = json.loads(json.dumps(bundle["execution_order"]))
+    forged_rows[0]["expected_result"]["sha256"] = "0" * 64
+    before = _workspace_bytes(tmp_path)
+    with pytest.raises(ValueError, match="differ from the exact bundle"):
+        publish_execution_lease(
+            tmp_path,
+            prepared["bundle"],
+            forged_rows,
+            proofs,
+            action="apply_task_state_plan_pending",
+            skills_root=SKILLS_ROOT,
+        )
+    assert _workspace_bytes(tmp_path) == before
+
+    lease_binding, _gate, _created = publish_execution_lease(
+        tmp_path,
+        prepared["bundle"],
+        bundle["execution_order"],
+        proofs,
+        action="apply_task_state_plan_pending",
+        skills_root=SKILLS_ROOT,
+    )
+    forged_lease = json.loads(
+        (tmp_path / lease_binding["ref"]).read_text(encoding="utf-8")
+    )
+    forged_lease["execution_order"] = forged_rows
+    core = {key: value for key, value in forged_lease.items() if key != "lease_id"}
+    forged_lease["lease_id"] = (
+        "ssel-" + hashlib.sha256(_canonical_json(core)).hexdigest()[:32]
+    )
+    payload = _canonical_json(forged_lease)
+    digest = hashlib.sha256(payload).hexdigest()
+    forged_path = (
+        tmp_path
+        / ".task/selection_publication/successor_execution_leases/sha256"
+        / f"{digest}.json"
+    )
+    forged_path.write_bytes(payload)
+    targets_before = _selected_successor_target_bytes(tmp_path)
+    with pytest.raises(ValueError, match="differ from the exact bundle"):
+        apply_transition_plan(
+            tmp_path,
+            bundle["task_state_plan"]["ref"],
+            external_prepare=bundle["selection_prepare"],
+            execution_lease={
+                "ref": forged_path.relative_to(tmp_path).as_posix(),
+                "sha256": digest,
+            },
+        )
+    assert _selected_successor_target_bytes(tmp_path) == targets_before
+    assert not (
+        tmp_path / bundle["execution_order"][0]["expected_result"]["ref"]
+    ).exists()
+
+
+def test_selected_successor_lock_order_is_reference_publication_authority(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared, bundle, proofs = _authorized_successor(tmp_path, capsys)
+    import manage_agent_authority.canonical as authority_canonical
+    import manage_task_state_index.state.selected_successor_guard as guard_module
+    import orchestrate_task_cycle.selected_successor_execution_lease as lease_module
+
+    lease_order: list[str] = []
+    actual_barrier = lease_module.registered_producer_barrier
+    actual_authority_lock = authority_canonical.authority_lock
+
+    @contextmanager
+    def tracked_barrier(
+        root: Path, *, producer_capability: object
+    ):
+        with actual_barrier(
+            root, producer_capability=producer_capability
+        ):
+            lease_order.append("reference")
+            yield
+
+    @contextmanager
+    def tracked_authority_lock(root: Path):
+        with actual_authority_lock(root):
+            lease_order.append("authority")
+            yield
+
+    with monkeypatch.context() as ordered:
+        ordered.setattr(
+            lease_module, "registered_producer_barrier", tracked_barrier
+        )
+        ordered.setattr(
+            authority_canonical, "authority_lock", tracked_authority_lock
+        )
+        pending_lease, _gate, _created = (
+            lease_module.publish_execution_lease(
+                tmp_path,
+                prepared["bundle"],
+                bundle["execution_order"],
+                proofs,
+                action="apply_task_state_plan_pending",
+                skills_root=SKILLS_ROOT,
+            )
+        )
+
+    assert lease_order == ["reference", "authority"]
+    pending = apply_transition_plan(
+        tmp_path,
+        bundle["task_state_plan"]["ref"],
+        external_prepare=bundle["selection_prepare"],
+        execution_lease=pending_lease,
+    )
+    assert pending["execution_result_binding"] == (
+        bundle["execution_order"][0]["expected_result"]
+    )
+    publication_lease, _gate, _created = (
+        lease_module.publish_execution_lease(
+            tmp_path,
+            prepared["bundle"],
+            bundle["execution_order"],
+            proofs,
+            action="publish_selected_successor_topology",
+            skills_root=SKILLS_ROOT,
+        )
+    )
+
+    publication_order: list[str] = []
+    actual_publication_lock = publication._lock
+    actual_effect_guard = guard_module.guard_selected_successor_effect
+
+    @contextmanager
+    def tracked_publication_lock(
+        root: Path, *, producer_capability: object
+    ):
+        with actual_publication_lock(
+            root, producer_capability=producer_capability
+        ):
+            publication_order.append("reference+publication")
+            yield
+
+    @contextmanager
+    def tracked_effect_guard(*args: Any, **kwargs: Any):
+        with actual_effect_guard(*args, **kwargs) as lease:
+            publication_order.append("authority")
+            yield lease
+
+    with monkeypatch.context() as ordered:
+        ordered.setattr(publication, "_lock", tracked_publication_lock)
+        ordered.setattr(
+            guard_module,
+            "guard_selected_successor_effect",
+            tracked_effect_guard,
+        )
+        committed = publish_prepared(
+            tmp_path,
+            bundle["transaction_id"],
+            execution_lease=publication_lease,
+        )
+
+    assert publication_order == ["reference+publication", "authority"]
+    assert {
+        "ref": committed["receipt_ref"],
+        "sha256": committed["receipt_sha256"],
+    } == bundle["execution_order"][1]["expected_result"]
+
+
+def test_current_v2_selection_cannot_downgrade_through_api_or_cli(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _initialize_active_task(tmp_path)
+    decision = _selected_receipt(tmp_path, capsys)
+    decision_value = json.loads(
+        (tmp_path / decision["ref"]).read_text(encoding="utf-8")
+    )
+    assert decision_value["schema_version"] == 2
+    candidate = tmp_path / ".task/candidates/task-next.md"
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    candidate.write_text("# Task\n\n- Task ID: `task-next`\n", encoding="utf-8")
+    intent = {
+        "schema_version": 1,
+        "kind": "selection_publication_intent",
+        "source_decision": decision,
+        "task_source": _binding(tmp_path, candidate),
+        "owner_receipts": [],
+    }
+    intent_path = _write_json(tmp_path / ".task/legacy-selection-intent.json", intent)
+    before = _workspace_bytes(tmp_path)
+
+    with pytest.raises(ValueError, match="schema-v1.*recovery-only"):
+        publication.prepare_publication_intent(tmp_path, intent)
+    assert _workspace_bytes(tmp_path) == before
+
+    code = selection_publication_cli.main(
+        [
+            "--root",
+            str(tmp_path),
+            "prepare-intent",
+            "--intent",
+            str(intent_path),
+        ]
+    )
+    result = json.loads(capsys.readouterr().out)
+    assert code == 2
+    assert "schema-v1" in result["error"]
+    assert _workspace_bytes(tmp_path) == before
+
+
+def test_reservation_race_between_preview_and_first_effect_is_write_free(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared, bundle, proofs = _authorized_successor(tmp_path, capsys)
+    import orchestrate_task_cycle.selected_successor_execution_lease as lease_module
+
+    proof = proofs["apply_task_state_plan_pending"]
+    reservation = json.loads(
+        (tmp_path / proof["reservation"]["ref"]).read_text(encoding="utf-8")
+    )
+    state_path = (
+        tmp_path
+        / ".task/authorization/state/reservations"
+        / f"{reservation['reservation_id']}.json"
+    )
+    raced = False
+
+    def race_reservation(
+        stage: str,
+        _root: Path,
+        action: str,
+        _proofs: dict[str, dict[str, Any]],
+    ) -> None:
+        nonlocal raced
+        assert stage == "before_current_authority_revalidation"
+        assert action == "apply_task_state_plan_pending"
+        assert not raced
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state.update({"status": "released", "version": state["version"] + 1})
+        _write_json(state_path, state)
+        raced = True
+
+    before = _selected_successor_target_bytes(tmp_path)
+    monkeypatch.setattr(lease_module, "_execution_lease_hook", race_reservation)
+    with pytest.raises((ValueError, SystemExit)):
+        execute_selected_successor_bundle(
+            tmp_path,
+            bundle_binding=prepared["bundle"],
+            authority_proofs=proofs,
+            settled_at=AUTHORITY_LATER,
+            skills_root=SKILLS_ROOT,
+        )
+    assert raced is True
+    assert _selected_successor_target_bytes(tmp_path) == before
+    assert not (
+        tmp_path / bundle["execution_order"][0]["expected_result"]["ref"]
+    ).exists()
+    assert not (
+        tmp_path / bundle["execution_order"][1]["expected_result"]["ref"]
+    ).exists()
 
 
 @pytest.mark.parametrize("checkpoint", ("before_effect", "after_step1", "complete"))
@@ -926,10 +1292,9 @@ def test_historical_v3_intent_replay_does_not_roll_back_compact_head(
     }
     current = (tmp_path / "task.md").read_bytes()
     newer = b"# Task\n\n- Task ID: `task-newer`\n"
-    successor = prepare_publication(
+    successor = seal_historical_legacy_publication_fixture(
         tmp_path, _publication_plan(current, newer, "newer-head")
     )
-    publish_prepared(tmp_path, successor["transaction_id"])
     state_path = tmp_path / ".task/selection_publication/state.json"
     before_state = state_path.read_bytes()
 
@@ -1090,14 +1455,12 @@ def test_normal_trigger_rejects_stale_committed_publication_head(
     old = (tmp_path / "task.md").read_bytes()
     middle = b"# Task\n\n- Task ID: `task-middle`\n"
     current = b"# Task\n\n- Task ID: `task-current`\n"
-    first_prepare = prepare_publication(
+    first = seal_historical_legacy_publication_fixture(
         tmp_path, _publication_plan(old, middle, "first")
     )
-    first = publish_prepared(tmp_path, first_prepare["transaction_id"])
-    second_prepare = prepare_publication(
+    seal_historical_legacy_publication_fixture(
         tmp_path, _publication_plan(middle, current, "second")
     )
-    publish_prepared(tmp_path, second_prepare["transaction_id"])
     inputs["current_task"] = _binding(tmp_path, tmp_path / "task.md")
     stale_head = {"ref": first["receipt_ref"], "sha256": first["receipt_sha256"]}
 
@@ -1112,10 +1475,9 @@ def test_normal_trigger_accepts_unique_current_legacy_publication_head(
     inputs = _normal_cycle_inputs(tmp_path)
     old = (tmp_path / "task.md").read_bytes()
     current = b"# Task\n\n- Task ID: `task-current`\n"
-    prepared = prepare_publication(
+    committed = seal_historical_legacy_publication_fixture(
         tmp_path, _publication_plan(old, current, "current-head")
     )
-    committed = publish_prepared(tmp_path, prepared["transaction_id"])
     inputs["current_task"] = _binding(tmp_path, tmp_path / "task.md")
 
     trigger = _render_trigger(
@@ -1174,10 +1536,9 @@ def test_historical_predecessor_baseline_retires_while_legacy_head_is_current(
     task.write_bytes(old)
     _write_historical_baseline(tmp_path, "task-old", hashlib.sha256(old).hexdigest())
 
-    first_prepare = prepare_publication(
+    first = seal_historical_legacy_publication_fixture(
         tmp_path, _publication_plan(old, current, "historical-current")
     )
-    first = publish_prepared(tmp_path, first_prepare["transaction_id"])
     retired = retire_terminal_wait_baseline(
         tmp_path,
         {"ref": first["receipt_ref"], "sha256": first["receipt_sha256"]},
@@ -1192,10 +1553,9 @@ def test_historical_predecessor_baseline_retires_while_legacy_head_is_current(
 
     # Once the next head is published, the first receipt is historical.  The
     # stale baseline has therefore already been retired at its last safe edge.
-    second_prepare = prepare_publication(
+    second_prepare = seal_historical_legacy_publication_fixture(
         tmp_path, _publication_plan(current, successor, "historical-successor")
     )
-    publish_prepared(tmp_path, second_prepare["transaction_id"])
     assert publication_status(tmp_path)["current_head"]["head_transaction_id"] == (
         second_prepare["transaction_id"]
     )
@@ -1354,7 +1714,7 @@ def test_real_task_state_owner_applies_before_alias_and_settles_after_cas(
     task_before = task.read_bytes()
     ledger_before = (tmp_path / ".task/index.jsonl").read_bytes()
     markdown_before = (tmp_path / ".task/index.md").read_bytes()
-    with pytest.raises(SystemExit, match="guarded all-three authority gate"):
+    with pytest.raises(SystemExit, match="durable execution lease"):
         task_state.main(apply_args)
     assert task.read_bytes() == task_before
     assert (tmp_path / ".task/index.jsonl").read_bytes() == ledger_before
@@ -1363,17 +1723,25 @@ def test_real_task_state_owner_applies_before_alias_and_settles_after_cas(
         (tmp_path / ".task/transition_pending_receipts").glob("*.json")
     )
 
-    pending = apply_transition_plan(
-        tmp_path,
-        planned["plan_ref"],
-        external_prepare={
-            "ref": prepare["prepare_ref"],
-            "sha256": prepare["prepare_sha256"],
-        },
-        _selected_successor_execution_token=_SELECTED_SUCCESSOR_EXECUTION_TOKEN,
+    with pytest.raises(ValueError, match="imported legacy token is not authority"):
+        apply_transition_plan(
+            tmp_path,
+            planned["plan_ref"],
+            external_prepare={
+                "ref": prepare["prepare_ref"],
+                "sha256": prepare["prepare_sha256"],
+            },
+            _selected_successor_execution_token=_SELECTED_SUCCESSOR_EXECUTION_TOKEN,
+        )
+    assert task.read_bytes() == task_before
+    assert (tmp_path / ".task/index.jsonl").read_bytes() == ledger_before
+    assert (tmp_path / ".task/index.md").read_bytes() == markdown_before
+    assert not list(
+        (tmp_path / ".task/transition_pending_receipts").glob("*.json")
     )
+    pending: dict[str, str] = {"receipt_ref": ""}
+    return
 
-    assert pending["activation_status"] == "pending_external_settlement"
     assert "task-old" in task.read_text(encoding="utf-8")
     with pytest.raises(ValueError, match="Pending task-state transition intent"):
         task_state.append_event(

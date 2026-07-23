@@ -175,6 +175,8 @@ def build_index(ctx: PacketBuildContext) -> dict[str, Any]:
             "index_status",
             "audit verdict",
             "high-severity ID blockers",
+            "immutable audit observation scope",
+            "live revalidation requirement",
         ],
     }
 

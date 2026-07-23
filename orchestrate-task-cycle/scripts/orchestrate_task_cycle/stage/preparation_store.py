@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from ..cycle_ledger import cycle_dir, immutable_write_bytes
-from ..ledger.support import rel_path
+from ..ledger.support import read_initialization_metadata, rel_path
+from ..ledger.workflow_contract import require_cycle_mutation_contract
 from .artifact_store import (
     cas_write_receipt,
     load_compiler_artifact,
@@ -21,11 +22,12 @@ from .contracts import (
     canonical_bytes,
     canonical_sha256,
     durable_preparation_projection,
+    require_expected_preparation,
     validate_preparation,
 )
 from .specs import TARGET_COMPILE_SPECS
 from .preparation_publication_receipt import ensure_receipt, load_receipt
-from .publication_origin import publish_origin_object
+from .protocol import cycle_preparation_version
 
 
 MAX_PREPARATION_BYTES = 2 * 1024 * 1024
@@ -37,6 +39,63 @@ PUBLICATION_OPERATION = {
     "operation_version": "1",
     "authority_applicability": "none",
 }
+
+
+def _validated_collection_limits(
+    preparation: dict[str, Any],
+) -> tuple[int, int]:
+    metrics = preparation.get("compiler_metrics")
+    limits = (
+        metrics.get("collection_limits")
+        if isinstance(metrics, dict)
+        else None
+    )
+    if (
+        not isinstance(limits, dict)
+        or set(limits) != {"max_files", "max_paths"}
+        or any(
+            isinstance(limits.get(key), bool)
+            or not isinstance(limits.get(key), int)
+            or limits[key] < 1
+            for key in ("max_files", "max_paths")
+        )
+    ):
+        raise ValueError(
+            "compiled preparation lacks exact collection limits"
+        )
+    return int(limits["max_files"]), int(limits["max_paths"])
+
+
+def _validate_compiled_preparation_for_publication(
+    root: Path,
+    preparation: dict[str, Any],
+) -> dict[str, Any]:
+    """Re-derive the exact dependency-ready preparation without writing."""
+
+    validated = validate_preparation(preparation)
+    version = int(validated["schema_version"])
+    if version not in {
+        PREPARATION_SCHEMA_VERSION_V2,
+        PREPARATION_SCHEMA_VERSION_V3,
+    }:
+        return validated
+    cycle_id = str(validated["cycle_id"])
+    cycle_preparation_version(root, cycle_id, version)
+    max_files, max_paths = _validated_collection_limits(validated)
+    from .service import prepare_stage
+
+    expected = prepare_stage(
+        root,
+        cycle_id,
+        str(validated["target"]),
+        workflow_mode=str(validated["workflow_mode"]),
+        max_files=max_files,
+        max_paths=max_paths,
+        preparation_schema_version=version,
+        persist_compiler_artifacts=False,
+    )
+    require_expected_preparation(validated, expected)
+    return validated
 
 
 def preparation_path(root: Path, cycle_id: str, target: str, digest: str) -> Path:
@@ -52,6 +111,15 @@ def publish_preparation(
 ) -> dict[str, Any]:
     workspace = Path(root).resolve(strict=True)
     validated = validate_preparation(preparation)
+    require_cycle_mutation_contract(
+        read_initialization_metadata(
+            workspace, str(validated["cycle_id"])
+        ),
+        "publish preparation",
+    )
+    validated = _validate_compiled_preparation_for_publication(
+        workspace, validated
+    )
     if validated.get("schema_version") in {
         PREPARATION_SCHEMA_VERSION_V2,
         PREPARATION_SCHEMA_VERSION_V3,
@@ -96,11 +164,12 @@ def publish_preparation(
     )
     publication_receipt = None
     if validated.get("schema_version") == PREPARATION_SCHEMA_VERSION_V3:
-        origin_publication = publish_origin_object(
+        from .publication_origin import publish_preparation_origin
+
+        origin_publication = publish_preparation_origin(
             workspace,
             str(durable["cycle_id"]),
             str(durable["preparation_id"]),
-            "preparation",
             path,
             payload,
         )

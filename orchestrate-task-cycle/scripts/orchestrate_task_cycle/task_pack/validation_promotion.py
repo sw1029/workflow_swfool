@@ -9,7 +9,13 @@ from .contracts import PROMOTION_ORIGINS
 from .packet_io import non_empty, require_file_digest
 from .provenance import validate_promotion_provenance
 from .receipts import validate_initial_selection_receipt
-from .storage import _require_within, bounded_workspace_file, bounded_workspace_path, pack_dir
+from .storage import (
+    _require_within,
+    bounded_workspace_file,
+    bounded_workspace_path,
+    pack_dir,
+    sha256_bytes,
+)
 
 FindingAdder = Callable[..., None]
 _COMMON_PROMOTION_FIELDS = ("task_id", "task_path", "task_sha256", "task_snapshot_path", "promoted_at")
@@ -52,6 +58,8 @@ def _validate_bound_promotion(
     promotion_origin: str,
     path: Path | None,
     prospective_task_digests: set[str] | None,
+    prospective_creation_snapshots: dict[str, dict[str, Any]] | None,
+    prospective_task_snapshots: dict[str, bytes] | None,
     add: FindingAdder,
 ) -> None:
     if path is None:
@@ -85,10 +93,41 @@ def _validate_bound_promotion(
                 task_id=str(promotion.get("task_id") or ""),
                 task_digest=str(promotion.get("task_sha256") or ""),
                 operation=operation,
+                prospective_creation_snapshot=(
+                    prospective_creation_snapshots or {}
+                ).get(str(receipt.get("pack_creation_snapshot_ref") or "")),
+                prospective_task_bytes=(
+                    prospective_task_snapshots or {}
+                ).get(str(receipt.get("task_snapshot_ref") or "")),
             )
-        snapshot_path = bounded_workspace_file(root, promotion.get("task_snapshot_path"), "Promotion task_snapshot_path")
+        snapshot_ref = str(promotion.get("task_snapshot_path") or "")
+        prospective_snapshot = (prospective_task_snapshots or {}).get(
+            snapshot_ref
+        )
+        snapshot_path = (
+            bounded_workspace_file(
+                root,
+                snapshot_ref,
+                "Promotion task_snapshot_path",
+            )
+            if prospective_snapshot is None
+            else bounded_workspace_path(
+                root,
+                snapshot_ref,
+                "Promotion task_snapshot_path",
+            )
+        )
         _require_within(snapshot_path, pack_dir(root), "Promotion task_snapshot_path")
-        require_file_digest(snapshot_path, promotion.get("task_sha256"), "Promotion task snapshot")
+        if prospective_snapshot is None:
+            require_file_digest(
+                snapshot_path,
+                promotion.get("task_sha256"),
+                "Promotion task snapshot",
+            )
+        elif sha256_bytes(prospective_snapshot) != promotion.get("task_sha256"):
+            raise SystemExit(
+                "Prospective promotion task snapshot digest differs."
+            )
         if data.get("status") == "active" and item.get("status") in {"promoted", "in_progress"}:
             prospective_digest = str(promotion.get("task_sha256") or "")
             raw_task_path = str(promotion.get("task_path") or "")
@@ -161,6 +200,8 @@ def validate_item_promotion(
     item_id: str,
     path: Path | None,
     prospective_task_digests: set[str] | None,
+    prospective_creation_snapshots: dict[str, dict[str, Any]] | None,
+    prospective_task_snapshots: dict[str, bytes] | None,
     add: FindingAdder,
 ) -> None:
     if item.get("status") not in {"promoted", "in_progress", "consumed"}:
@@ -194,7 +235,17 @@ def validate_item_promotion(
             {"item_id": item_id, "missing_fields": missing},
         )
     else:
-        _validate_bound_promotion(data, item, item_id, promotion, promotion_origin, path, prospective_task_digests, add)
+        _validate_bound_promotion(
+            data,
+            item,
+            item_id,
+            promotion,
+            promotion_origin,
+            path,
+            prospective_task_digests,
+            prospective_creation_snapshots,
+            prospective_task_snapshots,
+            add,
+        )
     if item.get("status") == "consumed":
         _validate_completion(item, item_id, promotion, path, add)
-

@@ -13,13 +13,26 @@ from ..cycle_ledger import read_current_expanded, read_events
 from ..profile_cycle_efficiency import analyze
 from ..repo_skill_adapter import scan_repo_skill_adapters
 from ..render_cycle_dashboard import render_summary, summarize
-from ..dashboard.io import atomic_write
 from ..assemble_cycle_report import assemble
-from .artifact_store import write_stage_input
-from .contracts import canonical_bytes, canonical_sha256
+from ..ledger.support import read_initialization_metadata
+from ..ledger.workflow_contract import require_cycle_mutation_contract
+from .artifact_store import (
+    compiler_artifact_binding,
+)
+from .contracts import (
+    canonical_bytes,
+    canonical_sha256,
+    require_expected_preparation,
+    stale_preparation_result,
+)
 from .executor_registry import executor_spec
-from .freshness import evaluate_preparation_freshness
+from .preparation_v3 import render_preparation
 from .specs import TARGET_COMPILE_SPECS
+from .v2_context import (
+    collect_selected_context,
+    render_machine_input,
+    selected_state_fingerprint,
+)
 
 
 Renderer = Callable[[Path, dict[str, Any], dict[str, Any]], dict[str, Any]]
@@ -85,6 +98,7 @@ def _code_structure(
         dict(DEFAULT_THRESHOLDS),
         (preparation.get("derived_values") or {}).get("task_id"),
     )
+    result = _allowed_owner_fields("code_structure_audit", result)
     return build_code_structure_packet(
         cycle_id=str(preparation["cycle_id"]), result=result
     )
@@ -131,18 +145,23 @@ def _efficiency(
 
 def _dashboard(
     root: Path, preparation: dict[str, Any], _machine: dict[str, Any]
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], dict[str, Any]]:
     cycle_id = str(preparation["cycle_id"])
     events = read_events(root, cycle_id)
     current = read_current_expanded(root, cycle_id)
     result = summarize(events, current, "loaded", cycle_id, root)
     path = root / ".task" / "cycle" / cycle_id / "dashboard.md"
-    atomic_write(path, render_summary(result))
+    content = render_summary(result)
     result["dashboard_path"] = path.relative_to(root).as_posix()
     result["evidence_paths"] = list(result.get("evidence_paths") or []) + [
         result["dashboard_path"]
     ]
-    return _allowed_owner_fields("dashboard", result)
+    return _allowed_owner_fields("dashboard", result), {
+        "kind": "write_text",
+        "ref": path.relative_to(root).as_posix(),
+        "content": content,
+        "content_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+    }
 
 
 def _latest(events: list[dict[str, Any]], step: str) -> dict[str, Any]:
@@ -183,9 +202,130 @@ _RENDERERS: dict[str, Renderer] = {
     "code_structure_audit": _code_structure,
     "repo_skill_gap_analysis": _repo_gap,
     "cycle_efficiency_profile": _efficiency,
-    "dashboard": _dashboard,
     "report": _report,
 }
+
+
+def _current_machine_input(
+    root: Path,
+    preparation: dict[str, Any],
+    *,
+    max_files: int,
+    max_paths: int,
+) -> tuple[
+    dict[str, Any],
+    dict[str, Any],
+    dict[str, Any] | None,
+]:
+    cycle_id, target = (
+        str(preparation["cycle_id"]),
+        str(preparation["target"]),
+    )
+    spec = TARGET_COMPILE_SPECS[target]
+    full, model, observed = collect_selected_context(
+        root, cycle_id, spec, max_files=max_files, max_paths=max_paths
+    )
+    metrics = dict(observed)
+    fingerprints = metrics.pop("precondition_fingerprints")
+    fingerprint = selected_state_fingerprint(
+        model, spec.dependency_selectors
+    )
+    before = preparation.get("precondition_fingerprints") or {}
+    changed = sorted(
+        selector
+        for selector in before
+        if fingerprints.get(selector) != before[selector]
+    )
+    if changed or fingerprint != preparation.get("state_fingerprint"):
+        return full, {}, {
+            **stale_preparation_result(preparation, fingerprint),
+            "freshness_status": "stale_precondition",
+            "changed_precondition_selectors": changed,
+            "disallowed_post_effect_selectors": changed,
+            "model_call_count": 0,
+            "model_visible_bytes": 0,
+            "files_written_count": 0,
+        }
+    machine = render_machine_input(
+        cycle_id,
+        target,
+        str(preparation["workflow_mode"]),
+        model,
+        fingerprint,
+        metrics,
+        fingerprints,
+    )
+    raw_binding = compiler_artifact_binding(
+        root,
+        cycle_id,
+        "machine_input",
+        machine,
+        persist=False,
+    )
+    binding = {
+        key: raw_binding[key]
+        for key in ("artifact_type", "ref", "sha256", "size_bytes")
+    }
+    expected = render_preparation(
+        cycle_id,
+        target,
+        str(preparation["workflow_mode"]),
+        (read_initialization_metadata(root, cycle_id).get("task_id")),
+        model,
+        metrics,
+        {"machine_input_binding": binding},
+        fingerprints,
+        schema_version=int(preparation["schema_version"]),
+        compiler_io_receipts=(raw_binding["compiler_io_receipt"],),
+    )
+    require_expected_preparation(preparation, expected)
+    return full, machine, None
+
+
+def predict_deterministic(
+    root: Path,
+    preparation: dict[str, Any],
+    *,
+    max_files: int = 12,
+    max_paths: int = 40,
+) -> dict[str, Any]:
+    """Render one deterministic result and effect plan without writing."""
+
+    target = str(preparation["target"])
+    require_cycle_mutation_contract(
+        read_initialization_metadata(
+            root, str(preparation["cycle_id"])
+        ),
+        "predict deterministic stage",
+    )
+    registered = executor_spec(target)
+    if registered.executor_kind != "deterministic" or (
+        target not in _RENDERERS and target != "dashboard"
+    ):
+        raise ValueError("stage target has no registered deterministic dispatcher")
+    full, machine, stale = _current_machine_input(
+        root,
+        preparation,
+        max_files=max_files,
+        max_paths=max_paths,
+    )
+    if stale is not None:
+        return stale
+    if target == "dashboard":
+        result, effect = _dashboard(root, preparation, machine)
+    else:
+        result = _RENDERERS[target](root, preparation, machine)
+        effect = None
+    return {
+        "executor_spec": registered.projection(),
+        "raw_owner_result": result,
+        "effect_plan": effect,
+        "full_context": full,
+        "model_call_count": 0,
+        "model_visible_bytes": 0,
+        "owner_result_bytes": len(canonical_bytes(result)),
+        "freshness_status": "exact_precondition",
+    }
 
 
 def dispatch_deterministic(
@@ -195,45 +335,17 @@ def dispatch_deterministic(
     max_files: int = 12,
     max_paths: int = 40,
 ) -> dict[str, Any]:
-    target = str(preparation["target"])
-    registered = executor_spec(target)
-    if registered.executor_kind != "deterministic" or target not in _RENDERERS:
-        raise ValueError("stage target has no registered deterministic dispatcher")
-    freshness = evaluate_preparation_freshness(
+    """Compatibility name for the now write-free deterministic prediction."""
+
+    return predict_deterministic(
         root,
         preparation,
         max_files=max_files,
         max_paths=max_paths,
-        allow_post_effect=False,
     )
-    if freshness["status"] == "block":
-        return {
-            **freshness,
-            "model_call_count": 0,
-            "model_visible_bytes": 0,
-            "files_written_count": 0,
-        }
-    preparation = freshness["preparation"]
-    machine = freshness["bound_material"]
-    result = _RENDERERS[target](root, preparation, machine)
-    binding = write_stage_input(
-        root,
-        str(preparation["cycle_id"]),
-        target,
-        "owner_result",
-        result,
-    )
-    return {
-        "executor_spec": registered.projection(),
-        "owner_result_binding": binding,
-        "model_call_count": 0,
-        "model_visible_bytes": 0,
-        "owner_result_bytes": len(canonical_bytes(result)),
-        "freshness_status": freshness["freshness_status"],
-    }
 
 
-if set(_RENDERERS) != {
+if set(_RENDERERS) | {"dashboard"} != {
     target
     for target in TARGET_COMPILE_SPECS
     if executor_spec(target).executor_kind == "deterministic"
@@ -241,4 +353,7 @@ if set(_RENDERERS) != {
     raise RuntimeError("deterministic dispatcher registry is incomplete")
 
 
-__all__ = ["dispatch_deterministic"]
+__all__ = [
+    "dispatch_deterministic",
+    "predict_deterministic",
+]

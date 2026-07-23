@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import inspect
 import json
 import os
@@ -20,15 +21,33 @@ from manage_agent_authority import lifecycle as lifecycle_module  # noqa: E402
 from manage_agent_authority import settlement as settlement_module  # noqa: E402
 from manage_agent_authority import authority_cli  # noqa: E402
 from manage_agent_authority.artifact_store import load_grant  # noqa: E402
-from manage_agent_authority.artifact_store import register_grant  # noqa: E402
+from manage_agent_authority.artifact_store import (  # noqa: E402
+    _register_compiled_grant as _production_register_grant,
+)
+from manage_agent_authority.artifact_store import (  # noqa: E402
+    register_grant as _replay_registered_grant,
+)
 from manage_agent_authority.artifact_store import snapshot_file  # noqa: E402
-from manage_agent_authority.artifact_store import transition_grants  # noqa: E402
+from manage_agent_authority.artifact_store import (  # noqa: E402
+    transition_grants as _production_transition_grants,
+)
 from manage_agent_authority.canonical import object_sha256  # noqa: E402
 from manage_agent_authority.canonical import parse_time  # noqa: E402
 from manage_agent_authority.canonical import sha256_file  # noqa: E402
 from manage_agent_authority.canonical import write_immutable_json  # noqa: E402
-from manage_agent_authority.composition import create_composition  # noqa: E402
+from manage_agent_authority.composition import (  # noqa: E402
+    _create_compiled_composition as _production_create_composition,
+)
+from manage_agent_authority.composition import (  # noqa: E402
+    create_composition as _replay_composition,
+)
+from manage_agent_authority.composition_intent_compiler import (  # noqa: E402
+    validate_composition_source_binding,
+)
 from manage_agent_authority.contracts import validate_grant  # noqa: E402
+from manage_agent_authority.grant_intent_compiler import (  # noqa: E402
+    DELEGATION_SEMANTIC_KEYS,
+)
 from manage_agent_authority.evaluator import evaluate  # noqa: E402
 from manage_agent_authority.execution_results import create_execution_result  # noqa: E402
 from manage_agent_authority.lifecycle import consume as _consume  # noqa: E402
@@ -39,7 +58,12 @@ from manage_agent_authority.reconciliation_evidence import (  # noqa: E402
 )
 from manage_agent_authority.source_recovery import prepare_source_recovery  # noqa: E402
 from manage_agent_authority.settlement import settle_owner_result  # noqa: E402
-from manage_agent_authority.source_approval import validate_source_approval  # noqa: E402
+from manage_agent_authority.source_approval import (  # noqa: E402
+    load_source_approval,
+    validate_for_grant,
+    validate_for_transition,
+    validate_source_approval,
+)
 from manage_agent_authority.lifecycle import reserve  # noqa: E402
 from manage_agent_authority.lifecycle import verify_reservation_with_recovery  # noqa: E402
 from manage_agent_authority.operations import load_operation  # noqa: E402
@@ -57,6 +81,9 @@ from manage_agent_authority.workflow_status import status_snapshot  # noqa: E402
 from manage_agent_authority.verification_publication import (  # noqa: E402
     verify_and_publish_precommit,
 )
+from manage_agent_authority.producer_capability import (  # noqa: E402
+    _AUTHORITY_PRODUCER_CAPABILITY,
+)
 from manage_task_state_index import index as task_state_index  # noqa: E402
 from manage_task_state_index.state.scan_transition import (  # noqa: E402
     apply_scan,
@@ -69,6 +96,81 @@ LATER = "2026-07-17T10:05:00+09:00"
 APPROVAL_AT = "2026-07-17T10:10:00+09:00"
 EXPIRY = "2026-07-17T11:00:00+09:00"
 AFTER_EXPIRY = "2026-07-17T11:05:00+09:00"
+
+
+def register_grant(
+    root: Path, raw: dict[str, Any], *, parent_id: str | None = None
+) -> dict[str, Any]:
+    """Simulate a grant registered before prospective schema-v2 retirement."""
+
+    original = artifact_store_module.validate_for_grant
+    def validate_historical_fixture(
+        fixture_root: Path,
+        approval: dict[str, Any],
+        grant: dict[str, Any],
+    ) -> None:
+        validate_for_grant(
+            fixture_root,
+            approval,
+            grant,
+            prospective=approval["schema_version"] != 2,
+        )
+
+    artifact_store_module.validate_for_grant = validate_historical_fixture
+    try:
+        return _production_register_grant(
+            root,
+            raw,
+            parent_id=parent_id,
+            producer_capability=_AUTHORITY_PRODUCER_CAPABILITY,
+        )
+    finally:
+        artifact_store_module.validate_for_grant = original
+
+
+def create_composition(
+    root: Path, raw: dict[str, Any]
+) -> dict[str, Any]:
+    """Test-only producer for historical composition fixtures."""
+
+    return _production_create_composition(
+        root,
+        raw,
+        producer_capability=_AUTHORITY_PRODUCER_CAPABILITY,
+    )
+
+
+def transition_grants(
+    root: Path,
+    grant_id: str,
+    status: str,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Exercise historical transition semantics without a production bypass."""
+
+    original = artifact_store_module.validate_for_transition
+    def validate_historical_fixture(
+        fixture_root: Path,
+        approval: dict[str, Any],
+        grant: dict[str, Any],
+        at: str,
+        **_kwargs: Any,
+    ) -> None:
+        validate_for_transition(
+            fixture_root,
+            approval,
+            grant,
+            at,
+            prospective=approval["schema_version"] != 2,
+        )
+
+    artifact_store_module.validate_for_transition = validate_historical_fixture
+    try:
+        return _production_transition_grants(
+            root, grant_id, status, **kwargs
+        )
+    finally:
+        artifact_store_module.validate_for_transition = original
 
 
 def precommit_binding(
@@ -215,6 +317,23 @@ def write(path: Path, body: str) -> Path:
     return path
 
 
+def snapshot_historical_source(root: Path, source: Path) -> dict[str, str]:
+    """Install exact bytes as a test-only pre-upgrade immutable fixture."""
+
+    payload = source.read_bytes()
+    digest = hashlib.sha256(payload).hexdigest()
+    snapshot = (
+        root
+        / ".task/authorization/source_snapshots"
+        / f"source_approval-{digest}.json"
+    )
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    if snapshot.exists() and snapshot.read_bytes() != payload:
+        raise AssertionError("historical source fixture conflicts")
+    snapshot.write_bytes(payload)
+    return {"ref": snapshot.relative_to(root).as_posix(), "sha256": digest}
+
+
 def setup_workspace(root: Path) -> dict[str, Any]:
     policy = write(
         root / ".agent_goal/agent_authority.md",
@@ -291,9 +410,7 @@ def setup_workspace(root: Path) -> dict[str, Any]:
         json.dumps(approval_body, indent=2, sort_keys=True) + "\n",
     )
     policy_binding = snapshot_file(root, str(policy.relative_to(root)), "policy")
-    source_binding = snapshot_file(
-        root, str(approval.relative_to(root)), "source_approval"
-    )
+    source_binding = snapshot_historical_source(root, approval)
     return {
         "policy": policy,
         "approval": approval,
@@ -302,6 +419,119 @@ def setup_workspace(root: Path) -> dict[str, Any]:
         "policy_binding": policy_binding,
         "source_binding": source_binding,
     }
+
+
+def test_schema_v2_is_readable_and_replayable_but_never_prospective(
+    tmp_path: Path,
+) -> None:
+    workspace = setup_workspace(tmp_path)
+    request = request_for(workspace)
+    grant = grant_for(workspace, request)
+    first = register_grant(tmp_path, grant)
+    historical = load_source_approval(tmp_path / workspace["source_binding"]["ref"])
+    assert historical["schema_version"] == 2
+    replay = _replay_registered_grant(tmp_path, grant)
+    assert replay["grant_sha256"] == first["grant_sha256"]
+
+    new_source = write(
+        tmp_path / ".task/authorization/new-schema-v2-source.json",
+        workspace["approval"].read_text(encoding="utf-8"),
+    )
+    with pytest.raises(SystemExit, match="read-only"):
+        snapshot_file(
+            tmp_path, new_source.relative_to(tmp_path).as_posix(), "source_approval"
+        )
+    new_grant = {
+        **grant,
+        "grant_id": "grant-new-without-boundary",
+        "idempotency_key": "grant-new-without-boundary-key",
+    }
+    with pytest.raises(SystemExit, match="sealed to exact historical replay"):
+        _replay_registered_grant(tmp_path, new_grant)
+    with pytest.raises(SystemExit, match="cannot authorize transitions"):
+        _production_transition_grants(
+            tmp_path,
+            grant["grant_id"],
+            "suspended",
+            event_id="schema-v2-transition-rejected",
+            expected_version=0,
+            source_approval=workspace["source_binding"],
+            transitioned_at=LATER,
+        )
+
+
+def test_schema_v3_grant_use_reopens_registered_decision_relationship(
+    tmp_path: Path,
+) -> None:
+    workspace = setup_workspace(tmp_path)
+    request = request_for(workspace)
+    policy_binding = workspace["policy_binding"]
+    legacy = json.loads(workspace["approval"].read_text(encoding="utf-8"))
+    fake_decision = write(
+        tmp_path / ".task/authorization/fake-decision.json",
+        json.dumps(
+            {
+                "schema_version": 1,
+                "artifact_kind": "generic_model_approval",
+                "decision": "approved",
+            },
+            sort_keys=True,
+        )
+        + "\n",
+    )
+    source = {
+        **{
+            key: value
+            for key, value in legacy.items()
+            if key != "integrity_status"
+        },
+        "schema_version": 3,
+        "grant_ids": ["grant-v3-fake"],
+        "decision_binding": {
+            "ref": fake_decision.relative_to(tmp_path).as_posix(),
+            "sha256": sha256_file(fake_decision),
+        },
+        "decision_trust_class": "caller_asserted_exact_echo",
+    }
+    source_payload = json.dumps(source, indent=2, sort_keys=True) + "\n"
+    source_digest = hashlib.sha256(source_payload.encode("utf-8")).hexdigest()
+    source_path = write(
+        tmp_path
+        / ".task/authorization/source_snapshots"
+        / f"source_approval-{source_digest}.json",
+        source_payload,
+    )
+    source_binding = {
+        "ref": source_path.relative_to(tmp_path).as_posix(),
+        "sha256": source_digest,
+    }
+    grant = {
+        **grant_for(workspace, request),
+        "grant_id": "grant-v3-fake",
+        "source_approval": source_binding,
+        "policy_snapshot": policy_binding,
+        "idempotency_key": "grant-v3-fake-key",
+    }
+    with pytest.raises(SystemExit, match="registered producer verifier"):
+        register_grant(tmp_path, grant)
+
+    missing = {
+        **source,
+        "decision_binding": {
+            "ref": ".task/authorization/missing-decision.json",
+            "sha256": "f" * 64,
+        },
+    }
+    missing_path = write(
+        tmp_path / ".task/authorization/missing-bound-source.json",
+        json.dumps(missing, indent=2, sort_keys=True) + "\n",
+    )
+    with pytest.raises(SystemExit, match="does not identify an existing path"):
+        snapshot_file(
+            tmp_path,
+            missing_path.relative_to(tmp_path).as_posix(),
+            "source_approval",
+        )
 
 
 def request_for(workspace: dict[str, Any], **changes: Any) -> dict[str, Any]:
@@ -463,7 +693,7 @@ def delegated_source_for(
         root / f".task/authorization/{approval_id}.json",
         json.dumps(body, indent=2, sort_keys=True) + "\n",
     )
-    return snapshot_file(root, str(source.relative_to(root)), "source_approval")
+    return snapshot_historical_source(root, source)
 
 
 def persist_decision(root: Path, decision: dict[str, Any]) -> tuple[str, str]:
@@ -557,7 +787,7 @@ def replace_with_narrow_source(
         root / ".task/authorization/narrow-source.json",
         json.dumps(body, indent=2, sort_keys=True) + "\n",
     )
-    binding = snapshot_file(root, str(source.relative_to(root)), "source_approval")
+    binding = snapshot_historical_source(root, source)
     previous_snapshot.unlink()
     return {**workspace, "source_binding": binding}
 
@@ -602,24 +832,18 @@ def legacy_receipt(root: Path, schema_version: int) -> dict[str, Any]:
     }
 
 
-def test_v2_receipt_survives_mutable_policy_and_source_updates(tmp_path: Path) -> None:
+def test_v2_receipt_issuance_cannot_create_a_new_source_snapshot(
+    tmp_path: Path,
+) -> None:
     body = legacy_receipt(tmp_path, 2)
     args = argparse.Namespace(
         root=str(tmp_path),
         plan=json.dumps(body),
         output=".task/authority_receipts/receipt-v2.json",
     )
-    assert authority_receipt.command_issue(args) == 0
-    receipt = json.loads((tmp_path / args.output).read_text(encoding="utf-8"))
-    write(
-        tmp_path / ".agent_goal/agent_authority.md",
-        "# Authority\n\nNew unrelated policy.\n",
-    )
-    write(
-        tmp_path / ".task/authorization/user-approval.json",
-        "{}\n",
-    )
-    assert authority_receipt.validate_receipt(tmp_path, receipt)["status"] == "valid"
+    with pytest.raises(SystemExit, match="read-only"):
+        authority_receipt.command_issue(args)
+    assert not (tmp_path / args.output).exists()
 
 
 def test_v1_receipt_preserves_current_file_digest_semantics(tmp_path: Path) -> None:
@@ -1095,7 +1319,7 @@ def test_prepare_reconciliation_evidence_cli_is_deterministic(
     assert first["evidence"]["artifact_kind"] == "authority_effect_reconciliation_evidence"
 
 
-def test_resolve_reuses_source_approval_and_stable_wait_without_prompt(
+def test_resolve_treats_historical_source_without_grant_as_exhausted(
     tmp_path: Path,
 ) -> None:
     workspace = setup_workspace(tmp_path)
@@ -1108,14 +1332,15 @@ def test_resolve_reuses_source_approval_and_stable_wait_without_prompt(
         tmp_path, request, context, evaluated_at=LATER, skills_root=ROOT
     )
     assert first["decision"] == "approval_required"
-    assert first["resolution"] == "source_approval_ready_for_grant"
+    assert first["resolution"] == "source_authority_exhausted"
     assert first["outcome"] == first["workflow_state"] == first["resolution"]
     assert first["should_prompt"] is False
     assert first["approval_projection"] is None
     assert second["approval_projection"] is None
     assert first["user_action"] is None
-    assert first["next_action"]["code"] == "materialize_grant"
-    assert first["wait_identity"] == second["wait_identity"]
+    assert first["next_action"]["code"] == "prepare_exact_recovery_recipe"
+    assert first["wait_identity"] is second["wait_identity"] is None
+    assert first["recovery_identity"] == second["recovery_identity"]
     assert "no_authority_grants_registered" in first["reason_codes"]
 
 
@@ -1490,7 +1715,7 @@ def test_exhausted_exact_source_prepares_one_closed_recovery_approval(
     ]
 
     actual_source_body = {
-        "schema_version": 2,
+        "schema_version": 3,
         "artifact_kind": "authority_source_approval",
         "approval_id": source_requirements["approval_id"],
         "source_kind": source_requirements["source_kind_required"],
@@ -1510,7 +1735,8 @@ def test_exhausted_exact_source_prepares_one_closed_recovery_approval(
         "not_before": APPROVAL_AT,
         "expires_at": source_requirements["expires_at_ceiling"],
         "evidence_id": "explicit-user-decision-recovery-1",
-        "integrity_status": "verified",
+        "decision_binding": user_decision_binding,
+        "decision_trust_class": "caller_asserted_exact_echo",
     }
     actual_source_path = (
         tmp_path
@@ -1574,7 +1800,7 @@ def test_exhausted_exact_source_prepares_one_closed_recovery_approval(
         )
         == 0
     )
-    assert json.loads(capsys.readouterr().out)["status"] == "registered"
+    assert json.loads(capsys.readouterr().out)["status"] == "replayed"
 
     replacement_request_path = write(
         tmp_path / ".task/authorization/replacement-request.json",
@@ -1856,7 +2082,7 @@ def test_exact_request_filter_ignores_only_unrelated_stale_manifest(
         for item in unfiltered["historical_waits"]
         if item["decision"]["request_sha256"] == unrelated["request_sha256"]
     )
-    assert unfiltered["workflow_state"] == "source_approval_ready_for_grant"
+    assert unfiltered["workflow_state"] == "source_authority_exhausted"
     assert unrelated_history["current_blocker_codes"] == [
         "operation_manifest_binding_stale"
     ]
@@ -1868,7 +2094,7 @@ def test_exact_request_filter_ignores_only_unrelated_stale_manifest(
         skills_root=skills_root,
     )
     assert filtered["request_sha256_filter"] == current["request_sha256"]
-    assert filtered["workflow_state"] == "source_approval_ready_for_grant"
+    assert filtered["workflow_state"] == "source_authority_exhausted"
     assert filtered["workflow_basis"]["request_sha256"] == current["request_sha256"]
 
     resolved = resolve_operation(
@@ -1878,7 +2104,7 @@ def test_exact_request_filter_ignores_only_unrelated_stale_manifest(
         evaluated_at=LATER,
         skills_root=skills_root,
     )
-    assert resolved["workflow_state"] == "source_approval_ready_for_grant"
+    assert resolved["workflow_state"] == "source_authority_exhausted"
     assert resolved["workflow_basis"]["request_sha256"] == current["request_sha256"]
 
 
@@ -2124,8 +2350,8 @@ def test_resolve_uses_fresh_evaluation_after_bound_manifest_changes(
         skills_root=skills_root,
     )
 
-    assert resolved["workflow_state"] == "source_approval_ready_for_grant"
-    assert resolved["next_action"]["code"] == "materialize_grant"
+    assert resolved["workflow_state"] == "source_authority_exhausted"
+    assert resolved["next_action"]["code"] == "prepare_exact_recovery_recipe"
 
 
 def test_status_classifies_allowed_decision_when_operation_identity_disappears(
@@ -2534,14 +2760,17 @@ def test_status_rejects_malformed_decision(tmp_path: Path) -> None:
     assert (
         pending["outcome"]
         == pending["workflow_state"]
-        == "source_approval_ready_for_grant"
+        == "source_authority_exhausted"
     )
     assert pending["should_prompt"] is False
     assert pending["user_action"] is None
     assert pending["workflow_basis"]["source_approval"]["ref"]
     assert pending["workflow_basis"]["source_approval"][
         "materializable_grant_ids"
-    ]
+    ] == []
+    assert pending["workflow_basis"]["source_approval"][
+        "unavailable_grants"
+    ][0]["blocker_codes"] == ["historical_source_read_only"]
     path = tmp_path / decision_ref
     malformed = json.loads(path.read_text(encoding="utf-8"))
     malformed["unknown_field"] = True
@@ -2768,6 +2997,103 @@ def test_delegation_is_subset_only_and_revocation_cascades(tmp_path: Path) -> No
     assert load_grant(tmp_path, "grant-child")[2]["status"] == "revoked"
 
 
+def test_cli_seals_raw_grant_to_replay_and_compiles_child_semantics(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    workspace = setup_workspace(tmp_path)
+    request = request_for(workspace)
+    parent = grant_for(
+        workspace,
+        request,
+        grant_id="grant-1",
+        issuer_rank="S3",
+        holder_rank="S2",
+        max_uses=3,
+    )
+    parent_path = write(
+        tmp_path / "prospective-parent.json",
+        json.dumps(parent, indent=2, sort_keys=True) + "\n",
+    )
+    raw_args = [
+        "register-grant",
+        "--root",
+        str(tmp_path),
+        "--grant",
+        str(parent_path),
+    ]
+
+    with pytest.raises(SystemExit, match="Raw register_grant is sealed"):
+        _replay_registered_grant(tmp_path, parent)
+    assert authority_cli.main(raw_args) == 2
+    error = json.loads(capsys.readouterr().out)
+    assert "sealed to exact historical replay" in error["error"]["message"]
+    assert not (
+        tmp_path
+        / ".task/authorization/grants/grant-1.json"
+    ).exists()
+
+    parent_result = register_grant(tmp_path, parent)
+    assert authority_cli.main(raw_args) == 0
+    replay = json.loads(capsys.readouterr().out)
+    assert replay["status"] == "replayed"
+    assert replay["grant_binding"]["sha256"] == parent_result["grant_sha256"]
+    assert "grant" not in replay
+
+    child = grant_for(
+        workspace,
+        request,
+        grant_id="caller-id-is-not-used",
+        issuer_rank="S2",
+        holder_rank="S0",
+        parent_grant_id=parent["grant_id"],
+        max_uses=1,
+    )
+    semantics = {key: child[key] for key in DELEGATION_SEMANTIC_KEYS}
+    semantics_path = write(
+        tmp_path / "delegation-semantics.json",
+        json.dumps(semantics, indent=2, sort_keys=True) + "\n",
+    )
+    delegate_args = [
+        "delegate",
+        "--root",
+        str(tmp_path),
+        "--parent-grant-id",
+        parent["grant_id"],
+        "--semantics",
+        str(semantics_path),
+        "--at",
+        LATER,
+    ]
+
+    assert authority_cli.main(delegate_args) == 0
+    delegated = json.loads(capsys.readouterr().out)
+    assert delegated["status"] == "delegated"
+    assert delegated["grant_id"].startswith("authg-")
+    assert delegated["grant_id"] != child["grant_id"]
+    compiled_child, _digest, _state = load_grant(
+        tmp_path, delegated["grant_id"]
+    )
+    assert compiled_child["source_approval"] == {
+        "ref": ".task/authorization/grants/grant-1.json",
+        "sha256": parent_result["grant_sha256"],
+    }
+    assert compiled_child["policy_snapshot"] == parent["policy_snapshot"]
+    assert compiled_child["issuer_rank"] == parent["holder_rank"]
+    assert compiled_child["lineage_id"] == parent["lineage_id"]
+
+    assert authority_cli.main(delegate_args) == 0
+    assert json.loads(capsys.readouterr().out) == delegated
+
+    with pytest.raises(SystemExit):
+        authority_cli.build_parser().parse_args(
+            ["delegate", "--grant", "caller-child.json"]
+        )
+    with pytest.raises(SystemExit):
+        authority_cli.build_parser().parse_args(
+            ["compose", "--composition", "caller-composition.json"]
+        )
+
+
 def test_suspended_grant_has_explicit_unexpired_reactivation_path(
     tmp_path: Path,
 ) -> None:
@@ -2871,10 +3197,8 @@ def test_explicit_composition_is_required_for_capability_union(tmp_path: Path) -
         tmp_path / ".task/authorization/composition-approval.json",
         json.dumps(composition_approval_body, indent=2, sort_keys=True) + "\n",
     )
-    composition_source = snapshot_file(
-        tmp_path,
-        str(composition_approval_file.relative_to(tmp_path)),
-        "source_approval",
+    composition_source = snapshot_historical_source(
+        tmp_path, composition_approval_file
     )
     composition = create_composition(
         tmp_path,
@@ -2899,6 +3223,34 @@ def test_explicit_composition_is_required_for_capability_union(tmp_path: Path) -
         "grant-a",
         "grant-b",
     ]
+
+
+def test_prospective_composition_rejects_historical_source(
+    tmp_path: Path,
+) -> None:
+    workspace = setup_workspace(tmp_path)
+    raw = {
+        "schema_version": 2,
+        "artifact_kind": "authority_grant_composition",
+        "composition_id": "caller-composition",
+        "request_sha256": "a" * 64,
+        "grant_ids": ["grant-a", "grant-b"],
+        "source_approval": workspace["source_binding"],
+        "created_at": AT,
+        "idempotency_key": "caller-composition-key",
+    }
+
+    with pytest.raises(SystemExit, match="Raw create_composition is sealed"):
+        _replay_composition(tmp_path, raw)
+    assert not (
+        tmp_path
+        / ".task/authorization/compositions/caller-composition.json"
+    ).exists()
+
+    with pytest.raises(SystemExit, match="Historical schema-v2/v4"):
+        validate_composition_source_binding(
+            tmp_path, workspace["source_binding"]
+        )
 
 
 def test_unknown_effect_quarantines_and_does_not_restore_budget(tmp_path: Path) -> None:
@@ -4372,9 +4724,7 @@ def test_delegated_grant_issue_capability_must_reach_the_root(
         tmp_path / ".task/authorization/root-without-issue.json",
         json.dumps(root_body, indent=2, sort_keys=True) + "\n",
     )
-    root_without_issue = snapshot_file(
-        tmp_path, str(root_file.relative_to(tmp_path)), "source_approval"
-    )
+    root_without_issue = snapshot_historical_source(tmp_path, root_file)
     delegated_source = delegated_source_for(
         tmp_path,
         workspace,
@@ -4520,11 +4870,7 @@ def test_delegated_s2_can_transition_exact_s0_grant_but_not_unrelated(
         tmp_path / ".task/authorization/delegated-transition.json",
         json.dumps(delegated_body, indent=2, sort_keys=True) + "\n",
     )
-    delegated_source = snapshot_file(
-        tmp_path,
-        str(delegated_file.relative_to(tmp_path)),
-        "source_approval",
-    )
+    delegated_source = snapshot_historical_source(tmp_path, delegated_file)
     transition_grants(
         tmp_path,
         "grant-1",
@@ -4596,9 +4942,7 @@ def _reserved_task_index_operation(
         root / ".task/authorization/task-index-source.json",
         json.dumps(source_body, indent=2, sort_keys=True) + "\n",
     )
-    workspace["source_binding"] = snapshot_file(
-        root, str(source_path.relative_to(root)), "source_approval"
-    )
+    workspace["source_binding"] = snapshot_historical_source(root, source_path)
     request = request_for(
         workspace,
         skill_id="manage-task-state-index",
