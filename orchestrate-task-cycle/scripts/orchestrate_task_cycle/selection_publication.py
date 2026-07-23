@@ -1,7 +1,7 @@
 """Forward-recoverable publication of one canonical task selection."""
+
 from __future__ import annotations
 
-from contextlib import nullcontext
 import json
 from pathlib import Path
 from typing import Any
@@ -63,6 +63,7 @@ from .selection_publication_v2 import (
     validate_external_pending_assertion,
     validate_owner_assertion,
 )
+from .selection_publication_effect_guard import publication_effect_guard
 
 
 def _load_json(path: Path, label: str) -> dict[str, Any]:
@@ -159,7 +160,10 @@ def prepare_drift_reconciliation(root: Path, plan: dict[str, Any]) -> dict[str, 
 
     root = root.expanduser().resolve(strict=True)
     normalized = _normalize_plan(root, plan)
-    if len(normalized["targets"]) != 1 or normalized["targets"][0]["role"] != "task_alias":
+    if (
+        len(normalized["targets"]) != 1
+        or normalized["targets"][0]["role"] != "task_alias"
+    ):
         raise ValueError(
             "selection-publication drift reconciliation accepts only task_alias"
         )
@@ -242,9 +246,7 @@ def _repair_existing_receipt(
     return {**response, "storage_schema_version": STORAGE_SCHEMA_VERSION}
 
 
-def _recover_state_for_transaction(
-    root: Path, transaction_id: str
-) -> dict[str, Any]:
+def _recover_state_for_transaction(root: Path, transaction_id: str) -> dict[str, Any]:
     try:
         state = load_state(root)
     except ValueError as exc:
@@ -260,6 +262,16 @@ def _recover_state_for_transaction(
     return write_state(root, receipts, pending, load_prepare=_load_prepare)
 
 
+def _validate_predecessor_snapshot(root: Path, prepare: dict[str, Any]) -> None:
+    if prepare.get("schema_version") != 3:
+        return
+    from .selected_successor_predecessor_snapshot import (
+        validate_prepare_owned_predecessor_snapshot,
+    )
+
+    validate_prepare_owned_predecessor_snapshot(root, prepare)
+
+
 def publish_prepared(
     root: Path,
     transaction_id: str,
@@ -270,42 +282,27 @@ def publish_prepared(
     """Publish an exact prepare under its durable selected-successor lease."""
     root = root.expanduser().resolve(strict=True)
     prepare, prepare_path, prepare_sha = _load_prepare(root, transaction_id)
-    receipt_path = _receipt_path(root, transaction_id)
-    if receipt_path.is_file():
-        effect_guard = nullcontext()
-    elif prepare.get("schema_version") != 3:
-        raise ValueError(
-            "Legacy schema-v1/v2 selection prepares are immutable recovery "
-            "evidence; new publication effects are forbidden"
-        )
-    else:
-        from manage_task_state_index.state.selected_successor_guard import (
-            guard_selected_successor_effect,
-        )
-        effect_guard = guard_selected_successor_effect(
-            root,
-            execution_lease,
-            action="publish_selected_successor_topology",
-            effect_inputs={
-                "prepare": {
-                    "ref": prepare_path.relative_to(root).as_posix(),
-                    "sha256": prepare_sha,
-                },
-                "transaction_id": transaction_id,
-            },
-            legacy_token=_selected_successor_execution_token,
-        )
-    with _lock(
+    effect_guard = publication_effect_guard(
         root,
-        producer_capability=_SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
-    ), effect_guard:
+        prepare,
+        prepare_path,
+        prepare_sha,
+        transaction_id,
+        execution_lease,
+        _selected_successor_execution_token,
+    )
+    with (
+        _lock(
+            root,
+            producer_capability=_SELECTION_PUBLICATION_PRODUCER_CAPABILITY,
+        ),
+        effect_guard,
+    ):
         state = _recover_state_for_transaction(root, transaction_id)
         prepare, prepare_path, prepare_sha = _load_prepare(root, transaction_id)
         receipt_path = _receipt_path(root, transaction_id)
         if receipt_path.is_file():
-            return _repair_existing_receipt(
-                root, state, transaction_id, receipt_path
-            )
+            return _repair_existing_receipt(root, state, transaction_id, receipt_path)
         _reject_competing_pending(state, transaction_id)
         validate_publish_predecessor(
             prepare,
@@ -334,6 +331,7 @@ def publish_prepared(
                 raise ValueError(
                     f"selection-publication target drifted outside prepared states: {target['target_ref']}"
                 )
+        _validate_predecessor_snapshot(root, prepare)
         for target in targets:  # canonical pointer is sorted last by ROLE_PRIORITY.
             path = _target_path(root, target["role"], target["target_ref"])
             if _sha256_file(path) == target["after_sha256"]:
@@ -429,9 +427,7 @@ def _state_pending_ids(state: dict[str, Any]) -> list[str]:
 
 
 def _reject_competing_pending(state: dict[str, Any], transaction_id: str) -> None:
-    competing = [
-        item for item in _state_pending_ids(state) if item != transaction_id
-    ]
+    competing = [item for item in _state_pending_ids(state) if item != transaction_id]
     if competing:
         raise ValueError(
             "selection-publication has a different pending transaction; "

@@ -67,14 +67,15 @@ def _tree_snapshot(root: Path) -> dict[str, tuple[object, ...]]:
         else:
             body = ("directory", None)
         snapshot[path.relative_to(root).as_posix()] = (
-            metadata.st_mode, metadata.st_mtime_ns, body,
+            metadata.st_mode,
+            metadata.st_mtime_ns,
+            body,
         )
     return snapshot
 
 
 def _reseal_compilation(value: dict[str, object]) -> None:
-    body = {key: item for key, item in value.items()
-            if key != "compilation_sha256"}
+    body = {key: item for key, item in value.items() if key != "compilation_sha256"}
     value["compilation_sha256"] = hashlib.sha256(
         json.dumps(
             body, ensure_ascii=False, separators=(",", ":"), sort_keys=True
@@ -97,13 +98,23 @@ def test_scan_compiler_separates_logical_updates_from_exact_event_batch(
     artifact.parent.mkdir(parents=True)
     artifact.write_text("# Before\n", encoding="utf-8")
     digest = task_index.sha256_file(artifact)
-    for item_id, updated in (("val-a", "2026-07-22T01:00:00+09:00"),
-                             ("val-b", "2026-07-22T02:00:00+09:00")):
-        task_index.append_event(tmp_path, {
-            "event": "upsert", "id": item_id, "type": "validation",
-            "status": "passed", "path": ".task/validation/result.md",
-            "title": "Before", "content_sha256": digest, "updated_at": updated,
-        })
+    for item_id, updated in (
+        ("val-a", "2026-07-22T01:00:00+09:00"),
+        ("val-b", "2026-07-22T02:00:00+09:00"),
+    ):
+        task_index.append_event(
+            tmp_path,
+            {
+                "event": "upsert",
+                "id": item_id,
+                "type": "validation",
+                "status": "passed",
+                "path": ".task/validation/result.md",
+                "title": "Before",
+                "content_sha256": digest,
+                "updated_at": updated,
+            },
+        )
     task_index.rebuild_markdown(tmp_path)
     before_count = len(task_index.load_events(tmp_path))
     artifact.write_text("# After\n", encoding="utf-8")
@@ -118,7 +129,10 @@ def test_scan_compiler_separates_logical_updates_from_exact_event_batch(
     assert owner["logical_update_count"] == 1
     assert owner["event_batch"]["event_count"] == 3
     assert owner["post_check"]["would_change"] is False
-    assert apply_scan(tmp_path, prepared["compilation_binding"])["status"] == "already_applied"
+    assert (
+        apply_scan(tmp_path, prepared["compilation_binding"])["status"]
+        == "already_applied"
+    )
 
 
 def test_apply_scan_recovers_committed_transition_before_scan_receipt(
@@ -153,13 +167,12 @@ def test_apply_scan_recovers_committed_transition_before_scan_receipt(
     assert (tmp_path / ".task/index.jsonl").read_bytes() == committed_ledger
     assert (tmp_path / ".task/index.md").read_bytes() == committed_projection
     owner_result = json.loads(scan_receipt.read_text(encoding="utf-8"))
-    assert owner_result["transition_receipt"] == transition[
-        "execution_result_binding"
-    ]
+    assert owner_result["transition_receipt"] == transition["execution_result_binding"]
 
 
 def test_apply_scan_recovers_batch_committed_before_transition_receipt(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     artifact = tmp_path / ".task/validation/result.md"
     artifact.parent.mkdir(parents=True)
@@ -201,9 +214,7 @@ def test_apply_scan_recovers_batch_committed_before_transition_receipt(
     assert (tmp_path / ".task/index.jsonl").read_bytes() == committed_ledger
     assert (tmp_path / ".task/index.md").read_bytes() == committed_projection
     owner_result = json.loads(scan_receipt.read_text(encoding="utf-8"))
-    assert owner_result["transition_receipt"] == _binding(
-        tmp_path, transition_receipt
-    )
+    assert owner_result["transition_receipt"] == _binding(tmp_path, transition_receipt)
     assert owner_result["event_batch"]["event_count"] == prepared["event_count"]
 
     replay = apply_scan(tmp_path, prepared["compilation_binding"])
@@ -214,7 +225,8 @@ def test_apply_scan_recovers_batch_committed_before_transition_receipt(
 
 
 def test_apply_scan_recovers_projection_repair_before_scan_receipt(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     prepared = prepare_scan(tmp_path, at=AT)
     assert prepared["effect_mode"] == "projection_repair"
@@ -236,11 +248,13 @@ def test_apply_scan_recovers_projection_repair_before_scan_receipt(
     expected_after = expected_projection_sha256([], compilation["created_at"])
     assert task_index.sha256_file(projection) == expected_after
     assert (
-        tmp_path / ".task/scan_projection_intents"
+        tmp_path
+        / ".task/scan_projection_intents"
         / f"{prepared['compilation_id']}.json"
     ).is_file()
     assert (
-        tmp_path / ".task/scan_projection_receipts"
+        tmp_path
+        / ".task/scan_projection_receipts"
         / f"{prepared['compilation_id']}.json"
     ).is_file()
     assert not (
@@ -248,9 +262,7 @@ def test_apply_scan_recovers_projection_repair_before_scan_receipt(
     ).exists()
     repaired_bytes = projection.read_bytes()
 
-    monkeypatch.setattr(
-        scan_transition_module, "_publish_scan_result", publish_result
-    )
+    monkeypatch.setattr(scan_transition_module, "_publish_scan_result", publish_result)
     recovered = apply_scan(tmp_path, prepared["compilation_binding"])
 
     assert recovered["status"] == "applied"
@@ -265,7 +277,8 @@ def test_apply_scan_recovers_projection_repair_before_scan_receipt(
 
 
 def test_apply_scan_materializes_historical_receipt_after_task_descendant(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     task = tmp_path / "task.md"
     task.write_text("# Original\n", encoding="utf-8")
@@ -276,7 +289,8 @@ def test_apply_scan_materializes_historical_receipt_after_task_descendant(
         (tmp_path / prepared["plan_binding"]["ref"]).read_text(encoding="utf-8")
     )
     original_id = next(
-        event["id"] for event in plan["events"]
+        event["id"]
+        for event in plan["events"]
         if event.get("type") == "task" and event.get("path") == "task.md"
     )
     original_snapshot = (
@@ -292,30 +306,42 @@ def test_apply_scan_materializes_historical_receipt_after_task_descendant(
     )
     with pytest.raises(RuntimeError, match="simulated crash"):
         apply_scan(tmp_path, prepared["compilation_binding"])
-    monkeypatch.setattr(
-        scan_transition_module, "_publish_scan_result", publish_result
-    )
+    monkeypatch.setattr(scan_transition_module, "_publish_scan_result", publish_result)
     assert original_snapshot.read_text(encoding="utf-8") == "# Original\n"
 
     task.write_text("# Later\n", encoding="utf-8")
     later_digest = task_index.sha256_file(task)
     later_snapshot = tmp_path / ".task/snapshots/task-later.md"
     later_snapshot.write_bytes(task.read_bytes())
-    task_index.append_event(tmp_path, {
-        "event": "upsert", "id": original_id, "status": "superseded",
-        "updated_at": "2026-07-23T10:01:00+09:00",
-    })
-    task_index.append_event(tmp_path, {
-        "event": "upsert", "id": "task-later", "type": "task",
-        "status": "active", "path": "task.md", "title": "Later",
-        "content_sha256": later_digest,
-        "fields": {
-            "record_class": "mutable_alias", "snapshot_digest": later_digest,
-            "snapshot_path": ".task/snapshots/task-later.md",
-            "canonical_id": "task-later", "alias_path": "task.md",
+    task_index.append_event(
+        tmp_path,
+        {
+            "event": "upsert",
+            "id": original_id,
+            "status": "superseded",
+            "updated_at": "2026-07-23T10:01:00+09:00",
         },
-        "updated_at": "2026-07-23T10:01:00+09:00",
-    })
+    )
+    task_index.append_event(
+        tmp_path,
+        {
+            "event": "upsert",
+            "id": "task-later",
+            "type": "task",
+            "status": "active",
+            "path": "task.md",
+            "title": "Later",
+            "content_sha256": later_digest,
+            "fields": {
+                "record_class": "mutable_alias",
+                "snapshot_digest": later_digest,
+                "snapshot_path": ".task/snapshots/task-later.md",
+                "canonical_id": "task-later",
+                "alias_path": "task.md",
+            },
+            "updated_at": "2026-07-23T10:01:00+09:00",
+        },
+    )
     task_index.rebuild_markdown(tmp_path)
 
     recovered = apply_scan(tmp_path, prepared["compilation_binding"])
@@ -339,12 +365,19 @@ def test_apply_scan_rejects_foreign_ledger_drift_before_batch(
         (tmp_path / prepared["compilation_binding"]["ref"]).read_text()
     )
     snapshot = tmp_path / compilation["snapshot_materializations"][0]["target_ref"]
-    task_index.append_event(tmp_path, {
-        "event": "upsert", "id": "task-foreign", "type": "task",
-        "status": "active", "path": "task.md",
-        "title": "Foreign", "content_sha256": task_index.sha256_file(artifact),
-        "updated_at": "2026-07-23T10:01:00+09:00",
-    })
+    task_index.append_event(
+        tmp_path,
+        {
+            "event": "upsert",
+            "id": "task-foreign",
+            "type": "task",
+            "status": "active",
+            "path": "task.md",
+            "title": "Foreign",
+            "content_sha256": task_index.sha256_file(artifact),
+            "updated_at": "2026-07-23T10:01:00+09:00",
+        },
+    )
     before = _tree_snapshot(tmp_path)
 
     with pytest.raises(ValueError, match="CAS mismatch"):
@@ -359,7 +392,8 @@ def test_apply_scan_rejects_foreign_ledger_drift_before_batch(
 
 @pytest.mark.parametrize("effect_mode", ("projection_repair", "no_effect"))
 def test_apply_scan_rejects_non_event_projection_drift_without_writes(
-    tmp_path: Path, effect_mode: str,
+    tmp_path: Path,
+    effect_mode: str,
 ) -> None:
     projection = tmp_path / ".task/index.md"
     if effect_mode == "no_effect":
@@ -378,11 +412,12 @@ def test_apply_scan_rejects_non_event_projection_drift_without_writes(
 
 @pytest.mark.parametrize(
     ("effect_mode", "outcome"),
-    (("projection_repair", "confirmed_effect"),
-     ("no_effect", "confirmed_no_effect")),
+    (("projection_repair", "confirmed_effect"), ("no_effect", "confirmed_no_effect")),
 )
 def test_non_event_scan_owner_validation_recomputes_current_evidence(
-    tmp_path: Path, effect_mode: str, outcome: str,
+    tmp_path: Path,
+    effect_mode: str,
+    outcome: str,
 ) -> None:
     if effect_mode == "no_effect":
         task_index.rebuild_markdown(tmp_path)
@@ -407,11 +442,12 @@ def test_non_event_scan_owner_validation_recomputes_current_evidence(
 
 @pytest.mark.parametrize(
     ("effect_mode", "outcome"),
-    (("projection_repair", "confirmed_effect"),
-     ("no_effect", "confirmed_no_effect")),
+    (("projection_repair", "confirmed_effect"), ("no_effect", "confirmed_no_effect")),
 )
 def test_non_event_scan_receipt_accepts_legal_descendant_suffix(
-    tmp_path: Path, effect_mode: str, outcome: str,
+    tmp_path: Path,
+    effect_mode: str,
+    outcome: str,
 ) -> None:
     if effect_mode == "no_effect":
         task_index.rebuild_markdown(tmp_path)
@@ -460,8 +496,10 @@ def test_unapplied_self_sealed_projection_result_fails_replay_and_owner_validati
         "plan": None,
         "transition_receipt": None,
         "subject": {
-            "kind": "task_index", "ref": ".task/index.jsonl",
-            "before_sha256": empty_digest, "after_sha256": empty_digest,
+            "kind": "task_index",
+            "ref": ".task/index.jsonl",
+            "before_sha256": empty_digest,
+            "after_sha256": empty_digest,
         },
         "projection": {
             "ref": ".task/index.md",
@@ -477,20 +515,22 @@ def test_unapplied_self_sealed_projection_result_fails_replay_and_owner_validati
         },
         "focus_results": compilation["focus_results"],
         "post_check": {
-            "would_change": False, "logical_update_count": 0,
+            "would_change": False,
+            "logical_update_count": 0,
             "event_count": 0,
             "inventory_sha256": compilation["inventory"]["sha256"],
         },
     }
     forged = {
         **body,
-        "result_sha256": hashlib.sha256(json.dumps(
-            body, ensure_ascii=False, separators=(",", ":"), sort_keys=True
-        ).encode("utf-8")).hexdigest(),
+        "result_sha256": hashlib.sha256(
+            json.dumps(
+                body, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+            ).encode("utf-8")
+        ).hexdigest(),
     }
     receipt = _write_json(
-        tmp_path / ".task/scan_receipts"
-        / f"{compilation['compilation_id']}.json",
+        tmp_path / ".task/scan_receipts" / f"{compilation['compilation_id']}.json",
         forged,
     )
     before = _tree_snapshot(tmp_path)
@@ -551,7 +591,8 @@ def test_scan_compilation_rejects_raw_self_sealed_forged_id(
 
 @pytest.mark.parametrize("defect", ("effect_mode", "projection_revision"))
 def test_scan_compilation_identity_binds_non_event_projection(
-    tmp_path: Path, defect: str,
+    tmp_path: Path,
+    defect: str,
 ) -> None:
     task_index.rebuild_markdown(tmp_path)
     prepared = prepare_scan(tmp_path, at=AT)
@@ -581,7 +622,9 @@ def test_scan_compilation_identity_binds_non_event_projection(
     ),
 )
 def test_scan_compilation_rejects_self_sealed_derived_field_defects(
-    tmp_path: Path, defect: str, message: str,
+    tmp_path: Path,
+    defect: str,
+    message: str,
 ) -> None:
     artifact = tmp_path / ".task/validation/result.md"
     artifact.parent.mkdir(parents=True)
@@ -643,8 +686,12 @@ def test_legacy_opaque_scan_result_is_unknown_effect(tmp_path: Path) -> None:
             "artifact_kind": "task_state_index_scan_result",
             "effect_status": "confirmed_effect",
             "completed_at": AT,
-            "subject": {"kind": "task_index", "ref": ".task/index.jsonl",
-                        "before_sha256": "a" * 64, "after_sha256": "b" * 64},
+            "subject": {
+                "kind": "task_index",
+                "ref": ".task/index.jsonl",
+                "before_sha256": "a" * 64,
+                "after_sha256": "b" * 64,
+            },
         },
     )
     reservation, precommit = _authority_inputs(tmp_path)
@@ -668,22 +715,27 @@ def _selection_decision(path: Path, task_id: str) -> Path:
         "not_authority": True,
         "mutation_performed": False,
     }
-    return _write_json(path, {
-        **core,
-        "receipt_sha256": hashlib.sha256(
-            (json.dumps(core, ensure_ascii=False, separators=(",", ":"),
-                        sort_keys=True) + "\n").encode()
-        ).hexdigest(),
-    })
+    return _write_json(
+        path,
+        {
+            **core,
+            "receipt_sha256": hashlib.sha256(
+                (
+                    json.dumps(
+                        core, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+                    )
+                    + "\n"
+                ).encode()
+            ).hexdigest(),
+        },
+    )
 
 
 def test_selected_successor_renderer_derives_plan_without_writing_on_dry_run(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "task.md").write_text("# Old\n", encoding="utf-8")
-    task_index.upsert_item(
-        tmp_path, "task", "task.md", "active", item_id="task-old"
-    )
+    task_index.upsert_item(tmp_path, "task", "task.md", "active", item_id="task-old")
     source = tmp_path / ".task/candidates/task-new.md"
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text("# New\n\n- Task ID: `task-new`\n", encoding="utf-8")
@@ -700,7 +752,218 @@ def test_selected_successor_renderer_derives_plan_without_writing_on_dry_run(
     assert result["selected_task_id"] == "task-new"
     assert result["event_count"] == 2
     assert result["mutation_performed"] is False
-    assert not (tmp_path / ".task/transition_plans" / f"{result['plan_id']}.json").exists()
+    assert not (
+        tmp_path / ".task/transition_plans" / f"{result['plan_id']}.json"
+    ).exists()
+
+
+def test_selected_successor_rejects_unrelated_global_active_task_without_writes(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "task.md").write_text("# Old\n", encoding="utf-8")
+    task_index.upsert_item(tmp_path, "task", "task.md", "active", item_id="task-old")
+    (tmp_path / "other.md").write_text("# Other\n", encoding="utf-8")
+    task_index.upsert_item(
+        tmp_path, "task", "other.md", "active", item_id="task-unrelated"
+    )
+    source = tmp_path / ".task/candidates/task-new.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("# New\n\n- Task ID: `task-new`\n", encoding="utf-8")
+    decision = _selection_decision(
+        tmp_path / ".task/cycle/cycle-A/decision.json", "task-new"
+    )
+    before = _tree_snapshot(tmp_path)
+
+    with pytest.raises(
+        ValueError,
+        match="Global active task set differs from the current task predecessor",
+    ):
+        prepare_selected_successor(
+            tmp_path,
+            source_decision=_binding(tmp_path, decision),
+            task_source=_binding(tmp_path, source),
+            at=AT,
+        )
+
+    assert _tree_snapshot(tmp_path) == before
+    assert not (tmp_path / ".task/transition_plans").exists()
+
+
+@pytest.mark.parametrize("status", ("blocked", "terminal_blocked", "deferred"))
+def test_selected_successor_rejects_unsupported_current_predecessor_status(
+    tmp_path: Path,
+    status: str,
+) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("# Old\n", encoding="utf-8")
+    task_index.upsert_item(tmp_path, "task", "task.md", "active", item_id="task-old")
+    task_index.upsert_item(tmp_path, "task", "task.md", status, item_id="task-old")
+    source = tmp_path / ".task/candidates/task-new.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("# New\n\n- Task ID: `task-new`\n", encoding="utf-8")
+    decision = _selection_decision(
+        tmp_path / ".task/cycle/cycle-A/decision.json", "task-new"
+    )
+    before = _tree_snapshot(tmp_path)
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Selected-successor current task predecessor status is unsupported: "
+            f"'{status}'"
+        ),
+    ):
+        prepare_selected_successor(
+            tmp_path,
+            source_decision=_binding(tmp_path, decision),
+            task_source=_binding(tmp_path, source),
+            at=AT,
+        )
+
+    assert _tree_snapshot(tmp_path) == before
+    assert not (tmp_path / ".task/transition_plans").exists()
+
+
+def _append_completed_mutable_alias(
+    root: Path,
+    *,
+    item_id: str,
+    digest: str,
+) -> None:
+    task_index.append_event(
+        root,
+        {
+            "event": "upsert",
+            "id": item_id,
+            "type": "task",
+            "status": "completed",
+            "path": "task.md",
+            "title": "Historical completed alias",
+            "content_sha256": digest,
+            "updated_at": AT,
+            "fields": {
+                "record_class": "mutable_alias",
+                "canonical_id": item_id,
+                "alias_path": "task.md",
+                "snapshot_digest": digest,
+                "snapshot_path": f".task/snapshots/{item_id}.md",
+            },
+        },
+    )
+
+
+def test_selected_successor_ignores_historical_completed_alias_with_other_body(
+    tmp_path: Path,
+) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("# Current\n", encoding="utf-8")
+    task_index.upsert_item(
+        tmp_path, "task", "task.md", "active", item_id="task-current"
+    )
+    _append_completed_mutable_alias(
+        tmp_path,
+        item_id="task-historical",
+        digest="f" * 64,
+    )
+    source = tmp_path / ".task/candidates/task-new.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("# New\n\n- Task ID: `task-new`\n", encoding="utf-8")
+    decision = _selection_decision(
+        tmp_path / ".task/cycle/cycle-A/decision.json", "task-new"
+    )
+
+    selected = prepare_selected_successor(
+        tmp_path,
+        source_decision=_binding(tmp_path, decision),
+        task_source=_binding(tmp_path, source),
+        at=AT,
+    )
+
+    plan = json.loads((tmp_path / selected["plan_binding"]["ref"]).read_text())
+    predecessor_events = [
+        event for event in plan["events"] if event.get("status") == "superseded"
+    ]
+    assert [event["id"] for event in predecessor_events] == ["task-current"]
+
+
+def test_selected_successor_rejects_duplicate_completed_alias_for_current_body(
+    tmp_path: Path,
+) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("# Current\n", encoding="utf-8")
+    current = task_index.upsert_item(
+        tmp_path, "task", "task.md", "active", item_id="task-current"
+    )
+    task_index.upsert_item(
+        tmp_path, "task", "task.md", "complete", item_id="task-current"
+    )
+    _append_completed_mutable_alias(
+        tmp_path,
+        item_id="task-duplicate",
+        digest=current["event"]["content_sha256"],
+    )
+    source = tmp_path / ".task/candidates/task-new.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("# New\n\n- Task ID: `task-new`\n", encoding="utf-8")
+    decision = _selection_decision(
+        tmp_path / ".task/cycle/cycle-A/decision.json", "task-new"
+    )
+    before = _tree_snapshot(tmp_path)
+
+    with pytest.raises(ValueError, match="Current task alias identity is not unique"):
+        prepare_selected_successor(
+            tmp_path,
+            source_decision=_binding(tmp_path, decision),
+            task_source=_binding(tmp_path, source),
+            at=AT,
+        )
+
+    assert _tree_snapshot(tmp_path) == before
+    assert not (tmp_path / ".task/transition_plans").exists()
+
+
+@pytest.mark.parametrize("damage", ("missing", "tampered", "symlink"))
+def test_selected_successor_rejects_invalid_completed_predecessor_snapshot(
+    tmp_path: Path,
+    damage: str,
+) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("# Old\n", encoding="utf-8")
+    active = task_index.upsert_item(
+        tmp_path, "task", "task.md", "active", item_id="task-old"
+    )
+    task_index.upsert_item(tmp_path, "task", "task.md", "complete", item_id="task-old")
+    snapshot = tmp_path / active["event"]["fields"]["snapshot_path"]
+    if damage == "missing":
+        snapshot.unlink()
+    elif damage == "tampered":
+        snapshot.write_text("# Tampered\n", encoding="utf-8")
+    else:
+        target = tmp_path / "snapshot-target.md"
+        target.write_bytes(task.read_bytes())
+        snapshot.unlink()
+        snapshot.symlink_to(target)
+    source = tmp_path / ".task/candidates/task-new.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("# New\n\n- Task ID: `task-new`\n", encoding="utf-8")
+    decision = _selection_decision(
+        tmp_path / ".task/cycle/cycle-A/decision.json", "task-new"
+    )
+    before = _tree_snapshot(tmp_path)
+
+    with pytest.raises(
+        ValueError,
+        match="Selected-successor predecessor snapshot binding is invalid",
+    ):
+        prepare_selected_successor(
+            tmp_path,
+            source_decision=_binding(tmp_path, decision),
+            task_source=_binding(tmp_path, source),
+            at=AT,
+        )
+
+    assert _tree_snapshot(tmp_path) == before
+    assert not (tmp_path / ".task/transition_plans").exists()
 
 
 def test_external_validator_allows_historical_task_drift_after_settlement(
@@ -708,9 +971,7 @@ def test_external_validator_allows_historical_task_drift_after_settlement(
 ) -> None:
     task = tmp_path / "task.md"
     task.write_text("# Old\n", encoding="utf-8")
-    task_index.upsert_item(
-        tmp_path, "task", "task.md", "active", item_id="task-old"
-    )
+    task_index.upsert_item(tmp_path, "task", "task.md", "active", item_id="task-old")
     source = tmp_path / ".task/candidates/task-new.md"
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text("# New\n\n- Task ID: `task-new`\n", encoding="utf-8")
@@ -726,18 +987,23 @@ def test_external_validator_allows_historical_task_drift_after_settlement(
     plan = json.loads((tmp_path / selected["plan_binding"]["ref"]).read_text())
     transaction_id = "selection-test"
     prepare = {
-        "schema_version": 3, "kind": "selection_publication_prepare",
+        "schema_version": 3,
+        "kind": "selection_publication_prepare",
         "transaction_id": transaction_id,
         "task_state_plan": selected["plan_binding"],
-        "targets": [{
-            "role": "task_alias", "target_ref": "task.md",
-            "before_sha256": plan["artifact_anchors"][0]["before_sha256"],
-            "after_sha256": _binding(tmp_path, source)["sha256"],
-            "payload_sha256": _binding(tmp_path, source)["sha256"],
-        }],
+        "targets": [
+            {
+                "role": "task_alias",
+                "target_ref": "task.md",
+                "before_sha256": plan["artifact_anchors"][0]["before_sha256"],
+                "after_sha256": _binding(tmp_path, source)["sha256"],
+                "payload_sha256": _binding(tmp_path, source)["sha256"],
+            }
+        ],
     }
     prepare_path = _write_json(
-        tmp_path / f".task/selection_publication/transactions/{transaction_id}/prepare.json",
+        tmp_path
+        / f".task/selection_publication/transactions/{transaction_id}/prepare.json",
         prepare,
     )
     context, replay = transition_apply._preflight(
@@ -747,22 +1013,24 @@ def test_external_validator_allows_historical_task_drift_after_settlement(
         transition_apply._default_rebuild_markdown,
     )
     assert replay is None
-    pending = transition_apply._result(
-        context, transition_apply._apply_locked(context)
-    )
+    pending = transition_apply._result(context, transition_apply._apply_locked(context))
     task.write_bytes(source.read_bytes())
     commit = {
-        "schema_version": 3, "kind": "selection_publication_receipt",
+        "schema_version": 3,
+        "kind": "selection_publication_receipt",
         "status": "committed",
         "prepare_ref": _binding(tmp_path, prepare_path)["ref"],
         "prepare_sha256": _binding(tmp_path, prepare_path)["sha256"],
         "external_settlement_plan_id": plan["plan_id"],
         "owner_pending_receipt": pending["execution_result_binding"],
-        "targets": [{
-            "role": "task_alias", "target_ref": "task.md",
-            "before_sha256": plan["artifact_anchors"][0]["before_sha256"],
-            "after_sha256": _binding(tmp_path, source)["sha256"],
-        }],
+        "targets": [
+            {
+                "role": "task_alias",
+                "target_ref": "task.md",
+                "before_sha256": plan["artifact_anchors"][0]["before_sha256"],
+                "after_sha256": _binding(tmp_path, source)["sha256"],
+            }
+        ],
     }
     commit_path = _write_json(
         tmp_path / ".task/selection_publication/commit.json", commit

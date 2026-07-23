@@ -19,15 +19,8 @@ from .selection_publication_store import _sha256_bytes
 
 def directory_flags() -> int:
     if not hasattr(os, "O_DIRECTORY") or not hasattr(os, "O_NOFOLLOW"):
-        raise ValueError(
-            "selection-publication gc requires O_DIRECTORY and O_NOFOLLOW"
-        )
-    return (
-        os.O_RDONLY
-        | os.O_DIRECTORY
-        | os.O_NOFOLLOW
-        | getattr(os, "O_CLOEXEC", 0)
-    )
+        raise ValueError("selection-publication gc requires O_DIRECTORY and O_NOFOLLOW")
+    return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
 
 
 def file_flags() -> int:
@@ -76,9 +69,7 @@ class BoundParent:
         return self.relative.name
 
     def verify(self) -> None:
-        verify_directory_chain(
-            self.root, self.relative.parent.parts, self.identities
-        )
+        verify_directory_chain(self.root, self.relative.parent.parts, self.identities)
 
 
 class BoundDirectory:
@@ -160,9 +151,7 @@ class PinnedLeaf:
     def verify_bytes(self, *, max_bytes: int | None = None) -> None:
         self.verify_visible()
         os.lseek(self.descriptor, 0, os.SEEK_SET)
-        payload = _read_descriptor(
-            self.descriptor, self.label, max_bytes=max_bytes
-        )
+        payload = _read_descriptor(self.descriptor, self.label, max_bytes=max_bytes)
         after = os.fstat(self.descriptor)
         if payload != self.payload or file_signature(after) != self.signature:
             raise ValueError(f"{self.label} bytes changed after acquisition")
@@ -186,8 +175,14 @@ def bound_parent(
     target = relative_ref(relative, "selection-publication gc artifact ref")
     descriptors: list[int] = []
     try:
+        from .selection_publication_producer_capability import (
+            _active_reference_barrier_descriptor,
+        )
+
         try:
-            current = os.open(root, directory_flags())
+            current = _active_reference_barrier_descriptor(root)
+            if current is None:
+                current = os.open(root, directory_flags())
         except OSError as exc:
             raise ValueError(
                 "selection-publication gc workspace root is unsafe"
@@ -222,6 +217,28 @@ def bound_parent(
             os.close(descriptor)
 
 
+def _raise_unsafe_directory_component(
+    parent_descriptor: int,
+    name: str,
+    cause: OSError,
+) -> None:
+    try:
+        observed = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+    except OSError:
+        raise ValueError(
+            "selection-publication gc directory chain is unsafe"
+        ) from cause
+    if stat.S_ISLNK(observed.st_mode):
+        raise ValueError(
+            "selection-publication gc directory component cannot be a symlink"
+        ) from cause
+    if not stat.S_ISDIR(observed.st_mode):
+        raise ValueError(
+            "selection-publication gc directory component must be a directory"
+        ) from cause
+    raise ValueError("selection-publication gc directory chain is unsafe") from cause
+
+
 @contextlib.contextmanager
 def bound_directory(
     root: Path,
@@ -232,7 +249,13 @@ def bound_directory(
     target = relative_ref(relative, "selection-publication gc directory ref")
     descriptors: list[int] = []
     try:
-        current = os.open(root, directory_flags())
+        from .selection_publication_producer_capability import (
+            _active_reference_barrier_descriptor,
+        )
+
+        current = _active_reference_barrier_descriptor(root)
+        if current is None:
+            current = os.open(root, directory_flags())
         descriptors.append(current)
         identities = [directory_identity(current)]
         for part in target.parts:
@@ -247,9 +270,7 @@ def bound_directory(
                     pass
                 child = os.open(part, directory_flags(), dir_fd=current)
             except OSError as exc:
-                raise ValueError(
-                    "selection-publication gc directory chain is unsafe"
-                ) from exc
+                _raise_unsafe_directory_component(current, part, exc)
             descriptors.append(child)
             identities.append(directory_identity(child))
             current = child
@@ -288,14 +309,9 @@ def open_pinned_leaf(
             raise ValueError(f"{label} exceeds its byte bound")
         payload = _read_descriptor(descriptor, label, max_bytes=max_bytes)
         after = os.fstat(descriptor)
-        visible = os.stat(
-            parent.name, dir_fd=parent.descriptor, follow_symlinks=False
-        )
+        visible = os.stat(parent.name, dir_fd=parent.descriptor, follow_symlinks=False)
         signature = file_signature(before)
-        if (
-            signature != file_signature(after)
-            or signature != file_signature(visible)
-        ):
+        if signature != file_signature(after) or signature != file_signature(visible):
             raise ValueError(f"{label} changed during acquisition")
         parent.verify()
         return PinnedLeaf(parent, descriptor, signature, payload, label)
@@ -311,9 +327,7 @@ def read_leaf(
     required: bool = True,
     max_bytes: int | None = None,
 ) -> bytes | None:
-    pinned = open_pinned_leaf(
-        parent, label, required=required, max_bytes=max_bytes
-    )
+    pinned = open_pinned_leaf(parent, label, required=required, max_bytes=max_bytes)
     if pinned is None:
         return None
     try:
@@ -322,9 +336,7 @@ def read_leaf(
         pinned.close()
 
 
-def _read_descriptor(
-    descriptor: int, label: str, *, max_bytes: int | None
-) -> bytes:
+def _read_descriptor(descriptor: int, label: str, *, max_bytes: int | None) -> bytes:
     chunks: list[bytes] = []
     total = 0
     while True:
@@ -353,9 +365,7 @@ def read_relative(
 ) -> bytes | None:
     try:
         with bound_parent(root, relative, create=False) as parent:
-            return read_leaf(
-                parent, label, required=required, max_bytes=max_bytes
-            )
+            return read_leaf(parent, label, required=required, max_bytes=max_bytes)
     except MissingArtifactParent:
         if required:
             raise ValueError(f"{label} parent is missing")
@@ -387,9 +397,7 @@ def read_json_relative(
     return value, payload
 
 
-def artifact_binding(
-    root: Path, relative: str | PurePosixPath
-) -> dict[str, str]:
+def artifact_binding(root: Path, relative: str | PurePosixPath) -> dict[str, str]:
     normalized = relative_ref(relative, "retention evidence ref").as_posix()
     digest = sha256_relative(root, normalized, "retention evidence")
     if digest is None:

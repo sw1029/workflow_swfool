@@ -31,6 +31,7 @@ from .selection_publication_gc_walk import (
     walk_regular_files_fd,
 )
 from .selection_publication_reference_barrier import (
+    MAX_REFERENCE_BARRIER_BYTES,
     REFERENCE_BARRIER_REF,
     reference_barrier_binding,
     validate_reference_barrier_payload,
@@ -49,13 +50,9 @@ from .selection_publication_store import (
 def _cas_files(root: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for parts in CAS_LAYOUTS:
-        relative = Path(
-            ".task", "selection_publication", *parts
-        ).as_posix()
+        relative = Path(".task", "selection_publication", *parts).as_posix()
         try:
-            files = walk_regular_files_fd(
-                root, start=relative, recursive=False
-            )
+            files = walk_regular_files_fd(root, start=relative, recursive=False)
             for value in files:
                 payload = read_pinned_walk_file(
                     value,
@@ -103,9 +100,7 @@ def _json_string_refs(value: Any, candidates: set[str]) -> set[str]:
     return referenced
 
 
-def _decoded_json_refs(
-    ref: str, payload: bytes, candidates: set[str]
-) -> set[str]:
+def _decoded_json_refs(ref: str, payload: bytes, candidates: set[str]) -> set[str]:
     suffix = Path(ref).suffix.lower()
     if suffix not in {".json", ".jsonl"}:
         return set()
@@ -117,9 +112,7 @@ def _decoded_json_refs(
             else [json.loads(line) for line in text.splitlines() if line.strip()]
         )
     except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
-        raise ValueError(
-            f"retention JSON reference scan failed closed: {ref}"
-        ) from exc
+        raise ValueError(f"retention JSON reference scan failed closed: {ref}") from exc
     result: set[str] = set()
     for value in values:
         result.update(_json_string_refs(value, candidates))
@@ -179,9 +172,7 @@ def workspace_reference_epoch(root: Path) -> dict[str, Any]:
     )
     for count, value in enumerate(values, start=1):
         if count > MAX_SCAN_FILES:
-            raise ValueError(
-                "reference barrier adoption exceeds file-count bound"
-            )
+            raise ValueError("reference barrier adoption exceeds file-count bound")
         size = value.metadata.st_size
         if size > MAX_SCAN_FILE_BYTES:
             raise ValueError(
@@ -189,9 +180,7 @@ def workspace_reference_epoch(root: Path) -> dict[str, Any]:
             )
         scanned += size
         if scanned > MAX_SCAN_BYTES:
-            raise ValueError(
-                "reference barrier adoption exceeds workspace byte bound"
-            )
+            raise ValueError("reference barrier adoption exceeds workspace byte bound")
         payload = read_pinned_walk_file(
             value,
             f"reference barrier adoption file {value.ref}",
@@ -311,15 +300,13 @@ def plan_gc(root: Path) -> dict[str, Any]:
     }
 
 
-def current_reference_barrier(
-    root: Path, *, required: bool
-) -> dict[str, str] | None:
+def current_reference_barrier(root: Path, *, required: bool) -> dict[str, str] | None:
     payload = read_relative(
         root,
         REFERENCE_BARRIER_REF,
         "selection-publication reference barrier",
         required=False,
-        max_bytes=16 * 1024,
+        max_bytes=MAX_REFERENCE_BARRIER_BYTES,
     )
     if payload is None:
         if required:
@@ -328,15 +315,11 @@ def current_reference_barrier(
                 "reference-producer participation"
             )
         return None
-    validate_reference_barrier_payload(
-        payload, root=root, require_current=True
-    )
+    validate_reference_barrier_payload(payload, root=root, require_current=True)
     return reference_barrier_binding(payload)
 
 
-def validate_plan_reference_barrier(
-    root: Path, plan: dict[str, Any]
-) -> dict[str, str]:
+def validate_plan_reference_barrier(root: Path, plan: dict[str, Any]) -> dict[str, str]:
     expected = plan.get("reference_barrier")
     current = current_reference_barrier(root, required=True)
     if expected != current:
@@ -370,17 +353,13 @@ def _candidate_rows(
 def load_plan(root: Path, plan_id: str) -> tuple[dict[str, Any], Path, str]:
     path = plan_path(root, plan_id)
     relative = path.relative_to(root).as_posix()
-    plan, payload = read_json_relative(
-        root, relative, "selection-publication gc plan"
-    )
+    plan, payload = read_json_relative(root, relative, "selection-publication gc plan")
     _validate_plan_header(plan, plan_id, payload)
     _validate_candidate_rows(plan)
     return plan, path, _sha256_bytes(payload)
 
 
-def _validate_plan_header(
-    plan: dict[str, Any], plan_id: str, payload: bytes
-) -> None:
+def _validate_plan_header(plan: dict[str, Any], plan_id: str, payload: bytes) -> None:
     required = {
         "schema_version",
         "storage_schema_version",
@@ -453,9 +432,7 @@ def _validate_candidate_row(row: Any, seen: set[str]) -> None:
         or ".." in relative.parts
         or relative not in expected
     ):
-        raise ValueError(
-            "selection-publication gc candidate is not an exact CAS path"
-        )
+        raise ValueError("selection-publication gc candidate is not an exact CAS path")
 
 
 __all__ = (

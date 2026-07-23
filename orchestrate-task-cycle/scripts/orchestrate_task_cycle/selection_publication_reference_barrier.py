@@ -30,6 +30,7 @@ from .selection_publication_producer_manifest import (
 
 REFERENCE_BARRIER_PROTOCOL = "selection_publication_reference_barrier_v2"
 REFERENCE_BARRIER_REF = ".task/selection_publication/reference-barrier.json"
+MAX_REFERENCE_BARRIER_BYTES = 64 * 1024
 REFERENCE_BARRIER_KEYS = {
     "schema_version",
     "kind",
@@ -95,30 +96,20 @@ def _safe_lock_descriptor(root: Path) -> int:
     and GC process resolves and verifies this same inode before taking flock.
     """
 
-    flags = (
-        os.O_RDONLY
-        | os.O_DIRECTORY
-        | os.O_NOFOLLOW
-        | getattr(os, "O_CLOEXEC", 0)
-    )
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
     try:
         descriptor = os.open(root, flags)
     except OSError as exc:
-        raise ValueError(
-            "selection-publication workspace barrier is unsafe"
-        ) from exc
+        raise ValueError("selection-publication workspace barrier is unsafe") from exc
     try:
         observed = os.fstat(descriptor)
         current = root.stat(follow_symlinks=False)
         if (
             not stat.S_ISDIR(observed.st_mode)
             or not stat.S_ISDIR(current.st_mode)
-            or (observed.st_dev, observed.st_ino)
-            != (current.st_dev, current.st_ino)
+            or (observed.st_dev, observed.st_ino) != (current.st_dev, current.st_ino)
         ):
-            raise ValueError(
-                "selection-publication workspace barrier identity changed"
-            )
+            raise ValueError("selection-publication workspace barrier identity changed")
         return descriptor
     except BaseException:
         os.close(descriptor)
@@ -128,14 +119,20 @@ def _safe_lock_descriptor(root: Path) -> int:
 @contextlib.contextmanager
 def _barrier(root: Path, mode: int, proof_mode: str) -> Iterator[None]:
     if not hasattr(fcntl, "flock"):
-        raise ValueError(
-            "selection-publication reference barrier requires POSIX flock"
-        )
-    root = root.expanduser().resolve(strict=True)
-    descriptor = _safe_lock_descriptor(root)
+        raise ValueError("selection-publication reference barrier requires POSIX flock")
+    requested_root = root.expanduser().absolute()
+    resolved_root = requested_root.resolve(strict=True)
+    descriptor = _safe_lock_descriptor(resolved_root)
     try:
         fcntl.flock(descriptor, mode)
-        with _reference_barrier_proof(root, proof_mode):
+        proof_roots = [resolved_root]
+        if requested_root != resolved_root:
+            proof_roots.append(requested_root)
+        with contextlib.ExitStack() as stack:
+            for proof_root in proof_roots:
+                stack.enter_context(
+                    _reference_barrier_proof(proof_root, proof_mode, descriptor)
+                )
             yield
     finally:
         fcntl.flock(descriptor, fcntl.LOCK_UN)
@@ -247,18 +244,14 @@ def validate_reference_barrier_payload(
             )
         from .selection_publication_gc_fs import artifact_binding
 
-        current_state = artifact_binding(
-            root, ".task/selection_publication/state.json"
-        )
+        current_state = artifact_binding(root, ".task/selection_publication/state.json")
         if value["storage_state"] != current_state:
             raise ValueError(
-                "selection-publication reference barrier storage-state binding "
-                "is stale"
+                "selection-publication reference barrier storage-state binding is stale"
             )
         if value["producer_inventory"] != registered_producer_inventory():
             raise ValueError(
-                "selection-publication reference barrier producer inventory "
-                "has drifted"
+                "selection-publication reference barrier producer inventory has drifted"
             )
     return value
 
@@ -271,9 +264,7 @@ def reference_barrier_binding(payload: bytes) -> dict[str, str]:
     }
 
 
-def refresh_reference_barrier_state(
-    root: Path, state_binding: dict[str, str]
-) -> bool:
+def refresh_reference_barrier_state(root: Path, state_binding: dict[str, str]) -> bool:
     """Refresh an adopted policy after a state mutation under the shared lock."""
 
     from .selection_publication_gc_fs import read_relative, replace_relative
@@ -283,7 +274,7 @@ def refresh_reference_barrier_state(
         REFERENCE_BARRIER_REF,
         "selection-publication reference barrier policy",
         required=False,
-        max_bytes=64 * 1024,
+        max_bytes=MAX_REFERENCE_BARRIER_BYTES,
     )
     if existing is None:
         return False
@@ -324,9 +315,7 @@ def adopt_reference_barrier(root: Path) -> dict[str, Any]:
     with reference_gc_barrier(root):
         with _publication_lock(
             root,
-            producer_capability=(
-                _SELECTION_PUBLICATION_GC_EXCLUSIVE_CAPABILITY
-            ),
+            producer_capability=(_SELECTION_PUBLICATION_GC_EXCLUSIVE_CAPABILITY),
         ):
             _state, state_binding = validate_quiescent_state(root)
             existing = read_relative(
@@ -334,7 +323,7 @@ def adopt_reference_barrier(root: Path) -> dict[str, Any]:
                 REFERENCE_BARRIER_REF,
                 "selection-publication reference barrier policy",
                 required=False,
-                max_bytes=16 * 1024,
+                max_bytes=MAX_REFERENCE_BARRIER_BYTES,
             )
             if existing is not None:
                 try:
@@ -346,18 +335,15 @@ def adopt_reference_barrier(root: Path) -> dict[str, Any]:
                 if policy is not None:
                     return {
                         "schema_version": 2,
-                        "result_kind":
-                            "selection_publication_reference_barrier_adoption",
+                        "result_kind": "selection_publication_reference_barrier_adoption",
                         "status": "adopted",
-                        "coverage":
-                            "registered_selection_publication_producers_only",
+                        "coverage": "registered_selection_publication_producers_only",
                         "external_writer_coverage": "not_claimed",
                         "reference_barrier": artifact_binding(
                             root, REFERENCE_BARRIER_REF
                         ),
                         "adoption_preflight": policy["adoption_preflight"],
-                        "producer_inventory":
-                            policy["producer_inventory"],
+                        "producer_inventory": policy["producer_inventory"],
                         "idempotent_replay": True,
                         "mutation_performed": False,
                         "model_authored_mechanical_bytes": 0,
@@ -369,17 +355,13 @@ def adopt_reference_barrier(root: Path) -> dict[str, Any]:
                 "workspace_bytes": epoch["workspace_bytes"],
             }
             inventory = registered_producer_inventory()
-            payload = reference_barrier_payload(
-                preflight, state_binding, inventory
-            )
+            payload = reference_barrier_payload(preflight, state_binding, inventory)
             digest, created = replace_relative(
                 root,
                 REFERENCE_BARRIER_REF,
                 payload,
                 "selection-publication reference barrier policy",
-                producer_capability=(
-                    _SELECTION_PUBLICATION_GC_EXCLUSIVE_CAPABILITY
-                ),
+                producer_capability=(_SELECTION_PUBLICATION_GC_EXCLUSIVE_CAPABILITY),
             )
             binding = artifact_binding(root, REFERENCE_BARRIER_REF)
             if binding["sha256"] != digest:
@@ -403,6 +385,7 @@ def adopt_reference_barrier(root: Path) -> dict[str, Any]:
 
 __all__ = (
     "REFERENCE_BARRIER_BASE",
+    "MAX_REFERENCE_BARRIER_BYTES",
     "REFERENCE_BARRIER_PROTOCOL",
     "REFERENCE_BARRIER_REF",
     "adopt_reference_barrier",

@@ -1,4 +1,5 @@
 """Render selected-successor task-state transitions from exact source bindings."""
+
 from __future__ import annotations
 
 import io
@@ -10,13 +11,12 @@ import stat
 from typing import Any
 
 from .events import load_events_read_only, merge_state
+from .selected_successor_predecessor import current_task_predecessor
 from .transition_plan import build_transition_plan, publish_transition_plan
 from .transition_plan_contract import canonical_bytes, sha256_bytes, workspace_path
 
 
-TASK_ID_LINE = re.compile(
-    r"(?m)^\s*-\s*Task ID:\s*(?:`([^`\r\n]+)`|([^\s`\r\n]+))\s*$"
-)
+TASK_ID_LINE = re.compile(r"(?m)^\s*-\s*Task ID:\s*(?:`([^`\r\n]+)`|([^\s`\r\n]+))\s*$")
 OPAQUE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 
 # A decision receipt is a compact, body-free chain of bindings. The selected task
@@ -24,6 +24,29 @@ OPAQUE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 MAX_SELECTION_DECISION_BYTES = 256 * 1024
 MAX_SELECTED_SUCCESSOR_TASK_BYTES = 32 * 1024 * 1024
 _READ_CHUNK_BYTES = 1024 * 1024
+V3_SELECTION_RECEIPT_FIELDS = {
+    "schema_version",
+    "artifact_kind",
+    "receipt_id",
+    "selection_trigger",
+    "trigger_kind",
+    "trigger_id",
+    "selection_decision",
+    "selection_synthesis",
+    "authority_resolution",
+    "task_source",
+    "resolution_kind",
+    "synthesis_receipt_id",
+    "input_evidence_manifest_sha256",
+    "outcome",
+    "selected_task_id",
+    "not_goal_truth",
+    "not_authority",
+    "not_validation_evidence",
+    "not_completion_evidence",
+    "mutation_performed",
+    "receipt_sha256",
+}
 
 
 def _binding(value: Any, label: str) -> dict[str, str]:
@@ -91,9 +114,7 @@ def _verify_directory_chain(
             os.close(descriptor)
 
 
-def _bounded_regular_bytes(
-    root: Path, ref: str, label: str, max_bytes: int
-) -> bytes:
+def _bounded_regular_bytes(root: Path, ref: str, label: str, max_bytes: int) -> bytes:
     """Read at most max_bytes+1 through a stable no-follow directory chain."""
 
     path = workspace_path(root, ref)
@@ -111,9 +132,7 @@ def _bounded_regular_bytes(
             descriptors.append(current)
             identities.append(_identity(current))
         leaf_flags = (
-            os.O_RDONLY
-            | getattr(os, "O_NOFOLLOW", 0)
-            | getattr(os, "O_CLOEXEC", 0)
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
         )
         leaf_descriptor = os.open(parts[-1], leaf_flags, dir_fd=current)
         before = os.fstat(leaf_descriptor)
@@ -163,16 +182,21 @@ def _read_bound(
     return binding, payload
 
 
-def _decision_task_id(payload: bytes) -> tuple[str, str]:
+def _decision_task_id(
+    payload: bytes,
+) -> tuple[str, str, dict[str, str] | None]:
     try:
         receipt = json.loads(payload)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("Selection decision receipt must be JSON") from exc
     if not isinstance(receipt, dict):
         raise ValueError("Selection decision receipt must be an object")
+    schema_version = receipt.get("schema_version")
     body = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
     if (
-        receipt.get("schema_version") not in {1, 2}
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version not in {1, 2, 3}
         or receipt.get("artifact_kind") != "selection_decision_receipt"
         or receipt.get("outcome") != "selected"
         or receipt.get("not_authority") is not True
@@ -189,7 +213,46 @@ def _decision_task_id(payload: bytes) -> tuple[str, str]:
         or not OPAQUE_ID.fullmatch(receipt_id)
     ):
         raise ValueError("Selection decision receipt has an invalid selected task")
-    return task_id, receipt_id
+    receipt_task_source: dict[str, str] | None = None
+    if schema_version == 3:
+        if (
+            set(receipt) != V3_SELECTION_RECEIPT_FIELDS
+            or receipt.get("trigger_kind") != "normal_cycle"
+            or receipt.get("resolution_kind") != "user_escalation_authority_resolution"
+            or receipt.get("not_goal_truth") is not True
+            or receipt.get("not_validation_evidence") is not True
+            or receipt.get("not_completion_evidence") is not True
+        ):
+            raise ValueError(
+                "Selection decision receipt v3 is not a closed selected decision"
+            )
+        for field in (
+            "selection_trigger",
+            "selection_decision",
+            "selection_synthesis",
+            "authority_resolution",
+        ):
+            _binding(receipt.get(field), f"selection decision receipt {field}")
+        receipt_task_source = _binding(
+            receipt.get("task_source"), "selection decision receipt task source"
+        )
+        for field in ("trigger_id", "synthesis_receipt_id"):
+            if not isinstance(receipt.get(field), str) or not OPAQUE_ID.fullmatch(
+                receipt[field]
+            ):
+                raise ValueError(
+                    "Selection decision receipt v3 has an invalid dependency ID"
+                )
+        manifest_sha = receipt.get("input_evidence_manifest_sha256")
+        if (
+            not isinstance(manifest_sha, str)
+            or len(manifest_sha) != 64
+            or any(character not in "0123456789abcdef" for character in manifest_sha)
+        ):
+            raise ValueError(
+                "Selection decision receipt v3 has an invalid evidence digest"
+            )
+    return task_id, receipt_id, receipt_task_source
 
 
 def _source_task_metadata(payload: bytes, ref: str) -> tuple[str, str]:
@@ -205,7 +268,9 @@ def _source_task_metadata(payload: bytes, ref: str) -> tuple[str, str]:
             )
         task_id = match.group(1) or match.group(2)
     if task_id is None or not OPAQUE_ID.fullmatch(task_id):
-        raise ValueError("Selected successor source requires exactly one bounded Task ID")
+        raise ValueError(
+            "Selected successor source requires exactly one bounded Task ID"
+        )
     fallback = Path(ref).stem.replace("-", " ").replace("_", " ")
     title = fallback
     for line in io.StringIO(text):
@@ -219,17 +284,61 @@ def _source_task_metadata(payload: bytes, ref: str) -> tuple[str, str]:
     return task_id, title
 
 
-def _current_task(state: dict[str, dict[str, Any]]) -> tuple[str, dict[str, Any]] | None:
-    rows = [
-        (item_id, item)
-        for item_id, item in state.items()
-        if item.get("type") == "task"
-        and item.get("path") == "task.md"
-        and item.get("status") not in {"archived", "deleted", "obsolete", "superseded"}
-    ]
-    if len(rows) > 1:
-        raise ValueError("Current task alias identity is not unique")
-    return rows[0] if rows else None
+def _predecessor_snapshot_fields(
+    root: Path, predecessor_id: str, predecessor: dict[str, Any]
+) -> dict[str, Any]:
+    fields = (
+        dict(predecessor["fields"])
+        if isinstance(predecessor.get("fields"), dict)
+        else {}
+    )
+    ref = fields.get("snapshot_path")
+    digest = predecessor.get("content_sha256")
+    if not isinstance(ref, str) or not ref or fields.get("snapshot_digest") != digest:
+        raise ValueError("Selected-successor predecessor snapshot binding is invalid")
+    try:
+        payload = _bounded_regular_bytes(
+            root,
+            ref,
+            "selected-successor predecessor snapshot",
+            MAX_SELECTED_SUCCESSOR_TASK_BYTES,
+        )
+    except ValueError as exc:
+        raise ValueError(
+            "Selected-successor predecessor snapshot binding is invalid"
+        ) from exc
+    if sha256_bytes(payload) != digest:
+        raise ValueError("Selected-successor predecessor snapshot binding is invalid")
+    return {
+        **fields,
+        "record_class": "immutable_snapshot",
+        "snapshot_digest": predecessor.get("content_sha256"),
+        "snapshot_path": fields.get("snapshot_path"),
+        "alias_path": "task.md",
+        "canonical_id": predecessor_id,
+    }
+
+
+def _successor_alias_fields(
+    *,
+    selected_id: str,
+    receipt_id: str,
+    decision_binding: dict[str, str],
+    task_binding: dict[str, str],
+) -> dict[str, str]:
+    digest = task_binding["sha256"]
+    return {
+        "record_class": "mutable_alias",
+        "snapshot_digest": digest,
+        "snapshot_path": (f".task/selection_publication/blobs/sha256/{digest}"),
+        "alias_path": "task.md",
+        "canonical_id": selected_id,
+        "selection_decision_id": receipt_id,
+        "selection_decision_ref": decision_binding["ref"],
+        "selection_decision_sha256": decision_binding["sha256"],
+        "prospective_source_ref": task_binding["ref"],
+        "prospective_source_sha256": digest,
+    }
 
 
 def prepare_selected_successor(
@@ -255,7 +364,11 @@ def prepare_selected_successor(
         "selected successor source",
         max_bytes=MAX_SELECTED_SUCCESSOR_TASK_BYTES,
     )
-    selected_id, receipt_id = _decision_task_id(decision_payload)
+    selected_id, receipt_id, receipt_task_source = _decision_task_id(decision_payload)
+    if receipt_task_source is not None and receipt_task_source != task_binding:
+        raise ValueError(
+            "Selected successor source differs from the exact receipt task source"
+        )
     source_task_id, source_title = _source_task_metadata(
         task_payload, task_binding["ref"]
     )
@@ -263,19 +376,30 @@ def prepare_selected_successor(
         raise ValueError("Selected successor source differs from the decision task ID")
     existing, index_digest = load_events_read_only(root)
     state = merge_state(existing)
-    predecessor = _current_task(state)
+    current_alias_sha256 = sha256_bytes(
+        _bounded_regular_bytes(
+            root,
+            "task.md",
+            "current task alias",
+            MAX_SELECTED_SUCCESSOR_TASK_BYTES,
+        )
+    )
+    predecessor = current_task_predecessor(state, current_alias_sha256)
     if selected_id in state:
         raise ValueError("Selected successor ID is already present in task state")
     events: list[dict[str, Any]] = []
     links: list[dict[str, str]] = []
     if predecessor is not None:
-        predecessor_id, _predecessor = predecessor
+        predecessor_id, predecessor_value = predecessor
         events.append(
             {
                 "event": "upsert",
                 "id": predecessor_id,
                 "status": "superseded",
                 "links": [{"rel": "superseded_by", "id": selected_id}],
+                "fields": _predecessor_snapshot_fields(
+                    root, predecessor_id, predecessor_value
+                ),
                 "note": "selected_successor_predecessor",
             }
         )
@@ -290,13 +414,12 @@ def prepare_selected_successor(
             "title": source_title,
             "content_sha256": task_binding["sha256"],
             "links": links,
-            "fields": {
-                "selection_decision_id": receipt_id,
-                "selection_decision_ref": decision_binding["ref"],
-                "selection_decision_sha256": decision_binding["sha256"],
-                "prospective_source_ref": task_binding["ref"],
-                "prospective_source_sha256": task_binding["sha256"],
-            },
+            "fields": _successor_alias_fields(
+                selected_id=selected_id,
+                receipt_id=receipt_id,
+                decision_binding=decision_binding,
+                task_binding=task_binding,
+            ),
             "note": "selected_successor_activation",
         }
     )
@@ -319,9 +442,7 @@ def prepare_selected_successor(
     return {
         "result_kind": "task_state_selected_successor_preparation",
         "schema_version": 1,
-        "status": (
-            published["status"] if published else "dry_run"
-        ),
+        "status": (published["status"] if published else "dry_run"),
         "selected_task_id": selected_id,
         "source_decision": decision_binding,
         "task_source": task_binding,

@@ -83,6 +83,27 @@ When a task pack exists under `.task/task_pack/`, keep that same one-active-task
 
 When `task.md` is absent, run `initial_init` as a separate bootstrap transaction rather than a partial normal cycle. Render derive with `--workflow-mode bootstrap`, validate only the bootstrap order (`context -> authority -> schema_pre_derive -> derive -> schema_post_derive -> index`) with `python3 -P -m orchestrate_task_cycle transition --workflow-mode bootstrap`, and close it with `--transition bootstrap_complete`. Resolve authority, refresh schema contracts when relevant, derive one initial `task.md`, write its top `## Execution Environment`, reconcile schema contracts, and index the bootstrap result. Do not run task-bound acceptance, validation-set planning, governance, execution, completion validation, issue closure, or task-pack promotion inside that transaction. Start a fresh normal cycle afterward; recollect task-bound context, run `repo_skill_adapter_scan`, and normalize acceptance against the new task ID/path/fingerprint before governance. If the repository declares a measurable goal and `tier0_hook_set` is missing, include Tier-0 supply in the initial task acceptance. Tier-1+ hooks remain demand-led after real `decision_relevant_skip` evidence.
 
+## User-escalation Authority Re-entry Routing
+
+A finalized normal-cycle `user_escalation` result is not a terminal-wait baseline. When
+new signed decisions exactly resolve its frozen authority request, invoke
+`authority-reentry` over the old finalization, derive, schema, current-task, index,
+publication-head, allowed-decision bindings, and one explicit RFC3339 re-evaluation
+time. The compiler binds that time for exact replay and accepts only an
+identical singleton `blocked_authority` candidate from all three frozen lenses and one
+shared signed-root lineage. It reopens the packet-bound historical decision and
+requires the later allowed request to preserve every request semantic except the
+compiler-allocation `request_id`, `attempt_id`, and `idempotency_key`. It publishes a
+preparation-only schema-v3 selected receipt and exact prospective task source; it does
+not make the old cycle executable.
+
+Continue through selected-successor topology settlement, then initialize a fresh
+compiler-first cycle for the new task. Do not run `selection-tick`, create another
+derive fanout, reserve the old dispatch/run operations, or carry an old grant into the
+new task. Topology authority is exact to the historical trigger cycle and selected
+task; later dispatch/run authority is exact to the fresh cycle and therefore uses a
+separate root plan.
+
 ## Terminal-wait Re-entry Routing
 
 Terminal-wait re-entry is a bounded pre-cycle decision, not another phase in the fixed normal-cycle sequence. When the current task is terminal and non-executable, resolve the authority-settled terminal-wait baseline and run the deterministic selection tick before allocating proposal agents or initializing a ledger cycle.
@@ -114,7 +135,7 @@ The fixed sequence above and `python3 -P -m orchestrate_task_cycle transition` a
 | --- | --- | --- | --- | --- | --- |
 | Collect context | `$orchestrate-task-cycle` | `report` or `governance` | Deterministic helper scripts | `task.md`, `.agent_goal/`, `.agent_advice/`, `.task/`, `.issue/`, `.agent_log/`, `.schema/`, `.contract/`, optional Git state, optional validated session-audit sidecar | `available_goal_truth` and `used_goal_truth` must stay separate; final `기준 GT` may list only actually used GT. Session observations cannot establish authority or positive verdicts. |
 | Initialize ledger | `$maintain-cycle-ledger` | `report` | Deterministic ledger helper | `.task/cycle/<cycle-id>/stage.jsonl`, `current_stage.json`, `packets/` | Stage events are append-only workflow state. |
-| Resolve authority | `$manage-agent-authority` | `authority` | Owning skill decision/reservation lifecycle plus deterministic orchestrator validation | Immutable policy snapshot and grant state, exact request/operation/subject, operation manifest, independent local/external/risk/GT evidence; exact reservation and `pre_dispatch` verification for mutation | Validate the closed v2 packet in `block` mode. Unknown mutation, implicit grant union, stale binding, or legacy material cannot dispatch. |
+| Resolve authority | `$manage-agent-authority` | `authority` | Owning skill decision lifecycle plus read-only executable-closure inspection; selected-successor topology additionally holds its exact predecessor epoch through reservation | Immutable policy snapshot and grant state, exact request/operation/subject and request digest, operation manifest, independent local/external/risk/GT evidence; exact operation batch and current task/cycle closure; exact reservation and `pre_dispatch` verification for mutation | Validate the closed v2 packet in `block` mode. Unknown mutation, implicit grant union, stale binding, completed-task/historical-cycle execution, request-digest drift, or legacy material cannot dispatch. Do not claim the ordinary read-only closure command is a universal atomic guard around the low-level reserve API. |
 | Scan repo-local adapters | `$orchestrate-task-cycle` | `repo_skill_adapter_scan` | Metadata-only adapter scan | `.codex/skills/*/SKILL.md` frontmatter, optional `adapter.manifest.json`, optional packet-renderer availability | Emit adapter count including zero, explicit blockers, and a `repo_skill_adapter_packet` before acceptance; adapter data is non-GT capability evidence. |
 | Normalize acceptance/demo | `$normalize-acceptance-and-demo` | `acceptance` | Summary-level workflow artifact | Current `task.md`, authority policy, repo adapter packet/hooks, advice packet, schema/contract summaries | Emit `acceptance_id` plus source task ID/path/fingerprint; mismatch or missing provenance blocks governance. Missing criteria become assumptions or blockers, not hidden scope expansion. |
 | Route plan | `$orchestrate-task-cycle` | `validation_set_plan` or `governance` | Summary-level deterministic classification | Current task, acceptance, authority, GT/advice packets, schema/contracts, issues, task_miss, `.validation/` inventory | Classify whether validation assets are `not_applicable`, `plan`, `build`, `refresh`, `consume`, or `blocked_or_candidate_only`; skipped paths require reasons. |

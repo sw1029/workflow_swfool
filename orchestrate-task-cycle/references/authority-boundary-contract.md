@@ -85,7 +85,9 @@ Use this sequence without adding a phase:
 exact request + exact subject + operation manifest
   -> manage-agent-authority evaluate
   -> closed decision artifact
-  -> if allowed mutation: reserve exact uses
+  -> if allowed orchestrated mutation: inspect executable closure over the exact operation batch
+  -> selected-successor owner: hold its exact closure epoch through reservation
+  -> other owners: reserve only through an owner path whose lifecycle lock is explicit
   -> manage-agent-authority verify --stage pre_dispatch
   -> orchestrator authority packet --mode block
   -> dispatch only when packet passes
@@ -98,7 +100,56 @@ exact request + exact subject + operation manifest
 
 For `observe`, set reservation applicability and dispatch preflight to `not_applicable`. For an allowed mutation, require `reservation_binding.applicability: required`, `status: reserved`, exact grant-use transitions, and a `dispatch_preflight` copied from the immutable owner verification plus its ref/hash.
 
-The pre-dispatch verification must echo the same request ID and owner fingerprint, exact reservation artifact/state, and the same set of selected plus lineage grant IDs/digests at their post-reservation versions. Every verified grant and finite-budget ancestor must remain `active`, and `reserved_uses` must cover the operation units. This is the TOCTOU/revocation/expiry/usage boundary. A later change requires a fresh owner verification and packet; a caller-authored boolean is not verification.
+The pre-dispatch verification must echo the same request ID and owner fingerprint, exact reservation artifact/state, and the same set of selected plus lineage grant IDs/digests at their post-reservation versions. Every verified grant and finite-budget ancestor must remain `active`, and `reserved_uses` must cover the operation units. A schema-v3 root-materialized grant and every descendant that depends on it must also match the evaluated request's canonical SHA-256 exactly; because the digest includes cycle and task scope, matching only operation, subject, or task cannot bridge a different cycle. This is the TOCTOU/revocation/expiry/usage boundary. A later change requires a fresh owner verification and packet; a caller-authored boolean is not verification.
+
+### Executable closure inspection and selected-successor reservation guard
+
+Authority evaluation answers whether grants cover an exact request. It does not by itself prove that the request still belongs to an executable task lifecycle. Before an orchestrated mutation reservation, run the read-only inspection:
+
+```bash
+python3 -P -m orchestrate_task_cycle workflow cycle executable-closure --root . \
+  --operation-batch-ref <operation-batch-ref> \
+  --operation-batch-sha256 <operation-batch-raw-sha256>
+```
+
+The read-only preflight reopens the operation batch, cycle initialization and workflow contract, the unique digest-matched `task.md` alias, and task-index state. `ready/current_cycle` requires one active task whose ID matches both the sealed compiler-first cycle and every request. A completed alias or `historical_v1_read_only|historical_v2_read_only` cycle blocks ordinary reservation even if an old decision remains `allowed`.
+
+For the three selected-successor topology operations, also bind the exact closed bundle and all three allowed decisions:
+
+```bash
+python3 -P -m orchestrate_task_cycle workflow cycle executable-closure --root . \
+  --operation-batch-ref <topology-operation-batch-ref> \
+  --operation-batch-sha256 <topology-operation-batch-raw-sha256> \
+  --selected-successor-bundle-ref <bundle-ref> \
+  --selected-successor-bundle-sha256 <bundle-raw-sha256> \
+  --authority-decision-ref <decision-1-ref> \
+  --authority-decision-sha256 <decision-1-raw-sha256> \
+  --authority-decision-ref <decision-2-ref> \
+  --authority-decision-sha256 <decision-2-raw-sha256> \
+  --authority-decision-ref <decision-3-ref> \
+  --authority-decision-sha256 <decision-3-raw-sha256>
+```
+
+Only an exact bundle/request projection, exact still-current predecessor `task.md` and task-index epoch, exact transition-plan anchors/events, and the complete allowed decision set may return `ready/selected_successor_topology`. The topology effect does not make its historical source cycle executable. After settlement, initialize a fresh compiler-first cycle for the selected task, compile a new execution batch, and obtain authority exact to that new request. A blocked or invalid selected-successor closure performs no reservation and no mutation.
+
+The selected-successor authority producer enforces this check in-process: it reopens
+the owner bundle and all published compilations, evaluates the complete three-decision
+set without writing reservations, and requires `ready/selected_successor_topology`
+before its first reservation. It holds the authority lock and task-index read epoch in
+the fixed owner lock order, then reopens the exact task/index epoch after each decision
+publication and immediately before each reservation. Shared finite grants are
+re-evaluated immediately before each reservation so earlier reservations cannot make a
+later decision stale.
+
+The public `executable-closure` command remains a read-only inspection surface for
+ordinary operation batches. It does not retrofit an operation-batch binding or a
+universal task-lifecycle epoch into `$manage-agent-authority reserve`; task-doctor,
+selection publication, and other owners do not yet share one generic lifecycle lock.
+Accordingly, do not describe an ordinary ready result as an atomic global reservation
+guard. Use only a fixed owning-skill reservation path, document its lifecycle lock, and
+stop on any changed closure input. Extending the selected-successor guard and common
+lifecycle epoch to every mutating owner is a separate contract migration, not a
+property of the current low-level CLI.
 
 ## Commit and settlement gates
 
@@ -161,7 +212,8 @@ events, publication target, predecessor, effect, or consume key.
 Use this order:
 
 ```text
-exact normal-cycle trigger + selection-decision receipt v2
+exact normal-cycle trigger + direct-selection receipt v2
+  or authority-resolution receipt v3 with its exact task_source
   -> prospective task-state plan v2 over candidate bytes
   -> non-active selection-publication prepare v3
   -> authority/pre-commit gates for the exact owner effects

@@ -40,6 +40,14 @@ PRODUCER_SPECS = (
         ("main",),
     ),
     _spec(
+        "selection-authority-reentry",
+        "selection_authority_reentry.py",
+        (
+            "compile_and_publish_authority_reentry",
+            "publish_authority_reentry",
+        ),
+    ),
+    _spec(
         "selection-publication-intent",
         "selection_publication_intent_service.py",
         ("prepare_publication_intent",),
@@ -140,6 +148,17 @@ PRODUCER_SPECS = (
         "control",
     ),
     _spec(
+        "selection-publication-store-pinned-control",
+        "selection_publication_store_pinned.py",
+        (
+            "create_store_directories",
+            "publication_lock",
+            "replace_registered_path",
+            "write_once_registered_path",
+        ),
+        "control",
+    ),
+    _spec(
         "selection-publication-barrier-control",
         "selection_publication_reference_barrier.py",
         (
@@ -153,7 +172,9 @@ PRODUCER_SPECS = (
         "selection-publication-capability-control",
         "selection_publication_producer_capability.py",
         (
+            "_active_reference_barrier_descriptor",
             "_active_reference_barrier_mode",
+            "_active_reference_barrier_root_for_path",
             "_reference_barrier_proof",
             "_require_selection_publication_gc_exclusive",
             "_require_selection_publication_lock",
@@ -198,9 +219,7 @@ PRODUCER_INVENTORY_KEYS = {
 
 
 def _canonical_json(value: Any) -> bytes:
-    return (
-        json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
-    ).encode()
+    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
 def registered_producer_inventory() -> dict[str, Any]:
@@ -233,9 +252,7 @@ def registered_producer_inventory() -> dict[str, Any]:
         definitions = {
             node.name
             for node in tree.body
-            if isinstance(
-                node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
-            )
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
         }
         missing = sorted(set(spec["entrypoints"]) - definitions)
         if missing:
@@ -243,9 +260,7 @@ def registered_producer_inventory() -> dict[str, Any]:
                 "selection-publication producer manifest entrypoint is absent: "
                 + ", ".join(missing)
             )
-        rows.append(
-            {**spec, "source_sha256": hashlib.sha256(payload).hexdigest()}
-        )
+        rows.append({**spec, "source_sha256": hashlib.sha256(payload).hexdigest()})
     rows.sort(key=lambda row: row["producer_id"])
     lint = lint_registered_producers(
         source_root, {str(spec["source_file"]) for spec in PRODUCER_SPECS}
@@ -267,8 +282,7 @@ def valid_producer_inventory(value: Any) -> bool:
         not isinstance(value, dict)
         or set(value) != PRODUCER_INVENTORY_KEYS
         or value.get("schema_version") != 2
-        or value.get("scope")
-        != "closed_registered_selection_publication_modules"
+        or value.get("scope") != "closed_registered_selection_publication_modules"
         or not isinstance(value.get("producers"), list)
         or not value["producers"]
         or not isinstance(value.get("contract_lint"), dict)
@@ -314,18 +328,14 @@ def valid_producer_inventory(value: Any) -> bool:
     ):
         return False
     lint_body = {key: child for key, child in lint.items() if key != "lint_sha256"}
-    if lint["lint_sha256"] != hashlib.sha256(
-        _canonical_json(lint_body)
-    ).hexdigest():
+    if lint["lint_sha256"] != hashlib.sha256(_canonical_json(lint_body)).hexdigest():
         return False
     body = {
-        key: value[key]
-        for key in PRODUCER_INVENTORY_KEYS
-        if key != "inventory_sha256"
+        key: value[key] for key in PRODUCER_INVENTORY_KEYS if key != "inventory_sha256"
     }
-    return value["inventory_sha256"] == hashlib.sha256(
-        _canonical_json(body)
-    ).hexdigest()
+    return (
+        value["inventory_sha256"] == hashlib.sha256(_canonical_json(body)).hexdigest()
+    )
 
 
 __all__ = (

@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
 from typing import Any
 
 import pytest
@@ -89,6 +90,27 @@ def _authority_counts(root: Path) -> tuple[int, int, int]:
     )
 
 
+def _damage_predecessor_snapshot(
+    root: Path, bundle: dict[str, Any], damage: str
+) -> None:
+    plan = json.loads(
+        (root / bundle["task_state_plan"]["ref"]).read_text(encoding="utf-8")
+    )
+    predecessor = next(
+        event for event in plan["events"] if event["status"] == "superseded"
+    )
+    snapshot = root / predecessor["fields"]["snapshot_path"]
+    if damage == "missing":
+        snapshot.unlink()
+    elif damage == "tampered":
+        snapshot.write_bytes(snapshot.read_bytes() + b"\n# tampered\n")
+    else:
+        target = root / "predecessor-snapshot-symlink-target.md"
+        target.write_bytes(snapshot.read_bytes())
+        snapshot.unlink()
+        snapshot.symlink_to(target)
+
+
 def test_prepare_authority_builds_body_free_packet_and_packet_cli_executes(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -110,7 +132,8 @@ def test_prepare_authority_builds_body_free_packet_and_packet_cli_executes(
         "settle_selected_successor_task_state",
     }
     assert all(
-        set(row) == {
+        set(row)
+        == {
             "action",
             "compilation",
             "request_sha256",
@@ -204,10 +227,19 @@ def test_truly_absent_grants_publish_projection_but_no_authority_lifecycle(
 
     assert result["status"] == "approval_required"
     assert _authority_counts(tmp_path) == (0, 0, 0)
-    assert len(list((tmp_path / ".task/authorization/operation_compilations").glob("*.json"))) == 3
+    assert (
+        len(
+            list(
+                (tmp_path / ".task/authorization/operation_compilations").glob("*.json")
+            )
+        )
+        == 3
+    )
     assert projection["authority_effects"]["decisions_published"] is False
     assert all("compilation" in row for row in projection["operations"])
-    assert all(row["decision"] == "approval_required" for row in projection["operations"])
+    assert all(
+        row["decision"] == "approval_required" for row in projection["operations"]
+    )
 
     replay = _prepare_authority(tmp_path, prepared, inputs)
     assert replay["idempotent_replay"] is True
@@ -231,9 +263,7 @@ def test_declared_absent_existing_grant_is_input_conflict_with_zero_writes(
 def test_shared_grant_budget_is_preflighted_before_any_reservation(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    prepared, _bundle, inputs = _prepared(
-        tmp_path, capsys, shared_grant_max_uses=2
-    )
+    prepared, _bundle, inputs = _prepared(tmp_path, capsys, shared_grant_max_uses=2)
 
     result = _prepare_authority(tmp_path, prepared, inputs)
     _projection_binding, projection = load_projection(
@@ -242,9 +272,14 @@ def test_shared_grant_budget_is_preflighted_before_any_reservation(
 
     assert result["status"] == "approval_required"
     assert _authority_counts(tmp_path) == (0, 0, 0)
-    assert len(
-        list((tmp_path / ".task/authorization/operation_compilations").glob("*.json"))
-    ) == 3
+    assert (
+        len(
+            list(
+                (tmp_path / ".task/authorization/operation_compilations").glob("*.json")
+            )
+        )
+        == 3
+    )
     assert all(row["decision"] == "allowed" for row in projection["operations"])
     assert all(
         row["reason_codes"] == ["aggregate_grant_budget_insufficient"]
@@ -258,18 +293,287 @@ def test_shared_grant_budget_is_preflighted_before_any_reservation(
     assert _authority_counts(tmp_path) == (0, 0, 0)
 
 
+@pytest.mark.parametrize(
+    "closure_result",
+    [
+        {"status": "invalid", "route": "selected_successor_topology"},
+        {"status": "ready", "route": "current_cycle"},
+        {
+            "status": "blocked_prerequisite",
+            "route": "selected_successor_topology",
+        },
+    ],
+    ids=("invalid", "route-mismatch", "incomplete"),
+)
+def test_non_ready_topology_closure_aborts_before_first_authority_reservation(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    closure_result: dict[str, str],
+) -> None:
+    prepared, _bundle, inputs = _prepared(tmp_path, capsys, shared_grant_max_uses=3)
+    grant_state_root = tmp_path / ".task/authorization/state/grants"
+    grant_states_before = {
+        path.name: path.read_bytes() for path in grant_state_root.glob("*.json")
+    }
+    import orchestrate_task_cycle.executable_closure_topology as topology
+
+    monkeypatch.setattr(
+        topology,
+        "preflight_selected_successor_closure",
+        lambda *_args, **_kwargs: dict(closure_result),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="executable closure is not ready before reservation",
+    ):
+        _prepare_authority(tmp_path, prepared, inputs)
+
+    assert _authority_counts(tmp_path) == (0, 0, 0)
+    assert {
+        path.name: path.read_bytes() for path in grant_state_root.glob("*.json")
+    } == grant_states_before
+    assert not list(
+        (tmp_path / ".task/authorization/state/reservations").glob("*.json")
+    )
+    assert (
+        len(
+            list(
+                (tmp_path / ".task/authorization/operation_compilations").glob("*.json")
+            )
+        )
+        == 3
+    )
+
+
+def test_task_swap_after_ready_closure_aborts_before_first_reservation(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared, _bundle, inputs = _prepared(tmp_path, capsys, shared_grant_max_uses=3)
+    grant_state_root = tmp_path / ".task/authorization/state/grants"
+    grant_states_before = {
+        path.name: path.read_bytes() for path in grant_state_root.glob("*.json")
+    }
+    import orchestrate_task_cycle.selected_successor_authority_publication as publication
+
+    swapped = False
+
+    def swap_task_after_closure(
+        stage: str, root: Path, closure: dict[str, Any]
+    ) -> None:
+        nonlocal swapped
+        assert stage == "after_pure_preflight"
+        assert closure["status"] == "ready"
+        if swapped:
+            return
+        swapped = True
+        (root / "task.md").write_text(
+            "# Task\n\n- Task ID: `task-swapped-after-closure`\n",
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(
+        publication, "_reservation_closure_hook", swap_task_after_closure
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="closure epoch changed before authority reservation",
+    ):
+        _prepare_authority(tmp_path, prepared, inputs)
+
+    assert swapped is True
+    assert _authority_counts(tmp_path) == (0, 0, 0)
+    assert {
+        path.name: path.read_bytes() for path in grant_state_root.glob("*.json")
+    } == grant_states_before
+    assert not list(
+        (tmp_path / ".task/authorization/state/reservations").glob("*.json")
+    )
+
+
+@pytest.mark.parametrize("damage", ("missing", "tampered", "symlink"))
+def test_snapshot_drift_after_ready_closure_has_zero_reservations(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    damage: str,
+) -> None:
+    prepared, bundle, inputs = _prepared(tmp_path, capsys, shared_grant_max_uses=3)
+    import orchestrate_task_cycle.selected_successor_authority_publication as publication
+
+    drifted = False
+
+    def damage_after_closure(stage: str, root: Path, closure: dict[str, Any]) -> None:
+        nonlocal drifted
+        assert stage == "after_pure_preflight"
+        assert closure["status"] == "ready"
+        assert closure["closure_epoch"]["selected_successor_predecessor"]["snapshot"]
+        if not drifted:
+            _damage_predecessor_snapshot(root, bundle, damage)
+            drifted = True
+
+    monkeypatch.setattr(publication, "_reservation_closure_hook", damage_after_closure)
+
+    with pytest.raises(
+        ValueError,
+        match="closure epoch changed before authority reservation",
+    ):
+        _prepare_authority(tmp_path, prepared, inputs)
+
+    assert drifted is True
+    assert _authority_counts(tmp_path) == (0, 0, 0)
+    assert not list(
+        (tmp_path / ".task/authorization/state/reservations").glob("*.json")
+    )
+
+
+@pytest.mark.parametrize("damage", ("missing", "tampered", "symlink"))
+def test_predecessor_snapshot_drift_before_authority_has_zero_reservations(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    damage: str,
+) -> None:
+    prepared, bundle, inputs = _prepared(tmp_path, capsys, shared_grant_max_uses=3)
+    _damage_predecessor_snapshot(tmp_path, bundle, damage)
+    grant_state_root = tmp_path / ".task/authorization/state/grants"
+    grant_states_before = {
+        path.name: path.read_bytes() for path in grant_state_root.glob("*.json")
+    }
+
+    with pytest.raises(ValueError, match="predecessor snapshot"):
+        _prepare_authority(tmp_path, prepared, inputs)
+
+    assert _authority_counts(tmp_path) == (0, 0, 0)
+    assert {
+        path.name: path.read_bytes() for path in grant_state_root.glob("*.json")
+    } == grant_states_before
+    assert not list(
+        (tmp_path / ".task/authorization/state/reservations").glob("*.json")
+    )
+
+
+def test_unrelated_unique_active_alias_rejects_topology_without_authority_writes(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared, _bundle, inputs = _prepared(tmp_path, capsys, shared_grant_max_uses=3)
+    from test_executable_closure import _task
+    import orchestrate_task_cycle.selected_successor_authority as authority
+
+    monkeypatch.setattr(
+        authority,
+        "validate_pristine_source",
+        lambda *_args, **_kwargs: None,
+    )
+
+    _task(tmp_path, task_id="task-unrelated", status="active")
+    grant_state_root = tmp_path / ".task/authorization/state/grants"
+    grant_states_before = {
+        path.name: path.read_bytes() for path in grant_state_root.glob("*.json")
+    }
+
+    with pytest.raises(
+        ValueError,
+        match="executable closure is not ready before reservation",
+    ):
+        _prepare_authority(tmp_path, prepared, inputs)
+
+    assert _authority_counts(tmp_path) == (0, 0, 0)
+    assert {
+        path.name: path.read_bytes() for path in grant_state_root.glob("*.json")
+    } == grant_states_before
+
+
+def test_legitimate_task_index_writer_waits_for_reservation_scope(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared, _bundle, inputs = _prepared(tmp_path, capsys, shared_grant_max_uses=3)
+    import orchestrate_task_cycle.selected_successor_authority_publication as publication
+    from manage_task_state_index import index as task_index
+
+    started = threading.Event()
+    finished = threading.Event()
+    failures: list[BaseException] = []
+    writer: threading.Thread | None = None
+
+    def write_index() -> None:
+        try:
+            started.set()
+            task_index.append_event(
+                tmp_path,
+                {
+                    "event": "upsert",
+                    "id": "audit-concurrent-closure-writer",
+                    "type": "audit",
+                    "status": "logged",
+                    "path": ".task/concurrent-closure-audit.md",
+                    "title": "Concurrent closure audit",
+                    "updated_at": "2026-07-17T10:00:01+09:00",
+                },
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below.
+            failures.append(exc)
+        finally:
+            finished.set()
+
+    def start_writer(stage: str, _root: Path, closure: dict[str, Any]) -> None:
+        nonlocal writer
+        assert stage == "after_pure_preflight"
+        assert closure["status"] == "ready"
+        writer = threading.Thread(target=write_index, daemon=True)
+        writer.start()
+        assert started.wait(timeout=1)
+        assert not finished.wait(timeout=0.05)
+
+    monkeypatch.setattr(publication, "_reservation_closure_hook", start_writer)
+
+    result = _prepare_authority(tmp_path, prepared, inputs)
+    assert result["status"] == "prepared"
+    assert writer is not None
+    writer.join(timeout=2)
+    assert finished.is_set()
+    assert failures == []
+    assert _authority_counts(tmp_path) == (3, 3, 3)
+
+
 def test_sufficient_shared_grant_tracks_current_version_per_chain(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    prepared, _bundle, inputs = _prepared(
-        tmp_path, capsys, shared_grant_max_uses=3
-    )
+    prepared, _bundle, inputs = _prepared(tmp_path, capsys, shared_grant_max_uses=3)
 
     result = _prepare_authority(tmp_path, prepared, inputs)
     _packet_binding, packet = load_packet(tmp_path, result["authority_packet"])
 
     assert result["status"] == "prepared"
     assert _authority_counts(tmp_path) == (3, 3, 3)
+    assert len(packet["operations"]) == 3
+    assert len(packet["authority_proofs"]) == 3
+    assert len({row["decision"]["ref"] for row in packet["operations"]}) == 3
+    assert (
+        len(
+            {
+                proof["reservation"]["ref"]
+                for proof in packet["authority_proofs"].values()
+            }
+        )
+        == 3
+    )
+    assert (
+        len(
+            {
+                proof["pre_commit_verification"]["ref"]
+                for proof in packet["authority_proofs"].values()
+            }
+        )
+        == 3
+    )
     grant_ids = []
     state_versions = []
     for operation in packet["operations"]:
@@ -280,6 +584,14 @@ def test_sufficient_shared_grant_tracks_current_version_per_chain(
         state_versions.append(decision["selected_grants"][0]["state_version"])
     assert len(set(grant_ids)) == 1
     assert state_versions == [0, 1, 2]
+    shared_state = json.loads(
+        (
+            tmp_path
+            / ".task/authorization/state/grants/selected-compiler-shared-grant.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert shared_state["reserved_uses"] == 3
+    assert shared_state["version"] == 3
 
     replay = _prepare_authority(tmp_path, prepared, inputs)
     assert replay["idempotent_replay"] is True
@@ -290,9 +602,7 @@ def test_sufficient_shared_grant_resumes_after_first_reservation(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    prepared, _bundle, inputs = _prepared(
-        tmp_path, capsys, shared_grant_max_uses=3
-    )
+    prepared, _bundle, inputs = _prepared(tmp_path, capsys, shared_grant_max_uses=3)
     import manage_agent_authority.lifecycle as lifecycle
 
     real_reserve = lifecycle.reserve
@@ -348,13 +658,17 @@ def test_packet_locator_repairs_missing_index_after_consumed_execution(
         crash.setattr(
             publication,
             "publish_index",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("index crash")),
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("index crash")
+            ),
         )
         with pytest.raises(RuntimeError, match="index crash"):
             _prepare_authority(tmp_path, prepared, inputs)
 
     locator_path = next(
-        (tmp_path / ".task/selection_publication/successor_authority_locators/sha256").glob("*.json")
+        (
+            tmp_path / ".task/selection_publication/successor_authority_locators/sha256"
+        ).glob("*.json")
     )
     locator = json.loads(locator_path.read_text(encoding="utf-8"))
     packet_binding = locator["packet"]
@@ -393,12 +707,16 @@ def test_invalid_located_packet_is_not_swallowed_or_reauthorized(
         crash.setattr(
             publication,
             "publish_index",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("index crash")),
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("index crash")
+            ),
         )
         with pytest.raises(RuntimeError):
             _prepare_authority(tmp_path, prepared, inputs)
     locator_path = next(
-        (tmp_path / ".task/selection_publication/successor_authority_locators/sha256").glob("*.json")
+        (
+            tmp_path / ".task/selection_publication/successor_authority_locators/sha256"
+        ).glob("*.json")
     )
     locator = json.loads(locator_path.read_text(encoding="utf-8"))
     packet_path = tmp_path / locator["packet"]["ref"]
@@ -410,7 +728,9 @@ def test_invalid_located_packet_is_not_swallowed_or_reauthorized(
 
     assert _authority_counts(tmp_path) == before
     assert not list(
-        (tmp_path / ".task/selection_publication/successor_authority_indexes/sha256").glob("*.json")
+        (
+            tmp_path / ".task/selection_publication/successor_authority_indexes/sha256"
+        ).glob("*.json")
     )
 
 

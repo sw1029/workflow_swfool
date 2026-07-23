@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,25 @@ from .stable_store import atomic_replace
 from .stable_store import locked_file
 from .stable_store import publish_immutable
 from .stable_store import read_regular
+
+
+_AUTHORITY_THREAD_LOCKS: dict[str, threading.RLock] = {}
+_AUTHORITY_THREAD_LOCKS_GUARD = threading.Lock()
+_AUTHORITY_LOCK_STATE = threading.local()
+
+
+def _authority_thread_lock(root: Path) -> threading.RLock:
+    key = str(root)
+    with _AUTHORITY_THREAD_LOCKS_GUARD:
+        return _AUTHORITY_THREAD_LOCKS.setdefault(key, threading.RLock())
+
+
+def _authority_lock_depths() -> dict[str, int]:
+    depths = getattr(_AUTHORITY_LOCK_STATE, "depths", None)
+    if depths is None:
+        depths = {}
+        _AUTHORITY_LOCK_STATE.depths = depths
+    return depths
 
 
 def canonical_bytes(value: Any) -> bytes:
@@ -142,6 +162,21 @@ def write_immutable_json(path: Path, value: dict[str, Any], label: str) -> str:
 
 @contextmanager
 def authority_lock(root: Path) -> Iterator[None]:
-    lock_path = root / ".task" / "authorization" / "state" / ".authority.lock"
-    with locked_file(lock_path):
-        yield
+    root = root.resolve()
+    key = str(root)
+    with _authority_thread_lock(root):
+        depths = _authority_lock_depths()
+        if depths.get(key, 0):
+            depths[key] += 1
+            try:
+                yield
+            finally:
+                depths[key] -= 1
+            return
+        lock_path = root / ".task" / "authorization" / "state" / ".authority.lock"
+        with locked_file(lock_path):
+            depths[key] = 1
+            try:
+                yield
+            finally:
+                depths.pop(key, None)

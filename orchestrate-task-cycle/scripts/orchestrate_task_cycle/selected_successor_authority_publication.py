@@ -24,10 +24,11 @@ def supplied_grant_matches(
     if descriptor.get("status") != "bound" or not isinstance(selected, list):
         return False
     binding = descriptor["binding"]
-    return len(selected) == 1 and selected[0].get("grant_sha256") == binding[
-        "sha256"
-    ] and binding["ref"] == (
-        f".task/authorization/grants/{selected[0].get('grant_id')}.json"
+    return (
+        len(selected) == 1
+        and selected[0].get("grant_sha256") == binding["sha256"]
+        and binding["ref"]
+        == (f".task/authorization/grants/{selected[0].get('grant_id')}.json")
     )
 
 
@@ -78,9 +79,7 @@ def result_from_index(
         packet = validate_authority_packet(root, outcome, skills_root=skills_root)
         artifact = packet
     else:
-        artifact = validate_authority_projection(
-            root, outcome, skills_root=skills_root
-        )
+        artifact = validate_authority_projection(root, outcome, skills_root=skills_root)
     expected_fields = (
         "prepared_at",
         "bundle",
@@ -271,10 +270,18 @@ def aggregate_budget_reasons(
     }
 
 
+def _reservation_closure_hook(stage: str, root: Path, closure: dict[str, Any]) -> None:
+    """Test seam for a mutable-task swap after closure but before reservation."""
+
+    _ = stage, root, closure
+
+
 def _publish_chains(
     root: Path,
+    bundle: dict[str, str],
     rows: list[dict[str, Any]],
     compilations: list[dict[str, Any]],
+    compilation_bindings: list[dict[str, str]],
     grants: dict[str, dict[str, Any]],
     existing: list[dict[str, Any] | None],
     *,
@@ -282,65 +289,111 @@ def _publish_chains(
     skills_root: Path | None,
 ) -> tuple[list[dict[str, str]], dict[str, dict[str, Any]]]:
     from manage_agent_authority.decision_publication import evaluate_and_publish
+    from manage_agent_authority.evaluator import evaluate
     from manage_agent_authority.lifecycle import reserve
     from manage_agent_authority.verification_publication import (
         verify_and_publish_precommit,
     )
+    from .executable_closure_snapshot import (
+        assert_executable_closure_epoch_current,
+    )
+    from .executable_closure_topology import (
+        selected_successor_reservation_scope,
+    )
 
-    decisions = []
-    proofs = {}
+    decisions: list[dict[str, str] | None] = []
+    closure_bindings: list[dict[str, str]] = []
+    closure_values: list[dict[str, Any]] = []
     for row, compilation, present in zip(rows, compilations, existing):
         if present is None:
-            published = evaluate_and_publish(
+            current = evaluate(
                 root,
                 compilation["request"],
                 compilation["evaluation_context"],
                 evaluated_at=at,
                 skills_root=skills_root,
             )
-            if published.get("decision") != "allowed" or not supplied_grant_matches(
-                published, grants[row["action"]]
+            if current.get("decision") != "allowed" or not supplied_grant_matches(
+                current, grants[row["action"]]
             ):
-                raise ValueError(
-                    "Authority changed after the all-three pure preflight"
+                raise ValueError("Authority changed after the all-three pure preflight")
+            closure_values.append(current)
+            decisions.append(None)
+        else:
+            closure_bindings.append(present["decision_binding"])
+            decisions.append(present["decision_binding"])
+
+    proofs = {}
+    with selected_successor_reservation_scope(
+        root,
+        bundle_binding=bundle,
+        compilation_bindings=compilation_bindings,
+        decision_bindings=closure_bindings,
+        decision_values=closure_values,
+        skills_root=skills_root,
+    ) as closure:
+        _reservation_closure_hook("after_pure_preflight", root, closure)
+        assert_executable_closure_epoch_current(root, closure)
+        for index, (row, compilation, present, prior_binding) in enumerate(
+            zip(rows, compilations, existing, decisions)
+        ):
+            if present is None:
+                current = evaluate_and_publish(
+                    root,
+                    compilation["request"],
+                    compilation["evaluation_context"],
+                    evaluated_at=at,
+                    skills_root=skills_root,
                 )
-            decision_binding = {
-                "ref": published["decision_ref"],
-                "sha256": published["decision_sha256"],
-            }
-            reserved = reserve(
+                if current.get("decision") != "allowed" or not supplied_grant_matches(
+                    current, grants[row["action"]]
+                ):
+                    raise ValueError(
+                        "Authority changed after executable-closure preflight"
+                    )
+                decision_binding = {
+                    "ref": current["decision_ref"],
+                    "sha256": current["decision_sha256"],
+                }
+                decisions[index] = decision_binding
+                assert_executable_closure_epoch_current(root, closure)
+                reserved = reserve(
+                    root,
+                    decision_binding["ref"],
+                    decision_binding["sha256"],
+                    reserved_at=at,
+                    idempotency_key=row["idempotency_key"],
+                    skills_root=skills_root,
+                )
+                reservation = {
+                    "ref": reserved["reservation_ref"],
+                    "sha256": reserved["reservation_sha256"],
+                }
+            else:
+                assert prior_binding is not None
+                decision_binding = prior_binding
+                reservation = present["reservation_binding"]
+            verified = verify_and_publish_precommit(
                 root,
-                decision_binding["ref"],
-                decision_binding["sha256"],
-                reserved_at=at,
-                idempotency_key=row["idempotency_key"],
+                reservation["ref"],
+                reservation["sha256"],
+                verified_at=at,
+                expected_version=0,
                 skills_root=skills_root,
             )
-            reservation = {
-                "ref": reserved["reservation_ref"],
-                "sha256": reserved["reservation_sha256"],
+            proofs[row["action"]] = {
+                "reservation": reservation,
+                "pre_commit_verification": {
+                    "ref": verified["verification_ref"],
+                    "sha256": verified["verification_sha256"],
+                },
+                "expected_version": 0,
             }
-        else:
-            decision_binding = present["decision_binding"]
-            reservation = present["reservation_binding"]
-        decisions.append(decision_binding)
-        verified = verify_and_publish_precommit(
-            root,
-            reservation["ref"],
-            reservation["sha256"],
-            verified_at=at,
-            expected_version=0,
-            skills_root=skills_root,
+    if any(item is None for item in decisions):
+        raise ValueError(
+            "Selected-successor authority decision publication is incomplete"
         )
-        proofs[row["action"]] = {
-            "reservation": reservation,
-            "pre_commit_verification": {
-                "ref": verified["verification_ref"],
-                "sha256": verified["verification_sha256"],
-            },
-            "expected_version": 0,
-        }
-    return decisions, proofs
+    return [item for item in decisions if item is not None], proofs
 
 
 def publish_packet_result(
@@ -362,8 +415,10 @@ def publish_packet_result(
 ) -> dict[str, Any]:
     decisions, proofs = _publish_chains(
         root,
+        bundle,
         rows,
         compilations,
+        compilation_bindings,
         grants,
         existing,
         at=at,

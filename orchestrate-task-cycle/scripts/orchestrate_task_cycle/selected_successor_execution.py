@@ -19,11 +19,27 @@ from .selected_successor_execution_support import (
     settle_authority,
     validate_pristine_source,
 )
+from .selected_successor_predecessor_snapshot import (
+    validate_plan_owned_predecessor_snapshot,
+)
+
+
+def _execution_effect_hook(
+    stage: str,
+    root: Path,
+    bundle: dict[str, Any],
+    states: list[str],
+) -> None:
+    """Test seam for deterministic drift between selected-successor effects."""
+
+    _ = stage, root, bundle, states
 
 
 def _proofs(value: Any) -> dict[str, dict[str, Any]]:
     if not isinstance(value, dict) or set(value) != set(ACTIONS):
-        raise ValueError("Selected-successor execution requires all three authority proofs")
+        raise ValueError(
+            "Selected-successor execution requires all three authority proofs"
+        )
     result: dict[str, dict[str, Any]] = {}
     for action in ACTIONS:
         proof = value[action]
@@ -32,7 +48,9 @@ def _proofs(value: Any) -> dict[str, dict[str, Any]]:
             "pre_commit_verification",
             "expected_version",
         }:
-            raise ValueError(f"Selected-successor {action} authority proof is not closed")
+            raise ValueError(
+                f"Selected-successor {action} authority proof is not closed"
+            )
         version = proof["expected_version"]
         if type(version) is not int or version < 0:
             raise ValueError(f"Selected-successor {action} expected_version is invalid")
@@ -87,7 +105,9 @@ def _validate_existing_checkpoints(
             "ref": committed["receipt_ref"],
             "sha256": committed["receipt_sha256"],
         } != rows[1]["expected_result"]:
-            raise ValueError("Selected-successor publication checkpoint is inconsistent")
+            raise ValueError(
+                "Selected-successor publication checkpoint is inconsistent"
+            )
     if states[2] == "exact":
         settled = validate_external_transition_receipt(
             root, rows[2]["expected_result"], phase="current"
@@ -142,6 +162,7 @@ def _apply_effects(
 
     if states[0] == "missing":
         lease = lease_for(ACTIONS[0])
+        validate_pristine_source(root, bundle, states)
         result = apply_transition_plan(
             root,
             bundle["task_state_plan"]["ref"],
@@ -149,19 +170,29 @@ def _apply_effects(
             execution_lease=lease,
         )
         if result.get("execution_result_binding") != rows[0]["expected_result"]:
-            raise ValueError("Selected-successor pending effect returned another checkpoint")
+            raise ValueError(
+                "Selected-successor pending effect returned another checkpoint"
+            )
         effects.append({"action": ACTIONS[0], "result": result})
         states[0] = "exact"
     if states[1] == "missing":
+        _execution_effect_hook("before_step2_snapshot_validation", root, bundle, states)
+        validate_plan_owned_predecessor_snapshot(root, bundle)
         lease = lease_for(ACTIONS[1])
+        validate_plan_owned_predecessor_snapshot(root, bundle)
         result = publish_prepared(
             root,
             bundle["transaction_id"],
             execution_lease=lease,
         )
-        binding = {"ref": result.get("receipt_ref"), "sha256": result.get("receipt_sha256")}
+        binding = {
+            "ref": result.get("receipt_ref"),
+            "sha256": result.get("receipt_sha256"),
+        }
         if binding != rows[1]["expected_result"]:
-            raise ValueError("Selected-successor publication returned another checkpoint")
+            raise ValueError(
+                "Selected-successor publication returned another checkpoint"
+            )
         effects.append({"action": ACTIONS[1], "result": result})
         states[1] = "exact"
     else:
@@ -176,7 +207,9 @@ def _apply_effects(
             "sha256": result.get("receipt_sha256"),
         }
         if binding != rows[1]["expected_result"]:
-            raise ValueError("Selected-successor publication replay returned another checkpoint")
+            raise ValueError(
+                "Selected-successor publication replay returned another checkpoint"
+            )
         if result.get("mutation_performed"):
             effects.append({"action": ACTIONS[1], "result": result})
     if states[2] == "missing":
@@ -188,7 +221,9 @@ def _apply_effects(
             execution_lease=lease,
         )
         if result.get("execution_result_binding") != rows[2]["expected_result"]:
-            raise ValueError("Selected-successor settlement returned another checkpoint")
+            raise ValueError(
+                "Selected-successor settlement returned another checkpoint"
+            )
         effects.append({"action": ACTIONS[2], "result": result})
         states[2] = "exact"
     return effects, leases, gate, gate_created
@@ -240,9 +275,7 @@ def execute_selected_successor_bundle(
         rows,
         states,
         proofs,
-        skills_root=(
-            skills_root.resolve() if skills_root is not None else None
-        ),
+        skills_root=(skills_root.resolve() if skills_root is not None else None),
     )
     if gate is None:
         gate, gate_created = _authority_gate(
@@ -256,9 +289,7 @@ def execute_selected_successor_bundle(
         settled_at=settled_at,
         skills_root=skills_root.resolve() if skills_root is not None else None,
     )
-    authority_mutation = any(
-        row["state_status"] == "reserved" for row in authority
-    )
+    authority_mutation = any(row["state_status"] == "reserved" for row in authority)
     effect_mutation = any(
         bool(effect["result"].get("mutation_performed")) for effect in effects
     )
@@ -269,9 +300,7 @@ def execute_selected_successor_bundle(
         "selected_task_id": bundle["selected_task_id"],
         "bundle": normalize_binding(bundle_binding, "selected-successor bundle"),
         "initial_checkpoints": dict(zip(ACTIONS, initial_states)),
-        "final_checkpoints": {
-            row["action"]: row["expected_result"] for row in rows
-        },
+        "final_checkpoints": {row["action"]: row["expected_result"] for row in rows},
         "authority_preflight": authority,
         "authority_gate": gate,
         "execution_leases": leases,

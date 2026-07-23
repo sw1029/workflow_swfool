@@ -54,8 +54,7 @@ def checkpoint_states(
 ) -> tuple[list[dict[str, Any]], list[str]]:
     rows = execution_rows(bundle)
     return rows, [
-        checkpoint_state(root, row["expected_result"], row["action"])
-        for row in rows
+        checkpoint_state(root, row["expected_result"], row["action"]) for row in rows
     ]
 
 
@@ -71,8 +70,16 @@ def validate_pristine_source(
     )
 
     validate_selected_source_for_prepared_successor(
-        root, bundle["source_decision"], bundle["selection_prepare"]
+        root,
+        bundle["source_decision"],
+        bundle["task_source"],
+        bundle["selection_prepare"],
     )
+    from .executable_closure_snapshot import (
+        validate_selected_successor_predecessor_snapshot,
+    )
+
+    validate_selected_successor_predecessor_snapshot(root, bundle)
 
 
 def settle_authority(
@@ -109,9 +116,7 @@ def settle_authority(
             result.get("status") != "consumed"
             or result.get("outcome") != "confirmed_effect"
         ):
-            raise ValueError(
-                f"Selected-successor {action} authority did not consume"
-            )
+            raise ValueError(f"Selected-successor {action} authority did not consume")
         settlement = result.get("settlement")
         if not isinstance(settlement, dict):
             raise ValueError(

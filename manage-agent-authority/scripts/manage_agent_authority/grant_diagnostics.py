@@ -3,7 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 from .canonical import parse_time
-from .contracts import cardinality_covers, rank_value, reservation_units, risk_value
+from .contracts import (
+    cardinality_covers,
+    rank_value,
+    reservation_units,
+    risk_value,
+)
+from .root_grant_request_binding import root_grant_request_binding_covers
 
 
 def near_miss_reasons(
@@ -25,6 +31,9 @@ def near_miss_reasons(
             "covering_grant_inactive": state.get("status") != "active",
             "covering_grant_holder_mismatch": grant["holder_rank"]
             != request["actor_rank"],
+            "covering_root_grant_exact_request_mismatch": (
+                not root_grant_request_binding_covers(grant, request)
+            ),
             "covering_grant_not_yet_valid": parse_time(
                 grant["not_before"], "grant.not_before"
             )
@@ -33,9 +42,7 @@ def near_miss_reasons(
                 grant.get("expires_at")
                 and parse_time(grant["expires_at"], "grant.expires_at") <= at
             ),
-            "covering_grant_source_rank_insufficient": rank_value(
-                grant["issuer_rank"]
-            )
+            "covering_grant_source_rank_insufficient": rank_value(grant["issuer_rank"])
             < rank_value(rank_floor),
             "covering_grant_capability_mismatch": not set(
                 request["required_capabilities"]
@@ -43,9 +50,7 @@ def near_miss_reasons(
             "covering_grant_subject_mismatch": request["subject"]
             not in grant["subjects"],
             "covering_grant_operation_mismatch": operation not in grant["operations"],
-            "covering_grant_risk_ceiling_insufficient": risk_value(
-                request["risk_tier"]
-            )
+            "covering_grant_risk_ceiling_insufficient": risk_value(request["risk_tier"])
             > risk_value(grant["risk_ceiling"]),
             "covering_grant_decision_class_mismatch": request["decision_class"]
             not in grant["decision_classes"],

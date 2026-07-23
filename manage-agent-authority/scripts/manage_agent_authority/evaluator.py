@@ -18,12 +18,14 @@ from .contracts import cardinality_covers
 from .contracts import rank_value
 from .contracts import reservation_units
 from .contracts import risk_value
+from .root_grant_request_binding import root_grant_request_binding_covers
 from .contracts import validate_request
 from .evaluation_context import context_decision
 from .evaluation_context import validate_evaluation_context
 from .evaluation_context import verify_request_evidence
 from .operations import load_operation
 from .grant_diagnostics import near_miss_reasons
+from .decision_integrity import effective_authority_fingerprint
 
 
 def manifest_reasons(request: dict[str, Any], operation: dict[str, Any]) -> list[str]:
@@ -71,6 +73,8 @@ def _covers(
 ) -> bool:
     if state.get("status") != "active" or grant["holder_rank"] != request["actor_rank"]:
         return False
+    if not root_grant_request_binding_covers(grant, request):
+        return False
     if parse_time(grant["not_before"], "grant.not_before") > at:
         return False
     if (
@@ -114,11 +118,9 @@ def _covers(
         grant["max_uses"] < request["use_budget_requested"]
     ):
         return False
-    if (
-        available is not None
-        and available - int(state.get("reserved_uses", 0))
-        < reservation_units(request)
-    ):
+    if available is not None and available - int(
+        state.get("reserved_uses", 0)
+    ) < reservation_units(request):
         return False
     return True
 
@@ -158,6 +160,8 @@ def _lineage_covers(
 ) -> bool:
     for grant, _, state in records:
         if state["status"] != "active":
+            return False
+        if not root_grant_request_binding_covers(grant, request):
             return False
         if parse_time(grant["not_before"], "ancestor.not_before") > at:
             return False
@@ -264,93 +268,6 @@ def _grant_decision(
         [],
         [_selected_binding(*record) for record in composed],
         [lineage_by_id[key] for key in sorted(lineage_by_id)],
-    )
-
-
-def _fingerprint_payload(
-    request: dict[str, Any],
-    context: dict[str, Any],
-    manifest_binding: dict[str, str] | None,
-    selected: list[dict[str, Any]],
-    lineage: list[dict[str, Any]],
-) -> dict[str, Any]:
-    ceiling = context["session_ceiling"]
-    envelope = context["goal_autonomy_envelope"]
-    operation_key = ":".join(
-        (
-            request["skill_id"],
-            request["skill_version"],
-            request["operation_id"],
-            request["operation_version"],
-        )
-    )
-    high_risk = risk_value(request["risk_tier"]) >= risk_value("R2")
-    design_decision = request["decision_class"] in {"D0", "D1"}
-    return {
-        "operation": {
-            key: request[key]
-            for key in (
-                "skill_id",
-                "skill_version",
-                "operation_id",
-                "operation_version",
-            )
-        },
-        "subject": request["subject"],
-        "capabilities": request["required_capabilities"],
-        "manifest": manifest_binding,
-        "session_projection": {
-            "capabilities_permit": set(request["required_capabilities"]).issubset(
-                ceiling["capabilities"]
-            ),
-            "risk_permits": risk_value(request["risk_tier"])
-            <= risk_value(ceiling["risk_ceiling"]),
-            "mutation_permits": request["mutation_class"]
-            in ceiling["mutation_classes"],
-        },
-        "goal_projection": {
-            "capabilities_permit": set(request["required_capabilities"]).issubset(
-                envelope["capabilities"]
-            ),
-            "risk_permits": risk_value(request["risk_tier"])
-            <= risk_value(envelope["risk_ceiling"]),
-            "decision_permits": request["decision_class"]
-            in envelope["decision_classes"],
-            "subject_permits": request["subject"]["digest"] in envelope["subjects"],
-            "operation_permits": operation_key in envelope["operations"],
-        },
-        "typed_decision_projection": {
-            "external_input_status": request["context"]["external_input_status"],
-            "external_input_evidence": request["context"]["external_input_evidence"],
-            "risk_acceptance_status": request["context"]["risk_acceptance_status"]
-            if high_risk
-            else "not_applicable",
-            "risk_acceptance_evidence": request["context"]["risk_acceptance_evidence"]
-            if high_risk
-            else None,
-            "design_selection_status": request["context"]["design_selection_status"]
-            if design_decision
-            else "not_applicable",
-            "design_selection_evidence": request["context"]["design_selection_evidence"]
-            if design_decision
-            else None,
-        },
-        "selected_grants": selected,
-        "lineage_grants": lineage,
-    }
-
-
-def effective_authority_fingerprint(
-    request: dict[str, Any],
-    context: dict[str, Any],
-    manifest_binding: dict[str, str] | None,
-    selected: list[dict[str, Any]],
-    lineage: list[dict[str, Any]],
-) -> str:
-    """Reproduce the evaluator fingerprint from already validated inputs."""
-
-    return object_sha256(
-        _fingerprint_payload(request, context, manifest_binding, selected, lineage)
     )
 
 

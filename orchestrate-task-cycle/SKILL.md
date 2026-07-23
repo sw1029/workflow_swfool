@@ -161,6 +161,9 @@ Consume repository adapter output only through typed packets and owner-defined h
 
 - Resolve authority through `$manage-agent-authority` before governed dispatch or mutation. Keep task scope, effect authority, external input, GT, risk/cost, and design selection as independent axes.
 - Consume only a closed owner decision, exact reservation, required pre-dispatch/pre-commit verification, and settlement binding. Do not infer permission from policy text, a previous prompt, implicit grant union, approval projection, or legacy classification.
+- Before an orchestrator-owned reservation, inspect `executable-closure` and stop unless it is `ready`. The selected-successor topology producer additionally enforces the exact predecessor/task-index epoch under its owner locks through the first reservation. The public command is diagnostic for ordinary batches; the low-level authority `reserve` API does not establish a generic task-lifecycle lock. Completed/historical sources must settle exact selected-successor topology, then start a fresh compiler-first cycle.
+- Reopen finalized `user_escalation` only through `authority-reentry` with explicit RFC3339 `--at`; it publishes a preparation-only schema-v3 receipt/task source. Never run `selection-tick` or reuse old grants.
+- Schema-v3 root grants bind the exact signed request/cycle digest.
 - Reuse the exact wait artifact while its request, subject, operation, and decision-axis fingerprint is unchanged. System recovery or reusable authority must not trigger another user prompt.
 - Preserve the normalized actionable external-advice clause set, packet/source digests, and clause IDs through every consumer. Only the actual derive owner may claim `wired`; `verified` additionally requires fresh producer evidence and an independent verifier. Missing or mismatched rows fail closed, while evidenced unrelated/no-packet cases remain normal bypasses.
 

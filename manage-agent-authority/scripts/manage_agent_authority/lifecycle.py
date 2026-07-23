@@ -6,6 +6,7 @@ from typing import Any
 from .artifact_store import state_path
 from .canonical import authority_lock, object_sha256, parse_time, read_object
 from .canonical import resolve_workspace_path, sha256_file, write_immutable_json
+from .decision_integrity import stable_decision_projection
 from .evaluator import evaluate, load_bound_decision
 from .contracts import reservation_units
 from .lifecycle_preflight import decision_grant_bindings
@@ -19,6 +20,49 @@ from .lifecycle_paths import reservation_state_path as _reservation_state_path
 from .projection_recovery import apply_projection_changes, projection_change
 from .projection_recovery import recover_projection_intents
 from .projection_recovery import validated_settled_intent
+from .projection_reservations import validate_decision_artifact
+from .projection_reservations import validate_reservation
+
+
+def _load_reservable_decision(
+    root: Path,
+    decision_ref: str,
+    decision_sha256: str,
+    idempotency_key: str,
+    skills_root: Path | None,
+) -> tuple[dict[str, Any], Path, str, Path, Path]:
+    decision, decision_path = load_bound_decision(
+        root,
+        decision_ref,
+        decision_sha256,
+    )
+    validate_decision_artifact(
+        root,
+        decision,
+        decision_path,
+        skills_root=skills_root,
+        verify_manifest=False,
+    )
+    if decision.get("decision") != "allowed" or not decision.get("selected_grants"):
+        raise SystemExit(
+            "Only an allowed decision with selected grants may be reserved."
+        )
+    reservation_id = (
+        "authz-"
+        + object_sha256(
+            {
+                "request": decision["request_sha256"],
+                "key": idempotency_key,
+            }
+        )[:24]
+    )
+    return (
+        decision,
+        decision_path,
+        reservation_id,
+        _reservation_path(root, reservation_id),
+        _reservation_state_path(root, reservation_id),
+    )
 
 
 def reserve(
@@ -31,20 +75,30 @@ def reserve(
     skills_root: Path | None = None,
 ) -> dict[str, Any]:
     root = root.resolve()
-    decision, decision_path = load_bound_decision(root, decision_ref, decision_sha256)
-    if decision.get("decision") != "allowed" or not decision.get("selected_grants"):
-        raise SystemExit(
-            "Only an allowed decision with selected grants may be reserved."
-        )
-    reservation_id = f"authz-{object_sha256({'request': decision['request_sha256'], 'key': idempotency_key})[:24]}"
-    artifact_path = _reservation_path(root, reservation_id)
-    projection_path = _reservation_state_path(root, reservation_id)
     with authority_lock(root):
+        (
+            decision,
+            decision_path,
+            reservation_id,
+            artifact_path,
+            projection_path,
+        ) = _load_reservable_decision(
+            root,
+            decision_ref,
+            decision_sha256,
+            idempotency_key,
+            skills_root,
+        )
         recover_projection_intents(root, skills_root=skills_root)
         if artifact_path.exists():
             existing = validated_settled_intent(
                 root, artifact_path, skills_root=skills_root
             )
+            # Reopen the immutable decision and its complete selected/lineage
+            # grant set at the exact replay boundary. Recovery performs this
+            # validation too, but the replay return must not depend on a
+            # caller-provided recovery implementation retaining that property.
+            validate_reservation(root, existing, artifact_path)
             if (
                 existing.get("decision") != _artifact_binding(root, decision_path)
                 or existing.get("idempotency_key") != idempotency_key
@@ -65,16 +119,17 @@ def reserve(
             evaluated_at=reserved_at,
             skills_root=skills_root,
         )
-        if (
-            fresh["decision"] != "allowed"
-            or fresh["effective_authority_fingerprint"]
-            != decision["effective_authority_fingerprint"]
-        ):
+        if fresh["decision"] != "allowed" or stable_decision_projection(
+            fresh
+        ) != stable_decision_projection(decision):
             raise SystemExit(
                 "Authority decision is stale at pre-dispatch verification."
             )
         records = validate_selected_grants(
-            root, decision_grant_bindings(decision), at=reserved_at
+            root,
+            decision_grant_bindings(decision),
+            request=decision["request"],
+            at=reserved_at,
         )
         units = reservation_units(decision["request"])
         grant_uses: list[dict[str, Any]] = []
@@ -151,15 +206,27 @@ def load_reservation(
     if sha256_file(path) != digest:
         raise SystemExit("Authority reservation digest mismatch.")
     reservation = read_object(path, "authority reservation")
-    if (
-        reservation.get("schema_version") != 2
-        or reservation.get("artifact_kind") != "authority_reservation"
-    ):
-        raise SystemExit("Authority reservation contract is invalid.")
+    validate_reservation(root, reservation, path)
     projection = _reservation_state_path(root, reservation["reservation_id"])
     if not projection.is_file():
         raise SystemExit("Authority reservation state is missing.")
     return reservation, path, read_object(projection, "authority reservation state")
+
+
+def _validate_stored_reservation(
+    root: Path,
+    reservation: dict[str, Any],
+) -> None:
+    stored_path = _reservation_path(
+        root,
+        str(reservation.get("reservation_id") or ""),
+    )
+    if not stored_path.is_file():
+        raise SystemExit("Authority reservation artifact is missing.")
+    stored = read_object(stored_path, "authority reservation")
+    if stored != reservation:
+        raise SystemExit("Authority reservation differs from its stored artifact.")
+    validate_reservation(root, stored, stored_path)
 
 
 def verify_reservation(
@@ -172,6 +239,7 @@ def verify_reservation(
     skills_root: Path | None = None,
     verify_subject: bool = True,
 ) -> dict[str, Any]:
+    _validate_stored_reservation(root, reservation)
     if state["status"] != "reserved" or state["version"] != expected_version:
         raise SystemExit("Reservation is not in the expected reserved CAS state.")
     decision, _ = load_bound_decision(
@@ -190,6 +258,7 @@ def verify_reservation(
         decision_grant_bindings(decision),
         expected_versions=versions,
         minimum_versions=True,
+        request=decision["request"],
         at=verified_at,
     )
     for grant, _, projection in records:

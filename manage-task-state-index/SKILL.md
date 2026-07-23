@@ -164,7 +164,7 @@ python3 -P -m manage_task_state_index index --root . prepare-selected-successor 
   --at 2026-01-01T00:00:00Z
 ```
 
-The selection owner still validates the complete decision receipt; this renderer reopens the exact binding, checks its selected task ID against the prospective Markdown, and derives only task-index mechanics.
+The selection owner still validates the complete decision receipt; this renderer reopens the exact binding, checks its selected task ID against the prospective Markdown, and derives only task-index mechanics. For an authority-reentry schema-v3 receipt it additionally validates the closed receipt seal and requires the receipt-owned `task_source` ref and SHA-256 to equal the supplied prospective source exactly. Matching only the Task ID, or copying identical bytes to another ref, is not sufficient.
 
 Before authority consumes or releases a task-index reservation, run `validate-owner-result` with the exact owner-result, reservation, and pre-commit bindings. A canonical scan result or settled external receipt is validated against its immutable plan, contiguous event batch, legal descendant suffix, and current full Markdown projection. Use `--phase current` while the selected task must still be current and `--phase historical` after a later successor. Legacy ad hoc scan JSON is reported as `unknown_effect`, never upgraded to confirmed effect.
 

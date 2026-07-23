@@ -16,12 +16,14 @@ ALLOWED_IMPORTERS = {
     "selection_publication_gc_fs.replace_relative": {
         "selection_publication_migration.py",
         "selection_publication_reference_barrier.py",
+        "selection_publication_store_pinned.py",
     },
     "selection_publication_gc_fs.write_once_relative": {
         "selection_publication_gc_apply.py",
         "selection_publication_gc_restore.py",
         "selection_publication_gc_scan.py",
         "selection_publication_migration_journal.py",
+        "selection_publication_store_pinned.py",
     },
     "selection_publication_gc_fs.write_payload": {
         "selection_publication_gc_restore.py",
@@ -31,6 +33,7 @@ ALLOWED_IMPORTERS = {
     },
     "selection_publication_gc_write.write_once_relative": {
         "selection_publication_gc_fs.py",
+        "selection_authority_reentry.py",
     },
     "selection_publication_gc_write.write_payload": {
         "selection_publication_gc_fs.py",
@@ -52,6 +55,7 @@ ALLOWED_IMPORTERS = {
         "selected_successor_authority_context_compiler.py",
         "selected_successor_execution_lease.py",
         "selected_successor_index.py",
+        "selection_authority_reentry.py",
         "selection_decision_receipt_cli.py",
         "selection_publication.py",
         "selection_publication_gc_scan.py",
@@ -62,9 +66,15 @@ ALLOWED_IMPORTERS = {
         "selection_publication_reference_barrier.py",
         "selection_publication_state.py",
     },
-    "selection_publication_producer_capability."
-    "_active_reference_barrier_mode": {
+    "selection_publication_producer_capability._active_reference_barrier_mode": {
         "selection_publication_gc_write.py",
+    },
+    "selection_publication_producer_capability._active_reference_barrier_descriptor": {
+        "selection_publication_gc_fs.py",
+    },
+    "selection_publication_producer_capability."
+    "_active_reference_barrier_root_for_path": {
+        "selection_publication_store_pinned.py",
     },
     "selection_publication_producer_capability._reference_barrier_proof": {
         "selection_publication_reference_barrier.py",
@@ -78,10 +88,11 @@ ALLOWED_IMPORTERS = {
         "selection_publication_gc_write.py",
         "selection_publication_reference_barrier.py",
         "selection_publication_store.py",
+        "selection_publication_store_pinned.py",
     },
-    "selection_publication_producer_capability."
-    "_require_selection_publication_lock": {
+    "selection_publication_producer_capability._require_selection_publication_lock": {
         "selection_publication_store.py",
+        "selection_publication_store_pinned.py",
     },
     "selection_publication_store._atomic_write": {
         "selection_publication.py",
@@ -126,15 +137,15 @@ ALLOWED_IMPORTERS = {
         "selection_publication_gc_apply.py",
         "selection_publication_gc_restore.py",
     },
-    "selection_publication_reference_barrier."
-    "reference_producer_barrier": {
+    "selection_publication_reference_barrier.reference_producer_barrier": {
         "selection_publication_gc_write.py",
     },
-    "selection_publication_reference_barrier."
-    "registered_producer_barrier": {
+    "selection_publication_reference_barrier.registered_producer_barrier": {
         "selected_successor_execution_lease.py",
+        "selection_authority_reentry.py",
         "selection_decision_receipt_cli.py",
         "selection_publication_store.py",
+        "selection_publication_store_pinned.py",
     },
 }
 PROTECTED_IMPORTS: dict[str, set[str]] = {}
@@ -144,9 +155,7 @@ for _qualified_symbol in ALLOWED_IMPORTERS:
 
 
 def _canonical_json(value: Any) -> bytes:
-    return (
-        json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
-    ).encode()
+    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
 def _source_family(module: str | None) -> str | None:
@@ -157,20 +166,14 @@ def _source_family(module: str | None) -> str | None:
 
 
 def _allowed(source_file: str, family: str, symbol: str) -> bool:
-    return source_file in ALLOWED_IMPORTERS.get(
-        f"{family}.{symbol}", set()
-    )
+    return source_file in ALLOWED_IMPORTERS.get(f"{family}.{symbol}", set())
 
 
-def _violation(
-    source_file: str, line: int, symbol: str
-) -> dict[str, Any]:
+def _violation(source_file: str, line: int, symbol: str) -> dict[str, Any]:
     return {"source_file": source_file, "line": line, "symbol": symbol}
 
 
-def _violations(
-    source_file: str, tree: ast.AST
-) -> list[dict[str, Any]]:
+def _violations(source_file: str, tree: ast.AST) -> list[dict[str, Any]]:
     violations: list[dict[str, Any]] = []
     module_aliases: dict[str, str] = {}
     for node in ast.walk(tree):
@@ -180,13 +183,10 @@ def _violations(
                 for alias in node.names:
                     if alias.name == "*":
                         violations.append(
-                            _violation(
-                                source_file, node.lineno, f"{family}.*"
-                            )
+                            _violation(source_file, node.lineno, f"{family}.*")
                         )
-                    elif (
-                        alias.name in PROTECTED_IMPORTS[family]
-                        and not _allowed(source_file, family, alias.name)
+                    elif alias.name in PROTECTED_IMPORTS[family] and not _allowed(
+                        source_file, family, alias.name
                     ):
                         violations.append(
                             _violation(
@@ -199,9 +199,9 @@ def _violations(
                 for alias in node.names:
                     imported_family = _source_family(alias.name)
                     if imported_family is not None:
-                        module_aliases[
-                            alias.asname or imported_family
-                        ] = imported_family
+                        module_aliases[alias.asname or imported_family] = (
+                            imported_family
+                        )
         elif isinstance(node, ast.Import):
             for alias in node.names:
                 family = _source_family(alias.name)
@@ -216,9 +216,7 @@ def _violations(
             and not _allowed(source_file, family, node.attr)
         ):
             violations.append(
-                _violation(
-                    source_file, node.lineno, f"{family}.{node.attr}"
-                )
+                _violation(source_file, node.lineno, f"{family}.{node.attr}")
             )
     return violations
 
@@ -229,13 +227,9 @@ def lint_registered_producers(
     """Reject a package module that reaches mutation primitives off-manifest."""
 
     allowed_sources = {
-        source
-        for sources in ALLOWED_IMPORTERS.values()
-        for source in sources
+        source for sources in ALLOWED_IMPORTERS.values() for source in sources
     }
-    missing_registrations = sorted(
-        allowed_sources - registered_source_files
-    )
+    missing_registrations = sorted(allowed_sources - registered_source_files)
     if missing_registrations:
         raise ValueError(
             "selection-publication producer manifest omits an allowed "
@@ -251,9 +245,7 @@ def lint_registered_producers(
         relative = path.relative_to(source_root)
         source_file = relative.as_posix()
         if len(relative.parts) > MAX_LINT_DEPTH:
-            raise ValueError(
-                "selection-publication producer lint exceeds depth bound"
-            )
+            raise ValueError("selection-publication producer lint exceeds depth bound")
         current = source_root
         for part in relative.parts[:-1]:
             current /= part

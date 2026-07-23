@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import os
 from pathlib import Path, PurePosixPath
+import threading
 from typing import Iterator
 
 from .selection_publication_gc_fs import (
@@ -23,15 +24,11 @@ from .selection_publication_store import _sha256_bytes
 
 
 @contextlib.contextmanager
-def _write_authority(
-    root: Path, producer_capability: object
-) -> Iterator[None]:
+def _write_authority(root: Path, producer_capability: object) -> Iterator[None]:
     """Require a registered shared writer or a proved exclusive GC writer."""
 
     if producer_capability is _SELECTION_PUBLICATION_GC_EXCLUSIVE_CAPABILITY:
-        _require_selection_publication_gc_exclusive(
-            producer_capability, root
-        )
+        _require_selection_publication_gc_exclusive(producer_capability, root)
         yield
         return
     _require_selection_publication_producer(producer_capability)
@@ -52,9 +49,7 @@ def _write_authority(
         yield
 
 
-def _write_payload_unlocked(
-    descriptor: int, payload: bytes, mode: int = 0o600
-) -> None:
+def _write_payload_unlocked(descriptor: int, payload: bytes, mode: int = 0o600) -> None:
     os.fchmod(descriptor, mode)
     with os.fdopen(descriptor, "wb", closefd=False) as handle:
         handle.write(payload)
@@ -75,7 +70,7 @@ def write_payload(
 
 
 def _temporary_name(name: str, payload: bytes) -> str:
-    return f".{name}.{os.getpid()}.{id(payload):x}.tmp"
+    return f".{name}.{os.getpid()}.{threading.get_ident():x}.{id(payload):x}.tmp"
 
 
 def write_once_relative(
@@ -105,14 +100,10 @@ def write_once_relative(
                 | getattr(os, "O_CLOEXEC", 0)
             )
             try:
-                descriptor = os.open(
-                    temporary, flags, 0o600, dir_fd=parent.descriptor
-                )
+                descriptor = os.open(temporary, flags, 0o600, dir_fd=parent.descriptor)
                 try:
                     _write_payload_unlocked(descriptor, payload)
-                    created = _link_immutable(
-                        parent, temporary, payload, label
-                    )
+                    created = _link_immutable(parent, temporary, payload, label)
                 finally:
                     os.close(descriptor)
             finally:
@@ -152,9 +143,7 @@ def replace_relative(
                 | getattr(os, "O_CLOEXEC", 0)
             )
             try:
-                descriptor = os.open(
-                    temporary, flags, 0o600, dir_fd=parent.descriptor
-                )
+                descriptor = os.open(temporary, flags, 0o600, dir_fd=parent.descriptor)
                 try:
                     _write_payload_unlocked(descriptor, payload)
                 finally:
@@ -193,9 +182,7 @@ def _link_immutable(
     except FileExistsError:
         existing = read_leaf(parent, label)
         if existing != payload:
-            raise ValueError(
-                f"{label} conflicts with immutable transaction evidence"
-            )
+            raise ValueError(f"{label} conflicts with immutable transaction evidence")
         return False
     os.fsync(parent.descriptor)
     parent.verify()

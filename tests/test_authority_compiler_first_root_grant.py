@@ -23,8 +23,13 @@ from manage_agent_authority.artifact_store import (  # noqa: E402
     snapshot_file,
     update_current_policy,
 )
-from manage_agent_authority.canonical import read_object, sha256_file  # noqa: E402
+from manage_agent_authority.canonical import (  # noqa: E402
+    object_sha256,
+    read_object,
+    sha256_file,
+)
 from manage_agent_authority.contracts import validate_grant  # noqa: E402
+from manage_agent_authority.evaluator import evaluate  # noqa: E402
 from manage_agent_authority.operation_batch import (  # noqa: E402
     MAX_OPERATION_SET_BYTES,
     load_operation_batch,
@@ -65,9 +70,7 @@ EXPIRES_AT = "2026-07-23T11:00:00+09:00"
 
 
 @pytest.fixture(autouse=True)
-def _host_authorization_trust(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def _host_authorization_trust(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     install_test_trust_anchor(monkeypatch, tmp_path)
 
 
@@ -82,9 +85,7 @@ def _tree_image(root: Path) -> list[tuple[str, str, bytes]]:
     for path in sorted(root.rglob("*")):
         relative = path.relative_to(root).as_posix()
         if path.is_symlink():
-            image.append(
-                (relative, "symlink", path.readlink().as_posix().encode())
-            )
+            image.append((relative, "symlink", path.readlink().as_posix().encode()))
         elif path.is_dir():
             image.append((relative, "directory", b""))
         else:
@@ -183,9 +184,7 @@ def _prepared_root_materialization(
 ) -> tuple[dict[str, str], dict[str, str], dict[str, object]]:
     _context, batch = _prepare_inputs(root)
     policy = _write(root / ".agent_goal/agent_authority.md", "# Authority\n")
-    policy_binding = snapshot_file(
-        root, policy.relative_to(root).as_posix(), "policy"
-    )
+    policy_binding = snapshot_file(root, policy.relative_to(root).as_posix(), "policy")
     update_current_policy(root, policy_binding, expected_version=0)
     prepared = prepare_root_approval_plan(
         root,
@@ -201,9 +200,7 @@ def _prepared_root_materialization(
         skills_root=ROOT,
     )
     plan_binding = prepared["root_approval_plan"]
-    _normalized, plan = load_root_approval_plan(
-        root, plan_binding, skills_root=ROOT
-    )
+    _normalized, plan = load_root_approval_plan(root, plan_binding, skills_root=ROOT)
     decision_result = compile_root_decision_seed(
         root,
         plan_binding,
@@ -452,9 +449,7 @@ def test_batch_rejects_compiled_time_provenance_and_classification_drift(
     for label, mutate in (
         (
             "compiled-at",
-            lambda value: value.update(
-                {"compiled_at": "2026-07-23T10:01:00+09:00"}
-            ),
+            lambda value: value.update({"compiled_at": "2026-07-23T10:01:00+09:00"}),
         ),
         (
             "provenance",
@@ -466,9 +461,7 @@ def test_batch_rejects_compiled_time_provenance_and_classification_drift(
         forged = json.loads(json.dumps(original))
         mutate(forged)
         body = {
-            key: value
-            for key, value in forged.items()
-            if key != "batch_fingerprint"
+            key: value for key, value in forged.items() if key != "batch_fingerprint"
         }
         forged["batch_fingerprint"] = hashlib.sha256(
             json.dumps(
@@ -661,9 +654,7 @@ def test_root_plan_uses_compact_decision_seed_and_materializes_plan_bound_source
         tmp_path, projection["grants"][0]["grant_id"]
     )
     with pytest.raises(SystemExit, match="schema-v2/v4"):
-        validate_for_grant(
-            tmp_path, validated_historical, grant, prospective=True
-        )
+        validate_for_grant(tmp_path, validated_historical, grant, prospective=True)
 
     forged_evidence = json.loads(
         (tmp_path / authorization_evidence["ref"]).read_text(encoding="utf-8")
@@ -674,9 +665,7 @@ def test_root_plan_uses_compact_decision_seed_and_materializes_plan_bound_source
     )
 
     with pytest.raises(SystemExit, match="not signed by an active trusted"):
-        publish_root_authorization_evidence(
-            tmp_path, forged_evidence, skills_root=ROOT
-        )
+        publish_root_authorization_evidence(tmp_path, forged_evidence, skills_root=ROOT)
     with pytest.raises(SystemExit, match="does not identify an existing path"):
         compile_root_decision_seed(
             tmp_path,
@@ -711,16 +700,64 @@ def test_root_plan_uses_compact_decision_seed_and_materializes_plan_bound_source
         )
 
 
+def test_root_materialized_grant_covers_only_its_exact_signed_cycle_request(
+    tmp_path: Path,
+) -> None:
+    plan_binding, decision_binding, plan = _prepared_root_materialization(tmp_path)
+    materialize_exact_echo_root_grant(
+        tmp_path,
+        plan_binding,
+        decision_binding,
+        skills_root=ROOT,
+    )
+    _batch_binding, _batch, compilations = load_operation_batch(
+        tmp_path,
+        plan["operation_batch"],
+        skills_root=ROOT,
+    )
+    compilation = compilations[0]
+    exact = evaluate(
+        tmp_path,
+        compilation["request"],
+        compilation["evaluation_context"],
+        evaluated_at=DECIDED_AT,
+        skills_root=ROOT,
+    )
+
+    assert exact["decision"] == "allowed"
+    assert [item["grant_id"] for item in exact["selected_grants"]] == [
+        plan["approval_projection"]["grants"][0]["grant_id"]
+    ]
+    assert exact["selected_grants"][0]["state_version"] == 0
+    assert exact["selected_grants"][0]["policy_snapshot"] == (plan["policy_snapshot"])
+
+    for field, value in (
+        ("cycle_id", "cycle-other"),
+        ("attempt_id", "attempt-other"),
+    ):
+        changed_request = json.loads(json.dumps(compilation["request"]))
+        changed_request[field] = value
+        assert object_sha256(changed_request) != compilation["request_sha256"]
+
+        rejected = evaluate(
+            tmp_path,
+            changed_request,
+            compilation["evaluation_context"],
+            evaluated_at=DECIDED_AT,
+            skills_root=ROOT,
+        )
+
+        assert rejected["decision"] == "approval_required"
+        assert rejected["selected_grants"] == []
+        assert "covering_root_grant_exact_request_mismatch" in rejected["reason_codes"]
+
+
 def test_root_authorization_fails_closed_without_trusted_host_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    plan_binding, decision_binding, _plan = _prepared_root_materialization(
-        tmp_path
-    )
+    plan_binding, decision_binding, _plan = _prepared_root_materialization(tmp_path)
     empty_registry = tmp_path / "empty-root-authorization.trust.json"
-    empty_registry.write_bytes(
-        _canonical_trust_registry([])
-    )
+    empty_registry.write_bytes(_canonical_trust_registry([]))
     monkeypatch.setattr(
         root_authorization_evidence,
         "TRUST_ANCHOR_REGISTRY",
@@ -858,12 +895,10 @@ def test_agent_managed_signer_full_root_grant_path(
     assert evidence_path.is_file()
     assert stat.S_IMODE(evidence_path.stat().st_mode) == 0o600
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    published = (
-        root_authorization_evidence.publish_root_authorization_evidence(
-            tmp_path,
-            evidence,
-            skills_root=ROOT,
-        )
+    published = root_authorization_evidence.publish_root_authorization_evidence(
+        tmp_path,
+        evidence,
+        skills_root=ROOT,
     )
     decision = compile_root_decision_seed(
         tmp_path,
@@ -878,9 +913,7 @@ def test_agent_managed_signer_full_root_grant_path(
         skills_root=ROOT,
     )
     assert materialized["status"] == "materialized"
-    assert materialized["decision_trust_class"] == (
-        "host_user_signed_exact_plan"
-    )
+    assert materialized["decision_trust_class"] == ("host_user_signed_exact_plan")
     replay = run_with_tty(
         lambda: root_authorization_signer.approve_root_plan(
             tmp_path,
@@ -893,8 +926,7 @@ def test_agent_managed_signer_full_root_grant_path(
     assert replay.status == "system_exit"
     assert "already exists" in replay.message
     revocation_confirmation = (
-        f"REVOKE {provisioned['key_id']} "
-        "AND INVALIDATE EXISTING EVIDENCE"
+        f"REVOKE {provisioned['key_id']} AND INVALIDATE EXISTING EVIDENCE"
     )
     monkeypatch.setattr(
         root_authority_admin,
@@ -918,8 +950,7 @@ def _canonical_trust_registry(keys: list[dict[str, object]]) -> bytes:
     return (
         json.dumps(
             {
-                "artifact_kind":
-                    "authority_root_authorization_trust_anchors",
+                "artifact_kind": "authority_root_authorization_trust_anchors",
                 "keys": keys,
                 "schema_version": 1,
             },
@@ -936,12 +967,15 @@ def test_root_signature_verifier_rejects_representative_at_modulus() -> None:
     modulus = int(modulus_hex, 16)
     signature = modulus.to_bytes(256, "big")
 
-    assert root_authorization_evidence._verify_rsa_signature(  # noqa: SLF001
-        b"exact-plan",
-        signature,
-        modulus_hex=modulus_hex,
-        exponent=65537,
-    ) is False
+    assert (
+        root_authorization_evidence._verify_rsa_signature(  # noqa: SLF001
+            b"exact-plan",
+            signature,
+            modulus_hex=modulus_hex,
+            exponent=65537,
+        )
+        is False
+    )
 
 
 def test_ordinary_root_exact_echo_rejects_platform_s4(
@@ -974,12 +1008,8 @@ def test_root_plan_uses_current_policy_and_compilation_minimum_grants(
 ) -> None:
     _write(tmp_path / "evidence/risk.json", "{}\n")
     _write(tmp_path / "evidence/design.json", "{}\n")
-    first = _write(
-        tmp_path / "plans/task-transition-a.json", '{"plan":"a"}\n'
-    )
-    second = _write(
-        tmp_path / "plans/task-transition-b.json", '{"plan":"b"}\n'
-    )
+    first = _write(tmp_path / "plans/task-transition-a.json", '{"plan":"a"}\n')
+    second = _write(tmp_path / "plans/task-transition-b.json", '{"plan":"b"}\n')
     goal = _write(tmp_path / ".agent_goal/goal_architecture.md", "# Goal\n")
     initialization = _write(
         tmp_path / ".task/cycle/cycle-multi-grant/initialization.json",
@@ -1088,8 +1118,7 @@ def test_root_plan_uses_current_policy_and_compilation_minimum_grants(
     assert all(len(grant["subjects"]) == 1 for grant in projection["grants"])
     assert all(len(grant["operations"]) == 1 for grant in projection["grants"])
     assert all(
-        grant["capabilities"] == ["task.scope.mutate"]
-        for grant in projection["grants"]
+        grant["capabilities"] == ["task.scope.mutate"] for grant in projection["grants"]
     )
     coverage = projection["source_coverage"]
     assert len(coverage["subjects"]) == 2
@@ -1113,17 +1142,14 @@ def test_root_plan_uses_current_policy_and_compilation_minimum_grants(
         decision_result["decision_seed"],
         skills_root=ROOT,
     )
-    source = load_source_approval(
-        tmp_path / materialized["source_approval"]["ref"]
-    )
+    source = load_source_approval(tmp_path / materialized["source_approval"]["ref"])
     assert source["grant_ids"] == sorted(coverage["grant_ids"])
     assert source["lineage_ids"] == sorted(coverage["lineage_ids"])
     for field, forged_value, message in (
         ("max_uses", None, "max_uses must be positive"),
         (
             "subjects",
-            projection["grants"][0]["subjects"]
-            + projection["grants"][1]["subjects"],
+            projection["grants"][0]["subjects"] + projection["grants"][1]["subjects"],
             "exactly one subject",
         ),
         (
@@ -1225,9 +1251,7 @@ def test_source_schema_v2_remains_historical_and_v3_cannot_claim_verified() -> N
 def test_raw_root_transaction_api_rejects_mechanical_inputs_without_writes(
     tmp_path: Path,
 ) -> None:
-    plan_binding, decision_binding, plan = _prepared_root_materialization(
-        tmp_path
-    )
+    plan_binding, decision_binding, plan = _prepared_root_materialization(tmp_path)
     transaction_root = (
         tmp_path
         / ".task/authorization/root_grant_materializations"
@@ -1252,9 +1276,7 @@ def test_raw_root_transaction_api_rejects_mechanical_inputs_without_writes(
 def test_root_transaction_reopens_forged_binding_without_writes(
     tmp_path: Path,
 ) -> None:
-    plan_binding, decision_binding, _plan = _prepared_root_materialization(
-        tmp_path
-    )
+    plan_binding, decision_binding, _plan = _prepared_root_materialization(tmp_path)
     forged_decision_binding = {
         **decision_binding,
         "sha256": "0" * 64,
@@ -1275,18 +1297,14 @@ def test_root_transaction_reopens_forged_binding_without_writes(
 def test_visibility_rejects_active_forged_capability_transaction(
     tmp_path: Path,
 ) -> None:
-    plan_binding, decision_binding, _plan = _prepared_root_materialization(
-        tmp_path
-    )
+    plan_binding, decision_binding, _plan = _prepared_root_materialization(tmp_path)
     expected = root_grant_transaction._derive_root_grant_assets(  # noqa: SLF001
         tmp_path,
         plan_binding,
         decision_binding,
         skills_root=ROOT,
     )
-    forged_source = json.loads(
-        expected["source_payload"].decode("utf-8")
-    )
+    forged_source = json.loads(expected["source_payload"].decode("utf-8"))
     forged_grant = json.loads(
         expected["grant_assets"][0]["artifact_payload"].decode("utf-8")
     )
@@ -1326,9 +1344,7 @@ def test_visibility_rejects_active_forged_capability_transaction(
 def test_visibility_reopens_exact_source_and_signed_evidence(
     tmp_path: Path,
 ) -> None:
-    plan_binding, decision_binding, plan = _prepared_root_materialization(
-        tmp_path
-    )
+    plan_binding, decision_binding, plan = _prepared_root_materialization(tmp_path)
     materialize_exact_echo_root_grant(
         tmp_path,
         plan_binding,
@@ -1372,9 +1388,7 @@ def test_visibility_reopens_exact_source_and_signed_evidence(
 def test_visibility_bounds_root_receipt_reopen(
     tmp_path: Path,
 ) -> None:
-    plan_binding, decision_binding, plan = _prepared_root_materialization(
-        tmp_path
-    )
+    plan_binding, decision_binding, plan = _prepared_root_materialization(tmp_path)
     materialize_exact_echo_root_grant(
         tmp_path,
         plan_binding,
@@ -1383,10 +1397,7 @@ def test_visibility_bounds_root_receipt_reopen(
     )
     grant_id = plan["approval_projection"]["grants"][0]["grant_id"]
     receipt_path = (
-        tmp_path
-        / plan["approval_projection"]["grants"][0][
-            "root_materialization_ref"
-        ]
+        tmp_path / plan["approval_projection"]["grants"][0]["root_materialization_ref"]
     )
     receipt_path.write_bytes(
         b"x" * (root_grant_transaction.MAX_ROOT_TRANSACTION_BYTES + 1)
@@ -1406,9 +1417,7 @@ def test_root_materialization_recovers_exact_write_ahead_transaction(
     crash_stage: str,
     interrupted_status: str,
 ) -> None:
-    plan_binding, decision_binding, plan = _prepared_root_materialization(
-        tmp_path
-    )
+    plan_binding, decision_binding, plan = _prepared_root_materialization(tmp_path)
     crashed = False
 
     def crash_once(stage: str, _path: Path) -> None:
@@ -1417,9 +1426,7 @@ def test_root_materialization_recovers_exact_write_ahead_transaction(
             crashed = True
             raise RuntimeError("simulated root materialization crash")
 
-    monkeypatch.setattr(
-        root_grant_transaction, "_materialization_hook", crash_once
-    )
+    monkeypatch.setattr(root_grant_transaction, "_materialization_hook", crash_once)
     with pytest.raises(RuntimeError, match="simulated"):
         materialize_exact_echo_root_grant(
             tmp_path,
@@ -1440,9 +1447,7 @@ def test_root_materialization_recovers_exact_write_ahead_transaction(
         "interrupted root grant state",
     )
     assert interrupted["status"] == interrupted_status
-    _grant_value, _grant_sha, effective_state = load_grant(
-        tmp_path, grant_id
-    )
+    _grant_value, _grant_sha, effective_state = load_grant(tmp_path, grant_id)
     assert effective_state["status"] == "draft"
     replay = register_grant(
         tmp_path,
@@ -1476,9 +1481,7 @@ def test_root_materialization_recovers_exact_write_ahead_transaction(
 def test_root_materialization_conflict_preflight_has_no_transaction_effect(
     tmp_path: Path,
 ) -> None:
-    plan_binding, decision_binding, plan = _prepared_root_materialization(
-        tmp_path
-    )
+    plan_binding, decision_binding, plan = _prepared_root_materialization(tmp_path)
     projection = plan["approval_projection"]
     grant_id = projection["grants"][0]["grant_id"]
     _write(
@@ -1503,48 +1506,63 @@ def test_root_materialization_conflict_preflight_has_no_transaction_effect(
 
 def test_cli_exposes_compiler_first_root_grant_commands() -> None:
     parser = authority_cli.build_parser()
-    assert parser.parse_args(
-        [
-            "compile-root-decision-seed",
-            "--approval-plan",
-            "{}",
-            "--authorization-evidence",
-            "{}",
-        ]
-    ).command == "compile-root-decision-seed"
-    assert parser.parse_args(
-        [
-            "compile-semantic-context",
-            "--initialization",
-            "{}",
-            "--semantic",
-            "{}",
-        ]
-    ).command == "compile-semantic-context"
-    assert parser.parse_args(
-        [
-            "publish-operation-set",
-            "--operations",
-            "[]",
-        ]
-    ).command == "publish-operation-set"
-    assert parser.parse_args(
-        [
-            "compile-operation-batch",
-            "--at",
-            AT,
-            "--semantic-context",
-            "{}",
-            "--operation-set",
-            "{}",
-        ]
-    ).command == "compile-operation-batch"
-    assert parser.parse_args(
-        [
-            "materialize-plan-bound-root-grant",
-            "--approval-plan",
-            "{}",
-            "--decision-seed",
-            "{}",
-        ]
-    ).command == "materialize-plan-bound-root-grant"
+    assert (
+        parser.parse_args(
+            [
+                "compile-root-decision-seed",
+                "--approval-plan",
+                "{}",
+                "--authorization-evidence",
+                "{}",
+            ]
+        ).command
+        == "compile-root-decision-seed"
+    )
+    assert (
+        parser.parse_args(
+            [
+                "compile-semantic-context",
+                "--initialization",
+                "{}",
+                "--semantic",
+                "{}",
+            ]
+        ).command
+        == "compile-semantic-context"
+    )
+    assert (
+        parser.parse_args(
+            [
+                "publish-operation-set",
+                "--operations",
+                "[]",
+            ]
+        ).command
+        == "publish-operation-set"
+    )
+    assert (
+        parser.parse_args(
+            [
+                "compile-operation-batch",
+                "--at",
+                AT,
+                "--semantic-context",
+                "{}",
+                "--operation-set",
+                "{}",
+            ]
+        ).command
+        == "compile-operation-batch"
+    )
+    assert (
+        parser.parse_args(
+            [
+                "materialize-plan-bound-root-grant",
+                "--approval-plan",
+                "{}",
+                "--decision-seed",
+                "{}",
+            ]
+        ).command
+        == "materialize-plan-bound-root-grant"
+    )

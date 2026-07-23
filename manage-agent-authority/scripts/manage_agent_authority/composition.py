@@ -13,6 +13,7 @@ from .canonical import sha256_file
 from .canonical import write_immutable_json
 from .contracts import risk_value
 from .contracts import reservation_units
+from .root_grant_request_binding import root_grant_request_binding_covers
 from .contracts import cardinality_covers
 from .contracts import rank_value
 from .source_approval import load_source_approval
@@ -84,9 +85,7 @@ def create_composition(root: Path, raw: dict[str, Any]) -> dict[str, Any]:
         )
     existing = validate_composition(read_object(path, "authority composition"))
     if existing != composition:
-        raise SystemExit(
-            "Historical composition replay differs from registered bytes."
-        )
+        raise SystemExit("Historical composition replay differs from registered bytes.")
     return {
         "composition": existing,
         "ref": path.relative_to(root).as_posix(),
@@ -178,6 +177,7 @@ def composition_covers(
         if (
             state.get("status") != "active"
             or grant["holder_rank"] != request["actor_rank"]
+            or not root_grant_request_binding_covers(grant, request)
         ):
             return False
         if parse_time(grant["not_before"], "grant.not_before") > at:
@@ -210,11 +210,9 @@ def composition_covers(
         if request["decision_class"] not in grant["decision_classes"]:
             return False
         available = state.get("remaining_uses")
-        if (
-            available is not None
-            and available - state.get("reserved_uses", 0)
-            < reservation_units(request)
-        ):
+        if available is not None and available - state.get(
+            "reserved_uses", 0
+        ) < reservation_units(request):
             return False
         capabilities.update(grant["capabilities"])
     return set(request["required_capabilities"]).issubset(capabilities)

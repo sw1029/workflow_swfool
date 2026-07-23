@@ -9,6 +9,7 @@ from .contracts import cardinality_covers
 from .contracts import rank_value
 from .contracts import reservation_units
 from .contracts import risk_value
+from .root_grant_request_binding import root_grant_request_binding_covers
 from .evaluator import evaluate
 from .projection_io import load_grant_artifact
 from .projection_io import safe_json
@@ -34,14 +35,12 @@ def validated_grants(root: Path) -> GrantRecords:
         if path.suffix != ".json":
             continue
         if path.is_symlink() or not path.is_file():
-            raise SystemExit("Authority grant directory contains a non-regular artifact.")
+            raise SystemExit(
+                "Authority grant directory contains a non-regular artifact."
+            )
         grant, digest = load_grant_artifact(root, path.stem)
         state_path = (
-            root
-            / AUTHORIZATION_ROOT
-            / "state"
-            / "grants"
-            / f"{grant['grant_id']}.json"
+            root / AUTHORIZATION_ROOT / "state" / "grants" / f"{grant['grant_id']}.json"
         )
         state, state_digest = safe_json(root, state_path, "authority grant state")
         state = validate_grant_state(state, grant, digest, "authority grant state")
@@ -97,14 +96,10 @@ def grant_status_records(
                 break
             parent, _, parent_state, _ = parent_record
             if parent_state["status"] != "active":
-                blockers.append(
-                    f"ancestor_grant_{parent_state['status']}:{parent_id}"
-                )
+                blockers.append(f"ancestor_grant_{parent_state['status']}:{parent_id}")
             blockers.extend(
                 f"{code}:{parent_id}"
-                for code in _temporal_blockers(
-                    parent, evaluated_at, "ancestor_grant_"
-                )
+                for code in _temporal_blockers(parent, evaluated_at, "ancestor_grant_")
             )
             parent_id = parent["parent_grant_id"]
         result.append(
@@ -146,9 +141,7 @@ def reservation_authority_blockers(
             blockers.append(f"{role}_grant_status_{state['status']}:{grant_id}")
         blockers.extend(
             f"{code}:{grant_id}"
-            for code in _temporal_blockers(
-                grant, evaluated_at, f"{role}_grant_"
-            )
+            for code in _temporal_blockers(grant, evaluated_at, f"{role}_grant_")
         )
         if state["reserved_uses"] < use["units"]:
             blockers.append(f"{role}_grant_reserved_units_missing:{grant_id}")
@@ -190,6 +183,8 @@ def grant_covers_request(
     blockers.extend(_temporal_blockers(grant, evaluated_at, "grant_"))
     if grant["holder_rank"] != request["actor_rank"]:
         blockers.append("holder_rank_mismatch")
+    if not root_grant_request_binding_covers(grant, request):
+        blockers.append("root_grant_exact_request_mismatch")
     if rank_value(grant["issuer_rank"]) < rank_value(rank_floor):
         blockers.append("issuer_rank_below_operation_floor")
     if not set(request["required_capabilities"]).issubset(grant["capabilities"]):
@@ -206,9 +201,7 @@ def grant_covers_request(
         blockers.append("risk_not_covered")
     if request["decision_class"] not in grant["decision_classes"]:
         blockers.append("decision_class_not_covered")
-    if not cardinality_covers(
-        grant["cardinality"], request["cardinality_requested"]
-    ):
+    if not cardinality_covers(grant["cardinality"], request["cardinality_requested"]):
         blockers.append("cardinality_not_covered")
     if grant["session_id"] and grant["session_id"] != session_id:
         blockers.append("session_scope_mismatch")
@@ -231,15 +224,17 @@ def grant_covers_request(
             break
         parent, _, parent_state, _ = parent_record
         if parent_state["status"] != "active":
-            blockers.append(f"ancestor_grant_status_{parent_state['status']}:{parent_id}")
+            blockers.append(
+                f"ancestor_grant_status_{parent_state['status']}:{parent_id}"
+            )
         blockers.extend(
             f"{code}:{parent_id}"
-            for code in _temporal_blockers(
-                parent, evaluated_at, "ancestor_grant_"
-            )
+            for code in _temporal_blockers(parent, evaluated_at, "ancestor_grant_")
         )
         if parent["session_id"] and parent["session_id"] != session_id:
             blockers.append(f"ancestor_session_scope_mismatch:{parent_id}")
+        if not root_grant_request_binding_covers(parent, request):
+            blockers.append(f"ancestor_root_grant_exact_request_mismatch:{parent_id}")
         if parent["task_id"] and parent["task_id"] != request["task_id"]:
             blockers.append(f"ancestor_task_scope_mismatch:{parent_id}")
         if parent["improvement_id"] and (

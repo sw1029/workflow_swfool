@@ -105,15 +105,12 @@ def _transition_assertion(
     _closed(receipt, TRANSITION_RECEIPT_KEYS, "task-state transition receipt")
     if (
         receipt.get("schema_version") != 1
-        or receipt.get("receipt_kind")
-        != "task_state_transition_apply_receipt"
+        or receipt.get("receipt_kind") != "task_state_transition_apply_receipt"
         or not OPAQUE_ID.fullmatch(str(receipt.get("plan_id") or ""))
     ):
         raise ValueError("task-state transition receipt contract is invalid")
     body = {
-        key: value
-        for key, value in receipt.items()
-        if key != "receipt_content_sha256"
+        key: value for key, value in receipt.items() if key != "receipt_content_sha256"
     }
     if receipt.get("receipt_content_sha256") != _compact_sha256(body):
         raise ValueError("task-state transition receipt integrity check failed")
@@ -229,15 +226,10 @@ def _selected_source(
 ) -> tuple[dict[str, str], dict[str, Any]]:
     binding = normalize_binding(source_binding_value, "selection decision receipt")
     _, raw = read_bound_json(root, binding, "selection decision receipt")
-    if raw.get("schema_version") == 2:
-        from .selection_decision_receipt_v2 import (
-            validate_selection_decision_receipt_v2,
-        )
-
-        receipt = validate_selection_decision_receipt_v2(
-            root, raw, expected_active_prepare=expected_active_prepare
-        )
-    else:
+    schema_version = raw.get("schema_version")
+    if not isinstance(schema_version, int) or isinstance(schema_version, bool):
+        raise ValueError("selection decision receipt schema_version is unsupported")
+    if schema_version == 1:
         trigger_binding = normalize_binding(
             raw.get("trigger_selection_tick"), "selection trigger tick"
         )
@@ -245,12 +237,39 @@ def _selected_source(
         receipt = validate_selection_decision_receipt(
             root, raw, expected_trigger_tick=trigger
         )
+    elif schema_version == 2:
+        from .selection_decision_receipt_v2 import (
+            validate_selection_decision_receipt_v2,
+        )
+
+        receipt = validate_selection_decision_receipt_v2(
+            root, raw, expected_active_prepare=expected_active_prepare
+        )
+    elif schema_version == 3:
+        from .selection_decision_receipt_v3 import (
+            validate_selection_decision_receipt_v3,
+        )
+
+        expected_ref = (
+            f".task/selection_reentry/receipts/sha256/{binding['sha256']}.json"
+        )
+        if binding["ref"] != expected_ref:
+            raise ValueError(
+                "selection decision receipt v3 must use its exact CAS path"
+            )
+        receipt = validate_selection_decision_receipt_v3(
+            root, raw, expected_active_prepare=expected_active_prepare
+        )
+    else:
+        raise ValueError("selection decision receipt schema_version is unsupported")
     if receipt.get("outcome") != "selected":
         raise ValueError("selection publication intent requires a selected decision")
     return binding, receipt
 
 
-def validate_selected_source(root: Path, source_binding_value: Any) -> tuple[dict[str, str], dict[str, Any]]:
+def validate_selected_source(
+    root: Path, source_binding_value: Any
+) -> tuple[dict[str, str], dict[str, Any]]:
     """Fully validate one selection receipt before any dependent artifact write."""
 
     binding, receipt = _selected_source(root, source_binding_value)
@@ -271,6 +290,14 @@ def compile_intent(root: Path, raw: dict[str, Any]) -> tuple[dict[str, Any], byt
     intent, intent_sha256 = external_intent_identity(raw)
     source_binding, selected = _selected_source(root, intent["source_decision"])
     task_binding = normalize_binding(intent["task_source"], "selection task source")
+    if selected.get("schema_version") == 3:
+        receipt_task_source = normalize_binding(
+            selected.get("task_source"), "selection decision receipt task source"
+        )
+        if task_binding != receipt_task_source:
+            raise ValueError(
+                "selection task source differs from the exact receipt task source"
+            )
     _, task_payload = read_bound_bytes(root, task_binding, "selection task source")
     selection_id = _task_id(task_payload)
     if selection_id != selected.get("selected_task_id"):
@@ -362,7 +389,9 @@ def normalize_prepare(root: Path, raw: dict[str, Any]) -> dict[str, Any]:
     if target.get("role") != "task_alias" or target.get("target_ref") != "task.md":
         raise ValueError("selection publication v2 target must be task_alias")
     before = target.get("before_sha256")
-    if before is not None and (not isinstance(before, str) or not SHA256.fullmatch(before)):
+    if before is not None and (
+        not isinstance(before, str) or not SHA256.fullmatch(before)
+    ):
         raise ValueError("selection publication v2 before digest is invalid")
     after = target.get("after_sha256")
     size = target.get("payload_size")
@@ -387,9 +416,7 @@ def normalize_prepare(root: Path, raw: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("selection publication v2 compiler metrics are invalid")
     normalized = dict(material)
     if "predecessor_transaction_id" in raw:
-        normalized["predecessor_transaction_id"] = raw.get(
-            "predecessor_transaction_id"
-        )
+        normalized["predecessor_transaction_id"] = raw.get("predecessor_transaction_id")
     if "transaction_id" in raw:
         normalized["transaction_id"] = raw.get("transaction_id")
     return normalized

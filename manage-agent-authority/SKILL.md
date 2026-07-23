@@ -218,6 +218,11 @@ not authority and must not invalidate the same signed membership. Materializatio
 preflights all conflicts before its first write, stages every grant as `draft`, and
 recovers an exact interrupted
 transaction before reporting all grants active.
+During evaluation, require every schema-v3 root-materialized grant in the selected
+lineage to bind the canonical current request by exact `request_sha256`. Because the
+closed request includes `cycle_id`, this also prevents a signed grant from crossing
+into another cycle even when task, subject, operation, and other broad scope fields
+match. Keep historical schema-v2 grants readable under their original contract.
 The transaction effect API accepts only the exact plan and decision-seed bindings.
 Inside the authority lock it boundedly reopens the plan, signed host/user evidence,
 and decision seed, re-renders source approval, capability coverage, source binding,

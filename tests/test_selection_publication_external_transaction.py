@@ -146,7 +146,7 @@ def _normal_cycle_inputs(root: Path) -> dict[str, Any]:
             "cycle_id": cycle_id,
             "task_id": "task-old",
             "status": "complete",
-            "schema_status": "pass",
+            "schema_status": "no_change",
             "evidence_paths": [],
         },
     )
@@ -160,9 +160,7 @@ def _normal_cycle_inputs(root: Path) -> dict[str, Any]:
         "schema_pre": _binding(root, schema_pre),
         "current_task": task_binding,
         "task_index": index_binding,
-        "input_evidence_manifest_sha256": synthesis[
-            "input_evidence_manifest_sha256"
-        ],
+        "input_evidence_manifest_sha256": synthesis["input_evidence_manifest_sha256"],
     }
 
 
@@ -204,15 +202,11 @@ def _render_trigger(
         current_task=current_task or inputs["current_task"],
         task_index=task_index or inputs["task_index"],
         publication_head=publication_head or _persist_bootstrap(root, inputs),
-        input_evidence_manifest_sha256=inputs[
-            "input_evidence_manifest_sha256"
-        ],
+        input_evidence_manifest_sha256=inputs["input_evidence_manifest_sha256"],
     )
 
 
-def _selected_receipt(
-    root: Path, capsys: pytest.CaptureFixture[str]
-) -> dict[str, str]:
+def _selected_receipt(root: Path, capsys: pytest.CaptureFixture[str]) -> dict[str, str]:
     inputs = _normal_cycle_inputs(root)
     code = selection_decision_receipt_cli.main(
         [
@@ -330,19 +324,14 @@ def test_selected_successor_prepare_renders_body_free_authority_bundle(
     assert replay["bundle"] == prepared["bundle"]
     assert replay["mutation_performed"] is False
     assert [row["step"] for row in bundle["execution_order"]] == [1, 2, 3]
-    assert [
-        row["operation"]["operation_id"] for row in bundle["execution_order"]
-    ] == [
+    assert [row["operation"]["operation_id"] for row in bundle["execution_order"]] == [
         "mutate_task_state_index",
         "publish_selected_successor_topology",
         "settle_selected_successor_task_state",
     ]
     assert all(
         set(row["expected_result"]) == {"ref", "sha256"}
-        and row["authority_bindings"][
-            "must_be_validated_before_first_effect"
-        ]
-        is True
+        and row["authority_bindings"]["must_be_validated_before_first_effect"] is True
         for row in bundle["execution_order"]
     )
     serialized = json.dumps(bundle, sort_keys=True)
@@ -494,18 +483,12 @@ def test_selected_successor_intent_index_rejects_forged_artifact_path(
     forged.parent.mkdir(parents=True, exist_ok=True)
     forged.write_bytes(original.read_bytes())
     index[forged_field] = _binding(tmp_path, forged)
-    body = {
-        key: value
-        for key, value in index.items()
-        if key != "index_content_sha256"
-    }
+    body = {key: value for key, value in index.items() if key != "index_content_sha256"}
     index["index_content_sha256"] = hashlib.sha256(_canonical_json(body)).hexdigest()
     index_path.write_bytes(_canonical_json(index))
 
     with pytest.raises(ValueError, match=f"{forged_field} path differs"):
-        load_intent_index(
-            tmp_path, intent_sha256, committed=forged_field == "receipt"
-        )
+        load_intent_index(tmp_path, intent_sha256, committed=forged_field == "receipt")
 
 
 def _authorized_successor(
@@ -539,6 +522,27 @@ def _selected_successor_target_bytes(root: Path) -> dict[str, bytes]:
         relative: (root / relative).read_bytes()
         for relative in ("task.md", ".task/index.jsonl", ".task/index.md")
     }
+
+
+def _damage_prepared_predecessor_snapshot(
+    root: Path, bundle: dict[str, Any], damage: str
+) -> None:
+    plan = json.loads(
+        (root / bundle["task_state_plan"]["ref"]).read_text(encoding="utf-8")
+    )
+    predecessor = next(
+        event for event in plan["events"] if event["status"] == "superseded"
+    )
+    snapshot = root / predecessor["fields"]["snapshot_path"]
+    if damage == "missing":
+        snapshot.unlink()
+    elif damage == "tampered":
+        snapshot.write_bytes(snapshot.read_bytes() + b"\n# tampered\n")
+    else:
+        target = root / "prepared-predecessor-symlink-target.md"
+        target.write_bytes(snapshot.read_bytes())
+        snapshot.unlink()
+        snapshot.symlink_to(target)
 
 
 def test_imported_token_and_producer_capability_do_not_authorize_effects(
@@ -650,12 +654,8 @@ def test_selected_successor_lock_order_is_reference_publication_authority(
     actual_authority_lock = authority_canonical.authority_lock
 
     @contextmanager
-    def tracked_barrier(
-        root: Path, *, producer_capability: object
-    ):
-        with actual_barrier(
-            root, producer_capability=producer_capability
-        ):
+    def tracked_barrier(root: Path, *, producer_capability: object):
+        with actual_barrier(root, producer_capability=producer_capability):
             lease_order.append("reference")
             yield
 
@@ -666,21 +666,15 @@ def test_selected_successor_lock_order_is_reference_publication_authority(
             yield
 
     with monkeypatch.context() as ordered:
-        ordered.setattr(
-            lease_module, "registered_producer_barrier", tracked_barrier
-        )
-        ordered.setattr(
-            authority_canonical, "authority_lock", tracked_authority_lock
-        )
-        pending_lease, _gate, _created = (
-            lease_module.publish_execution_lease(
-                tmp_path,
-                prepared["bundle"],
-                bundle["execution_order"],
-                proofs,
-                action="apply_task_state_plan_pending",
-                skills_root=SKILLS_ROOT,
-            )
+        ordered.setattr(lease_module, "registered_producer_barrier", tracked_barrier)
+        ordered.setattr(authority_canonical, "authority_lock", tracked_authority_lock)
+        pending_lease, _gate, _created = lease_module.publish_execution_lease(
+            tmp_path,
+            prepared["bundle"],
+            bundle["execution_order"],
+            proofs,
+            action="apply_task_state_plan_pending",
+            skills_root=SKILLS_ROOT,
         )
 
     assert lease_order == ["reference", "authority"]
@@ -690,18 +684,17 @@ def test_selected_successor_lock_order_is_reference_publication_authority(
         external_prepare=bundle["selection_prepare"],
         execution_lease=pending_lease,
     )
-    assert pending["execution_result_binding"] == (
-        bundle["execution_order"][0]["expected_result"]
+    assert (
+        pending["execution_result_binding"]
+        == (bundle["execution_order"][0]["expected_result"])
     )
-    publication_lease, _gate, _created = (
-        lease_module.publish_execution_lease(
-            tmp_path,
-            prepared["bundle"],
-            bundle["execution_order"],
-            proofs,
-            action="publish_selected_successor_topology",
-            skills_root=SKILLS_ROOT,
-        )
+    publication_lease, _gate, _created = lease_module.publish_execution_lease(
+        tmp_path,
+        prepared["bundle"],
+        bundle["execution_order"],
+        proofs,
+        action="publish_selected_successor_topology",
+        skills_root=SKILLS_ROOT,
     )
 
     publication_order: list[str] = []
@@ -709,12 +702,8 @@ def test_selected_successor_lock_order_is_reference_publication_authority(
     actual_effect_guard = guard_module.guard_selected_successor_effect
 
     @contextmanager
-    def tracked_publication_lock(
-        root: Path, *, producer_capability: object
-    ):
-        with actual_publication_lock(
-            root, producer_capability=producer_capability
-        ):
+    def tracked_publication_lock(root: Path, *, producer_capability: object):
+        with actual_publication_lock(root, producer_capability=producer_capability):
             publication_order.append("reference+publication")
             yield
 
@@ -943,6 +932,224 @@ def test_pristine_selected_successor_reopens_source_before_any_effect(
     )
 
 
+@pytest.mark.parametrize("damage", ("missing", "tampered", "symlink"))
+def test_predecessor_snapshot_drift_before_execute_has_zero_topology_effects(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    damage: str,
+) -> None:
+    prepared, bundle, proofs = _authorized_successor(tmp_path, capsys)
+    _damage_prepared_predecessor_snapshot(tmp_path, bundle, damage)
+    before = _workspace_bytes(tmp_path)
+
+    with pytest.raises(ValueError, match="predecessor snapshot"):
+        execute_selected_successor_bundle(
+            tmp_path,
+            bundle_binding=prepared["bundle"],
+            authority_proofs=proofs,
+            settled_at=AUTHORITY_LATER,
+            skills_root=SKILLS_ROOT,
+        )
+
+    assert _workspace_bytes(tmp_path) == before
+    assert not (
+        tmp_path / bundle["execution_order"][0]["expected_result"]["ref"]
+    ).exists()
+    assert not (
+        tmp_path / bundle["execution_order"][1]["expected_result"]["ref"]
+    ).exists()
+
+
+def test_snapshot_drift_after_initial_execute_check_stops_before_task_effect(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared, bundle, proofs = _authorized_successor(tmp_path, capsys)
+    import orchestrate_task_cycle.selected_successor_execution as execution
+
+    real_validate = execution.validate_pristine_source
+    checks = 0
+
+    def drift_after_first_check(
+        root: Path, current_bundle: dict[str, Any], states: list[str]
+    ) -> None:
+        nonlocal checks
+        checks += 1
+        real_validate(root, current_bundle, states)
+        if checks == 1:
+            _damage_prepared_predecessor_snapshot(root, current_bundle, "tampered")
+
+    targets_before = _selected_successor_target_bytes(tmp_path)
+    monkeypatch.setattr(execution, "validate_pristine_source", drift_after_first_check)
+
+    with pytest.raises(ValueError, match="predecessor snapshot"):
+        execute_selected_successor_bundle(
+            tmp_path,
+            bundle_binding=prepared["bundle"],
+            authority_proofs=proofs,
+            settled_at=AUTHORITY_LATER,
+            skills_root=SKILLS_ROOT,
+        )
+
+    assert checks == 2
+    assert _selected_successor_target_bytes(tmp_path) == targets_before
+    assert not (
+        tmp_path / bundle["execution_order"][0]["expected_result"]["ref"]
+    ).exists()
+    assert not (
+        tmp_path / bundle["execution_order"][1]["expected_result"]["ref"]
+    ).exists()
+
+
+@pytest.mark.parametrize("damage", ("missing", "tampered", "symlink"))
+def test_plan_owned_snapshot_drift_after_step1_blocks_recovery_publication(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    damage: str,
+) -> None:
+    prepared, bundle, proofs = _authorized_successor(tmp_path, capsys)
+    import orchestrate_task_cycle.selected_successor_execution as execution
+
+    with monkeypatch.context() as crash:
+        crash.setattr(
+            execution,
+            "publish_prepared",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("stop after step1")
+            ),
+        )
+        with pytest.raises(RuntimeError, match="stop after step1"):
+            execute_selected_successor_bundle(
+                tmp_path,
+                bundle_binding=prepared["bundle"],
+                authority_proofs=proofs,
+                settled_at=AUTHORITY_LATER,
+                skills_root=SKILLS_ROOT,
+            )
+
+    assert (tmp_path / bundle["execution_order"][0]["expected_result"]["ref"]).is_file()
+    assert not (
+        tmp_path / bundle["execution_order"][1]["expected_result"]["ref"]
+    ).exists()
+    _damage_prepared_predecessor_snapshot(tmp_path, bundle, damage)
+    before = _workspace_bytes(tmp_path)
+    task_before = (tmp_path / "task.md").read_bytes()
+
+    with pytest.raises(ValueError, match="plan-owned predecessor snapshot"):
+        execute_selected_successor_bundle(
+            tmp_path,
+            bundle_binding=prepared["bundle"],
+            authority_proofs=proofs,
+            settled_at=AUTHORITY_LATER,
+            skills_root=SKILLS_ROOT,
+        )
+
+    assert _workspace_bytes(tmp_path) == before
+    assert (tmp_path / "task.md").read_bytes() == task_before
+    assert not (
+        tmp_path / bundle["execution_order"][1]["expected_result"]["ref"]
+    ).exists()
+    assert not (
+        tmp_path / bundle["execution_order"][2]["expected_result"]["ref"]
+    ).exists()
+
+
+def test_same_run_snapshot_drift_between_step1_and_step2_blocks_publication(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared, bundle, proofs = _authorized_successor(tmp_path, capsys)
+    import orchestrate_task_cycle.selected_successor_execution as execution
+
+    drifted = False
+
+    def drift_before_step2(
+        stage: str,
+        root: Path,
+        current_bundle: dict[str, Any],
+        states: list[str],
+    ) -> None:
+        nonlocal drifted
+        assert stage == "before_step2_snapshot_validation"
+        assert states == ["exact", "missing", "missing"]
+        _damage_prepared_predecessor_snapshot(root, current_bundle, "tampered")
+        drifted = True
+
+    task_before = (tmp_path / "task.md").read_bytes()
+    monkeypatch.setattr(execution, "_execution_effect_hook", drift_before_step2)
+
+    with pytest.raises(ValueError, match="plan-owned predecessor snapshot"):
+        execute_selected_successor_bundle(
+            tmp_path,
+            bundle_binding=prepared["bundle"],
+            authority_proofs=proofs,
+            settled_at=AUTHORITY_LATER,
+            skills_root=SKILLS_ROOT,
+        )
+
+    assert drifted is True
+    assert (tmp_path / "task.md").read_bytes() == task_before
+    assert (tmp_path / bundle["execution_order"][0]["expected_result"]["ref"]).is_file()
+    assert not (
+        tmp_path / bundle["execution_order"][1]["expected_result"]["ref"]
+    ).exists()
+    assert not (
+        tmp_path / bundle["execution_order"][2]["expected_result"]["ref"]
+    ).exists()
+    leases = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in (
+            tmp_path / ".task/selection_publication/successor_execution_leases/sha256"
+        ).glob("*.json")
+    ]
+    assert [lease["action"] for lease in leases] == ["apply_task_state_plan_pending"]
+
+
+def test_snapshot_drift_inside_publication_effect_guard_blocks_task_replace(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared, bundle, proofs = _authorized_successor(tmp_path, capsys)
+    import manage_task_state_index.state.selected_successor_guard as guard
+
+    drifted = False
+
+    def drift_under_owner_guard(stage: str, root: Path, action: str) -> None:
+        nonlocal drifted
+        assert stage == "before_current_authority_revalidation"
+        if action == "publish_selected_successor_topology" and not drifted:
+            _damage_prepared_predecessor_snapshot(root, bundle, "tampered")
+            drifted = True
+
+    task_before = (tmp_path / "task.md").read_bytes()
+    monkeypatch.setattr(
+        guard, "_selected_successor_effect_hook", drift_under_owner_guard
+    )
+
+    with pytest.raises(ValueError, match="publication predecessor snapshot"):
+        execute_selected_successor_bundle(
+            tmp_path,
+            bundle_binding=prepared["bundle"],
+            authority_proofs=proofs,
+            settled_at=AUTHORITY_LATER,
+            skills_root=SKILLS_ROOT,
+        )
+
+    assert drifted is True
+    assert (tmp_path / "task.md").read_bytes() == task_before
+    assert (tmp_path / bundle["execution_order"][0]["expected_result"]["ref"]).is_file()
+    assert not (
+        tmp_path / bundle["execution_order"][1]["expected_result"]["ref"]
+    ).exists()
+    assert not (
+        tmp_path / bundle["execution_order"][2]["expected_result"]["ref"]
+    ).exists()
+
+
 @pytest.mark.parametrize(
     ("tamper", "message"),
     (
@@ -983,9 +1190,7 @@ def test_selected_successor_prepare_index_tamper_fails_before_recompile(
         forged.write_bytes(source.read_bytes())
         index["bundle"] = _binding(tmp_path, forged)
         body = {
-            key: value
-            for key, value in index.items()
-            if key != "index_content_sha256"
+            key: value for key, value in index.items() if key != "index_content_sha256"
         }
         index["index_content_sha256"] = hashlib.sha256(
             _canonical_json(body)
@@ -1150,9 +1355,7 @@ def test_selected_successor_incomplete_authority_gate_has_zero_effects(
 
     assert "task-old" in (tmp_path / "task.md").read_text(encoding="utf-8")
     assert not list((tmp_path / ".task").glob("transition_pending_receipts/*.json"))
-    assert not list(
-        (tmp_path / ".task/selection_publication/receipts").glob("*.json")
-    )
+    assert not list((tmp_path / ".task/selection_publication/receipts").glob("*.json"))
     assert not list(
         (tmp_path / ".task/selection_publication/successor_authority_gates").glob(
             "**/*.json"
@@ -1187,7 +1390,9 @@ def test_selected_successor_recovers_after_publication_checkpoint(
 
     assert (tmp_path / bundle["execution_order"][0]["expected_result"]["ref"]).is_file()
     assert (tmp_path / bundle["execution_order"][1]["expected_result"]["ref"]).is_file()
-    assert not (tmp_path / bundle["execution_order"][2]["expected_result"]["ref"]).exists()
+    assert not (
+        tmp_path / bundle["execution_order"][2]["expected_result"]["ref"]
+    ).exists()
     assert list(
         (tmp_path / ".task/selection_publication/successor_authority_gates").glob(
             "**/*.json"
@@ -1207,9 +1412,7 @@ def test_selected_successor_recovers_after_publication_checkpoint(
         "publish_selected_successor_topology": "exact",
         "settle_selected_successor_task_state": "missing",
     }
-    assert recovered["effect_actions"] == [
-        "settle_selected_successor_task_state"
-    ]
+    assert recovered["effect_actions"] == ["settle_selected_successor_task_state"]
 
 
 @pytest.mark.parametrize("crash_target", ("record_committed", "write_commit_index"))
@@ -1303,9 +1506,10 @@ def test_historical_v3_intent_replay_does_not_roll_back_compact_head(
     assert replay["status"] == "already_committed"
     assert replay["mutation_performed"] is False
     assert state_path.read_bytes() == before_state
-    assert publication_status(tmp_path)["current_head"]["head_transaction_id"] == successor[
-        "transaction_id"
-    ]
+    assert (
+        publication_status(tmp_path)["current_head"]["head_transaction_id"]
+        == successor["transaction_id"]
+    )
     assert (tmp_path / "task.md").read_bytes() == newer
 
 
@@ -1362,9 +1566,7 @@ def test_selected_successor_replays_partial_authority_consumption(
         skills_root=SKILLS_ROOT,
     )
     assert recovered["status"] == "complete"
-    assert recovered["authority_preflight"][0][
-        "exact_v3_settlement_replayed"
-    ] is True
+    assert recovered["authority_preflight"][0]["exact_v3_settlement_replayed"] is True
     replay = execute_selected_successor_bundle(
         tmp_path,
         bundle_binding=prepared["bundle"],
@@ -1400,9 +1602,7 @@ def test_normal_trigger_rejects_arbitrary_publication_head(tmp_path: Path) -> No
     )
 
     with pytest.raises(ValueError, match="committed receipt or compiler bootstrap"):
-        _render_trigger(
-            tmp_path, inputs, publication_head=_binding(tmp_path, blocker)
-        )
+        _render_trigger(tmp_path, inputs, publication_head=_binding(tmp_path, blocker))
 
 
 @pytest.mark.parametrize("artifact", ["schema_pre", "derive"])
@@ -1416,10 +1616,7 @@ def test_normal_trigger_rejects_wrong_cycle_stage_result(
     value = json.loads((tmp_path / original["ref"]).read_text(encoding="utf-8"))
     value["cycle_id"] = "cycle-other"
     path = _write_json(
-        tmp_path
-        / ".task/cycle"
-        / inputs["cycle_id"]
-        / f"wrong-cycle-{artifact}.json",
+        tmp_path / ".task/cycle" / inputs["cycle_id"] / f"wrong-cycle-{artifact}.json",
         value,
     )
 
@@ -1556,8 +1753,9 @@ def test_historical_predecessor_baseline_retires_while_legacy_head_is_current(
     second_prepare = seal_historical_legacy_publication_fixture(
         tmp_path, _publication_plan(current, successor, "historical-successor")
     )
-    assert publication_status(tmp_path)["current_head"]["head_transaction_id"] == (
-        second_prepare["transaction_id"]
+    assert (
+        publication_status(tmp_path)["current_head"]["head_transaction_id"]
+        == (second_prepare["transaction_id"])
     )
     assert resolve_terminal_wait_baseline(tmp_path)["status"] == "inactive"
 
@@ -1618,9 +1816,7 @@ def test_real_task_state_owner_applies_before_alias_and_settles_after_cas(
         "updated_at": "2026-07-22T20:00:00+09:00",
         "render": True,
         "external_settlement_kind": "selection_publication",
-        "artifact_sources": [
-            {"target_ref": "task.md", "source": candidate_binding}
-        ],
+        "artifact_sources": [{"target_ref": "task.md", "source": candidate_binding}],
         "events": [
             {
                 "event": "upsert",
@@ -1719,9 +1915,7 @@ def test_real_task_state_owner_applies_before_alias_and_settles_after_cas(
     assert task.read_bytes() == task_before
     assert (tmp_path / ".task/index.jsonl").read_bytes() == ledger_before
     assert (tmp_path / ".task/index.md").read_bytes() == markdown_before
-    assert not list(
-        (tmp_path / ".task/transition_pending_receipts").glob("*.json")
-    )
+    assert not list((tmp_path / ".task/transition_pending_receipts").glob("*.json"))
 
     with pytest.raises(ValueError, match="imported legacy token is not authority"):
         apply_transition_plan(
@@ -1736,9 +1930,7 @@ def test_real_task_state_owner_applies_before_alias_and_settles_after_cas(
     assert task.read_bytes() == task_before
     assert (tmp_path / ".task/index.jsonl").read_bytes() == ledger_before
     assert (tmp_path / ".task/index.md").read_bytes() == markdown_before
-    assert not list(
-        (tmp_path / ".task/transition_pending_receipts").glob("*.json")
-    )
+    assert not list((tmp_path / ".task/transition_pending_receipts").glob("*.json"))
     pending: dict[str, str] = {"receipt_ref": ""}
     return
 
@@ -1793,9 +1985,7 @@ def test_real_task_state_owner_applies_before_alias_and_settles_after_cas(
     ]
     with pytest.raises(SystemExit, match="guarded all-three authority gate"):
         task_state.main(settle_args)
-    assert not (
-        tmp_path / f".task/transition_receipts/{plan['plan_id']}.json"
-    ).exists()
+    assert not (tmp_path / f".task/transition_receipts/{plan['plan_id']}.json").exists()
 
     settled = settle_transition_external(
         tmp_path,
@@ -1923,9 +2113,10 @@ def test_real_task_state_owner_applies_before_alias_and_settles_after_cas(
     )
     assert retired["status"] == "inactive"
     assert resolve_terminal_wait_baseline(tmp_path)["status"] == "inactive"
-    assert task_state.verify_transition_plan(
-        tmp_path, planned["plan_ref"]
-    )["status"] == "already_applied"
+    assert (
+        task_state.verify_transition_plan(tmp_path, planned["plan_ref"])["status"]
+        == "already_applied"
+    )
     replay = publish_prepared(
         tmp_path,
         prepare["transaction_id"],
@@ -1933,8 +2124,13 @@ def test_real_task_state_owner_applies_before_alias_and_settles_after_cas(
     )
     assert replay["mutation_performed"] is False
 
-    modified = {**intent, "task_state_plan": {**intent["task_state_plan"], "sha256": "0" * 64}}
-    modified_path = _write_json(tmp_path / ".task/selection-intent-modified.json", modified)
+    modified = {
+        **intent,
+        "task_state_plan": {**intent["task_state_plan"], "sha256": "0" * 64},
+    }
+    modified_path = _write_json(
+        tmp_path / ".task/selection-intent-modified.json", modified
+    )
     code = selection_publication_cli.main(
         [
             "--root",

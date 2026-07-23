@@ -151,6 +151,12 @@ def _selection_decision_receipt(argv: Sequence[str]) -> int:
     return main(list(argv))
 
 
+def _authority_reentry(argv: Sequence[str]) -> int:
+    from .selection_authority_reentry_cli import main
+
+    return main(list(argv))
+
+
 def _selection_publication(argv: Sequence[str]) -> int:
     from .selection_publication_cli import main
 
@@ -159,6 +165,12 @@ def _selection_publication(argv: Sequence[str]) -> int:
 
 def _selected_successor(argv: Sequence[str]) -> int:
     from .selected_successor_cli import main
+
+    return main(list(argv))
+
+
+def _executable_closure(argv: Sequence[str]) -> int:
+    from .executable_closure import main
 
     return main(list(argv))
 
@@ -239,6 +251,11 @@ COMMANDS = (
         _selection_decision_receipt,
     ),
     CommandSpec(
+        "authority-reentry",
+        "compile a settled user-escalation authority delta",
+        _authority_reentry,
+    ),
+    CommandSpec(
         "selection-publication",
         "publish one selected task with forward recovery",
         _selection_publication,
@@ -247,6 +264,11 @@ COMMANDS = (
         "selected-successor",
         "prepare one body-free selected-successor lifecycle",
         _selected_successor,
+    ),
+    CommandSpec(
+        "executable-closure",
+        "verify that an exact operation batch may execute now",
+        _executable_closure,
     ),
     CommandSpec(
         "terminal-wait-baseline",

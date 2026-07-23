@@ -201,6 +201,14 @@ already current. Prospective sources must exactly cover all such anchors. Schema
 requests cannot declare artifact sources or external settlement, and schema-v2 requests
 cannot use another external owner.
 
+The source selection receipt may be a direct-selection schema-v1/v2 receipt or an
+authority-resolution schema-v3 receipt. Unknown receipt schemas fail closed. For
+schema v3, the task-state renderer validates the closed fixed fields and self-seal,
+extracts the receipt-owned `task_source`, and requires exact ref plus raw SHA-256
+equality with `artifact_sources[task.md].source` before it writes a plan. Same-ID
+Markdown with different bytes, or byte-identical Markdown copied to a different ref,
+cannot enter the selected-successor transaction.
+
 Use this closed transaction:
 
 1. Publish the immutable task-state plan while ledger, render, and `task.md` still match

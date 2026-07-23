@@ -333,6 +333,13 @@ an exact replay:
 
 Require `issuer_rank > holder_rank`. For `single_use`, require `max_uses=1`. For `bounded_reusable`, require finite positive `max_uses`. Bind task and improvement leases to their exact IDs.
 
+For a schema-v3 root-materialized grant, require `request_sha256` to equal the
+canonical digest of the request being evaluated. Apply the same check when that
+root grant is an ancestor of a delegated grant or participates in an explicit
+composition. Since `cycle_id` is a required field of the canonical request, this
+is also the exact cycle-scope check. Historical schema-v2 grants remain readable
+and evaluable under their original, non-request-bound contract.
+
 Cardinality coverage is directional. A `single_use` request may consume one use from any cardinality. A `bounded_reusable` request requires bounded-reusable or standing authority; a task lease requires task or standing authority; an improvement lease requires improvement or standing authority; standing-policy reuse requires standing authority. Independently enforce every non-null `session_id`, `task_id`, and `improvement_id`, including when the grant cardinality itself is not a lease.
 
 For prospective delegation, supply only the closed child semantics
@@ -381,6 +388,15 @@ Do not include the mutable whole policy, unrelated grants, unrelated concept nod
 Set `approval_projection` to `null` unless the decision is `approval_required`. For an approval wait, generate it deterministically from the one missing typed decision, request ID, exact operation/subject/capabilities/effect, cardinality/use/session/cycle/task/improvement/attempt scope, sorted reason codes, idempotent replay key, remaining excluded typed axes, fixed out-of-scope effects, and a closed safe-alternative code. A grant request blocked on unresolved risk projects `accept_risk_or_cost`; one blocked on a D0/D1 design choice projects `select_design_option`. Never list the projected intent itself as excluded. Derive `projection_id` from the canonical body. Approval covers only this projection; it does not resolve another typed axis, add capability, raise risk, broaden scope, or increase reuse.
 
 ## Reservation lifecycle
+
+`reserve` is the authority owner's low-level grant-use lifecycle primitive. It
+revalidates the exact decision, request, grant lineage, status, expiry, version, and
+budget under the authority lock; it does not know an orchestrator operation-batch
+binding or acquire a generic task-lifecycle epoch. A workflow must not treat a direct
+CLI reservation as proof that its task is still executable. The selected-successor
+owner supplies that stronger guarantee by holding its fixed authority/task-index
+closure scope through reservation. Other owners retain their explicit lifecycle locks
+until a common reservation-guard contract is introduced.
 
 Use this state sequence:
 

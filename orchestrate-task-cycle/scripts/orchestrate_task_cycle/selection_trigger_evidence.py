@@ -4,6 +4,7 @@ The trigger seal binds bytes.  This module owns the separate question of whether
 those bytes are the current, cycle-coherent owner artifacts that the trigger is
 allowed to bind.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -33,6 +34,7 @@ BOOTSTRAP_KEYS = {
     "bootstrap_sha256",
 }
 PASS_STATUSES = frozenset({"pass", "complete", "completed"})
+SCHEMA_READY_STATUSES = PASS_STATUSES | {"no_change"}
 
 
 def _cycle_ref(cycle_id: str, ref: str, label: str) -> None:
@@ -57,7 +59,9 @@ def validate_cycle_finalization(
         or pointer.get("cycle_id") != cycle_id
         or not isinstance(pointer.get("receipt"), dict)
     ):
-        raise ValueError("normal-cycle finalization pointer is wrong-kind or wrong-cycle")
+        raise ValueError(
+            "normal-cycle finalization pointer is wrong-kind or wrong-cycle"
+        )
     # The finalization owner verifies the immutable snapshot, current pointer,
     # committed state, and receipt lineage.  A committed `authoritative_final`
     # of blocked is deliberately valid here: selection may be the remaining gap.
@@ -78,7 +82,7 @@ def validate_schema_pre_derive(
         result.get("step") != "schema_pre_derive"
         or result.get("cycle_id") != cycle_id
         or status not in PASS_STATUSES
-        or schema_status not in PASS_STATUSES
+        or schema_status not in SCHEMA_READY_STATUSES
     ):
         raise ValueError(
             "normal-cycle schema-pre-derive result must be cycle-bound and pass/complete"
@@ -127,9 +131,7 @@ def _publication_status(root: Path) -> dict[str, Any]:
     return publication_status(root)
 
 
-def _prepared_publication_state(
-    root: Path, prepare_value: Any
-) -> dict[str, Any]:
+def _prepared_publication_state(root: Path, prepare_value: Any) -> dict[str, Any]:
     """Require the one active prepare expected during pre-effect revalidation."""
 
     prepare = normalize_binding(
@@ -161,8 +163,7 @@ def _assert_uninitialized_publication(
         if (
             state.get("head") is not None
             or status.get("status") != "recovery_required"
-            or status.get("pending_transaction_ids")
-            != [active.get("transaction_id")]
+            or status.get("pending_transaction_ids") != [active.get("transaction_id")]
             or status.get("selection_journal_initialized") is not False
             or not isinstance(head, dict)
             or head.get("status") != "not_initialized"
@@ -312,9 +313,7 @@ def _validate_committed_publication_head(
         )
     expected_ref = f".task/selection_publication/receipts/{transaction_id}.json"
     _canonical_owner_ref(binding, expected_ref, "publication head")
-    verified = validate_receipt(
-        root, str(transaction_id), require_current_targets=True
-    )
+    verified = validate_receipt(root, str(transaction_id), require_current_targets=True)
     if (
         verified.get("status") != "committed"
         or verified.get("receipt_ref") != binding["ref"]

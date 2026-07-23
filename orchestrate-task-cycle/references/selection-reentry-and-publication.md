@@ -5,6 +5,7 @@ Use these helpers only around the existing derive boundary. They do not create a
 ## Contents
 
 - [Exact selection trigger variants](#exact-selection-trigger-variants)
+- [Authority re-entry after user escalation](#authority-re-entry-after-user-escalation)
 - [Terminal-wait selection tick](#terminal-wait-selection-tick)
 - [Selection acknowledgement and baseline rebase](#selection-acknowledgement-and-baseline-rebase)
 - [Authority-settled current baseline](#authority-settled-current-baseline)
@@ -57,6 +58,86 @@ receipt ID, exact evidence-manifest digest, outcome, and selected task ID. It do
 choose a task, grant authority, validate completion, or mutate task topology. Do not
 reuse a terminal-wait tick as a normal-cycle trigger or fabricate a trigger from the
 known candidate ID.
+
+## Authority re-entry after user escalation
+
+`terminal_wait` and `user_escalation` have different re-entry contracts. A
+terminal-wait baseline observes a later material input change through
+`selection-tick`. A finalized normal cycle whose direct derive result is
+`user_escalation` already contains the selection analysis; when its exact authority
+request is later resolved by signed root grants, do not run `selection-tick`, allocate
+new lenses, or initialize a new implementation cycle around the completed predecessor.
+Reopen only the frozen selection boundary with the deterministic authority-reentry
+compiler:
+
+```bash
+python3 -P -m orchestrate_task_cycle workflow cycle authority-reentry --root . publish \
+  --cycle-id <historical-source-cycle-id> \
+  --at <RFC3339-authority-reentry-evaluation-time> \
+  --source-result-ref <direct-user-escalation-derive-ref> \
+  --source-result-sha256 <derive-raw-sha256> \
+  --cycle-finalization-ref <cycle-finalization-ref> \
+  --cycle-finalization-sha256 <cycle-finalization-raw-sha256> \
+  --schema-pre-derive-ref <schema-pre-derive-ref> \
+  --schema-pre-derive-sha256 <schema-pre-derive-raw-sha256> \
+  --current-task-ref task.md \
+  --current-task-sha256 <completed-task-raw-sha256> \
+  --task-index-ref .task/index.jsonl \
+  --task-index-sha256 <task-index-raw-sha256> \
+  --publication-head-ref <current-publication-receipt-ref> \
+  --publication-head-sha256 <publication-receipt-raw-sha256> \
+  --authority-decision-ref <allowed-decision-1-ref> \
+  --authority-decision-sha256 <allowed-decision-1-raw-sha256> \
+  --authority-decision-ref <allowed-decision-2-ref> \
+  --authority-decision-sha256 <allowed-decision-2-raw-sha256>
+```
+
+`--at` is required. It is the one explicit authority re-evaluation time bound into the
+compiler inputs and authority-resolution seal; dry-run, publication, replay, and
+persisted validation reuse that exact normalized value and never sample an ambient
+clock. Use `--dry-run` to perform the full write-free compilation and return only
+compact prospective bindings. Publication recompiles under the registered producer
+barrier and writes six content-addressed artifacts under `.task/selection_reentry/`:
+the normal trigger, frozen synthesis, exact prospective task Markdown,
+authority-resolution seal, schema-v3 preliminary decision, and schema-v3 selection
+receipt. Exact replay returns the same bindings with `mutation_performed: false`. None
+of these artifacts grants authority, mutates `task.md`, changes goal truth, validates
+completion, or makes the historical cycle executable.
+
+The compiler reopens the authority packet's historical decision at its exact artifact
+ref and raw SHA-256, verifies the packet's exact `request_sha256`, and persists that
+decision binding plus a request-semantic digest in the resolution. The semantic
+projection removes only the three compiler allocation identities `request_id`,
+`attempt_id`, and `idempotency_key`; cycle, task, subject, operation, capabilities,
+effect/classification, cardinality/budget, context evidence, actor, pack, composition,
+and every other request field remain exact. The later allowed decision for the
+historically required operation must have the same semantic digest. Additional
+operations may appear only when their own schema-v3 grants are exact request members
+of the same signed root lineage.
+
+The compiler accepts only this mechanically decidable shape:
+
+- exactly three frozen derive lenses, each containing one byte-equivalent candidate;
+- one canonical candidate union and a `blocked_authority` candidate;
+- a direct finalized `user_escalation` derive result with no selected task;
+- an allowed decision whose request is semantically identical to the frozen
+  historical request except for compiler allocation identities;
+- schema-v3 grants materialized from one shared signed-root approval lineage;
+- exact resolved-design evidence bound to the authority subject;
+- a clear single selection-publication head and unchanged trigger inputs.
+
+The derived task ID and task Markdown are deterministic. The schema-v3 receipt owns the
+exact `task_source` ref and SHA-256. Every publication, task-index, and selected-successor
+consumer must compare that full binding; the same Task ID with different bytes, or the
+same digest copied to a different ref, is not the selected source.
+
+After re-entry, use the ordinary selected-successor preparation over the returned
+receipt and task-source bindings. The historical decisions are evidence that the
+candidate's old blocker changed; they are not topology or execution grants for the new
+task. Settle the exact three-operation topology under its own signed plan, then
+initialize a fresh compiler-first cycle for the selected task and compile a separate
+dispatch/run plan. Because topology and fresh execution have different cycle scopes,
+the current single-batch root-plan contract requires separate exact approvals.
 
 ## Terminal-wait selection tick
 
@@ -231,7 +312,7 @@ Once activated, ordinary `selection-tick --root .` auto-discovers this verified 
 
 ## Recoverable selected-task publication
 
-The derive owner must first produce one authoritative, digest-bound selection decision. Persist the deterministic synthesis/decision/receipt chain without asking the coordinator to write or hash JSON envelopes. Use `--trigger-kind normal_cycle` plus the six exact normal-cycle bindings above for a normal cycle; use the terminal-wait trigger pair only for a re-entry:
+The derive owner must first produce one authoritative, digest-bound selection decision. Persist the deterministic synthesis/decision/receipt chain without asking the coordinator to write or hash JSON envelopes. A direct selected normal-cycle result uses `--trigger-kind normal_cycle` plus the six exact normal-cycle bindings above and produces receipt v2. A settled `user_escalation` result uses the authority-reentry compiler and produces receipt v3. A terminal-wait re-entry alone uses the trigger-tick pair:
 
 ```bash
 python3 -P -m orchestrate_task_cycle selection-decision-receipt --root . pipeline \

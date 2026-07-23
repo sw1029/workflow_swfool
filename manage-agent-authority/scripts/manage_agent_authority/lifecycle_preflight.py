@@ -7,6 +7,7 @@ from .artifact_store import load_grant, verify_binding
 from .canonical import parse_time, resolve_workspace_path, sha256_file
 from .evaluation_context import validate_evaluation_context, verify_request_evidence
 from .operations import load_operation
+from .root_grant_request_binding import root_grant_request_binding_covers
 
 
 def subject_preflight(root: Path, request: dict[str, Any]) -> None:
@@ -47,6 +48,7 @@ def validate_selected_grants(
     *,
     expected_versions: dict[str, int] | None = None,
     minimum_versions: bool = False,
+    request: dict[str, Any] | None = None,
     at: str,
 ) -> list[tuple[dict[str, Any], str, dict[str, Any]]]:
     records: list[tuple[dict[str, Any], str, dict[str, Any]]] = []
@@ -55,6 +57,13 @@ def validate_selected_grants(
         grant, digest, state = load_grant(root, binding["grant_id"])
         if digest != binding["grant_sha256"]:
             raise SystemExit("Authority grant changed after evaluation.")
+        if request is not None and not root_grant_request_binding_covers(
+            grant, request
+        ):
+            raise SystemExit(
+                "Plan-bound root grant does not cover the decision's exact request: "
+                f"{grant['grant_id']}."
+            )
         expected = (
             binding["state_version"]
             if expected_versions is None

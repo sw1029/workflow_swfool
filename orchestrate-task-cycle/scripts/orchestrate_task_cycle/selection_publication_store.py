@@ -13,15 +13,8 @@ import tempfile
 from typing import Any, Iterator
 
 from .selection_publication_producer_capability import (
-    _require_selection_publication_lock,
     _require_selection_publication_producer,
 )
-
-
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - POSIX is the production path.
-    fcntl = None  # type: ignore[assignment]
 
 
 TRANSACTION_ID = re.compile(r"^selection-[0-9a-f]{64}$")
@@ -36,9 +29,7 @@ def _canonical_json(value: Any) -> bytes:
 
 
 def _display_json(value: Any) -> bytes:
-    rendered = json.dumps(
-        value, ensure_ascii=False, indent=2, sort_keys=True
-    )
+    rendered = json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)
     return (rendered + "\n").encode("utf-8")
 
 
@@ -86,14 +77,12 @@ def _bounded_file_sha256(path: Path, expected_size: int, label: str) -> str | No
         ) from exc
     try:
         opened = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(opened.st_mode)
-            or (opened.st_dev, opened.st_ino, opened.st_size)
-            != (before.st_dev, before.st_ino, expected_size)
-        ):
-            raise ValueError(
-                f"{label} conflicts with immutable transaction evidence"
-            )
+        if not stat.S_ISREG(opened.st_mode) or (
+            opened.st_dev,
+            opened.st_ino,
+            opened.st_size,
+        ) != (before.st_dev, before.st_ino, expected_size):
+            raise ValueError(f"{label} conflicts with immutable transaction evidence")
         digest = hashlib.sha256()
         total = 0
         while total <= expected_size:
@@ -114,9 +103,7 @@ def _bounded_file_sha256(path: Path, expected_size: int, label: str) -> str | No
             or _file_signature(opened) != _file_signature(after)
             or (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino)
         ):
-            raise ValueError(
-                f"{label} conflicts with immutable transaction evidence"
-            )
+            raise ValueError(f"{label} conflicts with immutable transaction evidence")
         return digest.hexdigest()
     finally:
         os.close(descriptor)
@@ -141,40 +128,24 @@ def _fsync_dir(path: Path) -> None:
         os.close(descriptor)
 
 
-def _selection_store_write(
-    path: Path, producer_capability: object | None
-) -> contextlib.AbstractContextManager[None]:
-    # Classify lexically: resolving a symlinked store first erases its protected
-    # path markers and would bypass the capability gate.
-    lexical = Path(os.path.abspath(os.fspath(path)))
-    parts = lexical.parts
-    protected = any(
-        parts[index : index + 2] == (".task", "selection_publication")
-        for index in range(len(parts) - 1)
-    )
-    if not protected:
-        return contextlib.nullcontext()
-    _require_selection_publication_producer(producer_capability)
-    store_index = next(
-        index
-        for index in range(len(parts) - 1)
-        if parts[index : index + 2] == (".task", "selection_publication")
-    )
-    root = Path(*parts[:store_index])
-    from .selection_publication_reference_barrier import (
-        registered_producer_barrier,
-    )
-
-    return registered_producer_barrier(
-        root, producer_capability=producer_capability
-    )
-
-
 def _atomic_write(
-    path: Path, payload: bytes, *, producer_capability: object | None = None
+    path: Path,
+    payload: bytes,
+    *,
+    producer_capability: object | None = None,
 ) -> None:
-    with _selection_store_write(path, producer_capability):
-        _atomic_write_unlocked(path, payload)
+    from .selection_publication_store_pinned import (
+        replace_registered_path,
+    )
+
+    if replace_registered_path(
+        path,
+        payload,
+        "selection-publication atomic write",
+        producer_capability=producer_capability,
+    ):
+        return
+    _atomic_write_unlocked(path, payload)
 
 
 def _atomic_write_unlocked(path: Path, payload: bytes) -> None:
@@ -195,27 +166,46 @@ def _atomic_write_unlocked(path: Path, payload: bytes) -> None:
 
 
 def _write_once_with_status(
-    path: Path, payload: bytes, label: str, *,
-    producer_capability: object | None = None
+    path: Path,
+    payload: bytes,
+    label: str,
+    *,
+    producer_capability: object | None = None,
 ) -> tuple[str, bool]:
     from .selection_publication_store_immutable import (
         _verify_exact,
         _write_once_unlocked_with_status,
     )
 
-    write_context = _selection_store_write(path, producer_capability)
+    from .selection_publication_store_pinned import (
+        write_once_registered_path,
+    )
+
     if path.exists() or path.is_symlink():
         _verify_exact(path, payload, _sha256_bytes(payload), label)
-    with write_context:
-        return _write_once_unlocked_with_status(path, payload, label)
+    registered = write_once_registered_path(
+        path,
+        payload,
+        label,
+        producer_capability=producer_capability,
+    )
+    if registered is not None:
+        return registered
+    return _write_once_unlocked_with_status(path, payload, label)
 
 
 def _write_once(
-    path: Path, payload: bytes, label: str, *,
-    producer_capability: object | None = None
+    path: Path,
+    payload: bytes,
+    label: str,
+    *,
+    producer_capability: object | None = None,
 ) -> str:
     return _write_once_with_status(
-        path, payload, label, producer_capability=producer_capability
+        path,
+        payload,
+        label,
+        producer_capability=producer_capability,
     )[0]
 
 
@@ -409,37 +399,19 @@ def _successor_authority_locator_path(root: Path, digest: str) -> Path:
 
 
 def _create_store_directories(root: Path) -> Path:
-    store = _store_root(root)
-    task_root = root / ".task"
-    try:
-        task_root.mkdir()
-    except FileExistsError:
-        pass
-    _safe_directory(task_root, "selection-publication .task root")
-    try:
-        store.mkdir()
-    except FileExistsError:
-        pass
-    _safe_directory(store, "selection-publication store root")
-    return store
+    from .selection_publication_store_pinned import (
+        create_store_directories,
+    )
+
+    return create_store_directories(root)
 
 
 @contextlib.contextmanager
-def _publication_lock(
-    root: Path, *, producer_capability: object
-) -> Iterator[None]:
-    _require_selection_publication_lock(producer_capability, root)
-    store = _create_store_directories(root)
-    path = store / "publication.lock"
-    _safe_regular_file(path, "selection-publication lock")
-    with path.open("a+b") as handle:
-        if fcntl is not None:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            if fcntl is not None:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+def _publication_lock(root: Path, *, producer_capability: object) -> Iterator[None]:
+    from .selection_publication_store_pinned import publication_lock
+
+    with publication_lock(root, producer_capability=producer_capability):
+        yield
 
 
 @contextlib.contextmanager
@@ -453,9 +425,7 @@ def _lock(root: Path, *, producer_capability: object) -> Iterator[None]:
     )
 
     _require_selection_publication_producer(producer_capability)
-    with registered_producer_barrier(
-        root, producer_capability=producer_capability
-    ):
+    with registered_producer_barrier(root, producer_capability=producer_capability):
         with _publication_lock(root, producer_capability=producer_capability):
             yield
 

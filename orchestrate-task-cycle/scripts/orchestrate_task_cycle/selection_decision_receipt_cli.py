@@ -46,6 +46,10 @@ from .selection_decision_receipt_v2 import (
 CYCLE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
+def _before_pipeline_directory_create(root: Path, directory: Path) -> None:
+    """Deterministic test hook immediately before pinned directory creation."""
+
+
 def _binding(ref: str, digest: str) -> dict[str, str]:
     return {"ref": ref, "sha256": digest}
 
@@ -95,9 +99,7 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _pipeline_directory(
-    root: Path, cycle_id: str, *, create: bool
-) -> Path:
+def _pipeline_directory(root: Path, cycle_id: str, *, create: bool) -> Path:
     if not CYCLE_ID.fullmatch(cycle_id):
         raise ValueError("selection decision pipeline cycle ID is invalid")
     directory = root / ".task" / "cycle" / cycle_id / "agent_receipts" / "selection"
@@ -107,9 +109,24 @@ def _pipeline_directory(
         if current.is_symlink():
             raise ValueError("selection decision pipeline cannot traverse symlinks")
         if current.exists() and not current.is_dir():
-            raise ValueError("selection decision pipeline output parent is not a directory")
+            raise ValueError(
+                "selection decision pipeline output parent is not a directory"
+            )
     if create:
-        directory.mkdir(parents=True, exist_ok=True)
+        from .selection_publication_gc_fs import bound_directory
+
+        _before_pipeline_directory_create(root, directory)
+        try:
+            with bound_directory(
+                root,
+                directory.relative_to(root).as_posix(),
+                create=True,
+            ) as pinned:
+                pinned.verify()
+        except ValueError as exc:
+            raise ValueError(
+                "selection decision pipeline output parent changed or is unsafe"
+            ) from exc
     return directory
 
 
@@ -120,9 +137,11 @@ def _pipeline_artifact(
     digest = hashlib.sha256(payload).hexdigest()
     path = directory / f"{prefix}-{digest}.json"
     existing = path.exists() or path.is_symlink()
-    if existing and _bounded_file_sha256(
-        path, len(payload), f"selection decision {prefix}"
-    ) != digest:
+    if (
+        existing
+        and _bounded_file_sha256(path, len(payload), f"selection decision {prefix}")
+        != digest
+    ):
         raise ValueError(
             f"selection decision {prefix} conflicts with immutable evidence"
         )
@@ -159,9 +178,7 @@ def _persist_pipeline_artifact(
     return created
 
 
-def _required_normal_binding(
-    args: argparse.Namespace, prefix: str
-) -> dict[str, str]:
+def _required_normal_binding(args: argparse.Namespace, prefix: str) -> dict[str, str]:
     ref = getattr(args, prefix + "_ref")
     digest = getattr(args, prefix + "_sha256")
     if not ref or not digest:
@@ -172,18 +189,14 @@ def _required_normal_binding(
     return _binding(ref, digest)
 
 
-def _compile_pipeline(
-    root: Path, args: argparse.Namespace
-) -> dict[str, Any]:
+def _compile_pipeline(root: Path, args: argparse.Namespace) -> dict[str, Any]:
     source_binding = _binding(args.source_result_ref, args.source_result_sha256)
     _, source_result = read_bound_json(
         root, source_binding, "derive synthesis source result"
     )
     synthesis = render_selection_synthesis(root, source_result)
     directory = _pipeline_directory(root, args.cycle_id, create=False)
-    artifacts = [
-        _pipeline_artifact(root, directory, "synthesis", synthesis)
-    ]
+    artifacts = [_pipeline_artifact(root, directory, "synthesis", synthesis)]
     synthesis_binding = artifacts[0]["binding"]
     if args.trigger_kind == "normal_cycle":
         prospective_publication_head = None
@@ -213,24 +226,16 @@ def _compile_pipeline(
         trigger = render_normal_cycle_trigger(
             root,
             cycle_id=args.cycle_id,
-            cycle_finalization=_required_normal_binding(
-                args, "cycle_finalization"
-            ),
-            schema_pre_derive=_required_normal_binding(
-                args, "schema_pre_derive"
-            ),
+            cycle_finalization=_required_normal_binding(args, "cycle_finalization"),
+            schema_pre_derive=_required_normal_binding(args, "schema_pre_derive"),
             derive_result=source_binding,
             current_task=current_task,
             task_index=task_index,
             publication_head=publication_head,
-            input_evidence_manifest_sha256=synthesis[
-                "input_evidence_manifest_sha256"
-            ],
+            input_evidence_manifest_sha256=synthesis["input_evidence_manifest_sha256"],
             _prospective_publication_head=prospective_publication_head,
         )
-        trigger_artifact = _pipeline_artifact(
-            root, directory, "trigger", trigger
-        )
+        trigger_artifact = _pipeline_artifact(root, directory, "trigger", trigger)
         artifacts.append(trigger_artifact)
         trigger_binding = trigger_artifact["binding"]
         decision = render_preliminary_selection_decision_v2_from_values(
@@ -246,9 +251,7 @@ def _compile_pipeline(
         decision = render_preliminary_selection_decision_from_values(
             root, trigger, synthesis_binding, synthesis
         )
-    decision_artifact = _pipeline_artifact(
-        root, directory, "decision", decision
-    )
+    decision_artifact = _pipeline_artifact(root, directory, "decision", decision)
     artifacts.append(decision_artifact)
     decision_binding = decision_artifact["binding"]
     receipt = (
@@ -271,9 +274,7 @@ def _compile_pipeline(
             synthesis,
         )
     )
-    receipt_artifact = _pipeline_artifact(
-        root, directory, "receipt", receipt
-    )
+    receipt_artifact = _pipeline_artifact(root, directory, "receipt", receipt)
     artifacts.append(receipt_artifact)
     return {
         "directory": directory,

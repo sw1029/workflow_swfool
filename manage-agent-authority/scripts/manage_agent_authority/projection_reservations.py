@@ -11,6 +11,7 @@ from .contracts import validate_request
 from .contracts import reservation_units
 from .evaluation_context import validate_recorded_evaluation_context
 from .evaluation_context import verify_request_evidence
+from .grant_lineage_validation import validate_decision_grant_closure
 from .projection_contracts import AUTHORIZATION_ROOT
 from .projection_contracts import DECISION_GRANT_KEYS
 from .projection_contracts import DECISION_KEYS
@@ -30,6 +31,7 @@ from .projection_io import load_grant_artifact
 from .projection_io import validate_grant_state
 from .projection_io import verify_file_binding
 from .operations import load_operation
+from .root_grant_request_binding import root_grant_request_binding_covers
 
 
 def _validate_operation_manifest(
@@ -69,7 +71,10 @@ def current_operation_manifest_blockers(
     blockers: list[str] = []
     if decision.get("operation_manifest") != current_binding:
         blockers.append("operation_manifest_binding_stale")
-    if decision.get("decision") in {"allowed", "approval_required"} and operation is None:
+    if (
+        decision.get("decision") in {"allowed", "approval_required"}
+        and operation is None
+    ):
         blockers.append("operation_identity_missing")
     return blockers
 
@@ -170,6 +175,7 @@ def validate_decision_artifact(
         raise SystemExit("Allowed authority decision has no grant bindings.")
     if decision["decision"] != "allowed" and bindings:
         raise SystemExit("Non-allowed authority decision must not bind grants.")
+    validate_decision_grant_closure(root, decision, request)
     return request, bindings
 
 
@@ -181,6 +187,13 @@ def _validate_decision(
     )
     if artifact["decision"] != "allowed":
         raise SystemExit("A recovery reservation must bind an allowed decision.")
+    for grant_id in sorted(bindings):
+        grant, _ = load_grant_artifact(root, grant_id)
+        if not root_grant_request_binding_covers(grant, request):
+            raise SystemExit(
+                "Plan-bound root grant does not cover the decision's exact request: "
+                f"{grant_id}."
+            )
     return request, bindings
 
 
