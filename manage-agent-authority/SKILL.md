@@ -135,11 +135,17 @@ order-independent sets: reject duplicates, more than 128 members, or more than
 256 KiB of canonical semantic bytes. Re-render every batch compilation from the
 bound set, context, timestamp, defaults, classification, and fixed provenance.
 
-For ordinary S3 user root grants, snapshot and activate the current policy, then render
-one exact approval plan from the compiled batch and compact source/holder/time
-semantics. Reject any caller-selected stale non-current policy snapshot:
+For ordinary S3 user root grants, use this order without collapsing boundaries:
+preflight the controlling TTY, snapshot and activate the current policy, prepare one
+exact plan, invoke the isolated signer, publish its verified outbox candidate, compile
+the decision seed, then materialize the plan-bound grant. Run the TTY preflight before
+preparing a plan; it must not read a plan, key, registry, or workspace authority
+state. Reject any caller-selected stale non-current policy snapshot.
 
 ```bash
+PYTHONPATH="$SKILLS_ROOT/manage-agent-authority/scripts" \
+  python3 -P -m manage_agent_authority.root_authorization_signer preflight-tty
+
 PYTHONPATH="$SKILLS_ROOT/orchestrate-task-cycle/scripts" \
   python3 -P -m orchestrate_task_cycle workflow authority \
   prepare-root-approval \
@@ -147,10 +153,16 @@ PYTHONPATH="$SKILLS_ROOT/orchestrate-task-cycle/scripts" \
   --policy-snapshot '{"ref":"...","sha256":"..."}' \
   --grant-semantics root-grant-semantics.json --at 2026-01-01T00:00:00Z
 
+PYTHONPATH="$SKILLS_ROOT/manage-agent-authority/scripts" \
+  python3 -P -m manage_agent_authority.root_authorization_signer \
+  approve-root-plan --workspace /absolute/workspace/root \
+  --approval-plan-ref .task/authorization/root_approval_plans/sha256/<sha>.json \
+  --approval-plan-sha256 <sha256> --key-id <key-id>
+
 PYTHONPATH="$SKILLS_ROOT/orchestrate-task-cycle/scripts" \
   python3 -P -m orchestrate_task_cycle workflow authority \
   publish-root-authorization-evidence --root . \
-  --evidence host-user-signed-exact-plan-evidence.json
+  --evidence <exact-evidence_path-emitted-by-signer>
 
 PYTHONPATH="$SKILLS_ROOT/orchestrate-task-cycle/scripts" \
   python3 -P -m orchestrate_task_cycle workflow authority \
@@ -180,9 +192,14 @@ plan signing, read
 Invoke only the isolated `root_authority_admin` and `root_authorization_signer`
 modules described there. Never add secret-bearing options or expose those modules
 through the ordinary authority CLI. Treat agent-managed local custody as a same-OS-
-user procedural boundary, not independent host/user isolation. The signer only
-creates a verified outbox candidate; continue to publish, compile, or materialize
-through the ordinary producer-CAS commands when the active task authorizes them.
+creates a verified outbox candidate, not authority. Require the signer to display
+the resolved workspace identity and exact plan binding. Accept only the exact
+confirmation phrase from a foreground controlling `/dev/tty`; never normalize
+spaces, case, or punctuation and never use stdin or a non-interactive bypass. A TTY
+or confirmation failure creates no authority effect. Retry the same unchanged plan
+only while it is unexpired; after expiry or binding change, prepare and display a new
+plan. Continue to publish, compile, or materialize through the ordinary producer-CAS
+commands only when the active task authorizes them.
 
 `compile-root-decision-seed` accepts only the verified evidence CAS binding and exact
 plan, derives its schema-v3 compact seed, and emits only an immutable CAS binding.

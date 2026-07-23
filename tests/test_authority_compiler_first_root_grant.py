@@ -51,6 +51,7 @@ from root_authorization_test_support import (  # noqa: E402
     install_test_trust_anchor,
     signed_root_authorization,
 )
+from root_tty_test_support import run_with_tty  # noqa: E402
 from manage_agent_authority.root_authority_registry import (  # noqa: E402
     canonical_json as canonical_registry_json,
     empty_registry,
@@ -802,31 +803,57 @@ def test_agent_managed_signer_full_root_grant_path(
         "_utc_now",
         lambda: DECIDED_AT,
     )
-    monkeypatch.setattr(
-        root_authorization_signer,
-        "_tty_confirmation",
-        lambda _summary, expected: "declined",
-    )
-    with pytest.raises(SystemExit, match="not confirmed"):
-        root_authorization_signer.approve_root_plan(
+    expected_confirmation = f"APPROVE ROOT PLAN {plan_binding['sha256']}"
+    declined = run_with_tty(
+        lambda: root_authorization_signer.approve_root_plan(
             tmp_path,
             approval_plan_ref=plan_binding["ref"],
             approval_plan_sha256=plan_binding["sha256"],
             key_id=provisioned["key_id"],
-        )
+        ),
+        input_bytes=(expected_confirmation + ".\n").encode("utf-8"),
+    )
+    assert declined.status == "system_exit"
+    assert declined.message == "root_confirmation_mismatch"
     assert not (store / "outbox").exists()
 
+    prompt_window = iter((DECIDED_AT, EXPIRES_AT))
     monkeypatch.setattr(
         root_authorization_signer,
-        "_tty_confirmation",
-        lambda _summary, expected: expected,
+        "_utc_now",
+        lambda: next(prompt_window),
     )
-    signed = root_authorization_signer.approve_root_plan(
-        tmp_path,
-        approval_plan_ref=plan_binding["ref"],
-        approval_plan_sha256=plan_binding["sha256"],
-        key_id=provisioned["key_id"],
+    expired_during_confirmation = run_with_tty(
+        lambda: root_authorization_signer.approve_root_plan(
+            tmp_path,
+            approval_plan_ref=plan_binding["ref"],
+            approval_plan_sha256=plan_binding["sha256"],
+            key_id=provisioned["key_id"],
+        ),
+        input_bytes=(expected_confirmation + "\n").encode("utf-8"),
     )
+    assert expired_during_confirmation.status == "system_exit"
+    assert expired_during_confirmation.message == (
+        "Root approval plan is outside its approval window."
+    )
+    assert not (store / "outbox").exists()
+    monkeypatch.setattr(
+        root_authorization_signer,
+        "_utc_now",
+        lambda: DECIDED_AT,
+    )
+
+    signed_result = run_with_tty(
+        lambda: root_authorization_signer.approve_root_plan(
+            tmp_path,
+            approval_plan_ref=plan_binding["ref"],
+            approval_plan_sha256=plan_binding["sha256"],
+            key_id=provisioned["key_id"],
+        ),
+        input_bytes=(expected_confirmation + "\n").encode("utf-8"),
+    )
+    assert signed_result.status == "ok"
+    signed = signed_result.value
     evidence_path = Path(signed["evidence_path"])
     assert evidence_path.is_file()
     assert stat.S_IMODE(evidence_path.stat().st_mode) == 0o600
@@ -854,13 +881,17 @@ def test_agent_managed_signer_full_root_grant_path(
     assert materialized["decision_trust_class"] == (
         "host_user_signed_exact_plan"
     )
-    with pytest.raises(SystemExit, match="already exists"):
-        root_authorization_signer.approve_root_plan(
+    replay = run_with_tty(
+        lambda: root_authorization_signer.approve_root_plan(
             tmp_path,
             approval_plan_ref=plan_binding["ref"],
             approval_plan_sha256=plan_binding["sha256"],
             key_id=provisioned["key_id"],
-        )
+        ),
+        input_bytes=(expected_confirmation + "\n").encode("utf-8"),
+    )
+    assert replay.status == "system_exit"
+    assert "already exists" in replay.message
     revocation_confirmation = (
         f"REVOKE {provisioned['key_id']} "
         "AND INVALIDATE EXISTING EVIDENCE"

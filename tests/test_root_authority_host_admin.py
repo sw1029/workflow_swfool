@@ -11,6 +11,7 @@ from cryptography.hazmat.primitives import serialization
 from manage_agent_authority import root_authority_admin as admin
 from manage_agent_authority import root_authority_registry as registry
 from manage_agent_authority import root_authorization_signer as signer
+from root_tty_test_support import run_with_tty
 
 
 def _register_worker(
@@ -97,7 +98,6 @@ def test_provision_encrypts_pair_and_records_only_public_receipt(
 
 def test_register_replay_rotation_cas_and_revocation_are_fail_closed(
     host_registry: tuple[Path, Path, str],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _trust, store, initial_digest = host_registry
     first = admin.provision(expected_registry_sha256=initial_digest)
@@ -142,12 +142,16 @@ def test_register_replay_rotation_cas_and_revocation_are_fail_closed(
     confirmation = (
         f"REVOKE {first['key_id']} AND INVALIDATE EXISTING EVIDENCE"
     )
-    monkeypatch.setattr(admin, "_tty_confirmation", lambda expected: confirmation)
-    revoked = admin.revoke_public_key(
-        first["key_id"],
-        reason="rotation-complete",
-        expected_registry_sha256=second["registry_sha256_after"],
+    revocation = run_with_tty(
+        lambda: admin.revoke_public_key(
+            first["key_id"],
+            reason="rotation-complete",
+            expected_registry_sha256=second["registry_sha256_after"],
+        ),
+        input_bytes=(confirmation + "\n").encode("utf-8"),
     )
+    assert revocation.status == "ok"
+    revoked = revocation.value
     assert revoked["status"] == "revoked"
     assert revoked["existing_evidence_valid_on_future_verification"] is False
     with pytest.raises(SystemExit, match="cannot be reactivated"):
@@ -257,6 +261,10 @@ def test_admin_parser_has_no_secret_input_options() -> None:
     ]
     for forbidden in (
         "--yes",
+        "--stdin",
+        "--confirmation",
+        "--approval-text",
+        "--tty-path",
         "--private-key",
         "--passphrase",
         "--registry",

@@ -34,6 +34,7 @@ from .root_authorization_evidence import (
     validate_root_authorization_evidence,
 )
 from .root_grant_plan import load_root_approval_plan
+from .root_tty import RootTTYError, confirm_exact, preflight
 from .stable_store import read_regular
 
 
@@ -115,21 +116,10 @@ def _summary(
 
 def _tty_confirmation(summary: dict[str, Any], expected: str) -> str:
     try:
-        with open("/dev/tty", "r+", encoding="utf-8", buffering=1) as tty:
-            if not os.isatty(tty.fileno()):
-                raise SystemExit("Root plan approval requires an interactive TTY.")
-            tty.write(
-                json.dumps(
-                    summary,
-                    ensure_ascii=False,
-                    indent=2,
-                    sort_keys=True,
-                )
-            )
-            tty.write(f"\nType exactly: {expected}\n> ")
-            return tty.readline().rstrip("\r\n")
-    except OSError as exc:
-        raise SystemExit("Root plan approval requires an interactive TTY.") from exc
+        confirm_exact(summary, expected)
+    except RootTTYError as exc:
+        raise SystemExit(exc.code) from exc
+    return expected
 
 
 def _cryptography() -> tuple[Any, Any, Any, Any]:
@@ -317,6 +307,51 @@ def _ensure_outbox() -> Path:
     return outbox
 
 
+def _active_anchor(
+    loaded_registry: tuple[dict[str, Any], dict[str, dict[str, Any]], bytes, str],
+    key_id: str,
+) -> dict[str, Any]:
+    anchor = loaded_registry[1].get(key_id)
+    if (
+        anchor is None
+        or anchor["status"] != "active"
+        or anchor["issuer"] != ROOT_AUTHORIZATION_ISSUER
+        or key_id
+        != (
+            "root-rsa-sha256-"
+            + spki_fingerprint(
+                anchor["modulus_hex"],
+                anchor["public_exponent"],
+            )
+        )
+    ):
+        raise SystemExit(
+            "Root authorization key is not an active local signer key."
+        )
+    return anchor
+
+
+def _assert_approval_window(plan: dict[str, Any], observed_at: str) -> None:
+    observed = parse_time(observed_at, "root authorization decision time")
+    prepared = parse_time(plan["prepared_at"], "root approval prepared_at")
+    expires = parse_time(
+        plan["approval_projection"]["validity"]["expires_at"],
+        "root approval expires_at",
+    )
+    if observed < prepared or observed >= expires:
+        raise SystemExit("Root approval plan is outside its approval window.")
+
+
+def preflight_tty() -> dict[str, Any]:
+    preflight()
+    return {
+        "authority_effects": False,
+        "schema_version": 1,
+        "status": "ready",
+        "transport": "controlling_tty",
+    }
+
+
 def approve_root_plan(
     workspace: Path,
     *,
@@ -335,38 +370,37 @@ def approve_root_plan(
         raise SystemExit("Root approval plan binding is not canonical.")
     loaded_registry = load_registry(TRUST_ANCHOR_REGISTRY)
     assert loaded_registry is not None
-    anchor = loaded_registry[1].get(key_id)
-    if (
-        anchor is None
-        or anchor["status"] != "active"
-        or anchor["issuer"] != ROOT_AUTHORIZATION_ISSUER
-        or key_id
-        != (
-            "root-rsa-sha256-"
-            + spki_fingerprint(
-                anchor["modulus_hex"],
-                anchor["public_exponent"],
-            )
-        )
-    ):
-        raise SystemExit(
-            "Root authorization key is not an active local signer key."
-        )
+    anchor = _active_anchor(loaded_registry, key_id)
+    registry_digest = loaded_registry[3]
+    _assert_approval_window(plan, _utc_now())
     expected = f"APPROVE ROOT PLAN {digest}"
     if _tty_confirmation(_summary(root, binding, plan), expected) != expected:
         raise SystemExit("Root plan approval was not confirmed.")
 
     decided_at = _utc_now()
-    decided = parse_time(decided_at, "root authorization decision time")
-    prepared = parse_time(plan["prepared_at"], "root approval prepared_at")
-    expires = parse_time(
-        plan["approval_projection"]["validity"]["expires_at"],
-        "root approval expires_at",
-    )
-    if decided < prepared or decided >= expires:
-        raise SystemExit("Root approval plan is outside its approval window.")
+    normalized_binding_after, plan_after = load_root_approval_plan(root, binding)
+    if normalized_binding_after != binding or plan_after != plan:
+        raise SystemExit("Root approval plan changed during confirmation.")
+    loaded_registry_after = load_registry(TRUST_ANCHOR_REGISTRY)
+    assert loaded_registry_after is not None
+    if loaded_registry_after[3] != registry_digest:
+        raise SystemExit(
+            "Root authorization registry changed during confirmation."
+        )
+    anchor_after = _active_anchor(loaded_registry_after, key_id)
+    if anchor_after != anchor:
+        raise SystemExit(
+            "Root authorization registry changed during confirmation."
+        )
+    _assert_approval_window(plan_after, decided_at)
 
-    private_key = _load_signing_key(key_id, anchor)
+    private_key = _load_signing_key(key_id, anchor_after)
+    loaded_registry_before_signing = load_registry(TRUST_ANCHOR_REGISTRY)
+    assert loaded_registry_before_signing is not None
+    if loaded_registry_before_signing[3] != registry_digest:
+        raise SystemExit(
+            "Root authorization registry changed during confirmation."
+        )
     authorization_id, evidence_id = _identifiers(
         root,
         binding,
@@ -401,7 +435,7 @@ def approve_root_plan(
     normalized = validate_root_authorization_evidence(
         evidence,
         plan_binding=binding,
-        plan=plan,
+        plan=plan_after,
     )
     if normalized != evidence:
         raise SystemExit("Root authorization signer self-verification changed bytes.")
@@ -420,6 +454,7 @@ def approve_root_plan(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="root_authorization_signer")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers.add_parser("preflight-tty")
     approve = subparsers.add_parser("approve-root-plan")
     approve.add_argument("--workspace", required=True)
     approve.add_argument("--approval-plan-ref", required=True)
@@ -430,6 +465,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "preflight-tty":
+        try:
+            return _emit(preflight_tty())
+        except RootTTYError as exc:
+            sys.stderr.write(f"{exc.code}\n")
+            return 2
     if args.command != "approve-root-plan":
         raise SystemExit("Unknown root authorization signer command.")
     return _emit(
@@ -451,4 +492,5 @@ __all__ = [
     "approve_root_plan",
     "build_parser",
     "main",
+    "preflight_tty",
 ]

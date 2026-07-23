@@ -6,8 +6,9 @@
 2. Fixed storage and wire contracts
 3. Administration
 4. Interactive signing
-5. Publication and revocation
-6. Validation checklist
+5. Failure and retry contract
+6. Publication and revocation
+7. Validation checklist
 
 ## Trust boundary
 
@@ -114,7 +115,40 @@ key rotation; it permits a second active key without revoking the first.
 
 ## Interactive signing
 
-Prepare the exact producer CAS plan through the ordinary workflow, then invoke:
+Preflight the approval transport before preparing an approval plan:
+
+```bash
+PYTHONPATH="$AUTHORITY_PY" python3 -P -m \
+  manage_agent_authority.root_authorization_signer preflight-tty
+```
+
+On success, emit exactly one compact, sorted JSON object plus LF:
+
+```json
+{"authority_effects":false,"schema_version":1,"status":"ready","transport":"controlling_tty"}
+```
+
+Make preflight transport-only. Do not read a workspace, plan, registry, public key,
+private key, passphrase, receipt, or outbox. Do not create or change an authority
+artifact. Return exit status 2, empty stdout, and one stable reason code on stderr
+when preflight fails.
+
+Use only the fixed `/dev/tty` approval transport. Open separate read-only and
+write-only descriptors; never open it with `r+`. Set close-on-exec and no-controlling-
+TTY flags, and use no-follow where the host supports it. Require both descriptors to
+be TTY character devices for the same device and require the current process group
+to be the foreground group. Do not fall back to stdin, stdout, a caller-selected
+device, a pipe, a chat message, or a pseudo-terminal created automatically by the
+signer.
+
+Handle partial writes and interrupted system calls. Write and flush the complete
+summary and prompt before reading. Limit the UTF-8 summary to 1 MiB. Read at most
+512 bytes of strict UTF-8 confirmation and require a terminating LF. Remove only
+the optional CR immediately before that LF. Do not trim or normalize any other
+space, case, punctuation, or Unicode.
+
+After preflight succeeds, prepare the exact producer CAS plan through the ordinary
+workflow, then invoke:
 
 ```bash
 PYTHONPATH="$AUTHORITY_PY" python3 -P -m \
@@ -125,28 +159,68 @@ PYTHONPATH="$AUTHORITY_PY" python3 -P -m \
   --key-id <key-id>
 ```
 
-The signer reopens and re-renders the producer plan. It displays only the plan
-fingerprint, prepared/expiry times, grant count, and bounded holder/session/task,
-capability, operation, subject, risk, cardinality, and budget projections. Approve
-only by typing the following exact text on `/dev/tty`:
+The signer must reopen and re-render the producer plan before prompting. Display the
+actual canonical absolute workspace path, exact approval-plan ref and SHA-256,
+prepared/expiry times, grant count, and bounded holder/session/task, capability,
+operation, subject, risk, cardinality, and budget projections. Never display a
+caller label in place of the resolved workspace or plan binding.
+
+Approve only by typing the following exact text on the foreground controlling
+`/dev/tty`:
 
 ```text
 APPROVE ROOT PLAN <approval-plan-sha256>
 ```
 
+For example, a terminal period, leading/trailing space, altered case, or approval
+typed into chat is a mismatch and creates no evidence.
+
 Do not add `--yes`, stdin approval, non-interactive bypass, private-key, passphrase,
 registry, issuer, audience, `approved`, signature, or decision-time options.
 
-After confirmation, capture UTC once. Derive authorization/evidence IDs from the
-plan binding, key ID, absolute workspace identity, and that decision time. Render
-the unsigned evidence as compact sorted JSON plus LF, sign it with RSA PKCS#1 v1.5
-and SHA-256, check the encrypted private key against both stored public PEM and the
-active registry entry, and self-verify through the ordinary verifier.
+After exact confirmation, capture UTC once. Reopen the plan, require the same bytes
+and unexpired binding, and recheck the registry digest, selected active trust anchor,
+and key identity before reading or unlocking the private key. Fail without an
+outbox write if any value changed while the prompt was open. Derive authorization/
+evidence IDs from the plan binding, key ID, absolute workspace identity, and that
+decision time. Render the unsigned evidence as compact sorted JSON plus LF, sign it
+with RSA PKCS#1 v1.5 and SHA-256, check the encrypted private key against both stored
+public PEM and the active registry entry, and self-verify through the ordinary
+verifier.
 
 Write the signed envelope once to the fixed outbox with `O_EXCL` and mode `0600`.
 Emit only the outbox path, evidence SHA-256, key ID, and exact plan binding on
 stdout. The signer must not change the registry, prepare a plan, publish evidence,
 compile a decision seed, or materialize a grant.
+
+## Failure and retry contract
+
+Emit one of these stable reason codes without the entered confirmation or secret
+material:
+
+| Reason code | Meaning |
+| --- | --- |
+| `root_tty_unavailable` | The fixed controlling TTY cannot be opened safely. |
+| `root_tty_not_interactive` | One or both fixed descriptors are not the same interactive TTY. |
+| `root_tty_not_foreground` | The caller does not own the foreground TTY process group. |
+| `root_tty_io_failed` | A bounded TTY read, write, flush, or close failed. |
+| `root_approval_summary_too_large` | The bounded approval display exceeds 1 MiB. |
+| `root_confirmation_eof` | Input ended without a complete LF-terminated confirmation. |
+| `root_confirmation_too_long` | Confirmation exceeds 512 bytes. |
+| `root_confirmation_invalid_utf8` | Confirmation is not strict UTF-8. |
+| `root_confirmation_mismatch` | Confirmation is not byte-for-byte exact after optional CR removal. |
+
+Treat every transport or confirmation failure as an execution-environment blocker,
+not as approval, denial, or a new authority decision. Publish no evidence, grant,
+decision, reservation, or usage effect. Preserve the exact prepared plan and retry
+that same binding only when its bytes, policy, registry/key binding, workspace
+identity, and approval window remain current. Do not prepare a different plan merely
+because the terminal failed.
+
+After plan expiry or any bound-input change, stop retrying the old phrase. Re-evaluate
+the current operation batch, policy, subject, holder, scope, and time bounds; prepare
+and display a new plan; and require a new exact confirmation. Never transfer an old
+chat reply, TTY entry, signature, or outbox candidate to the new binding.
 
 ## Publication and revocation
 
@@ -156,6 +230,12 @@ plan, verifies the signature against the active registry, publishes verified byt
 to workspace CAS, and returns only the binding. Continue with
 `compile-root-decision-seed` and `materialize-plan-bound-root-grant` only when the
 current task explicitly authorizes those effects.
+
+Treat the signed outbox envelope as a candidate, not as authority. Do not evaluate,
+reserve, dispatch, or settle an operation from the outbox path. Authority becomes
+available only after ordinary publication verifies the exact plan/signature chain,
+the decision-seed compiler binds that verified CAS evidence, the materializer
+registers the plan-bound source/grants, and a fresh evaluation selects the grant.
 
 Revocation requires an exact registry digest and exact `/dev/tty` confirmation:
 
@@ -178,8 +258,14 @@ then explicitly revoking the old key.
   concurrent writers, non-canonical registry input, atomic replacement,
   revocation, and reactivation refusal.
 - Verify exact plan reopening, expiry/tamper rejection, inactive or mismatched key,
-  exact TTY confirmation, non-TTY rejection, outbox collision, canonical signing,
-  and ordinary verifier self-check.
+  actual displayed workspace/plan binding, exact TTY confirmation, CRLF handling,
+  punctuation/space/case mismatch, EOF/length/UTF-8 bounds, non-TTY/background-TTY
+  rejection, descriptor cleanup, outbox collision, canonical signing, prompt-time
+  expiry/registry change, and ordinary verifier self-check.
+- Verify that preflight reads no authority or secret state, returns the fixed JSON
+  only on a foreground controlling TTY, and produces no authority effect.
+- Verify that piping the exact phrase through stdin cannot approve a plan and that
+  failures never echo entered confirmation or secret material.
 - Run a temporary-key prepare → sign → publish → compile → materialize integration
   path. Never use the live key for that test.
 - Verify both repositories ignore sentinel private, public, passphrase, registry,

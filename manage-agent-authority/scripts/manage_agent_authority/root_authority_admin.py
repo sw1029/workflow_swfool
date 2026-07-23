@@ -38,6 +38,7 @@ from .root_authority_registry import (
     spki_fingerprint,
 )
 from .root_grant_plan import _identifier
+from .root_tty import RootTTYError, confirm_exact
 from .stable_store import atomic_replace, locked_file, publish_immutable, read_regular
 
 
@@ -353,13 +354,10 @@ def provision(
 
 def _tty_confirmation(expected: str) -> str:
     try:
-        with open("/dev/tty", "r+", encoding="utf-8", buffering=1) as tty:
-            if not os.isatty(tty.fileno()):
-                raise SystemExit("Root key revocation requires an interactive TTY.")
-            tty.write(f"Type exactly: {expected}\n> ")
-            return tty.readline().rstrip("\r\n")
-    except OSError as exc:
-        raise SystemExit("Root key revocation requires an interactive TTY.") from exc
+        confirm_exact(None, expected)
+    except RootTTYError as exc:
+        raise SystemExit(exc.code) from exc
+    return expected
 
 
 def revoke_public_key(
