@@ -10,6 +10,7 @@ from ..validate_cycle_transition import validate as validate_transition
 MODEL_JUDGMENT_TARGETS = frozenset(
     {"qualitative_review", "loopback_audit", "derive", "validate", "report"}
 )
+_LINEAGE_FIELDS = ("used_goal_truth", "used_advice")
 
 
 def boundary_reason(target: str, schema_version: int = 1) -> str:
@@ -29,12 +30,38 @@ def boundary_reason(target: str, schema_version: int = 1) -> str:
     return "awaiting_owner_result"
 
 
+def _stage_with_candidate_lineage(
+    stage: dict[str, Any], preparation: dict[str, Any]
+) -> dict[str, Any]:
+    derived = preparation.get("derived_values")
+    if not isinstance(derived, dict):
+        return stage
+    lineage = {
+        field: list(derived[field])
+        for field in _LINEAGE_FIELDS
+        if isinstance(derived.get(field), list)
+    }
+    if not lineage:
+        return stage
+    projected = dict(stage)
+    events = stage.get("events")
+    projected["events"] = list(events) if isinstance(events, list) else []
+    projected["events"].append(
+        {
+            "event_kind": "compiled_submission_candidate",
+            "packet": lineage,
+        }
+    )
+    return projected
+
+
 def validate_submission_transition(
     context: dict[str, Any],
     preparation: dict[str, Any],
     routing: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    stage = (context.get("cycle_state") or {}).get("current_stage") or {}
+    current = (context.get("cycle_state") or {}).get("current_stage") or {}
+    stage = _stage_with_candidate_lineage(current, preparation)
     target = str(preparation["target"])
     return validate_transition(
         context,

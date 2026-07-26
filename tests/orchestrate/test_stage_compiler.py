@@ -224,6 +224,10 @@ def test_target_compile_specs_cover_every_packet_and_result_target() -> None:
     assert set(TARGET_BUILDERS) < set(TARGET_COMPILE_SPECS)
     for target, spec in TARGET_COMPILE_SPECS.items():
         expected = {"step", *COMMON_FIELDS[target]}
+        if "goal" in spec.dependency_selectors:
+            expected.add("used_goal_truth")
+        if "advice" in spec.dependency_selectors:
+            expected.add("used_advice")
         classified = [
             *spec.derived_fields,
             *spec.semantic_fields,

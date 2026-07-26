@@ -32,9 +32,9 @@ def compile_derived_values(
             (model.get("goal_truth") or {}).get("used_goal_truth") or []
         ),
         "used_advice": [
-            item.get("advice_id")
+            item.get("path")
             for item in advice.get("items") or []
-            if isinstance(item, dict) and item.get("advice_id")
+            if isinstance(item, dict) and item.get("path")
         ],
     }
     return {
@@ -66,9 +66,9 @@ def render_context_event(
         "task_md": full.get("task_md"),
         "used_goal_truth": (model.get("goal_truth") or {}).get("used_goal_truth", []),
         "used_advice": [
-            item.get("advice_id")
+            item.get("path")
             for item in (model.get("advice") or {}).get("items", [])
-            if isinstance(item, dict) and item.get("advice_id")
+            if isinstance(item, dict) and item.get("path")
         ],
         "context_fingerprint": state_fingerprint(model),
     }

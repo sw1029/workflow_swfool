@@ -9,6 +9,7 @@ import subprocess
 
 import pytest
 
+from manage_external_advice import rendering as advice_rendering
 from manage_task_state_index.state import prevalidation_compiler
 from manage_task_state_index.state.scan_transition import apply_scan, prepare_scan
 from orchestrate_task_cycle.cycle_ledger import (
@@ -448,6 +449,95 @@ def test_routing_and_usage_producers_are_bound_but_usage_stays_unverified(
     assert usage_output["usage_aggregate_eligible"] is False
     assert usage["usage_aggregate_eligible"] is False
     assert usage["usage_provenance_status"] == "caller_asserted_unverified"
+
+
+def test_fresh_advice_lineage_is_compiler_owned_and_unblocks_submission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cycle_id = _cycle(tmp_path, "cycle-fresh-advice-lineage")
+    target = "validation_set_plan"
+    _prime(tmp_path, cycle_id, target)
+    advice_path = ".agent_advice/active/fresh.md"
+    active = tmp_path / advice_path
+    active.parent.mkdir(parents=True)
+    active.write_text(
+        "# Canonical Advice\n\n- status: active\n",
+        encoding="utf-8",
+    )
+    index = tmp_path / ".agent_advice" / "index.jsonl"
+    index.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        advice_rendering,
+        "advice_packet",
+        lambda _root: {
+            "used_advice": [
+                {
+                    "advice_id": "advice-fresh",
+                    "path": advice_path,
+                    "source_digest": "a" * 64,
+                    "content_sha256": "b" * 64,
+                    "fields": {
+                        "fidelity_status": "ok",
+                        "raw_direct_reference_required": False,
+                        "directives": [],
+                    },
+                }
+            ],
+            "not_goal_truth": True,
+            "execution_plan_eligible": False,
+            "normalized_packet_use": "direction_evidence_only",
+            "incomplete_normalization_advice_ids": [],
+            "canonical_clause_ids": [],
+            "actionable_clause_ids": [],
+            "source_digests": {},
+            "clause_source_digests": {},
+            "duplicate_actionable_clause_ids": [],
+            "advice_packet_digest": "c" * 64,
+        },
+    )
+
+    preparation = prepare_stage(
+        tmp_path, cycle_id, target, persist_compiler_artifacts=True
+    )
+    assert preparation["derived_values"]["used_advice"] == [advice_path]
+    with pytest.raises(ValueError, match="conflicting_derived_field"):
+        ResultBuilder().build(
+            preparation,
+            {"owner_result": {"used_advice": ["forged"]}},
+        )
+
+    published = publish_preparation(tmp_path, preparation)
+    owner = publish_owner_result(
+        tmp_path,
+        published["preparation_ref"],
+        published["preparation_sha256"],
+        {
+            "validation_set_need": "plan",
+            "task_family": "fresh-advice-lineage",
+            "oracle_strategy": "deterministic-contract-tests",
+            "split_strategy": "not_applicable",
+            "evidence_paths": ["task.md"],
+        },
+    )["owner_result_binding"]
+    routing = compile_routing(
+        tmp_path,
+        published["preparation_ref"],
+        published["preparation_sha256"],
+        "validation_set",
+    )["routing_binding"]
+    output = submit_stage(
+        tmp_path,
+        preparation,
+        owner_result_ref=owner["ref"],
+        owner_result_sha256=owner["sha256"],
+        routing_ref=routing["ref"],
+        routing_sha256=routing["sha256"],
+        apply=True,
+    )
+
+    assert output["applied"] is True
+    assert read_events(tmp_path, cycle_id)[-1]["used_advice"] == [advice_path]
 
 
 def test_enforced_input_loaders_reject_tamper_and_byte_identical_copy(

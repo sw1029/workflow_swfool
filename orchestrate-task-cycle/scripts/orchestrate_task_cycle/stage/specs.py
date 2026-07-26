@@ -32,6 +32,10 @@ OWNER_FIELD_NAMES = frozenset(
 DERIVED_FIELD_NAMES = frozenset(
     {"step", "cycle_id", "task_id", "used_goal_truth", "used_advice"}
 )
+SELECTOR_DERIVED_FIELDS = (
+    ("goal", "used_goal_truth"),
+    ("advice", "used_advice"),
+)
 GIT_DEPENDENT_TARGETS = frozenset(
     {
         "repo_skill_adapter_scan",
@@ -375,7 +379,13 @@ LEGACY_TARGET_COMPILE_SPECS: dict[str, TargetCompileSpec] = {
 
 
 def _v2_spec(target: str) -> TargetCompileSpec:
-    fields = tuple(dict.fromkeys(("step", *COMMON_FIELDS[target])))
+    selectors = dependency_selectors(target)
+    contextual_derived = tuple(
+        field for selector, field in SELECTOR_DERIVED_FIELDS if selector in selectors
+    )
+    fields = tuple(
+        dict.fromkeys(("step", *COMMON_FIELDS[target], *contextual_derived))
+    )
     derived = tuple(field for field in fields if field in DERIVED_FIELD_NAMES)
     semantic = SEMANTIC_FIELDS.get(target, ())
     if not set(semantic) <= set(fields):
@@ -391,7 +401,6 @@ def _v2_spec(target: str) -> TargetCompileSpec:
         optional_owner.extend(OPTIONAL_SEMANTIC_FIELDS.get(target, ()))
     if target in AGENT_ROUTING_TARGETS:
         optional_owner.extend(ROUTING_OWNER_FIELDS)
-    selectors = dependency_selectors(target)
     roles = ["core"]
     if {"git_head", "git_worktree"} & set(selectors):
         roles.append("git")
@@ -421,7 +430,17 @@ if set(TARGET_COMPILE_SPECS) != set(TARGETS):
 if set(TARGET_BUILDERS) - set(TARGET_COMPILE_SPECS):
     raise RuntimeError("TargetCompileSpec registry must cover every packet target")
 for _target, _specification in TARGET_COMPILE_SPECS.items():
-    _expected = frozenset(("step", *COMMON_FIELDS[_target]))
+    _expected = frozenset(
+        (
+            "step",
+            *COMMON_FIELDS[_target],
+            *(
+                field
+                for selector, field in SELECTOR_DERIVED_FIELDS
+                if selector in _specification.dependency_selectors
+            ),
+        )
+    )
     if _specification.classified_fields != _expected:
         raise RuntimeError(f"result field provenance is incomplete for {_target}")
 

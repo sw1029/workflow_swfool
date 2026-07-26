@@ -49,6 +49,11 @@ model-visible bytes.
   diagnostics. Exclude only explicit non-active compatibility pointers; journal and
   intake snapshots are noncanonical. Missing, unexpected, invalid, duplicate, or
   metadata-conflicting paths block while bounded path lists remain body-free.
+- When a target selects goal or advice context, classify `used_goal_truth` and
+  `used_advice` as coordinator-derived lineage, using exact canonical paths rather than
+  advice IDs. Preserve that lineage in the preparation and compiled result, and include
+  the immutable candidate lineage in pre-transition validation. Owners may neither
+  author nor override it; a newly aligned context requires a fresh preparation.
 - Keep a work order at or below 128 KiB and a v2 preparation at or below 256 KiB.
 - Persist context, work orders, and canonical results by content digest; reference them
   from preparations, ledger events, and current projections.

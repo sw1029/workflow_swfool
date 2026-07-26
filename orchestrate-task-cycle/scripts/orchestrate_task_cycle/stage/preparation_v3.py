@@ -148,9 +148,9 @@ def _derived_values(
             (model.get("goal_truth") or {}).get("used_goal_truth") or []
         ),
         "used_advice": [
-            item.get("advice_id")
+            item.get("path")
             for item in advice.get("items") or []
-            if isinstance(item, dict) and item.get("advice_id")
+            if isinstance(item, dict) and item.get("path")
         ],
     }
     return {
