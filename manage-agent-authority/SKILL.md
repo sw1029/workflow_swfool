@@ -17,7 +17,15 @@ Keep goal truth, authority, evidence, and mutable state separate:
 - Treat `.agent_advice/active/*.md` as non-GT, non-authority input.
 - Preserve historical uncertainty. Never use current ratification to backdate permission.
 
-Read [agent-authority-template.md](references/agent-authority-template.md) before drafting policy. Read [authority-v2-contract.md](references/authority-v2-contract.md) before issuing grants, evaluating operations, delegating, or changing lifecycle state. Read [operation-authority-receipt.md](references/operation-authority-receipt.md) before using the legacy-compatible `receipt` command.
+Read [agent-authority-template.md](references/agent-authority-template.md) for
+policy work, [authority-v2-contract.md](references/authority-v2-contract.md) for
+grant/evaluation/lifecycle work, and
+[operation-authority-receipt.md](references/operation-authority-receipt.md) for
+legacy receipts.
+
+For optional `authority_interaction_mode`, read
+[authority-interaction-mode.md](references/authority-interaction-mode.md) first.
+It only narrows; never confuse it with workflow `normal|bootstrap`.
 
 ## Authority model
 

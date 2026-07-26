@@ -18,6 +18,21 @@
       "reversibility": "conditionally_reversible",
       "subject_kinds": ["repository"],
       "authority_applicability": "required"
+    },
+    {
+      "operation_id": "push_git_ssh",
+      "operation_version": "1",
+      "authorization_mechanism": "grant",
+      "mutation_class": "external_mutation",
+      "required_capabilities": ["repository.git.push_ssh"],
+      "source_rank_floor": "S3",
+      "risk_floor": "R3",
+      "decision_class": "D3",
+      "effect_classes": ["push_exact_git_ssh_refspec"],
+      "data_classes": ["repository_git_ssh_push"],
+      "reversibility": "irreversible",
+      "subject_kinds": ["repository_git_ssh_push"],
+      "authority_applicability": "required"
     }
   ]
 }

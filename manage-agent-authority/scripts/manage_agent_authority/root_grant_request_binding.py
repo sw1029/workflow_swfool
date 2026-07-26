@@ -17,6 +17,6 @@ def root_grant_request_binding_covers(
     historical schema-v2 grant contract.
     """
 
-    if grant.get("schema_version") != 3:
+    if grant.get("schema_version") not in {3, 4}:
         return True
     return grant.get("request_sha256") == object_sha256(request)

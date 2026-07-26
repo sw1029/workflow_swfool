@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+"""Host utility for the optional signed authority-interaction mode."""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+import sys
+from typing import Any
+
+from manage_agent_authority.authority_interaction import (
+    build_activation_plan,
+    materialize_activation,
+    publish_activation_evidence,
+    record_last_attempt,
+    set_mode,
+    status,
+)
+from manage_agent_authority.root_authority_admin import status as signer_status
+from manage_agent_authority.root_authorization_signer import (
+    ROOT_AUTHORIZATION_HOME,
+    activate_authority_mode,
+    preflight_tty,
+)
+from manage_agent_authority.root_tty import RootTTYError
+from manage_agent_authority.stable_store import read_regular
+
+
+def _emit(value: dict[str, Any], *, code: int = 0) -> int:
+    json.dump(value, sys.stdout, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    sys.stdout.write("\n")
+    return code
+
+
+def _workspace(value: str) -> Path:
+    raw = Path(value)
+    if not raw.is_absolute() or raw.is_symlink() or not raw.is_dir():
+        raise SystemExit("authority_mode_workspace_invalid")
+    return raw.resolve()
+
+
+def _active_key() -> str:
+    active = [item["key_id"] for item in signer_status()["keys"] if item["status"] == "active"]
+    if len(active) != 1:
+        raise SystemExit("authority_mode_requires_one_active_signer_key")
+    return active[0]
+
+
+def _publish_and_materialize(root: Path, evidence: dict[str, Any]) -> dict[str, Any]:
+    evidence_binding = publish_activation_evidence(root, evidence)
+    materialized = materialize_activation(root, evidence_binding)
+    return {"status": "activated", "activation_evidence": evidence_binding, **materialized}
+
+
+def activate(root: Path, mode: str) -> int:
+    command = f"authority-mode activate --workspace {root} --mode {mode}"
+    try:
+        preflight_tty()
+    except RootTTYError as exc:
+        record_last_attempt(code=exc.code, plan_binding=None, retryable=True, next_action=command)
+        return _emit({"status": "blocked", "code": exc.code, "retryable": True, "next_action": command}, code=2)
+    binding, _plan = build_activation_plan(root, mode=mode)
+    try:
+        signed = activate_authority_mode(
+            root,
+            activation_plan_ref=binding["ref"],
+            activation_plan_sha256=binding["sha256"],
+            key_id=_active_key(),
+        )
+        payload = read_regular(Path(signed["evidence_path"]), label="authority interaction activation outbox evidence")
+        assert payload is not None
+        evidence = json.loads(payload.decode("utf-8"))
+        result = _publish_and_materialize(root, evidence)
+    except (SystemExit, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        code = str(exc)
+        record_last_attempt(code=code, plan_binding=binding, retryable=True, next_action=f"authority-mode resume-activation --workspace {root}")
+        return _emit({"status": "blocked", "code": code, "activation_plan": binding, "retryable": True, "next_action": f"authority-mode resume-activation --workspace {root}"}, code=2)
+    record_last_attempt(code="completed", plan_binding=binding, retryable=False, next_action="none")
+    return _emit({"activation_plan": binding, **result})
+
+
+def resume(root: Path) -> int:
+    outbox = ROOT_AUTHORIZATION_HOME / "outbox"
+    if not outbox.is_dir() or outbox.is_symlink():
+        return _emit({"status": "blocked", "code": "authority_mode_no_activation_evidence", "retryable": False}, code=2)
+    candidates: list[dict[str, Any]] = []
+    for path in sorted(outbox.glob("activation-evidence-*.json"), reverse=True):
+        try:
+            payload = read_regular(path, label="authority interaction activation outbox evidence", max_bytes=64 * 1024)
+            assert payload is not None
+            value = json.loads(payload.decode("utf-8"))
+            if value.get("artifact_kind") == "authority_interaction_activation_evidence":
+                candidates.append(value)
+        except (SystemExit, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+    for evidence in candidates:
+        try:
+            result = _publish_and_materialize(root, evidence)
+            record_last_attempt(code="completed", plan_binding=evidence["activation_plan"], retryable=False, next_action="none")
+            return _emit(result)
+        except SystemExit:
+            continue
+    return _emit({"status": "blocked", "code": "authority_mode_no_resumable_activation", "retryable": False}, code=2)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="authority-mode")
+    subs = parser.add_subparsers(dest="command", required=True)
+    for name in ("status", "resume-activation"):
+        item = subs.add_parser(name)
+        item.add_argument("--workspace", required=True)
+    activate_parser = subs.add_parser("activate")
+    activate_parser.add_argument("--workspace", required=True)
+    activate_parser.add_argument("--mode", choices=("workspace", "governed"), required=True)
+    downgrade = subs.add_parser("downgrade")
+    downgrade.add_argument("--workspace", required=True)
+    downgrade.add_argument("--mode", choices=("workspace", "observe", "manual"), required=True)
+    disable = subs.add_parser("disable")
+    disable.add_argument("--workspace", required=True)
+    args = parser.parse_args(argv)
+    root = _workspace(args.workspace)
+    if args.command == "status":
+        return _emit(status(root))
+    if args.command == "activate":
+        return activate(root, args.mode)
+    if args.command == "resume-activation":
+        return resume(root)
+    if args.command == "downgrade":
+        return _emit(set_mode(args.mode))
+    if args.command == "disable":
+        return _emit(set_mode("manual", disable=True))
+    raise SystemExit("authority_mode_unknown_command")
+
+
+if __name__ == "__main__":
+    try:
+        result = main()
+    except SystemExit as exc:
+        if isinstance(exc.code, str):
+            raise SystemExit(_emit({"status": "blocked", "code": exc.code, "retryable": False}, code=2))
+        raise
+    raise SystemExit(result)

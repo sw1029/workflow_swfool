@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .artifact_store import snapshot_file, transition_grants, update_current_policy
+from .artifact_store import snapshot_file, update_current_policy
 from .canonical import load_object
 from .composition_intent_compiler import compile_grant_composition
 from .decision_publication import evaluate_and_publish
@@ -38,6 +38,7 @@ from .verification_publication import verify_and_publish_precommit
 from .verification_publication import verify_and_publish_predispatch
 from .cli_errors import emit_error
 from .cli_parser import build_parser as _build_parser
+from .authority_transition_cli import command_transition
 
 
 def _emit(value: Any) -> int:
@@ -411,20 +412,6 @@ def command_materialize_approved_recovery(args: argparse.Namespace) -> int:
     )
 
 
-def command_transition(args: argparse.Namespace) -> int:
-    root = _root(args)
-    result = transition_grants(
-        root,
-        args.grant_id,
-        args.transition,
-        event_id=args.event_id,
-        expected_version=args.expected_version,
-        source_approval=_binding(args.source_approval, "source_approval"),
-        transitioned_at=args.at,
-    )
-    return _emit({"status": args.transition, **result})
-
-
 def command_status(args: argparse.Namespace) -> int:
     return _emit(
         status_snapshot(
@@ -452,6 +439,8 @@ def command_resolve(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    from .authority_interaction_cli import handlers as interaction_handlers
+
     handlers = {
         "compile_semantic_context": command_compile_semantic_context,
         "publish_operation_set": command_publish_operation_set,
@@ -482,6 +471,16 @@ def build_parser() -> argparse.ArgumentParser:
         "status": command_status,
         "resolve": command_resolve,
     }
+    handlers.update(
+        interaction_handlers(
+            emit=_emit,
+            root=_root,
+            binding=_binding,
+            input_object=_input_object,
+            operation_inputs=_operation_inputs,
+            skills_root=_skills_root,
+        )
+    )
     return _build_parser(handlers)
 
 

@@ -758,6 +758,7 @@ def test_root_authorization_fails_closed_without_trusted_host_key(
     plan_binding, decision_binding, _plan = _prepared_root_materialization(tmp_path)
     empty_registry = tmp_path / "empty-root-authorization.trust.json"
     empty_registry.write_bytes(_canonical_trust_registry([]))
+    empty_registry.chmod(0o600)
     monkeypatch.setattr(
         root_authorization_evidence,
         "TRUST_ANCHOR_REGISTRY",

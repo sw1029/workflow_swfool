@@ -117,6 +117,11 @@ def validate_for_grant(
     *,
     prospective: bool = True,
 ) -> None:
+    if approval["schema_version"] == 6:
+        from .authority_interaction import validate_mode_child_source
+
+        validate_mode_child_source(root, approval, grant)
+        return
     if prospective:
         if approval["schema_version"] in {2, 4}:
             raise SystemExit(

@@ -9,7 +9,7 @@ description: "Inspect a local Git repository's implementation state and create a
 
 Use this skill to turn a dirty repository into a deliberate commit without hiding important work or committing local noise. Keep the workflow conservative: inspect first, ignore generated artifacts precisely, stage only coherent changes, validate what is practical, then commit.
 
-Creating the commit is `finalize_git_state` in `authority.operations.json` and follows the shared [authority v2 contract](../manage-agent-authority/references/authority-v2-contract.md). Validation, coherent staging, or task completion does not itself authorize committing a different exact repository subject; pushing remains a separate external operation.
+Creating the commit is `finalize_git_state` in `authority.operations.json` and follows the shared [authority v2 contract](../manage-agent-authority/references/authority-v2-contract.md). Validation, coherent staging, or task completion does not itself authorize committing a different exact repository subject; pushing remains a separate external operation. `push_git_ssh` is S3/R3/external/single-use, always requires an exact confirmation, and must bind the SSH remote identity, branch, refspec, and commit SHA. Never let authority-interaction mode cover push, force, tag deletion, or remote changes.
 
 When a Codex `/goal` is active, treat `.agent_goal/goal_contract.yaml` as the commit contract. A commit is allowed only when the diff is inside the goal scope, a task node or checkpoint exists, validation is recorded as `passed` or explicitly `known_failed`, and the commit message carries the goal and task identity. Do not turn a partial goal state into an ambiguous success commit.
 

@@ -3,9 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .canonical import normalized_time
-from .canonical import parse_time
-from .grant_contract_fields import GRANT_KEYS, GRANT_V3_KEYS
+from .canonical import normalized_time, parse_time
+from .grant_contract_fields import GRANT_KEYS, GRANT_V3_KEYS, GRANT_V4_KEYS
 
 
 SOURCE_RANKS = ("S0", "S1", "S2", "S3", "S4")
@@ -22,20 +21,8 @@ DECISIONS = (
     "conflict",
     "not_applicable",
 )
-CARDINALITIES = (
-    "single_use",
-    "bounded_reusable",
-    "task_lease",
-    "improvement_lease",
-    "standing_policy",
-)
-INTENT_TYPES = (
-    "grant_authority",
-    "ratify_goal_truth",
-    "accept_risk_or_cost",
-    "supply_external_input",
-    "select_design_option",
-)
+CARDINALITIES = ("single_use", "bounded_reusable", "task_lease", "improvement_lease", "standing_policy")
+INTENT_TYPES = ("grant_authority", "ratify_goal_truth", "accept_risk_or_cost", "supply_external_input", "select_design_option")
 MUTATION_CLASSES = ("observe", "local_mutation", "external_mutation", "destructive")
 REVERSIBILITY = ("reversible", "conditionally_reversible", "irreversible")
 EXTERNAL_INPUT = (
@@ -335,25 +322,7 @@ def PathLikeUnsafe(value: str) -> bool:
     return value.startswith("/") or "*" in value or ".." in value.split("/")
 
 
-def validate_grant(value: dict[str, Any]) -> dict[str, Any]:
-    schema_version = value.get("schema_version")
-    expected_keys = (
-        GRANT_KEYS
-        if schema_version == 2
-        else GRANT_V3_KEYS
-        if schema_version == 3
-        else set()
-    )
-    _closed(value, expected_keys, "authority grant")
-    _required(value, expected_keys, "authority grant")
-    if (
-        schema_version not in {2, 3}
-        or value.get("artifact_kind") != "authority_grant"
-    ):
-        raise SystemExit(
-            "Authority grant requires schema_version=2 or 3 and "
-            "artifact_kind=authority_grant."
-        )
+def _grant_scope(value: dict[str, Any]) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     subjects = value.get("subjects")
     if not isinstance(subjects, list) or not subjects:
         raise SystemExit("authority grant.subjects must be non-empty.")
@@ -380,6 +349,10 @@ def validate_grant(value: dict[str, Any]) -> dict[str, Any]:
                 for key in sorted(OPERATION_SCOPE_KEYS)
             }
         )
+    return normalized_subjects, normalized_operations
+
+
+def _grant_lifetime(value: dict[str, Any]) -> tuple[str, int | None, str, str | None]:
     cardinality = _enum(value["cardinality"], CARDINALITIES, "cardinality")
     max_uses = value.get("max_uses")
     if max_uses is not None and (
@@ -404,6 +377,10 @@ def validate_grant(value: dict[str, Any]) -> dict[str, Any]:
         not_before, "not_before"
     ):
         raise SystemExit("expires_at must be after not_before.")
+    return cardinality, max_uses, not_before, expires_at
+
+
+def _grant_issuer_decisions(value: dict[str, Any]) -> tuple[str, str, list[str]]:
     issuer = _enum(value["issuer_rank"], SOURCE_RANKS, "issuer_rank")
     holder = _enum(value["holder_rank"], SOURCE_RANKS, "holder_rank")
     if SOURCE_RANKS.index(issuer) <= SOURCE_RANKS.index(holder):
@@ -418,6 +395,31 @@ def validate_grant(value: dict[str, Any]) -> dict[str, Any]:
         raise SystemExit(
             "decision_classes must contain unique closed decision classes."
         )
+    return issuer, holder, normalized_decisions
+
+
+def _grant_materialization(value: dict[str, Any], schema_version: int) -> dict[str, str]:
+    if schema_version not in {3, 4}:
+        return {}
+    request_sha256 = _sha(value["request_sha256"], "request_sha256")
+    field = "root_materialization_ref" if schema_version == 3 else "activation_materialization_ref"
+    prefix = ".task/authorization/root_grant_materializations/" if schema_version == 3 else ".task/authorization/authority_interaction_activations/"
+    reference = str(value[field] or "").strip()
+    if not reference or PathLikeUnsafe(reference) or not reference.startswith(prefix) or not reference.endswith("/receipt.json"):
+        raise SystemExit(f"{field} must be an exact materialization receipt path.")
+    return {"request_sha256": request_sha256, field: reference}
+
+
+def validate_grant(value: dict[str, Any]) -> dict[str, Any]:
+    schema_version = value.get("schema_version")
+    expected_keys = GRANT_KEYS if schema_version == 2 else GRANT_V3_KEYS if schema_version == 3 else GRANT_V4_KEYS if schema_version == 4 else set()
+    _closed(value, expected_keys, "authority grant")
+    _required(value, expected_keys, "authority grant")
+    if schema_version not in {2, 3, 4} or value.get("artifact_kind") != "authority_grant":
+        raise SystemExit("Authority grant requires schema_version=2, 3, or 4 and artifact_kind=authority_grant.")
+    normalized_subjects, normalized_operations = _grant_scope(value)
+    cardinality, max_uses, not_before, expires_at = _grant_lifetime(value)
+    issuer, holder, normalized_decisions = _grant_issuer_decisions(value)
     normalized = {
         "schema_version": schema_version,
         "artifact_kind": "authority_grant",
@@ -449,25 +451,7 @@ def validate_grant(value: dict[str, Any]) -> dict[str, Any]:
         "created_at": normalized_time(value["created_at"], "created_at"),
         "idempotency_key": _identifier(value["idempotency_key"], "idempotency_key"),
     }
-    if schema_version == 3:
-        normalized["request_sha256"] = _sha(
-            value["request_sha256"], "request_sha256"
-        )
-        root_materialization_ref = str(
-            value["root_materialization_ref"] or ""
-        ).strip()
-        if (
-            not root_materialization_ref
-            or PathLikeUnsafe(root_materialization_ref)
-            or not root_materialization_ref.startswith(
-                ".task/authorization/root_grant_materializations/"
-            )
-            or not root_materialization_ref.endswith("/receipt.json")
-        ):
-            raise SystemExit(
-                "root_materialization_ref must be an exact root receipt path."
-            )
-        normalized["root_materialization_ref"] = root_materialization_ref
+    normalized.update(_grant_materialization(value, schema_version))
     return normalized
 
 

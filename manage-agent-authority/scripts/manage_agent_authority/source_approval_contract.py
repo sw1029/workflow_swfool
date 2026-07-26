@@ -51,11 +51,18 @@ APPROVAL_V3_KEYS = (APPROVAL_V2_KEYS - {"integrity_status"}) | {
 }
 APPROVAL_V4_KEYS = APPROVAL_V3_KEYS | {"grant_projections"}
 APPROVAL_V5_KEYS = APPROVAL_V4_KEYS
+APPROVAL_V6_KEYS = APPROVAL_V3_KEYS | {
+    "activation_plan",
+    "activation_evidence",
+    "activation_materialization",
+    "activation_child",
+}
 OPERATION_KEYS = {"skill_id", "skill_version", "operation_id", "operation_version"}
 DECISION_TRUST_CLASSES = {
     "caller_asserted_exact_echo",
     "caller_asserted_plan_decision",
     "host_user_signed_exact_plan",
+    "host_user_signed_mode_activation_child",
 }
 ROOT_GRANT_PROJECTION_KEYS = {
     "grant_id",
@@ -327,6 +334,10 @@ def _validate_projection_coverage(
 
 def validate_source_approval(value: dict[str, Any]) -> dict[str, Any]:
     schema_version = value.get("schema_version")
+    if schema_version == 6:
+        from .source_activation_contract import validate_activation_source_approval
+
+        return validate_activation_source_approval(value)
     expected = (
         APPROVAL_V2_KEYS
         if schema_version == 2

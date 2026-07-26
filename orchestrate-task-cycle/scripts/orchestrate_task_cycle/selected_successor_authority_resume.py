@@ -100,6 +100,47 @@ def _materialized_grants(
     return projection, receipt_ref, descriptors
 
 
+def _mode_child_grants(
+    root: Path,
+    projection_binding: dict[str, str],
+    *,
+    at: str,
+    skills_root: Path | None,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Materialize independent exact mode children for this projection only."""
+    from manage_agent_authority.authority_interaction import materialize_mode_child
+
+    projection_ref, projection, selected = validate_authority_projection_snapshot(
+        root, projection_binding, skills_root=skills_root
+    )
+    descriptors: dict[str, dict[str, Any]] = {}
+    by_request = {
+        compilation["request_sha256"]: compilation
+        for _binding, compilation in selected
+    }
+    for operation in projection["operations"]:
+        action = operation["action"]
+        if operation["approval_projection"] is None:
+            descriptors[action] = projection["grants"][action]
+            continue
+        compilation = by_request.get(operation["request_sha256"])
+        if compilation is None:
+            raise ValueError("Mode child request is absent from selected projection")
+        result = materialize_mode_child(
+            root,
+            compilation["request"],
+            evaluated_at=at,
+            skills_root=skills_root,
+        )
+        if result is None:
+            raise ValueError("Authority interaction mode cannot materialize this child")
+        descriptors[action] = {"status": "bound", "binding": result["grant_binding"]}
+    # The exact same selected source was re-opened before every child creation.
+    if projection_ref != projection_binding:
+        raise ValueError("Selected-successor mode projection binding changed")
+    return projection, descriptors
+
+
 def _projection_compilations(
     root: Path,
     projection: dict[str, Any],
@@ -123,7 +164,7 @@ def resume_selected_successor_authority(
     root: Path,
     *,
     projection_binding: dict[str, str],
-    materialization_binding: dict[str, str],
+    materialization_binding: dict[str, str] | None,
     at: str,
     skills_root: Path | None = None,
 ) -> dict[str, Any]:
@@ -140,12 +181,18 @@ def resume_selected_successor_authority(
 
     root = root.expanduser().resolve(strict=True)
     prepared_at = normalized_time(at, "selected-successor continuation prepared_at")
-    projection, receipt_binding, grant_inputs = _materialized_grants(
-        root,
-        projection_binding,
-        materialization_binding,
-        skills_root=skills_root,
-    )
+    if materialization_binding is None:
+        projection, grant_inputs = _mode_child_grants(
+            root, projection_binding, at=prepared_at, skills_root=skills_root
+        )
+        receipt_binding = None
+    else:
+        projection, receipt_binding, grant_inputs = _materialized_grants(
+            root,
+            projection_binding,
+            materialization_binding,
+            skills_root=skills_root,
+        )
     projection_binding = normalize_binding(
         projection_binding, "selected-successor source projection"
     )
@@ -179,7 +226,7 @@ def resume_selected_successor_authority(
         grants=grant_descriptors,
         operation_manifests=manifests,
         prepared_at=prepared_at,
-        source_projection=projection_binding,
+        source_projection=projection_binding if receipt_binding is not None else None,
         root_grant_materialization=receipt_binding,
     )
     indexed = load_index(root, identity, input_sha)
@@ -242,7 +289,7 @@ def resume_selected_successor_authority(
         identity=identity,
         input_sha=input_sha,
         skills_root=skills_root,
-        source_projection=projection_binding,
+        source_projection=projection_binding if receipt_binding is not None else None,
         root_grant_materialization=receipt_binding,
     )
 

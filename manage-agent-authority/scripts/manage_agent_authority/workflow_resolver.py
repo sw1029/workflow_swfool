@@ -244,6 +244,25 @@ def resolve_operation(
         evaluated_at=evaluated_at,
         skills_root=skills_root,
     )
+    mode_child = None
+    # A signed activation can only produce a child after the ordinary evaluator
+    # has already classified this exact request.  Re-evaluate afterward so the
+    # unchanged reservation, verification, settlement, and use accounting path
+    # sees a normal exact grant rather than an activation shortcut.
+    if decision["decision"] == "approval_required":
+        from .authority_interaction import materialize_mode_child
+
+        mode_child = materialize_mode_child(
+            root, decision["request"], evaluated_at=evaluated_at, skills_root=skills_root
+        )
+        if mode_child is not None:
+            decision = evaluate(
+                root,
+                request,
+                context,
+                evaluated_at=evaluated_at,
+                skills_root=skills_root,
+            )
     current = status_snapshot(
         root,
         request_sha256=decision["request_sha256"],
@@ -278,6 +297,7 @@ def resolve_operation(
         "recovery_identity": selected["recovery_identity"],
         "existing_reservations": current["reservations"],
         "covering_source_approvals": selected["source_approvals"],
+        "authority_interaction_child": mode_child,
     }
 
 

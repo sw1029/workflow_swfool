@@ -62,6 +62,7 @@ def install_test_trust_anchor(monkeypatch: Any, directory: Path) -> Path:
         ],
     }
     registry.write_bytes(_canonical_json(value))
+    registry.chmod(0o600)
     monkeypatch.setattr(authorization, "TRUST_ANCHOR_REGISTRY", registry)
     return registry
 

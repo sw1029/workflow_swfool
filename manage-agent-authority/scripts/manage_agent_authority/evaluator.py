@@ -64,6 +64,7 @@ def manifest_reasons(request: dict[str, Any], operation: dict[str, Any]) -> list
 
 
 def _covers(
+    root: Path,
     request: dict[str, Any],
     grant: dict[str, Any],
     state: dict[str, Any],
@@ -71,6 +72,11 @@ def _covers(
     rank_floor: str,
     session_id: str,
 ) -> bool:
+    if grant.get("schema_version") == 4:
+        from .authority_interaction import activation_child_eligible
+
+        if not activation_child_eligible(root, grant, at=at):
+            return False
     if state.get("status") != "active" or grant["holder_rank"] != request["actor_rank"]:
         return False
     if not root_grant_request_binding_covers(grant, request):
@@ -153,12 +159,18 @@ def _lineage_records(
 
 
 def _lineage_covers(
+    root: Path,
     records: list[tuple[dict[str, Any], str, dict[str, Any]]],
     request: dict[str, Any],
     at: Any,
     session_id: str,
 ) -> bool:
     for grant, _, state in records:
+        if grant.get("schema_version") == 4:
+            from .authority_interaction import activation_child_eligible
+
+            if not activation_child_eligible(root, grant, at=at):
+                return False
         if state["status"] != "active":
             return False
         if not root_grant_request_binding_covers(grant, request):
@@ -199,6 +211,7 @@ def _grant_decision(
     candidates = []
     for grant, digest, state in records:
         if not _covers(
+            root,
             request,
             grant,
             state,
@@ -208,7 +221,7 @@ def _grant_decision(
         ):
             continue
         lineage = _lineage_records(root, grant)
-        if _lineage_covers(lineage, request, at, session_id):
+        if _lineage_covers(root, lineage, request, at, session_id):
             candidates.append((grant, digest, state, lineage))
     if candidates:
         candidates.sort(
@@ -255,7 +268,7 @@ def _grant_decision(
         rank_floor_index=rank_value(operation["source_rank_floor"]),
         session_id=session_id,
     ) or any(
-        not _lineage_covers(lineage, request, at, session_id) for lineage in lineages
+        not _lineage_covers(root, lineage, request, at, session_id) for lineage in lineages
     ):
         return "conflict", ["composition_no_longer_covers_request"], [], []
     lineage_by_id = {

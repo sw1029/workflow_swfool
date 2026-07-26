@@ -29,6 +29,10 @@ GRANT_V3_KEYS = GRANT_KEYS | {
     "request_sha256",
     "root_materialization_ref",
 }
+GRANT_V4_KEYS = GRANT_KEYS | {
+    "request_sha256",
+    "activation_materialization_ref",
+}
 
 
-__all__ = ("GRANT_KEYS", "GRANT_V3_KEYS")
+__all__ = ("GRANT_KEYS", "GRANT_V3_KEYS", "GRANT_V4_KEYS")

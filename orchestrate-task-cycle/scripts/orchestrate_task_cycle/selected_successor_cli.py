@@ -253,15 +253,25 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             resume_selected_successor_authority,
         )
 
+        if bool(args.root_grant_materialization_ref) != bool(
+            args.root_grant_materialization_sha256
+        ):
+            raise ValueError(
+                "root grant materialization ref and SHA must be supplied together"
+            )
         return resume_selected_successor_authority(
             root,
             projection_binding=_binding(
                 args.approval_projection_ref,
                 args.approval_projection_sha256,
             ),
-            materialization_binding=_binding(
-                args.root_grant_materialization_ref,
-                args.root_grant_materialization_sha256,
+            materialization_binding=(
+                _binding(
+                    args.root_grant_materialization_ref,
+                    args.root_grant_materialization_sha256,
+                )
+                if args.root_grant_materialization_ref and args.root_grant_materialization_sha256
+                else None
             ),
             at=args.at,
             skills_root=Path(args.skills_root) if args.skills_root else None,
@@ -370,13 +380,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         "resume-authority",
         help=(
             "Reuse exact projected requests with one signed root-grant "
-            "materialization at a later authority time."
+            "materialization, or independently materialized mode children, at a later authority time."
         ),
     )
     resume.add_argument("--approval-projection-ref", required=True)
     resume.add_argument("--approval-projection-sha256", required=True)
-    resume.add_argument("--root-grant-materialization-ref", required=True)
-    resume.add_argument("--root-grant-materialization-sha256", required=True)
+    resume.add_argument("--root-grant-materialization-ref")
+    resume.add_argument("--root-grant-materialization-sha256")
     resume.add_argument("--at", required=True)
     resume.add_argument("--skills-root")
     _add_context_arguments(commands.add_parser("prepare-authority-context"))

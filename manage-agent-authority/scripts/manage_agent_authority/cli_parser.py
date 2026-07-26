@@ -126,6 +126,23 @@ def _compilation(subparsers: Any, handlers: dict[str, Handler]) -> None:
     decision.add_argument("--authorization-evidence", required=True)
     decision.set_defaults(func=handlers["compile_root_decision_seed"])
 
+    activation = subparsers.add_parser(
+        "prepare-authority-interaction-activation",
+        help="Publish one signed-mode activation plan without granting authority.",
+    )
+    _root(activation)
+    _at(activation, required=False)
+    activation.add_argument("--mode", choices=("workspace", "governed"), required=True)
+    activation.set_defaults(func=handlers["prepare_authority_interaction_activation"])
+
+    activation_evidence = subparsers.add_parser(
+        "publish-authority-interaction-evidence",
+        help="Verify and publish a signed authority-interaction activation envelope.",
+    )
+    _root(activation_evidence)
+    activation_evidence.add_argument("--evidence", required=True)
+    activation_evidence.set_defaults(func=handlers["publish_authority_interaction_evidence"])
+
 
 def _reconciliation(subparsers: Any, handlers: dict[str, Handler]) -> None:
     reconcile = subparsers.add_parser("reconcile")
@@ -329,6 +346,24 @@ def _recovery_and_status(
     root_grant.add_argument("--approval-plan", required=True)
     root_grant.add_argument("--decision-seed", required=True)
     root_grant.set_defaults(func=handlers["materialize_plan_bound_root_grant"])
+
+    activation = subparsers.add_parser(
+        "materialize-authority-interaction-activation",
+        help="Materialize a verified signed authority-interaction activation.",
+    )
+    _root(activation)
+    activation.add_argument("--evidence", required=True)
+    activation.set_defaults(func=handlers["materialize_authority_interaction_activation"])
+
+    child = subparsers.add_parser(
+        "materialize-authority-interaction-child",
+        help="Materialize one exact child grant from an eligible activation.",
+    )
+    _root(child)
+    _at(child)
+    _skills_root(child)
+    _operation_input(child)
+    child.set_defaults(func=handlers["materialize_authority_interaction_child"])
 
     legacy_root_grant = subparsers.add_parser(
         "materialize-exact-echo-root-grant",

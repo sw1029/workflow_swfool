@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import base64
 import datetime as dt
 import hashlib
@@ -34,8 +33,9 @@ from .root_authorization_evidence import (
     validate_root_authorization_evidence,
 )
 from .root_grant_plan import load_root_approval_plan
-from .root_tty import RootTTYError, confirm_exact, preflight
+from .root_tty import RootTTYError, confirm_exact
 from .stable_store import read_regular
+from .root_signer_cli import build_parser, preflight_tty
 
 
 ROOT_AUTHORIZATION_HOME = ADMIN_ROOT_AUTHORIZATION_HOME
@@ -342,16 +342,6 @@ def _assert_approval_window(plan: dict[str, Any], observed_at: str) -> None:
         raise SystemExit("Root approval plan is outside its approval window.")
 
 
-def preflight_tty() -> dict[str, Any]:
-    preflight()
-    return {
-        "authority_effects": False,
-        "schema_version": 1,
-        "status": "ready",
-        "transport": "controlling_tty",
-    }
-
-
 def approve_root_plan(
     workspace: Path,
     *,
@@ -451,16 +441,20 @@ def approve_root_plan(
     }
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="root_authorization_signer")
-    subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("preflight-tty")
-    approve = subparsers.add_parser("approve-root-plan")
-    approve.add_argument("--workspace", required=True)
-    approve.add_argument("--approval-plan-ref", required=True)
-    approve.add_argument("--approval-plan-sha256", required=True)
-    approve.add_argument("--key-id", required=True)
-    return parser
+def activate_authority_mode(
+    workspace: Path,
+    *,
+    activation_plan_ref: str,
+    activation_plan_sha256: str,
+    key_id: str,
+) -> dict[str, Any]:
+    from .root_activation_signer import activate_authority_mode as activate
+    return activate(
+        workspace,
+        activation_plan_ref=activation_plan_ref,
+        activation_plan_sha256=activation_plan_sha256,
+        key_id=key_id,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -471,6 +465,15 @@ def main(argv: list[str] | None = None) -> int:
         except RootTTYError as exc:
             sys.stderr.write(f"{exc.code}\n")
             return 2
+    if args.command == "activate-authority-mode":
+        return _emit(
+            activate_authority_mode(
+                Path(args.workspace),
+                activation_plan_ref=args.activation_plan_ref,
+                activation_plan_sha256=args.activation_plan_sha256,
+                key_id=args.key_id,
+            )
+        )
     if args.command != "approve-root-plan":
         raise SystemExit("Unknown root authorization signer command.")
     return _emit(
@@ -489,6 +492,7 @@ if __name__ == "__main__":
 
 __all__ = [
     "ROOT_AUTHORIZATION_HOME",
+    "activate_authority_mode",
     "approve_root_plan",
     "build_parser",
     "main",
