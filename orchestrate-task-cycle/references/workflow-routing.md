@@ -7,6 +7,7 @@ This is the canonical routing reference for `$orchestrate-task-cycle`. It is a s
 - [Goal Truth Inputs](#goal-truth-inputs)
 - [Non-GT Direction Advice](#non-gt-direction-advice)
 - [Noncanonical Session Audit Sidecar](#noncanonical-session-audit-sidecar)
+- [Approval UX Review](#approval-ux-review)
 - [Goal Portfolio Inputs](#goal-portfolio-inputs)
 - [Terminal-wait Re-entry Routing](#terminal-wait-re-entry-routing)
 - [Routing Ownership Catalog](#routing-ownership-catalog)
@@ -49,6 +50,16 @@ Optionally run `$audit-session-governance` beside the cycle and pass only its tr
 Treat absent, incomplete, quarantined, or transcript-only capture as advisory/`not_evaluated` unless acceptance or the caller independently requires session audit; the packet cannot require itself. Direct packets, result-owned collection projections, and session-owned cross-source claims remain advisory. Only a separate deterministic comparator contract may establish a semantic mismatch that downgrades or blocks. A finding may propose issue/derive work but cannot upgrade a verdict or expand authority. Keep stop-hook capture read-only with respect to semantic workflow state: allow only exact deterministic reconstruction of `.task/session_audit/index.json` when an activated mode profile permits it, retain originals, append corrections, and route all source/task/acceptance/goal changes through their owning skills.
 
 Resolve optional capture/consume/reaction composition with `python3 -P -m orchestrate_task_cycle mode-profile` and the tracked `mode-profiles.json` registry before enabling the sidecar. This does not alter the fixed phase order or the canonical `normal|bootstrap` workflow modes. Require `user_instruction`, `caller_policy`, or `authority_record` activation for required consumption or derived-index repair; observations cannot self-activate. A repo-local override may only reduce capability and add probe requirements. Use the session auditor's `auto-rebuild-index` path for unattended repair so it revalidates the resolution and emits the required before/after-hash receipt.
+
+## Approval UX Review
+
+Run [approval-ux-review.md](approval-ux-review.md) inside the existing `authority`
+phase before any user question. Resolve every exact compiled operation first, reuse
+system-owned continuation states, allow eligible signed-mode child materialization,
+deduplicate unchanged waits, separate non-authority decision axes, and batch only
+compatible exact prompt projections. Default to no reviewer agent; use at most one
+read-only presentation reviewer for multiple unambiguous projections. Neither the
+reviewer, a general host configuration key, nor session text can create authority.
 
 ## Goal Portfolio Inputs
 
@@ -135,7 +146,7 @@ The fixed sequence above and `python3 -P -m orchestrate_task_cycle transition` a
 | --- | --- | --- | --- | --- | --- |
 | Collect context | `$orchestrate-task-cycle` | `report` or `governance` | Deterministic helper scripts | `task.md`, `.agent_goal/`, `.agent_advice/`, `.task/`, `.issue/`, `.agent_log/`, `.schema/`, `.contract/`, optional Git state, optional validated session-audit sidecar | `available_goal_truth` and `used_goal_truth` must stay separate; final `기준 GT` may list only actually used GT. Session observations cannot establish authority or positive verdicts. |
 | Initialize ledger | `$maintain-cycle-ledger` | `report` | Deterministic ledger helper | `.task/cycle/<cycle-id>/stage.jsonl`, `current_stage.json`, `packets/` | Stage events are append-only workflow state. |
-| Resolve authority | `$manage-agent-authority` | `authority` | Owning skill decision lifecycle plus read-only executable-closure inspection; selected-successor topology additionally holds its exact predecessor epoch through reservation | Immutable policy snapshot and grant state, exact request/operation/subject and request digest, operation manifest, independent local/external/risk/GT evidence; exact operation batch and current task/cycle closure; exact reservation and `pre_dispatch` verification for mutation | Validate the closed v2 packet in `block` mode. Unknown mutation, implicit grant union, stale binding, completed-task/historical-cycle execution, request-digest drift, or legacy material cannot dispatch. Do not claim the ordinary read-only closure command is a universal atomic guard around the low-level reserve API. |
+| Resolve authority | `$manage-agent-authority` | `authority` | Owning skill `resolve` lifecycle, bounded approval-UX review, then read-only executable-closure inspection; selected-successor topology additionally holds its exact predecessor epoch through reservation | Immutable policy snapshot and grant state, exact request/operation/subject and request digest, operation manifest, independent local/external/risk/GT evidence; exact per-operation resolution and wait identity; optional signed authority-interaction activation; exact operation batch and current task/cycle closure; exact reservation and `pre_dispatch` verification for mutation | Run `resolve` before any prompt and obey `should_prompt`; deduplicate unchanged waits and batch only compatible exact projections. Validate the closed v2 packet in `block` mode. Config or session text alone is not authority. Unknown mutation, implicit grant union, stale binding, completed-task/historical-cycle execution, request-digest drift, or legacy material cannot dispatch. Do not claim the ordinary read-only closure command is a universal atomic guard around the low-level reserve API. |
 | Scan repo-local adapters | `$orchestrate-task-cycle` | `repo_skill_adapter_scan` | Metadata-only adapter scan | `.codex/skills/*/SKILL.md` frontmatter, optional `adapter.manifest.json`, optional packet-renderer availability | Emit adapter count including zero, explicit blockers, and a `repo_skill_adapter_packet` before acceptance; adapter data is non-GT capability evidence. |
 | Normalize acceptance/demo | `$normalize-acceptance-and-demo` | `acceptance` | Summary-level workflow artifact | Current `task.md`, authority policy, repo adapter packet/hooks, advice packet, schema/contract summaries | Emit `acceptance_id` plus source task ID/path/fingerprint; mismatch or missing provenance blocks governance. Missing criteria become assumptions or blockers, not hidden scope expansion. |
 | Route plan | `$orchestrate-task-cycle` | `validation_set_plan` or `governance` | Summary-level deterministic classification | Current task, acceptance, authority, GT/advice packets, schema/contracts, issues, task_miss, `.validation/` inventory | Classify whether validation assets are `not_applicable`, `plan`, `build`, `refresh`, `consume`, or `blocked_or_candidate_only`; skipped paths require reasons. |

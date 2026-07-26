@@ -5,6 +5,7 @@ Use this contract at the existing `authority` phase. `$manage-agent-authority` r
 ## Contents
 
 - [Closed phase packet](#closed-phase-packet)
+- [Approval UX review](#approval-ux-review)
 - [Deterministic construction](#deterministic-construction)
 - [Independent axes](#independent-axes)
 - [Dispatch protocol](#dispatch-protocol)
@@ -45,6 +46,30 @@ Packet hashes are not self-authenticating. The consuming result contract require
 
 The owner decision fingerprint and orchestrator fingerprint have different scopes. Preserve both. The owner fingerprint binds the authority evaluator's exact capability/operation/subject coverage. The orchestrator fingerprint additionally binds the selected grant and reservation/use state consumed by this dispatch. Neither fingerprint includes a mutable whole-policy document or unrelated grants.
 
+## Approval UX review
+
+Before presenting any authority question, run the bounded review in
+[approval-ux-review.md](approval-ux-review.md). Use `workflow authority resolve`
+for every producer-owned compiled operation, not a caller reconstruction of
+`evaluate`. Treat the returned `should_prompt` as the sole prompt gate:
+
+- follow a system-owned `next_action` without prompting when it reuses an allowed
+  decision, reservation, settlement, source approval, recovery path, or eligible
+  signed authority-interaction child;
+- preserve and deduplicate an unchanged wait by exact `wait_identity` and effective
+  fingerprint;
+- prompt only for `needs_user_approval` with a user-owned next action and exact
+  approval projection;
+- batch compatible exact projections without merging independent decision types or
+  broadening any request-to-subject mapping.
+
+Keep the review non-authoritative and inside this phase. Configuration can narrow an
+eligible signed activation but cannot grant by itself. Session statements and
+session-audit projections may inform wording only; they cannot change a decision.
+An optional read-only reviewer may group and explain exact projections, but only
+`$manage-agent-authority` may change `should_prompt` by producing and re-evaluating
+authoritative state.
+
 ## Deterministic construction
 
 Construct the packet from owner bindings instead of copying fields by hand:
@@ -83,7 +108,9 @@ Use this sequence without adding a phase:
 
 ```text
 exact request + exact subject + operation manifest
-  -> manage-agent-authority evaluate
+  -> manage-agent-authority resolve (evaluate + exact reuse/mode-child review)
+  -> should_prompt=false: follow the system-owned next action and re-resolve
+  -> should_prompt=true: deduplicate and batch compatible exact projections
   -> closed decision artifact
   -> if allowed orchestrated mutation: inspect executable closure over the exact operation batch
   -> selected-successor owner: hold its exact closure epoch through reservation

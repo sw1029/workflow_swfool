@@ -134,9 +134,23 @@ def _generic_authority_packet(model: dict[str, Any]) -> dict[str, Any]:
         "target": "authority",
         "authority_policy": "owner_artifact_only",
         "required_inputs": [
-            "authority-owner decision artifact",
+            "producer-owned compiled operation binding",
+            "authority-owner resolve projection before any user prompt",
+            "exact wait/reuse or signed authority-interaction binding when available",
             "reservation and verification when mutation is allowed",
         ],
+        "approval_ux": {
+            "prompt_gate": "manage-agent-authority:resolve.should_prompt",
+            "reuse_system_next_action_first": True,
+            "deduplicate_by": [
+                "wait_identity",
+                "effective_authority_fingerprint",
+            ],
+            "batch_only_exact_compatible_projections": True,
+            "general_config_is_authority": False,
+            "session_statement_is_authority": False,
+            "reviewer_role": "optional_read_only_presentation",
+        },
         "required_outputs": list(TARGET_COMPILE_SPECS["authority"].required_fields),
         "model_context_binding": {"state_fingerprint": state_fingerprint(model, roles)},
     }

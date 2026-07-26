@@ -7,11 +7,11 @@ description: Run a governed repository task cycle when work requires ordered dis
 
 ## Overview
 
-Use this skill to run one governed repository task cycle from task discovery through implementation routing, execution, review, loopback, current-task validation and issue handling, next-task derivation, Git finalization, dashboard/report rendering, and closeout.
+Run one governed repository task cycle from discovery through closeout.
 
 Use `authority.operations.json` with [authority-boundary-contract.md](references/authority-boundary-contract.md) and the shared [authority v2 contract](../manage-agent-authority/references/authority-v2-contract.md). Inspection is authority-free; worker dispatch, external dispatch, and task-topology mutation use distinct exact operations and may not share or infer a grant. A topology effect first uses the ordinary `mutate_task_topology` grant. Its post-effect activation may use `activate_task_topology_settlement` only as a bound-lifecycle operation after the exact reservation, pre-commit verification, execution-result receipt, and owner consume receipt all validate; it is not a second authority source.
 
-The main agent is the coordinator. Each called skill owns its own implementation, validation, logging, indexing, schema, issue, and commit behavior. Keep the orchestrator summary-first: pass compact packets, IDs, paths, verdicts, blockers, and changed-file lists rather than loading implementation bodies into the main session.
+Coordinate through compact packets, IDs, paths, verdicts, blockers, and changed-file lists. Each called skill retains its implementation, validation, logging, indexing, schema, issue, and commit ownership.
 
 ## Reference Map
 
@@ -22,6 +22,7 @@ Read these first-level references only when the corresponding part of the cycle 
 - [workflow-interface-contracts.md](references/workflow-interface-contracts.md): skill handoff surfaces, packet ownership, required fields, helper-script inputs/outputs, fail-closed rules, and downstream consumers.
 - [compiler-first-efficiency.md](references/compiler-first-efficiency.md): preparation-v3, the closed executor registry, semantic-only model boundaries, exact routing receipts, compact result hydration, body-free publication, lazy context, compatibility, and efficiency evidence.
 - [authority-boundary-contract.md](references/authority-boundary-contract.md): closed authority phase packet, independent decision axes, owner decision/reservation/pre-dispatch/pre-commit/settlement bindings, scoped terminal-wait replay, and legacy migration.
+- [approval-ux-review.md](references/approval-ux-review.md): pre-prompt resolution, signed-mode reuse, wait deduplication, batching, and reviewer limits.
 - [cycle-artifacts.md](references/cycle-artifacts.md): ledger, result-contract, optional noncanonical session-audit sidecar, visible-increment, validation-scope, evidence-cache, dashboard/profile, and running-execution artifact contracts.
 - [mode-profile-contract.md](references/mode-profile-contract.md): bounded internal capture/consume/reaction composition, activation provenance, reducing local overrides, and the exact derived-metadata repair allowlist. The executable registry is [mode-profiles.json](references/mode-profiles.json).
 - [repo-local-skill-adapters.md](references/repo-local-skill-adapters.md): repository-local `.codex/skills/` adapter scan, manifest-v3 recursive closure and typed-hook contracts, architecture audit, consumption, creation/update routing, validation, and `$skill-creator` compliance.
@@ -194,6 +195,8 @@ When `$audit-session-governance` is enabled, resolve its tracked mode profile fi
 Initialize ledger storage in `initialization.json`; this is not a stage event. For a new v2 cycle, let `stage advance --apply` compile and publish `context`, then use `stage prepare`, exact owner-result/semantic/routing bindings with `stage submit`, and bounded `stage advance` for later stages. Do not call the public ledger append, generic `packet`, or a typed producer with a full event dictionary. Validate accumulated ordering state with `transition --stage ...` and important subskill results with `result-contract`, supplying `--context` whenever pending long-run state is in scope and using `block` for acceptance task-revision provenance, final report, running-state, issue lifecycle provenance, candidate deletion, task-pack promotion provenance, and commit gates.
 
 At the existing `authority` boundary, follow [authority-boundary-contract.md](references/authority-boundary-contract.md). Consume the authority owner's immutable decision. Before an allowed mutation, require its exact reservation and immutable `pre_dispatch` verification, then validate `--target authority --mode block`; an observe-only operation records reservation/preflight as `not_applicable`. Do not dispatch from an unknown operation manifest, implicit grant union, legacy packet, or caller boolean.
+
+Before prompting, apply [approval-ux-review.md](references/approval-ux-review.md): resolve, reuse, deduplicate, and batch exact operations; never infer authority from config or conversation. Keep this inside `authority`.
 
 Use [workflow-interface-contracts.md](references/workflow-interface-contracts.md) to determine producer/consumer ownership for `gate_satisfiability`, `failure_autopsy_packet`, `qualitative_review_packet`, `anti_loop_progress_gate`, `loop_breaker_packet`, `terminal_escalation_gate`, `terminal_blocker`, `repo_skill_adapter_packet`, and `repo_skill_gap_packet`.
 

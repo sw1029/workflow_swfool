@@ -55,3 +55,10 @@ When Part K fields are present, surface unresolved `expectation_lineage_stale`, 
 When Part L fields are present, surface unresolved `pass_on_stale_lane`, `decision_metadata_revision`, `axis_starved_by_missing_producer`, restrictive `portfolio_quota_exceeded`, `unreachable_within_cycle`, `basis_overclaim`, and nonzero `surface_field_defect_matrix` under `남은 blocker` or the affected `progress axes`. Do not mark `complete_verified` while any of those fields blocks current-lane capability, measurement/adoption, producer-supply, long-run/throughput, metric-basis, or qualitative-review consumption.
 
 If commit evidence matters, add it after the required fields as `추가 참고`. Keep implementation and closeout commits separate. Do not backfill a closeout commit hash into a report file that is part of that same closeout commit; mention that hash only in the user-facing summary or a later artifact.
+
+When an approval UX review projection is present, add a compact `승인 UX` entry
+under `추가 참고`: reviewed requests, reused states, signed-mode children, system
+recoveries, deduplicated waits, remaining prompts, batched prompt groups, and reviewer
+agent count. Report only observed transitions and consolidations; do not estimate
+counterfactual prompts avoided. Never include config contents, session text, approval
+projection bodies, credentials, tokens, or secrets.

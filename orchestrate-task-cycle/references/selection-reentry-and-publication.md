@@ -519,6 +519,26 @@ canonical initialization owns one current cycle/task pair and cannot reproduce t
 historical source-cycle plus prospective selected-task scope or the bundle-owned
 idempotency keys.
 
+Before opening that root bridge, apply
+[approval-ux-review.md](approval-ux-review.md). When one current signed
+authority-interaction activation covers all three exact topology requests, reuse the
+T1 projection and run the owner continuation without a root-materialization pair:
+
+```bash
+python3 -P -m orchestrate_task_cycle selected-successor --root . \
+  resume-authority \
+  --approval-projection-ref <approval-projection-ref> \
+  --approval-projection-sha256 <approval-projection-raw-sha256> \
+  --at <RFC3339-T2> --skills-root <co-located-skills-root>
+```
+
+The owner may materialize one exact mode child per request, re-evaluate all three,
+and continue only if the complete set becomes allowed. Configuration without a
+current signed activation is not eligible. Do not call the low-level child
+materializer directly, infer a mixed subset, or treat a partial/blocked continuation
+as approval. If the exact complete set is not mode-eligible, retain the original
+projection and use the root bridge below; do not ask once per topology operation.
+
 Seal the exact projection as a schema-v2 owner-projected operation batch:
 
 ```bash
