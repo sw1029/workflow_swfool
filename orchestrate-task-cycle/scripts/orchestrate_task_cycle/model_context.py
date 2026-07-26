@@ -8,6 +8,12 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .acceptance_contract import consumer_projection
+from .external_advice_alignment import (
+    advice_projection_status,
+    bounded_alignment_projection,
+    nonnegative_count,
+    project_packet_advice_items,
+)
 from .git_worktree_identity import (
     bind_git_worktree_identity,
     legacy_git_changed_paths,
@@ -169,67 +175,51 @@ def _goal_projection(context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _directive_projection(record: dict[str, Any]) -> dict[str, Any]:
-    return {field: record.get(field) for field in DIRECTIVE_FIELDS if field in record}
-
-
-def _advice_projection(context: dict[str, Any]) -> dict[str, Any]:
+def _advice_projection(context: dict[str, Any], max_paths: int) -> dict[str, Any]:
     advice = (
         context.get("external_advice")
         if isinstance(context.get("external_advice"), dict)
         else {}
     )
-    packet = (
-        advice.get("normalized_packet")
-        if isinstance(advice.get("normalized_packet"), dict)
-        else None
+    value = advice.get("normalized_packet")
+    packet = value if isinstance(value, dict) else None
+    alignment = bounded_alignment_projection(
+        advice.get("registry_filesystem_alignment"), max_paths
     )
     if packet is None:
+        active_count = nonnegative_count(advice.get("active_count"), 0)
         return {
-            "status": advice.get("normalized_packet_status", "unavailable"),
-            "active_count": int(advice.get("active_count") or 0),
+            "status": advice_projection_status(
+                advice.get("normalized_packet_status"),
+                packet_present=False,
+                active_count=active_count,
+                item_count=0,
+                incomplete=False,
+                alignment=alignment,
+            ),
+            "active_count": active_count,
+            "item_count": 0,
             "actionable_clause_ids": [],
             "items": [],
+            "registry_filesystem_alignment": alignment,
         }
-    actionable = {str(item) for item in packet.get("actionable_clause_ids") or []}
-    items: list[dict[str, Any]] = []
-    for item in packet.get("used_advice") or []:
-        if not isinstance(item, dict):
-            continue
-        fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
-        directives = (
-            fields.get("directives")
-            if isinstance(fields.get("directives"), list)
-            else []
-        )
-        items.append(
-            {
-                "advice_id": item.get("advice_id"),
-                "path": item.get("path"),
-                "source_digest": item.get("source_digest"),
-                "normalized_content_digest": item.get("content_sha256"),
-                "fidelity_status": fields.get("fidelity_status"),
-                "raw_direct_reference_required": fields.get(
-                    "raw_direct_reference_required"
-                ),
-                "directives": [
-                    _directive_projection(record)
-                    for record in directives
-                    if isinstance(record, dict)
-                    and str(record.get("directive_id") or "") in actionable
-                ],
-            }
-        )
-    active_count = int(advice.get("active_count") or len(items))
+    items = project_packet_advice_items(packet, DIRECTIVE_FIELDS)
+    active_count = nonnegative_count(advice.get("active_count"), 0) if (
+        "active_count" in advice
+    ) else len(items)
     incomplete = list(packet.get("incomplete_normalization_advice_ids") or [])
-    status = "available"
-    if incomplete:
-        status = "incomplete"
-    elif active_count != len(items):
-        status = "registry_filesystem_mismatch"
+    status = advice_projection_status(
+        advice.get("normalized_packet_status"),
+        packet_present=True,
+        active_count=active_count,
+        item_count=len(items),
+        incomplete=bool(incomplete),
+        alignment=alignment,
+    )
     return {
         "status": status,
         "active_count": active_count,
+        "item_count": len(items),
         "not_goal_truth": True,
         "execution_plan_eligible": False,
         "normalized_packet_use": packet.get("normalized_packet_use"),
@@ -242,6 +232,7 @@ def _advice_projection(context: dict[str, Any]) -> dict[str, Any]:
             packet.get("duplicate_actionable_clause_ids") or []
         ),
         "advice_packet_digest": packet.get("advice_packet_digest"),
+        "registry_filesystem_alignment": alignment,
         "items": items,
     }
 
@@ -348,7 +339,7 @@ def project_model_context(
 
     if max_paths < 1:
         raise ValueError("max_paths must be positive")
-    advice = _advice_projection(context)
+    advice = _advice_projection(context, max_paths)
     diagnostics = _diagnostic_bindings(
         {
             key: context.get(key)
@@ -405,7 +396,7 @@ def project_model_context(
         )
     )
     stop_reason = None
-    if advice.get("active_count", 0) and advice.get("status") != "available":
+    if advice.get("status") not in {"available", "not_applicable"}:
         stop_reason = "awaiting_advice_normalization"
     elif essential_count > MAX_ESSENTIAL_ITEMS or essential_bytes > MAX_ESSENTIAL_BYTES:
         stop_reason = "model_context_budget_exceeded"

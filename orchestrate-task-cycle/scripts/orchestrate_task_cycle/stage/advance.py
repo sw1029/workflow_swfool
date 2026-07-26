@@ -25,6 +25,30 @@ from .v2_context import collect_selected_context
 from .v2_specs import SYSTEM_STEPS
 
 
+def _blocked_preparation(
+    preparation: dict[str, Any],
+    *,
+    actions: list[dict[str, Any]] | None = None,
+    apply: bool = False,
+) -> dict[str, Any] | None:
+    """Propagate a compiler stop before dispatching or awaiting a stage."""
+
+    next_action = preparation.get("next_action")
+    if not isinstance(next_action, dict) or next_action.get("kind") != "stop":
+        return None
+    output: dict[str, Any] = {
+        "status": "block",
+        "stop_reason": next_action.get("reason"),
+        "preparation": preparation,
+        "model_call_count": 0,
+        "model_visible_bytes": 0,
+        "applied": bool(actions and apply),
+    }
+    if actions is not None:
+        output["actions"] = actions
+    return output
+
+
 def execute_deterministic_stage(
     root: str | Path,
     cycle_id: str,
@@ -59,6 +83,9 @@ def execute_deterministic_stage(
         raise ValueError("deterministic dispatcher requires preparation schema v3")
     if preparation.get("executor_kind") != "deterministic":
         raise ValueError("stage target is not a deterministic executor")
+    stopped = _blocked_preparation(preparation)
+    if stopped:
+        return stopped
     if not apply:
         return {
             "status": "ready",
@@ -119,6 +146,29 @@ def _blocked(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for event in latest.values()
         if str(event.get("status") or "").lower() in {"blocked", "failed"}
     ]
+
+
+def _prepare_target(
+    workspace: Path,
+    cycle_id: str,
+    target: str,
+    workflow_mode: str,
+    max_files: int,
+    max_paths: int,
+    schema_version: int,
+) -> dict[str, Any]:
+    from .service import prepare_stage
+
+    return prepare_stage(
+        workspace,
+        cycle_id,
+        target,
+        workflow_mode=workflow_mode,
+        max_files=max_files,
+        max_paths=max_paths,
+        preparation_schema_version=schema_version,
+        persist_compiler_artifacts=False,
+    )
 
 
 def _deterministic_disposition(
@@ -262,7 +312,7 @@ def advance_stage(
     max_paths: int = 40,
     preparation_schema_version: int | None = None,
 ) -> dict[str, Any]:
-    from .service import _next_target, _task_id, prepare_stage
+    from .service import _next_target, _task_id
 
     if max_steps < 1 or max_steps > 32:
         raise ValueError("max_steps must be between 1 and 32")
@@ -356,16 +406,16 @@ def advance_stage(
         )
         if isinstance(deterministic, dict):
             return deterministic
-        preparation = prepare_stage(
-            workspace,
-            cycle_id,
-            target,
-            workflow_mode=workflow_mode,
-            max_files=max_files,
-            max_paths=max_paths,
-            preparation_schema_version=schema_version,
-            persist_compiler_artifacts=False,
+        preparation = _prepare_target(
+            workspace, cycle_id, target, workflow_mode, max_files, max_paths, schema_version
         )
+        stopped = _blocked_preparation(
+            preparation,
+            actions=actions,
+            apply=apply,
+        )
+        if stopped:
+            return stopped
         if deterministic:
             stopped = _execute_prepared(
                 workspace,

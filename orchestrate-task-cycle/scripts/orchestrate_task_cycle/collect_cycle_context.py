@@ -8,6 +8,7 @@ from typing import Any
 from record_agent_work_log.integrity import inspect_agent_log_store
 
 from .cycle_ledger import read_current_expanded, read_events
+from .external_advice_alignment import advice_inventory_status, collect_advice_alignment
 from .result_contract.session_audit import collect_session_audit_directory
 from .selection_publication import publication_status
 from .task_pack.context_projection import collect_task_pack_projection
@@ -266,7 +267,12 @@ def collect_contract_dir(root: Path, name: str, max_files: int) -> dict[str, Any
     }
 
 
-def collect_external_advice(root: Path, max_files: int) -> dict[str, Any]:
+def collect_external_advice(
+    root: Path,
+    max_files: int,
+    *,
+    max_paths: int | None = None,
+) -> dict[str, Any]:
     directory = root / ".agent_advice"
     suffixes = {".md", ".json", ".jsonl"}
     files = files_with_suffixes(directory, suffixes)
@@ -275,37 +281,39 @@ def collect_external_advice(root: Path, max_files: int) -> dict[str, Any]:
         for path in files
         if path.suffix.lower() == ".md" and path.name.lower() != "index.md"
     ]
-    counts: dict[str, int] = {}
-    active_files: list[Path] = []
-    for path in markdown:
-        status = classify_text_status(path, default="active")
-        relative_parts = (
-            {part.lower() for part in path.relative_to(directory).parts}
-            if directory in path.parents
-            else set()
-        )
-        if "active" in relative_parts:
-            status = "active"
-        elif "applied" in relative_parts:
-            status = "applied"
-        elif "deferred" in relative_parts:
-            status = "deferred"
-        elif "rejected" in relative_parts:
-            status = "rejected"
-        elif "raw" in relative_parts:
-            status = "raw"
-        counts[status] = counts.get(status, 0) + 1
-        if status == "active":
-            active_files.append(path)
     normalized_packet: dict[str, Any] | None = None
     normalization_error: str | None = None
-    if (directory / "index.jsonl").is_file():
+    index_exists = (directory / "index.jsonl").is_file()
+    if index_exists:
         try:
             from manage_external_advice.rendering import advice_packet
 
             normalized_packet = advice_packet(root)
         except (ImportError, OSError, SystemExit, ValueError) as exc:
             normalization_error = type(exc).__name__
+    alignment = collect_advice_alignment(
+        root,
+        directory,
+        normalized_packet,
+        index_exists=index_exists,
+        max_paths=max_paths if max_paths is not None else max_files,
+    )
+    counts: dict[str, int] = {}
+    for path in markdown:
+        status = advice_inventory_status(root, directory, path, alignment)
+        status = status or classify_text_status(path, default="active")
+        counts[status] = counts.get(status, 0) + 1
+    selected_active = (
+        list(alignment.canonical_existing_files)
+        if normalized_packet is not None
+        else list(alignment.filesystem_active_files)
+    )
+    active_count = (
+        alignment.registry_active_count
+        if alignment.registry_active_count is not None
+        else len(alignment.filesystem_active_files)
+    )
+    alignment_status = alignment.alignment["status"]
     return {
         "directory": file_info(root, directory),
         "index_jsonl": file_info(root, directory / "index.jsonl"),
@@ -313,16 +321,19 @@ def collect_external_advice(root: Path, max_files: int) -> dict[str, Any]:
         "index_md": file_info(root, directory / "index.md"),
         "count": len(markdown),
         "status_counts": counts,
-        "active_count": len(active_files),
-        "active_files": limited_files(root, active_files, max_files),
+        "active_count": active_count,
+        "registry_active_count": alignment.registry_active_count,
+        "filesystem_active_count": len(alignment.filesystem_active_files),
+        "active_files": limited_files(root, selected_active, max_files),
         "latest_files": limited_files(root, markdown, max_files),
         "normalized_packet": normalized_packet,
         "normalized_packet_status": (
             "available"
             if normalized_packet is not None
-            else ("not_applicable" if not active_files else "unavailable")
+            else ("not_applicable" if alignment_status == "not_applicable" else "unavailable")
         ),
         "normalization_error_class": normalization_error,
+        "registry_filesystem_alignment": alignment.alignment,
     }
 
 

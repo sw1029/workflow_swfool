@@ -31,8 +31,25 @@ def _empty_advice(root: Path) -> dict[str, Any]:
         "directory": file_info(root, directory),
         "index_jsonl": file_info(root, directory / "index.jsonl"),
         "active_count": 0,
+        "registry_active_count": 0,
+        "filesystem_active_count": 0,
+        "active_files": [],
         "normalized_packet": None,
         "normalized_packet_status": "not_applicable",
+        "registry_filesystem_alignment": {
+            "status": "not_applicable",
+            "missing_count": 0,
+            "unexpected_count": 0,
+            "invalid_registry_path_count": 0,
+            "duplicate_registry_path_count": 0,
+            "ignored_nonactive_count": 0,
+            "active_metadata_conflict_count": 0,
+            "missing_paths": [],
+            "unexpected_paths": [],
+            "ignored_nonactive_paths": [],
+            "active_metadata_conflict_paths": [],
+            "paths_truncated": False,
+        },
     }
 
 
@@ -187,7 +204,7 @@ def collect_selected_context(
             publication_status(root) if "selection" in selectors else None
         ),
         "external_advice": (
-            collect_external_advice(root, max_files)
+            collect_external_advice(root, max_files, max_paths=max_paths)
             if "advice" in selectors
             else _empty_advice(root)
         ),

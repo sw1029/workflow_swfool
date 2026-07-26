@@ -44,6 +44,11 @@ model-visible bytes.
 - Collect context through target-declared selectors. Goal and selection-publication
   state are separate selectors. Do not read Git, task inventory, diagnostics, session
   audit, validation, schema, issue, goal, or selection state for unrelated targets.
+- Let the normalized external-advice registry packet own active identity. Reconcile its
+  complete `used_advice[].path` set against direct `active/*.md` files before truncating
+  diagnostics. Exclude only explicit non-active compatibility pointers; journal and
+  intake snapshots are noncanonical. Missing, unexpected, invalid, duplicate, or
+  metadata-conflicting paths block while bounded path lists remain body-free.
 - Keep a work order at or below 128 KiB and a v2 preparation at or below 256 KiB.
 - Persist context, work orders, and canonical results by content digest; reference them
   from preparations, ledger events, and current projections.
@@ -103,6 +108,11 @@ cycle-efficiency analysis, dashboard rendering, and report assembly. The dispatc
 loads the exact machine-input binding, validates the native envelope through the target
 adapter, writes an exact owner-result CAS artifact, and submits through the ordinary
 result and transition gates. It does not accept raw argv. Dry-run performs no write.
+
+After every target preparation, consume `next_action.kind=stop` before returning an
+owner wait or dispatching a deterministic renderer. Propagate the exact reason as a
+top-level block, preserve only already-applied system actions, and report zero new
+model/renderer work.
 
 A native deterministic renderer may retain its own envelope. Register a target-specific
 adapter that validates the exact envelope fields, scope, and internal content digest
