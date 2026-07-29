@@ -10,6 +10,7 @@ from .collections import (
     evidence_paths,
     latest_value,
     long_run_events,
+    retention_inventory,
     values,
 )
 from .constants import AXIS_FIELDS, PART_L_M_FIELDS, VERDICT_AXIS_FIELDS
@@ -260,6 +261,11 @@ class DashboardResultStage:
             if event.get("step") == "issue"
         ]
         findings = _dashboard_findings(state)
+        retention_summary = retention_inventory(
+            state.inputs.workspace_root,
+            events,
+            cycle_id=state.inputs.cycle_id,
+        )
         projection = finalization.authoritative_projection
         receipt = finalization.receipt
         dashboard_status = (
@@ -315,6 +321,7 @@ class DashboardResultStage:
             "unchanged_ref_count": len(unchanged_refs),
             "unchanged_refs": unchanged_refs[-50:],
             "lineage_findings": lineage_findings,
+            "retention_summary": retention_summary,
             "blockers": state.blockers,
             "findings": findings,
         }

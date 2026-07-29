@@ -6,6 +6,17 @@
 
 이 섹션은 각 스킬이 어떤 입력을 읽고, 어떤 판단을 하며, 어떤 산출물을 만들고, 어느 다음 스킬로 넘어가는지 확인하기 위한 흐름도이다.
 
+<!-- workflow-docs:phase-flow:start -->
+### Canonical normal-cycle phase flow (31)
+
+아래 순서는 runtime ledger registry에서 생성된다.
+
+```mermaid
+flowchart LR
+  context --> authority --> repo_skill_adapter_scan --> acceptance --> route_plan --> validation_scope_plan --> validation_set_plan --> governance --> result_contract --> repo_skill_adapter_validate --> ledger_append --> code_structure_audit --> run --> qualitative_review --> loopback_audit --> validation_set_build --> visible_increment --> repo_skill_gap_analysis --> cycle_efficiency_profile --> validation_scope_finalize --> index_pre_validate --> validate --> issue --> schema_pre_derive --> derive --> schema_post_derive --> index --> commit --> dashboard --> report --> closeout_commit
+```
+<!-- workflow-docs:phase-flow:end -->
+
 - Mermaid 블록은 렌더링 가능한 다이어그램이다.
 - 순수 텍스트 블록은 Mermaid 렌더링 없이도 같은 논리를 읽을 수 있는 흐름도이다.
 - `.agent_goal/*.md`는 장기 목표/권한/규칙의 GT로 취급한다.
@@ -29,17 +40,18 @@
 - 장기 실행은 새 canonical phase가 아니라 `step: run`의 분기이다. `event_kind: long_run_launch|long_run_monitor|long_run_harvest|long_run_finalize`와 `long_run_role: launch|monitor|harvest|finalize`를 기록하며, `running`과 `completed_pending_validation`은 성공이 아니라 남은 harvest/validation의 증거이다.
 - terminal-wait 재진입은 새 canonical phase나 전체 cycle이 아니라 pre-cycle selection boundary이다. authority-settled current baseline을 `selection-tick`이 재검증하고, 동일 입력은 `no_op`, 미완료 publication은 `recovery_required`, unjournaled head/lineage drift는 `drift_blocked`, exact premise 또는 baseline에 묶인 evidence-class 변화만 `selection_required`로 분기한다. successor가 선택되면 journal 기반 `selection-publication`으로 `task.md`를 마지막에 노출하고, 다시 wait하면 persisted selection receipt로 trigger `B`를 safe baseline `C`로 acknowledge한 뒤 authority-settled terminal-wait baseline을 CAS 활성화한다.
 - 권한 실행 경계는 스킬 전체가 아니라 각 `authority.operations.json`의 versioned operation과 `authorization_mechanism`이다. `grant` operation의 allowed mutation만 decision → reserve → pre-dispatch verification → closed authority packet → initial pre-commit verification → 선택적 owner PREPARE → current/pre-commit revalidation → effect → consume/release/quarantine 경로를 사용한다. PREPARE/activation journal은 해당 operation owner가 계약으로 선언한 경우에만 삽입한다. `typed_source_approval`과 `bound_lifecycle_artifact`는 각각 exact source/lifecycle verifier가 소유하며, `none`은 `not_applicable`로 처리한다. authority·local resolution·external input·risk/cost·goal truth 축은 서로 대체하지 않는다.
-- 스킬 실행 진입점은 스킬별 underscore 패키지의 `python3 -m <package> <command>` 형식으로 통일한다. 평면 `scripts/*.py` 호환 shim은 두지 않으며, 패키지 내부는 명시적 import와 정적 명령 레지스트리를 사용한다.
+- cross-owner 공개 진입점은 `orchestrate_task_cycle workflow <owner> ...` launcher를 우선한다. owner-local 직접 호출은 완전한 dependency root를 이미 공급한 compatibility/internal 경로이며, 평면 `scripts/*.py` shim은 두지 않는다.
 
 ### 스크립트 모듈 아키텍처
 
-- 각 `SKILL.md`는 자신의 `scripts/` 디렉터리를 `PYTHONPATH`에 추가하는 composition root이며, 외부 공개 진입점은 패키지의 `__main__.py` 하나이다.
+- 공개 launcher는 orchestrator의 `scripts/` 경로 하나에서 owner별 dependency set을 결정한다. 각 패키지의 `__main__.py`는 owner-local compatibility 진입점으로 유지한다.
 - 루트 명령은 정적 `CommandSpec` 레지스트리에서 명시적으로 선택한다. 명령 이름 중복은 import 시 차단하고, 런타임 파일 탐색이나 `globals()` 기반 자동 등록은 사용하지 않는다.
 - 상태 저장과 검증은 Repository/Unit-of-Work 경계로 분리하고, 분석 흐름은 작은 Stage/Strategy를 조합하는 Pipeline으로 구성한다. 상속은 상태 공유용 mixin 대신 안정된 추상 계약이나 `Protocol`이 실제 대체 가능성을 제공할 때만 사용한다.
 - 생산자와 독립 검증자는 공개 스키마와 content-bound receipt를 경계로 상호작용한다. 예외적으로 session-audit consumer는 source parity를 재현하기 위해 producer의 `validate_packet`을 지연 호출하지만, 그 replay를 독립 신뢰나 verdict 승격으로 취급하지 않고 consumer-owned schema/source/canonical-ref 검사와 함께 advisory로 제한한다.
 - 기능별 하위 패키지는 `api`/`cli` 또는 `command_registry` facade, 도메인 서비스, 저장소, 검증기, 렌더러를 분리한다. 공용 `utils.py`, 번호·버전 접미사 shard, wildcard import, 내부 `sys.path` 수정은 금지한다.
 - 구조 회귀 테스트는 평면 production 진입점 부재, 임의 작업 디렉터리의 `python3 -m` 실행, 파일·함수 크기 상한, 정적 import/명령 레지스트리, 기존 출력·스키마 회귀를 함께 확인한다.
 
+<!-- workflow-docs:command-table:start -->
 | 스킬 | 공개 패키지 | 루트 명령 |
 |---|---|---|
 | `audit-cycle-loopback` | `audit_cycle_loopback` | `evaluate` |
@@ -50,13 +62,23 @@
 | `manage-external-advice` | `manage_external_advice` | `registry` |
 | `manage-task-state-index` | `manage_task_state_index` | `index`, `migrate`, `verify-migration` |
 | `normalize-acceptance-and-demo` | `normalize_acceptance_and_demo` | `identity` |
-| `orchestrate-task-cycle` | `orchestrate_task_cycle` | `ledger`, `transition`, `packet`, `context`, `report`, `dashboard`, `result-contract`, `task-pack`, `progress-loop`, `gt-conflict`, `evidence-cache`, `mode-profile`, `model-effort`, `monitor`, `output-delta`, `efficiency`, `visible-increment`, `code-structure`, `changed-surface`, `validation-scope`, `selection-tick`, `selection-decision-receipt`, `selection-publication`, `terminal-wait-baseline`, `exact-subject-premise`, `repo-adapter`, `authority-packet` |
+| `orchestrate-task-cycle` | `orchestrate_task_cycle` | 33개: `ledger`, `transition`, `packet`, `context`, `report`, `dashboard`, `result-contract`, `task-pack`, `progress-loop`, `gt-conflict`, `evidence-cache`, `mode-profile`, `model-effort`, `monitor`, `output-delta`, `efficiency`, `visible-increment`, `code-structure`, `changed-surface`, `validation-scope`, `selection-tick`, `selection-decision-receipt`, `authority-reentry`, `selection-publication`, `selected-successor`, `executable-closure`, `terminal-wait-baseline`, `exact-subject-premise`, `repo-adapter`, `authority-packet`, `stage`, `workflow`, `session` |
 | `plan-validation-scope` | `plan_validation_scope` | `changed-surface`, `plan`, `finalize` |
 | `record-agent-work-log` | `record_agent_work_log` | `write`, `migrate`, `verify-migration` |
 | `run-task-code-and-log` | `run_task_code_and_log` | `failure-autopsy` |
 | `validate-task-completion` | `validate_task_completion` | `collect-evidence` |
+<!-- workflow-docs:command-table:end -->
 
-각 스킬은 `PYTHONPATH="$SKILLS_ROOT/<skill>/scripts" python3 -m <package> <command>`로 호출한다. 다른 스킬의 공개 API를 소비하는 경우 해당 스킬의 `scripts/` 루트만 `PYTHONPATH`에 추가한다.
+공개 cross-owner 호출은 clean environment에서 다음 launcher를 사용한다.
+
+```bash
+SKILLS_ROOT="${CODEX_HOME:-$HOME/.codex}/skills"
+PYTHONPATH="$SKILLS_ROOT/orchestrate-task-cycle/scripts" \
+  python3 -P -m orchestrate_task_cycle workflow cycle --help
+```
+
+`python3 -P -m <package> <command>` 직접 호출은 caller가 필요한 모든 `scripts/` root를 이미
+공급한 compatibility/internal 경로로만 유지한다.
 
 #### 확장 지점과 적용 규칙
 
@@ -77,7 +99,7 @@ flowchart TB
   Skill --> Main --> Registry
 
   subgraph Orchestrator["orchestrate_task_cycle composition root"]
-    OCLI["orchestrate_task_cycle/cli.py<br/>27개 정적 root command"]
+    OCLI["orchestrate_task_cycle/cli.py<br/>정적 root command registry"]
     Ledger["ledger<br/>cycle_ledger.py facade → ledger/*<br/>Repository + finalization Unit-of-Work"]
     Transition["transition<br/>validate_cycle_transition.py facade → transition/*<br/>ValidationContext + 21 ordered stages"]
     Packet["packet<br/>render_subskill_packet.py facade → packet/*<br/>PacketBuildContext + static target registry"]

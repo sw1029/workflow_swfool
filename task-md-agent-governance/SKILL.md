@@ -121,7 +121,7 @@ Use a repository-owned `code_convention_contract` when available from a repo-loc
    - Never delete still-open, partially resolved, or unverified miss files.
    - Use [task-miss-template.md](references/task-miss-template.md).
    - Do not store secrets, raw sensitive data, private tokens, or large copyrighted excerpts.
-   - After writing any miss/resolved/deleted report, run `$manage-task-state-index` `scan`, link each `miss-*` to the active `task-*`, and run `audit` before any archive/delete cleanup. Treat high-severity broken ID links as cleanup blockers.
+   - After writing any miss/resolved/deleted report, run `$manage-task-state-index` `scan`, link each `miss-*` to the active `task-*`, and run `audit --full-output` before any archive/delete cleanup. Treat high-severity broken ID links as cleanup blockers.
 
 7. Report outcome.
    - Summarize what was implemented, validation result, audit findings, and the saved miss report path.

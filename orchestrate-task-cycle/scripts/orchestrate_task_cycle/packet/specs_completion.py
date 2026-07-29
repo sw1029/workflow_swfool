@@ -188,6 +188,7 @@ def build_validate(ctx: PacketBuildContext) -> dict[str, Any]:
             "repository_audit": ctx.route("completion_review"),
             "oom_audit_when_relevant": ctx.route("completion_review"),
             "id_correction": ctx.route("id_index"),
+            "evidence_cache": "advisory check/store only; preserve hashed evidence paths/logs and never derive validation_verdict",
         },
         "required_inputs": [
             "implementation summary",
@@ -204,6 +205,7 @@ def build_validate(ctx: PacketBuildContext) -> dict[str, Any]:
             "advice application/rejection/defer status when task referenced advice",
             "Part J gates from validation-set, run, and loopback packets when present",
             "Part K gates from acceptance, run, loopback, report, and validation-set packets when present",
+            "evidence-cache check inputs for expensive deterministic validators, or a concrete not_applicable reason",
         ],
         "required_outputs": [
             "validation_verdict",

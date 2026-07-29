@@ -8,6 +8,10 @@ from .constants import DEFAULT_STEPS
 
 def render_summary(summary: dict[str, Any]) -> str:
     latest = summary["latest_event"]
+    retention = summary["retention_summary"]
+    inventory = retention["inventory"]
+    budget = retention["budget"]
+    overage = retention["overage"]
     lines = [
         f"# 사이클 대시보드: {summary['cycle_id']}",
         "",
@@ -19,6 +23,18 @@ def render_summary(summary: dict[str, Any]) -> str:
         f"- 검증 판정(validation_verdict): {summary['validation_verdict']}",
         f"- 진행 판정(progress_verdict): {summary['progress_verdict']}",
         f"- unchanged_ref 수: {summary['unchanged_ref_count']}",
+        "",
+        "## 보존 dry-run",
+        f"- 인벤토리 상태: {retention['inventory_status']}",
+        f"- 정책/예산 상태: {retention['policy_status']} / {retention['budget_status']}",
+        f"- 파일/bytes: {inventory['file_count']} / {inventory['bytes']}",
+        f"- packet 파일/bytes: {inventory['packet_count']} / {inventory['packet_bytes']}",
+        f"- 예산(files/bytes/age days): {budget['max_cycle_files']} / {budget['max_cycle_bytes']} / {budget['max_age_days']}",
+        f"- 초과(files/bytes/age files): {overage['files']} / {overage['bytes']} / {overage['age_expired_files']}",
+        f"- 중복 packet 그룹/잠재 bytes: {retention['duplicate_packets']['group_count']} / {retention['duplicate_packets']['potential_reclaim_bytes']}",
+        f"- 재생성 중간물 수/bytes: {retention['regenerable_intermediates']['file_count']} / {retention['regenerable_intermediates']['bytes']}",
+        f"- protected 수/bytes: {retention['protected']['file_count']} / {retention['protected']['bytes']}",
+        f"- symlink 제외/scan 오류: {inventory['skipped_symlink_count']} / {inventory['scan_error_count']}",
         "",
         "## 단계 상태",
     ]

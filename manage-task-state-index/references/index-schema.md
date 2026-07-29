@@ -99,17 +99,19 @@ A committed legacy migration is the sole exception to ordinary whole-file curren
 
 For the orchestration `index_pre_validate` stage, run
 `index --root . compile-prevalidation --at <RFC3339>`. The compiler performs the
-current global ID audit under the shared index read lock. It opens every path
+current-surface ID audit under the shared index read lock. It opens every path
 component with descriptor-relative no-follow semantics, enforces file/count/byte
-budgets plus one global visited-entry traversal budget before parsing, and
-captures the ledger, migration and agent-log
-sidecars, projection, `task.md`, every indexed path/snapshot, and every supported
-discovery root in a bounded Merkle manifest. The audit consumes a temporary
+budgets plus one visited-entry traversal budget before parsing, and captures the
+ledger, projection, `task.md`, sealed-migration sidecars, active task packs, and
+the exact paths/snapshots reachable from the current task graph in a scope-bound
+Merkle manifest. Unrelated historical files remain global-audit debt and do not
+stale this receipt. The append-only ledger may consume the existing total audit
+byte budget; every other file retains the per-file budget. The audit consumes a temporary
 view made only from those captured bytes; equal post-audit capture and a final
 pre-publication manifest check reject drift, symlink escape, and ABA-induced
 result/body mismatch. It publishes that manifest and one content-addressed
 `task_index.prevalidate.owner.v3` result with the derived snapshot
-ID/status/blockers/evidence. The stage loader re-runs the audit and full input
+ID/status/blockers/evidence. The stage loader re-runs the audit and current-surface
 capture at the bound timestamp and requires both canonical producer paths; a
 model-authored summary or a result whose task/artifact inputs drifted is rejected.
 A passing stage reports `index_status: snapshot_current`,
@@ -355,6 +357,8 @@ Use `PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/manage-task-state-index/scri
 - `.task/task_pack` JSON queues present on disk but not represented in the index,
 - multiple active task packs,
 - missing or stale `.task/index.md`.
+
+Audit computes the full global result but prints a bounded summary by default. The summary always includes every `current_surface_blocker` plus historical-debt counts and severity counts; use `--full-output` for the complete historical issue list. `--summary-only` remains accepted, and `--write-report` still writes full durable evidence.
 
 Audit output separates `current_surface_blockers` from `historical_debt`. Only missing current canonical ID, duplicate active alias, and broken current links block completion-oriented close; inactive immutable-history defects remain debt.
 

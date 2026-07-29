@@ -13,6 +13,7 @@ from .selection_decision_store import (
     closed_object as _closed,
     normalize_binding,
     read_bound_json,
+    seal_selection_artifact,
 )
 from .selection_synthesis import validate_selection_synthesis
 from .selection_tick_contract import validate_selection_tick_v2
@@ -188,9 +189,9 @@ def render_preliminary_selection_decision(
         normalized_task,
         synthesis["input_evidence_manifest_sha256"],
     )
-    decision_id = "preliminary-selection-" + canonical_sha256(core)[:24]
-    body = {**core, "decision_id": decision_id}
-    return {**body, "decision_sha256": canonical_sha256(body)}
+    return seal_selection_artifact(
+        core, "decision_id", "preliminary-selection-", "decision_sha256"
+    )
 
 
 def validate_preliminary_selection_decision(
@@ -237,9 +238,9 @@ def validate_preliminary_selection_decision(
         selected_task_id,
         evidence_digest,
     )
-    expected_id = "preliminary-selection-" + canonical_sha256(core)[:24]
-    body = {**core, "decision_id": expected_id}
-    sealed = {**body, "decision_sha256": canonical_sha256(body)}
+    sealed = seal_selection_artifact(
+        core, "decision_id", "preliminary-selection-", "decision_sha256"
+    )
     if decision != sealed:
         raise ValueError("derive selection decision integrity check failed")
     return sealed
@@ -302,9 +303,9 @@ def render_selection_decision_receipt(
         outcome,
         selected_task_id,
     )
-    receipt_id = "selection-decision-" + canonical_sha256(core)[:24]
-    body = {**core, "receipt_id": receipt_id}
-    return {**body, "receipt_sha256": canonical_sha256(body)}
+    return seal_selection_artifact(
+        core, "receipt_id", "selection-decision-", "receipt_sha256"
+    )
 
 
 def read_receipt_trigger_tick(root: Path, value: Any) -> dict[str, Any]:
@@ -389,9 +390,9 @@ def validate_selection_decision_receipt(
         outcome,
         selected_task_id,
     )
-    expected_id = "selection-decision-" + canonical_sha256(core)[:24]
-    body = {**core, "receipt_id": expected_id}
-    sealed = {**body, "receipt_sha256": canonical_sha256(body)}
+    sealed = seal_selection_artifact(
+        core, "receipt_id", "selection-decision-", "receipt_sha256"
+    )
     if receipt != sealed:
         raise ValueError("selection decision receipt integrity check failed")
     return sealed

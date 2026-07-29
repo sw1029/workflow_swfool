@@ -6,11 +6,11 @@ from pathlib import Path
 from typing import Any
 
 from .selection_decision_store import (
-    canonical_sha256,
     closed_object,
     normalize_binding,
     read_bound_bytes,
     read_bound_json,
+    seal_selection_artifact,
 )
 from .selection_synthesis import validate_selection_synthesis
 from .selection_trigger import validate_normal_cycle_trigger
@@ -223,9 +223,9 @@ def render_preliminary_selection_decision_v3_from_values(
         resolution,
         task_source,
     )
-    decision_id = "preliminary-selection-v3-" + canonical_sha256(core)[:24]
-    body = {**core, "decision_id": decision_id}
-    return {**body, "decision_sha256": canonical_sha256(body)}
+    return seal_selection_artifact(
+        core, "decision_id", "preliminary-selection-v3-", "decision_sha256"
+    )
 
 
 def validate_preliminary_selection_decision_v3(
@@ -287,9 +287,9 @@ def validate_preliminary_selection_decision_v3(
         resolution,
         task_source,
     )
-    expected_id = "preliminary-selection-v3-" + canonical_sha256(core)[:24]
-    body = {**core, "decision_id": expected_id}
-    sealed = {**body, "decision_sha256": canonical_sha256(body)}
+    sealed = seal_selection_artifact(
+        core, "decision_id", "preliminary-selection-v3-", "decision_sha256"
+    )
     if decision != sealed:
         raise ValueError("selection decision v3 integrity failed")
     return sealed
@@ -388,9 +388,9 @@ def render_selection_decision_receipt_v3_from_values(
         resolution,
         task_source,
     )
-    receipt_id = "selection-decision-v3-" + canonical_sha256(core)[:24]
-    body = {**core, "receipt_id": receipt_id}
-    return {**body, "receipt_sha256": canonical_sha256(body)}
+    return seal_selection_artifact(
+        core, "receipt_id", "selection-decision-v3-", "receipt_sha256"
+    )
 
 
 def validate_selection_decision_receipt_v3(
@@ -472,9 +472,9 @@ def validate_selection_decision_receipt_v3(
         resolution,
         task_source,
     )
-    expected_id = "selection-decision-v3-" + canonical_sha256(core)[:24]
-    body = {**core, "receipt_id": expected_id}
-    sealed = {**body, "receipt_sha256": canonical_sha256(body)}
+    sealed = seal_selection_artifact(
+        core, "receipt_id", "selection-decision-v3-", "receipt_sha256"
+    )
     if receipt != sealed:
         raise ValueError("selection decision receipt v3 integrity failed")
     return sealed

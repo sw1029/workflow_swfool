@@ -253,6 +253,7 @@ def build_run(ctx: PacketBuildContext) -> dict[str, Any]:
             "validation_profile": "current_only|affected_chain|full_chain from task/validation scope manifest",
             "running_status": "running is in-progress evidence, not success",
             "long_run_branch": "keep step=run and use event_kind long_run_launch|long_run_monitor|long_run_harvest|long_run_finalize",
+            "evidence_cache": "advisory check/store only; preserve hashed evidence paths/logs and never derive execution or validation truth",
         },
         "required_inputs": [
             "governance result",
@@ -260,7 +261,7 @@ def build_run(ctx: PacketBuildContext) -> dict[str, Any]:
             "task-declared command or explicit not_applicable/blocker reason",
             "validation scope manifest when present",
             "validation set root/oracle/split hashes when consuming an existing validation set",
-            "evidence-cache reuse candidate when present",
+            "evidence-cache check inputs or a concrete not_applicable reason",
             "long-running authorization and monitor/stop details when applicable",
         ],
         "required_outputs": [

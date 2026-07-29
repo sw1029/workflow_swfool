@@ -44,6 +44,16 @@ def canonical_sha256(value: object) -> str:
     return hashlib.sha256(canonical_bytes(value)).hexdigest()
 
 
+def seal_selection_artifact(
+    core: dict[str, Any],
+    id_field: str,
+    id_prefix: str,
+    digest_field: str,
+) -> dict[str, Any]:
+    body = {**core, id_field: id_prefix + canonical_sha256(core)[:24]}
+    return {**body, digest_field: canonical_sha256(body)}
+
+
 def closed_object(value: Any, keys: set[str], label: str) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != keys:
         raise ValueError(f"{label} requires exact fields {sorted(keys)}")
@@ -164,4 +174,5 @@ __all__ = (
     "normalize_binding",
     "read_bound_bytes",
     "read_bound_json",
+    "seal_selection_artifact",
 )

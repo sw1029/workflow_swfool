@@ -2,42 +2,11 @@ from __future__ import annotations
 
 import re
 
+from ..ledger.constants import CANONICAL_STEP_ORDER
 from ..result_contract.finalization import VERDICT_AXES
 
 
-DEFAULT_STEPS = [
-    "context",
-    "authority",
-    "repo_skill_adapter_scan",
-    "acceptance",
-    "route_plan",
-    "validation_scope_plan",
-    "validation_set_plan",
-    "governance",
-    "result_contract",
-    "repo_skill_adapter_validate",
-    "ledger_append",
-    "code_structure_audit",
-    "run",
-    "qualitative_review",
-    "loopback_audit",
-    "validation_set_build",
-    "visible_increment",
-    "repo_skill_gap_analysis",
-    "cycle_efficiency_profile",
-    "validation_scope_finalize",
-    "index_pre_validate",
-    "validate",
-    "issue",
-    "schema_pre_derive",
-    "derive",
-    "schema_post_derive",
-    "index",
-    "commit",
-    "dashboard",
-    "report",
-    "closeout_commit",
-]
+DEFAULT_STEPS = list(CANONICAL_STEP_ORDER)
 CANONICAL_STEPS = set(DEFAULT_STEPS)
 CYCLE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 

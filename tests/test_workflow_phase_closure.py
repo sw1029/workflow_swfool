@@ -10,6 +10,9 @@ from orchestrate_task_cycle import (
     render_subskill_packet as packets,
     validate_cycle_transition as transition,
 )
+from orchestrate_task_cycle.dashboard import constants as dashboard_constants
+from orchestrate_task_cycle.ledger.constants import CANONICAL_STEP_ORDER
+from orchestrate_task_cycle.report.constants import STAGE_ORDER
 from orchestrate_task_cycle.result_contract import api as result_contract
 from legacy_packet_test_support import build_unbound_legacy_packet
 from manage_task_state_index.state.prevalidation_compiler import (
@@ -136,8 +139,17 @@ def initialize_current_task_index(root: Path) -> None:
 
 
 def test_phase_order_is_identical_across_transition_dashboard_and_contract() -> None:
+    assert isinstance(CANONICAL_STEP_ORDER, tuple)
+    assert isinstance(cycle_ledger.DEFAULT_STEPS, list)
+    assert isinstance(transition.ORDER, list)
+    assert isinstance(dashboard.DEFAULT_STEPS, list)
+    assert isinstance(STAGE_ORDER, list)
+    assert tuple(cycle_ledger.DEFAULT_STEPS) == CANONICAL_STEP_ORDER
     assert transition.ORDER == EXPECTED_ORDER
     assert dashboard.DEFAULT_STEPS == EXPECTED_ORDER
+    assert dashboard_constants.DEFAULT_STEPS == EXPECTED_ORDER
+    assert STAGE_ORDER == EXPECTED_ORDER
+    assert result_contract.CANONICAL_LEDGER_STEPS is CANONICAL_STEP_ORDER
     assert list(result_contract.CANONICAL_LEDGER_STEPS) == EXPECTED_ORDER
 
 
@@ -177,14 +189,21 @@ def test_packet_routing_reference_is_workspace_relative_and_preindex_is_determin
 
 
 def test_packets_bind_validate_derive_dashboard_and_report_to_finalization_receipt() -> None:
+    run_packet = build_unbound_legacy_packet("run", {}, {})
     validate_packet = build_unbound_legacy_packet("validate", {}, {})
     derive_packet = build_unbound_legacy_packet("derive", {}, {})
     dashboard_packet = build_unbound_legacy_packet("dashboard", {}, {})
     report_packet = build_unbound_legacy_packet("report", {}, {})
 
     assert any("cycle_final_candidate" in item for item in validate_packet["required_outputs"])
+    assert any("evidence-cache" in item for item in run_packet["required_inputs"])
+    assert any("evidence-cache" in item for item in validate_packet["required_inputs"])
+    assert "advisory" in run_packet["routing"]["evidence_cache"]
+    assert "advisory" in validate_packet["routing"]["evidence_cache"]
     assert any("finalization_consumption" in item for item in derive_packet["required_outputs"])
     assert any("current_finalization.json" in item for item in dashboard_packet["required_inputs"])
+    assert any("retention_summary" in item for item in dashboard_packet["required_outputs"])
+    assert any("retention_summary" in item for item in report_packet["required_inputs"])
     assert any("authoritative_projection_digest convergence" in item for item in report_packet["required_outputs"])
 
 

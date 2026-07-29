@@ -79,6 +79,7 @@ def build_dashboard(ctx: PacketBuildContext) -> dict[str, Any]:
             "validation and progress verdicts/axes",
             "issue and commit results",
             "blockers, changed files, artifact/evidence paths",
+            "adapter/caller record_retention_policy budgets when supplied",
         ],
         "required_outputs": [
             "step: dashboard",
@@ -87,6 +88,7 @@ def build_dashboard(ctx: PacketBuildContext) -> dict[str, Any]:
             "event_count and explicit current_stage_event_count",
             "snapshot_status",
             "validation_verdict and progress_verdict",
+            "bounded read-only retention_summary with inventory, configured overage or fail-quiet nulls, duplicate packet candidates, regenerable projections, and protected evidence counts",
             "authoritative_final, authoritative_projection, finalization_receipt, and exact finalization_consumption echo when finalized truth exists",
             "blockers including explicit []",
             "dashboard_path",
@@ -97,6 +99,7 @@ def build_dashboard(ctx: PacketBuildContext) -> dict[str, Any]:
             "noncanonical or incomplete event envelopes remain visible in a separate section",
             "dashboard never upgrades validation or progress truth",
             "dashboard projects the verified current-finalization pointer; a later ledger echo cannot replace or contradict it",
+            "retention dry-run never archives, deletes, applies, or changes close truth; absent/malformed policy is fail-quiet",
         ],
     }
 
@@ -111,6 +114,7 @@ def build_report(ctx: PacketBuildContext) -> dict[str, Any]:
         "required_inputs": [
             "verified current cycle_finalization_receipt and authoritative_projection for any predecessor final attempt",
             "report inputs whose legacy validation/progress fields converge with the receipt-bound projection",
+            "dashboard retention_summary",
         ],
         "required_outputs": [
             "authoritative_final and authoritative_projection from the verified immutable snapshot",

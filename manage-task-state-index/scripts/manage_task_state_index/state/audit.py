@@ -456,6 +456,16 @@ def issue_matches_focus(issue: dict[str, Any], focus_paths: list[str]) -> bool:
 
 def summarize_audit(audit: dict[str, Any], focus_paths: list[str], limit: int = 20) -> dict[str, Any]:
     issues = [issue for issue in audit.get("issues", []) if isinstance(issue, dict)]
+    current_blockers = [
+        issue
+        for issue in audit.get("current_surface_blockers", [])
+        if isinstance(issue, dict)
+    ]
+    historical_debt = [
+        issue
+        for issue in audit.get("historical_debt", [])
+        if isinstance(issue, dict)
+    ]
     focused = [issue for issue in issues if issue_matches_focus(issue, focus_paths)]
     return {
         "workspace": audit.get("workspace"),
@@ -474,9 +484,16 @@ def summarize_audit(audit: dict[str, Any], focus_paths: list[str], limit: int = 
         "counts_by_type": audit.get("counts_by_type", {}),
         "issue_count": audit.get("issue_count", len(issues)),
         "severity_counts": severity_counts(issues),
+        "current_surface_blocker_count": len(current_blockers),
+        "current_surface_blocker_severity_counts": severity_counts(
+            current_blockers
+        ),
+        "current_surface_blockers": current_blockers,
+        "historical_debt_count": len(historical_debt),
+        "historical_debt_severity_counts": severity_counts(historical_debt),
         "focused_issue_count": len(focused),
         "focused_severity_counts": severity_counts(focused),
         "focused_issues": focused[:limit],
         "omitted_issue_count": max(0, len(issues) - min(len(focused), limit)) if focus_paths else max(0, len(issues) - limit),
-        "historical_debt_note": "summary_only preserves global counts while limiting emitted issues to focus paths; run audit without --summary-only for the full issue list.",
+        "historical_debt_note": "The bounded summary preserves global counts and every current blocker; run audit --full-output for the complete historical issue list.",
     }

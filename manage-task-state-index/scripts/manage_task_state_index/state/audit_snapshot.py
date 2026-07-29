@@ -10,7 +10,7 @@ import stat
 import tempfile
 from typing import Any, Iterator
 
-from .audit import audit_index
+from .audit import _current_surface, audit_index
 from .events import load_events_for_audit, merge_state
 from .storage import existing_index_read_lock
 from .transition_plan_contract import canonical_bytes, sha256_bytes
@@ -28,27 +28,10 @@ _FIXED_FILES = {
     "task.md",
 }
 _DISCOVERY_ROOTS = (
-    (".task/candidate_task", False, frozenset({".md"})),
-    (".task/task_pack", False, frozenset({".json", ".md"})),
-    (".task/task_miss", True, frozenset({".md"})),
-    (".task/validation", False, frozenset({".md"})),
-    (".task/id_audit", False, frozenset({".md"})),
+    # Sealed-ledger readers reopen migration sidecars before they can derive
+    # the current graph. Other historical roots are outside prevalidation.
+    # ponytail: scan this bounded root until the sealed reader exposes exact refs.
     (".task/migrations", True, None),
-    (".agent_log", True, None),
-    (".agent_goal", False, frozenset({".md"})),
-    (".interview", True, frozenset({".md"})),
-    (".agent_advice", True, frozenset({".md"})),
-    (".issue", True, frozenset({".md"})),
-    (
-        ".schema",
-        True,
-        frozenset({".md", ".json", ".jsonl", ".yaml", ".yml"}),
-    ),
-    (
-        ".contract",
-        True,
-        frozenset({".md", ".json", ".jsonl", ".yaml", ".yml"}),
-    ),
 )
 
 
@@ -254,6 +237,7 @@ def _regular_entry(
     ref: str,
     *,
     byte_limit: int = MAX_AUDIT_INPUT_FILE_BYTES,
+    file_byte_limit: int = MAX_AUDIT_INPUT_FILE_BYTES,
 ) -> tuple[dict[str, Any], bytes | None]:
     parent, leaf = _open_parent(root, ref)
     if parent < 0:
@@ -276,7 +260,7 @@ def _regular_entry(
                 raise ValueError(
                     f"Task-index audit input is not a regular file: {ref}"
                 )
-            effective_limit = min(MAX_AUDIT_INPUT_FILE_BYTES, byte_limit)
+            effective_limit = min(file_byte_limit, byte_limit)
             if before.st_size > effective_limit:
                 raise ValueError(
                     f"Task-index audit input exceeds its byte budget: {ref}"
@@ -324,11 +308,20 @@ def _regular_entry(
     }, body
 
 
-def _indexed_refs(root: Path) -> set[str]:
+def _current_indexed_refs(root: Path) -> set[str]:
     events, _read_results = load_events_for_audit(root)
     state = merge_state(events)
+    _active_tasks, _aliases, current_ids = _current_surface(root, state)
+    current_ids.update(
+        item_id
+        for item_id, item in state.items()
+        if item.get("type") == "task_pack" and item.get("status") == "active"
+    )
     refs: set[str] = set()
-    for item in state.values():
+    for item_id in current_ids:
+        item = state.get(item_id)
+        if item is None:
+            continue
         ref = _safe_ref(item.get("path"))
         if ref is not None:
             refs.add(ref)
@@ -366,7 +359,16 @@ def _capture_refs(
     total_bytes = 0
     for ref in refs:
         remaining = MAX_AUDIT_INPUT_TOTAL_BYTES - total_bytes
-        entry, payload = _regular_entry(root, ref, byte_limit=remaining)
+        entry, payload = _regular_entry(
+            root,
+            ref,
+            byte_limit=remaining,
+            file_byte_limit=(
+                MAX_AUDIT_INPUT_TOTAL_BYTES
+                if ref == ".task/index.jsonl"
+                else MAX_AUDIT_INPUT_FILE_BYTES
+            ),
+        )
         entries.append(entry)
         if payload is not None:
             payloads[ref] = payload
@@ -387,9 +389,9 @@ def _materialized_snapshot(
         yield snapshot_root
 
 
-def _indexed_refs_from_payloads(payloads: dict[str, bytes]) -> set[str]:
+def _current_indexed_refs_from_payloads(payloads: dict[str, bytes]) -> set[str]:
     with _materialized_snapshot(payloads) as snapshot_root:
-        return _indexed_refs(snapshot_root)
+        return _current_indexed_refs(snapshot_root)
 
 
 def _capture(
@@ -398,7 +400,7 @@ def _capture(
     root = root.resolve(strict=True)
     base_refs = _base_refs(root)
     base_entries, base_payloads = _capture_refs(root, base_refs)
-    indexed_refs = _indexed_refs_from_payloads(base_payloads)
+    indexed_refs = _current_indexed_refs_from_payloads(base_payloads)
     refs = sorted(set(base_refs) | indexed_refs)
     if len(refs) > MAX_AUDIT_INPUT_FILES:
         raise ValueError("Task-index audit input file-count budget exceeded")
@@ -409,18 +411,23 @@ def _capture(
         raise AuditSnapshotRace(
             "Task-index base inputs changed while closing the audit snapshot"
         )
-    if _indexed_refs_from_payloads(payloads) != indexed_refs:
+    if _current_indexed_refs_from_payloads(payloads) != indexed_refs:
         raise AuditSnapshotRace(
             "Task-index referenced-input closure changed during capture"
         )
     total_bytes = sum(len(payload) for payload in payloads.values())
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "artifact_kind": "task_index_audit_input_manifest",
+        "audit_scope": "current_surface",
         "entry_count": len(entries),
         "total_bytes": total_bytes,
         "entries": entries,
-        "root_sha256": sha256_bytes(canonical_bytes(entries)),
+        "root_sha256": sha256_bytes(
+            canonical_bytes(
+                {"audit_scope": "current_surface", "entries": entries}
+            )
+        ),
     }
     return manifest, payloads
 

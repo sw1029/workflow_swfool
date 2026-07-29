@@ -281,17 +281,38 @@ def test_prevalidation_validator_rejects_noncanonical_source_cas_bytes(
         )
 
 
-def test_prevalidation_binds_full_audit_input_manifest(
+def test_prevalidation_binds_current_surface_audit_input_manifest(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "task.md").write_text("# Task\n")
-    goal = tmp_path / ".agent_goal/goal_architecture.md"
-    goal.parent.mkdir(parents=True)
-    goal.write_text("# Goal\n")
+    linked_goal = tmp_path / ".agent_goal/goal_architecture.md"
+    linked_goal.parent.mkdir(parents=True)
+    linked_goal.write_text("# Goal\n")
+    unrelated_goal = tmp_path / ".agent_goal/unrelated.md"
+    unrelated_goal.write_text("# Unrelated\n")
     migration_sidecar = tmp_path / ".task/migrations/mig-1/receipt.json"
     migration_sidecar.parent.mkdir(parents=True)
     migration_sidecar.write_text('{"status":"fixture"}\n')
     _init_cycle(tmp_path, "cycle-1")
+    prepared = prepare_scan(tmp_path, at=AT)
+    apply_scan(tmp_path, prepared["compilation_binding"])
+    state = task_index.merge_state(task_index.load_events(tmp_path))
+    task_id = next(
+        item_id
+        for item_id, item in state.items()
+        if item.get("type") == "task" and item.get("path") == "task.md"
+    )
+    goal_id = next(
+        item_id
+        for item_id, item in state.items()
+        if item.get("path") == ".agent_goal/goal_architecture.md"
+    )
+    task_index.link_item(
+        tmp_path,
+        task_id,
+        [{"rel": "related_to", "id": goal_id}],
+    )
+    task_snapshot_ref = state[task_id]["fields"]["snapshot_path"]
 
     compiled = compile_prevalidation(tmp_path, at=AT)
     binding = compiled["owner_result_binding"]
@@ -302,14 +323,29 @@ def test_prevalidation_binds_full_audit_input_manifest(
     )
     entries = {entry["ref"]: entry for entry in manifest["entries"]}
 
+    assert manifest["schema_version"] == 2
+    assert manifest["audit_scope"] == "current_surface"
+    assert value["index_snapshot"]["audit_scope"] == "current_surface"
     assert entries["task.md"]["kind"] == "regular"
+    assert entries[task_snapshot_ref]["kind"] == "regular"
     assert entries[".agent_goal/goal_architecture.md"]["kind"] == "regular"
+    assert ".agent_goal/unrelated.md" not in entries
     assert entries[".task/migrations/mig-1/receipt.json"]["kind"] == "regular"
     assert manifest["root_sha256"] == value["index_snapshot"][
         "audit_input_root_sha256"
     ]
 
-    goal.write_text("# Mutated goal\n")
+    unrelated_goal.write_text("# Mutated unrelated goal\n")
+    accepted = normalize_native_owner_result(
+        "index_pre_validate",
+        value,
+        root=tmp_path,
+        cycle_id="cycle-1",
+        source_ref=binding["ref"],
+    )
+    assert accepted["index_status"] == "snapshot_current"
+
+    linked_goal.write_text("# Mutated linked goal\n")
     try:
         normalize_native_owner_result(
             "index_pre_validate",
@@ -327,6 +363,8 @@ def test_prevalidation_binds_full_audit_input_manifest(
 def test_audit_snapshot_rejects_indexed_parent_symlink_escape(
     tmp_path: Path,
 ) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("# Task\n")
     external = tmp_path.parent / f"{tmp_path.name}-external"
     external.mkdir()
     secret = external / "secret.md"
@@ -344,6 +382,24 @@ def test_audit_snapshot_rejects_indexed_parent_symlink_escape(
             "content_sha256": hashlib.sha256(secret.read_bytes()).hexdigest(),
             "updated_at": AT,
         },
+    )
+    task_index.append_event(
+        tmp_path,
+        {
+            "event": "upsert",
+            "id": "task-current",
+            "type": "task",
+            "status": "active",
+            "path": "task.md",
+            "title": "Task",
+            "content_sha256": hashlib.sha256(task.read_bytes()).hexdigest(),
+            "updated_at": AT,
+        },
+    )
+    task_index.link_item(
+        tmp_path,
+        "task-current",
+        [{"rel": "related_to", "id": "val-escape"}],
     )
 
     with pytest.raises(ValueError, match="unsafe ancestor"):
@@ -378,14 +434,20 @@ def test_audit_consumes_captured_bytes_during_live_aba(
     assert projected["result"]["blockers"]
 
 
-def test_audit_rejects_oversized_index_before_parsing(
+def test_audit_ledger_uses_total_budget_and_rejects_overflow_before_parsing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     index = tmp_path / ".task/index.jsonl"
     index.parent.mkdir(parents=True)
-    index.write_bytes(
-        b" " * (audit_snapshot.MAX_AUDIT_INPUT_FILE_BYTES + 1)
-    )
+    monkeypatch.setattr(audit_snapshot, "MAX_AUDIT_INPUT_FILE_BYTES", 32)
+    monkeypatch.setattr(audit_snapshot, "MAX_AUDIT_INPUT_TOTAL_BYTES", 1024)
+    index.write_bytes(b"\n" * 64)
+
+    projected = audit_projection(tmp_path, at=AT)
+
+    assert projected["index_snapshot"]["audit_input_total_bytes"] == 64
+
+    index.write_bytes(b" " * 1025)
 
     def parsed_too_early(_root: Path) -> tuple[list[object], list[object]]:
         raise AssertionError("oversized index was parsed before its byte cap")
@@ -397,19 +459,32 @@ def test_audit_rejects_oversized_index_before_parsing(
         audit_projection(tmp_path, at=AT)
 
 
-def test_audit_discovery_budget_is_shared_across_roots(
+def test_current_surface_snapshot_ignores_unrelated_history_file_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(audit_snapshot, "MAX_AUDIT_INPUT_FILES", 8)
+    history = tmp_path / ".agent_log"
+    history.mkdir()
+    for index in range(20):
+        (history / f"historical-{index}.md").write_text("# History\n")
+
+    projected = audit_projection(tmp_path, at=AT)
+
+    assert projected["index_snapshot"]["audit_scope"] == "current_surface"
+    assert projected["index_snapshot"]["audit_input_entry_count"] <= 8
+
+
+def test_audit_migration_discovery_budget_remains_bounded(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(audit_snapshot, "MAX_AUDIT_DISCOVERY_ENTRIES", 16)
-    for root_ref in (".agent_goal", ".agent_log"):
-        directory = tmp_path / root_ref
-        directory.mkdir()
-        for index in range(9):
-            (directory / f"empty-{index}").mkdir()
+    migrations = tmp_path / ".task/migrations"
+    migrations.mkdir(parents=True)
+    for index in range(17):
+        (migrations / f"empty-{index}").mkdir()
 
     with pytest.raises(ValueError, match="global discovery entry budget"):
         audit_projection(tmp_path, at=AT)
-
 
 def test_prevalidation_rechecks_snapshot_before_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

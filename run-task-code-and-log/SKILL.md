@@ -34,6 +34,8 @@ When task-state IDs are available, link the run evidence and log entry through `
   - `affected_chain`: rerun only prerequisites whose affected surfaces changed, plus the current command.
   - `full_chain`: rerun all named prerequisites. Use this only when the task, user, or orchestrator explicitly requires it.
 - If a prerequisite manifest is supplied, prefer checking recorded path/status/hash evidence before rerunning unchanged prerequisite commands.
+- Before an expensive deterministic command, use `$manage-evidence-cache` `check`; use `--fresh-required` for side-effecting, live, security/credential, destructive, or caller-required fresh work. Preserve the check/store command and hashed evidence path in the existing run log, or record a concrete `not_applicable` reason.
+- A verified `reuse` skips that command only; it is not execution success or validation pass. After fresh execution, `store` the status and existing hashed evidence path.
 - Before creating a new timestamped `.agent_log` or task_miss-style execution artifact, check whether the same task ID, command/check path, relevant input hashes or artifact paths, exit status, and result summary already exist. If the evidence is identical, link or reference the existing artifact instead of creating a duplicate log.
 - Create a fresh log when the run was intentionally fresh, inputs changed, output changed, exit status changed, stdout/stderr contains new material evidence, or the task explicitly requires a fresh execution artifact.
 - Never use idempotent reuse to hide a failed rerun. If a command is executed and fails, log the failure even when an older passing log exists.

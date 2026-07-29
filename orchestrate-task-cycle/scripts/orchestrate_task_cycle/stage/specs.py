@@ -333,6 +333,7 @@ OPTIONAL_OWNER_FIELDS: dict[str, tuple[str, ...]] = {
         "finalization_receipt",
         "finalization_consumption",
         "current_stage_event_count",
+        "retention_summary",
     ),
     "report": (
         "authoritative_final",

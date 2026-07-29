@@ -28,6 +28,73 @@ from manage_task_state_index.state import transition_plan_contract as transition
 from manage_task_state_index.state import transition_publication as transition_publication_module  # noqa: E402
 
 
+def test_audit_cli_defaults_to_summary_and_supports_full_output(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert task_state_index.main(["--root", str(tmp_path), "audit"]) == 0
+    summary = json.loads(capsys.readouterr().out)
+
+    assert summary["summary_only"] is True
+    assert summary["current_surface_blockers"] == []
+    assert summary["historical_debt_count"] == summary["issue_count"]
+    assert "issues" not in summary
+
+    assert (
+        task_state_index.main(
+            ["--root", str(tmp_path), "audit", "--full-output"]
+        )
+        == 0
+    )
+    full = json.loads(capsys.readouterr().out)
+
+    assert full["issues"]
+    assert full["current_surface_blockers"] == []
+    assert "summary_only" not in full
+
+    assert (
+        task_state_index.main(
+            ["--root", str(tmp_path), "audit", "--summary-only"]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["summary_only"] is True
+
+
+def test_audit_summary_keeps_current_blockers_and_historical_counts() -> None:
+    current = {
+        "severity": "high",
+        "code": "current_canonical_id_missing",
+        "message": "missing",
+        "ids": [],
+        "paths": ["task.md"],
+    }
+    historical = {
+        "severity": "medium",
+        "code": "missing_path",
+        "message": "historical",
+        "ids": ["val-old"],
+        "paths": ["history.md"],
+    }
+    summary = task_state_index.summarize_audit(
+        {
+            "issues": [historical, current],
+            "issue_count": 2,
+            "current_surface_blockers": [current],
+            "historical_debt": [historical],
+        },
+        [],
+        limit=1,
+    )
+
+    assert summary["current_surface_blocker_count"] == 1
+    assert summary["current_surface_blocker_severity_counts"] == {"high": 1}
+    assert summary["current_surface_blockers"] == [current]
+    assert summary["historical_debt_count"] == 1
+    assert summary["historical_debt_severity_counts"] == {"medium": 1}
+    assert summary["omitted_issue_count"] == 1
+
+
 def test_scan_keeps_stable_id_for_ordinary_same_path_edit(tmp_path: Path) -> None:
     task = tmp_path / "task.md"
     task.write_text("# First task wording\n", encoding="utf-8")

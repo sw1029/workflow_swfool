@@ -240,6 +240,15 @@ def test_target_compile_specs_cover_every_packet_and_result_target() -> None:
         owner = set(spec.owner_receipt_fields) | set(spec.optional_owner_fields)
         assert semantic.isdisjoint(owner)
     assert "next_task_id" in TARGET_COMPILE_SPECS["derive"].optional_semantic_fields
+    assert "evidence_cache" not in TARGET_COMPILE_SPECS["run"].optional_owner_fields
+    assert (
+        "evidence_cache"
+        not in TARGET_COMPILE_SPECS["validate"].optional_owner_fields
+    )
+    assert (
+        "retention_summary"
+        in TARGET_COMPILE_SPECS["dashboard"].optional_owner_fields
+    )
 
 
 def test_stage_advance_dry_run_does_not_append_context(tmp_path: Path) -> None:

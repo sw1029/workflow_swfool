@@ -401,9 +401,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     audit_parser = subparsers.add_parser("audit", help="Audit global ID consistency; optionally write and index a report.")
     audit_parser.add_argument("--write-report", action="store_true", help="Write .task/id_audit/*.md and index it.")
-    audit_parser.add_argument("--summary-only", action="store_true", help="Print compact counts and focused issues instead of the full historical issue list.")
+    audit_output = audit_parser.add_mutually_exclusive_group()
+    audit_output.add_argument("--summary-only", dest="summary_only", action="store_true", help="Print compact counts, current blockers, and focused issues (default).")
+    audit_output.add_argument("--full-output", dest="summary_only", action="store_false", help="Print the complete historical issue list.")
     audit_parser.add_argument("--focus-path", action="append", default=[], help="Limit emitted issues to workspace-relative paths or IDs while preserving global counts.")
-    audit_parser.set_defaults(func=cmd_audit)
+    audit_parser.set_defaults(func=cmd_audit, summary_only=True)
 
     plan_parser = subparsers.add_parser(
         "plan-transition",

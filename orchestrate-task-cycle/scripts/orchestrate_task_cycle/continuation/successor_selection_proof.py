@@ -14,6 +14,7 @@ from ..selection_decision_store import (
     closed_object,
     normalize_binding,
     read_bound_json,
+    seal_selection_artifact,
 )
 from ..selection_synthesis import validate_selection_synthesis
 from ..selection_trigger import (
@@ -182,9 +183,9 @@ def _decision(
             "input_evidence_manifest_sha256"
         ],
     }
-    decision_id = "preliminary-selection-v2-" + canonical_sha256(core)[:24]
-    body = {**core, "decision_id": decision_id}
-    expected = {**body, "decision_sha256": canonical_sha256(body)}
+    expected = seal_selection_artifact(
+        core, "decision_id", "preliminary-selection-v2-", "decision_sha256"
+    )
     if decision != expected:
         raise ValueError("historical selection decision integrity failed")
     return decision
@@ -235,9 +236,9 @@ def validate_historical_selection_v2(
         "not_completion_evidence": True,
         "mutation_performed": False,
     }
-    receipt_id = "selection-decision-v2-" + canonical_sha256(core)[:24]
-    body = {**core, "receipt_id": receipt_id}
-    expected = {**body, "receipt_sha256": canonical_sha256(body)}
+    expected = seal_selection_artifact(
+        core, "receipt_id", "selection-decision-v2-", "receipt_sha256"
+    )
     if selected != expected:
         raise ValueError("historical selection receipt integrity failed")
     # Reopen the exact bound bytes once more after the lineage walk.

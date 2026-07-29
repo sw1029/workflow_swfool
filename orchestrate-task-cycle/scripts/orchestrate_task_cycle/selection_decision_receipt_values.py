@@ -14,8 +14,8 @@ from .selection_decision_receipt import (
     _validate_trigger_tick,
 )
 from .selection_decision_store import (
-    canonical_sha256,
     normalize_binding,
+    seal_selection_artifact,
 )
 from .selection_synthesis import validate_selection_synthesis
 
@@ -44,9 +44,9 @@ def render_preliminary_selection_decision_from_values(
         selected_task_id,
         synthesis["input_evidence_manifest_sha256"],
     )
-    decision_id = "preliminary-selection-" + canonical_sha256(core)[:24]
-    body = {**core, "decision_id": decision_id}
-    return {**body, "decision_sha256": canonical_sha256(body)}
+    return seal_selection_artifact(
+        core, "decision_id", "preliminary-selection-", "decision_sha256"
+    )
 
 
 def render_selection_decision_receipt_from_values(
@@ -85,9 +85,9 @@ def render_selection_decision_receipt_from_values(
         decision["outcome"],
         decision["selected_task_id"],
     )
-    receipt_id = "selection-decision-" + canonical_sha256(core)[:24]
-    body = {**core, "receipt_id": receipt_id}
-    return {**body, "receipt_sha256": canonical_sha256(body)}
+    return seal_selection_artifact(
+        core, "receipt_id", "selection-decision-", "receipt_sha256"
+    )
 
 
 __all__ = (

@@ -112,6 +112,7 @@ def _projection(
     )
     snapshot = {
         "schema_version": 1,
+        "audit_scope": manifest["audit_scope"],
         "audit_input_manifest": manifest_binding,
         "audit_input_root_sha256": manifest["root_sha256"],
         "audit_input_entry_count": manifest["entry_count"],
@@ -181,6 +182,7 @@ def _validate_compiled_snapshot(
     }
     if (
         manifest_payload != canonical_bytes(manifest) + b"\n"
+        or snapshot.get("audit_scope") != manifest.get("audit_scope")
         or snapshot.get("audit_input_manifest")
         != expected_manifest_binding
         or snapshot.get("audit_input_root_sha256")

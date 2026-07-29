@@ -57,7 +57,7 @@ When session governance is available, consume only a trusted-collector privacy-s
 5. Resolve or close an issue.
    - Require concrete evidence before closing: validation report, task_miss resolution, command output, or another factual run artifact.
    - Use `$run-task-code-and-log` to run or record the verification command/procedure and create `.agent_log` evidence, including failed or partial verification.
-   - If verification succeeds, close the GitHub issue or move the local issue from `.issue/open/` to `.issue/resolved/` or `.issue/closed/`.
+   - If verification succeeds, require `$manage-task-state-index` `audit --full-output`, then close the GitHub issue or move the local issue from `.issue/open/` to `.issue/resolved/` or `.issue/closed/`.
    - Preserve a resolution record under `.issue/resolved/` even when the remote GitHub issue is closed.
    - Link the issue to the run log, validation report, and resolving task with `resolved_by`, `run_for`, `validates`, or `closes_issue`.
    - If verification is partial or failed, keep the issue open and record the blocker.

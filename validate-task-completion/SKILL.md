@@ -64,12 +64,13 @@ Do not define identifier surfaces, meaning floors, regeneration commands, storag
      PYTHONPATH="$SKILLS_ROOT/validate-task-completion/scripts:$SKILLS_ROOT/orchestrate-task-cycle/scripts:$SKILLS_ROOT/record-agent-work-log/scripts" \
        python3 -m validate_task_completion collect-evidence --root . --include-git
      ```
+   - Before an expensive deterministic validator or audit, use `$manage-evidence-cache` `check`; use `--fresh-required` for live, side-effecting, security/destructive, or caller-required fresh evidence. Preserve the check/store command and hashed report path in existing evidence, or record a concrete `not_applicable` reason; `store` only after a fresh report exists. Cache reuse never supplies `validation_verdict`.
 
 2. Ensure task-state traceability.
    - If `.task/index.jsonl` or `.task/index.md` is missing or stale, use `$manage-task-state-index` to initialize, scan, and link the current artifacts.
    - The active task should link to relevant execution logs, audit logs, validation reports, and active or resolved task_miss files.
    - Active or resolved issue records should link to relevant tasks, execution logs, validation reports, task_miss files, and issue resolution evidence when present.
-   - Run `$manage-task-state-index` deterministic global `audit`. Use `audit --write-report` when this validation report is closing a workflow cycle.
+   - Run `$manage-task-state-index` deterministic global `audit`; its default stdout is a bounded summary with all current blockers and historical-debt counts. Use `audit --full-output` for the complete issue list and `audit --write-report` when this validation report is closing a workflow cycle.
    - If the workflow authorizes agents and ID context exists, spawn one additional read-only ID consistency agent. This agent is separate from repo/OOM/env/run validation and must only inspect ID relationships and lifecycle status.
 
 3. Verify execution environment.

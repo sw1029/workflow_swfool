@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from .. import model_effort_router
+from ..ledger.constants import CANONICAL_STEP_ORDER
 
 
 TARGETS = {
@@ -36,39 +37,7 @@ TARGETS = {
     "closeout_commit",
 }
 
-CANONICAL_LEDGER_STEPS = (
-    "context",
-    "authority",
-    "repo_skill_adapter_scan",
-    "acceptance",
-    "route_plan",
-    "validation_scope_plan",
-    "validation_set_plan",
-    "governance",
-    "result_contract",
-    "repo_skill_adapter_validate",
-    "ledger_append",
-    "code_structure_audit",
-    "run",
-    "qualitative_review",
-    "loopback_audit",
-    "validation_set_build",
-    "visible_increment",
-    "repo_skill_gap_analysis",
-    "cycle_efficiency_profile",
-    "validation_scope_finalize",
-    "index_pre_validate",
-    "validate",
-    "issue",
-    "schema_pre_derive",
-    "derive",
-    "schema_post_derive",
-    "index",
-    "commit",
-    "dashboard",
-    "report",
-    "closeout_commit",
-)
+CANONICAL_LEDGER_STEPS = CANONICAL_STEP_ORDER
 
 MODEL_EFFORT_PROFILE_PATH = (
     Path(__file__).resolve().parents[3] / "references" / "model-effort-profiles.json"

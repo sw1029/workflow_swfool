@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 
 
-DEFAULT_STEPS = [
+CANONICAL_STEP_ORDER = (
     "context",
     "authority",
     "repo_skill_adapter_scan",
@@ -35,8 +35,9 @@ DEFAULT_STEPS = [
     "dashboard",
     "report",
     "closeout_commit",
-]
+)
 
+DEFAULT_STEPS = list(CANONICAL_STEP_ORDER)
 CANONICAL_STEPS = set(DEFAULT_STEPS)
 
 LEDGER_FORMAT_VERSION = 1

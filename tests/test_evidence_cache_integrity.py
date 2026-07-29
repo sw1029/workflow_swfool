@@ -162,6 +162,32 @@ def test_exact_match_reuses_only_while_stored_evidence_hash_matches(tmp_path: Pa
     assert missing["classification"] == "unsafe_to_reuse"
 
 
+def test_fresh_required_and_reuse_classification_never_declare_validation(
+    tmp_path: Path,
+) -> None:
+    create_source_and_evidence(tmp_path)
+    args = args_for(
+        tmp_path, inputs=["input.json"], evidence_paths=["proof.json"]
+    )
+    fingerprint = evidence_cache.build_fingerprint(args)
+    path = evidence_cache.cache_path(tmp_path, None)
+    evidence_cache.store_record(path, fingerprint, args)
+    records = evidence_cache.read_records(path)
+
+    fresh = evidence_cache.classify_candidate(
+        fingerprint, records, True, tmp_path
+    )
+    reused = evidence_cache.classify_candidate(
+        fingerprint, records, False, tmp_path
+    )
+
+    assert fresh["classification"] == "fresh_required"
+    assert fresh["reason"] == "caller_required_fresh_evidence"
+    assert reused["classification"] == "reuse"
+    assert "validation_verdict" not in reused
+    assert "progress_verdict" not in reused
+
+
 def test_cache_check_reads_existing_file_without_creating_lock_residue(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
