@@ -15,7 +15,7 @@ test = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "audit-cycle-loopback/tests"]
+testpaths = ["tests", "audit-cycle-loopback/tests", "task-doctor/tests"]
 python_files = ["test_*.py"]
 addopts = "-p no:cacheprovider"
 pythonpath = [
@@ -31,5 +31,6 @@ pythonpath = [
   "normalize-acceptance-and-demo/scripts",
   "find-local-python-envs/scripts",
   "run-task-code-and-log/scripts",
+  "repo-change-commit/scripts",
   "validate-task-completion/scripts",
 ]

@@ -229,13 +229,14 @@ def _fresh_resolution(
     }
 
 
-def resolve_operation(
+def _resolve_operation(
     root: Path,
     request: dict[str, Any],
     context: dict[str, Any],
     *,
     evaluated_at: str,
     skills_root: Path | None,
+    materialize_mode_child: bool,
 ) -> dict[str, Any]:
     decision = evaluate(
         root,
@@ -249,10 +250,12 @@ def resolve_operation(
     # has already classified this exact request.  Re-evaluate afterward so the
     # unchanged reservation, verification, settlement, and use accounting path
     # sees a normal exact grant rather than an activation shortcut.
-    if decision["decision"] == "approval_required":
-        from .authority_interaction import materialize_mode_child
+    if materialize_mode_child and decision["decision"] == "approval_required":
+        from .authority_interaction import (
+            materialize_mode_child as materialize_exact_mode_child,
+        )
 
-        mode_child = materialize_mode_child(
+        mode_child = materialize_exact_mode_child(
             root, decision["request"], evaluated_at=evaluated_at, skills_root=skills_root
         )
         if mode_child is not None:
@@ -301,4 +304,63 @@ def resolve_operation(
     }
 
 
-__all__ = ["resolve_operation"]
+def inspect_operation(
+    root: Path,
+    request: dict[str, Any],
+    context: dict[str, Any],
+    *,
+    evaluated_at: str,
+    skills_root: Path | None,
+) -> dict[str, Any]:
+    """Inspect one exact operation without materializing authority artifacts."""
+
+    return _resolve_operation(
+        root,
+        request,
+        context,
+        evaluated_at=evaluated_at,
+        skills_root=skills_root,
+        materialize_mode_child=False,
+    )
+
+
+def advance_operation(
+    root: Path,
+    request: dict[str, Any],
+    context: dict[str, Any],
+    *,
+    evaluated_at: str,
+    skills_root: Path | None,
+) -> dict[str, Any]:
+    """Advance one exact operation through at most one mode-child materialization."""
+
+    return _resolve_operation(
+        root,
+        request,
+        context,
+        evaluated_at=evaluated_at,
+        skills_root=skills_root,
+        materialize_mode_child=True,
+    )
+
+
+def resolve_operation(
+    root: Path,
+    request: dict[str, Any],
+    context: dict[str, Any],
+    *,
+    evaluated_at: str,
+    skills_root: Path | None,
+) -> dict[str, Any]:
+    """Deprecated compatibility alias for :func:`advance_operation`."""
+
+    return advance_operation(
+        root,
+        request,
+        context,
+        evaluated_at=evaluated_at,
+        skills_root=skills_root,
+    )
+
+
+__all__ = ["advance_operation", "inspect_operation", "resolve_operation"]

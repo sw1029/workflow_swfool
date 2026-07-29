@@ -51,6 +51,8 @@ OWNER_SPECS = {
             "manage-task-state-index",
             "normalize-acceptance-and-demo",
             "record-agent-work-log",
+            "repo-change-commit",
+            "run-task-code-and-log",
             "audit-session-governance",
         ),
     ),
@@ -112,6 +114,8 @@ def _module_for(skill: str) -> str:
         "normalize-acceptance-and-demo": "normalize_acceptance_and_demo",
         "orchestrate-task-cycle": "orchestrate_task_cycle",
         "record-agent-work-log": "record_agent_work_log",
+        "repo-change-commit": "repo_change_commit",
+        "run-task-code-and-log": "run_task_code_and_log",
         "audit-session-governance": "audit_session_governance",
         "task-doctor": "task_doctor_workflow_lib",
     }

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .authority import SKILLS_ROOT, validate_completion
+from .authority_settlement import validate_settlement_artifact
 from .common import (
     SCHEMA_VERSION,
     WorkflowError,
@@ -27,6 +28,9 @@ if str(AUTHORITY_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(AUTHORITY_SCRIPTS))
 
 from manage_agent_authority.lifecycle import release  # noqa: E402
+from manage_agent_authority.registered_release import (  # noqa: E402
+    registered_release_required,
+)
 from manage_agent_authority.projection_io import (  # noqa: E402
     validate_reservation_state,
 )
@@ -34,6 +38,9 @@ from manage_agent_authority.projection_receipts import (  # noqa: E402
     validate_release_receipt,
 )
 from manage_agent_authority.workflow_status import resolve_operation  # noqa: E402
+from manage_agent_authority.projection_reservations import (  # noqa: E402
+    load_bound_reservation,
+)
 
 
 INTENT_KIND = "task_doctor_dependency_cancellation_intent"
@@ -135,7 +142,7 @@ def _owner_activity(owner: dict[str, Any]) -> dict[str, Any]:
 def _cancel_safe_owner_state(owner: dict[str, Any]) -> bool:
     """Require public proof that the index owner never started or completed."""
 
-    return (
+    untouched = (
         owner.get("status") == "stale"
         and owner.get("integrity_valid") is True
         and owner.get("plan_effect_observed") is False
@@ -145,6 +152,16 @@ def _cancel_safe_owner_state(owner: dict[str, Any]) -> bool:
         and owner.get("historical_transaction_complete") is False
         and owner.get("no_effect_verified") is False
     )
+    return untouched
+
+
+def _registered_owner_reservation(
+    root: Path, reservation: dict[str, str],
+) -> bool:
+    value, _uses, _binding = load_bound_reservation(
+        root, reservation, "dependency cancellation reservation"
+    )
+    return registered_release_required(root, value)
 
 
 def _reopen_cancel_safe_owner(
@@ -170,6 +187,11 @@ def _release_or_reopen(
         return {"status": "not_reserved"}
     existing = authority_state["settlement_receipt"]
     if existing is None:
+        if _registered_owner_reservation(root, reservation):
+            return {
+                "status": "blocked_registered_owner_settlement",
+                "reason": "registered_owner_not_started_release_forbidden",
+            }
         try:
             released = release(
                 root, reservation["ref"], reservation["sha256"], intent_binding,
@@ -182,14 +204,27 @@ def _release_or_reopen(
                 "dependency_cancellation_release_failed", str(error)
             ) from error
         existing = {"ref": released["ref"], "sha256": released["sha256"]}
-    _verify_release(root, existing, reservation, intent_binding)
-    return {"status": "released_not_started", "receipt": existing}
+    status = _verify_release(
+        root, existing, reservation, intent_binding, item
+    )
+    return {"status": status, "receipt": existing}
+
+
+def _verify_blocked_reservation(
+    root: Path, reservation: dict[str, str],
+) -> None:
+    value, _uses, _binding = load_bound_reservation(
+        root, reservation, "blocked dependency cancellation reservation"
+    )
+    require(registered_release_required(root, value),
+            "invalid_dependency_cancellation",
+            "blocked cancellation reservation is not a registered owner")
 
 
 def _verify_release(
     root: Path, receipt_binding: dict[str, str], reservation: dict[str, str],
-    intent_binding: dict[str, str],
-) -> None:
+    intent_binding: dict[str, str], item: dict[str, Any],
+) -> str:
     path = workspace_file(
         root, receipt_binding["ref"], receipt_binding["sha256"],
         "dependency cancellation release receipt",
@@ -202,12 +237,31 @@ def _verify_release(
             "invalid_dependency_cancellation",
             f"dependency cancellation release receipt is invalid: {error}",
         ) from error
-    require(receipt.get("reservation") == reservation
-            and receipt.get("no_effect_evidence") == intent_binding
-            and receipt.get("effect_status") == "not_started"
-            and receipt.get("release_applied") is True,
+    effect_status = receipt.get("effect_status")
+    require(
+        receipt.get("reservation") == reservation
+        and effect_status in {"not_started", "verified_no_effect"}
+        and receipt.get("release_applied") is True,
+        "invalid_dependency_cancellation",
+        "release does not bind an exact dependency cancellation",
+    )
+    if effect_status == "not_started":
+        require(
+            receipt.get("no_effect_evidence") == intent_binding,
             "invalid_dependency_cancellation",
-            "release does not bind exact not-started dependency cancellation")
+            "not-started release does not bind the cancellation intent",
+        )
+        outcome = "released_not_started"
+    else:
+        owner_artifact = validate_settlement_artifact(
+            root, receipt_binding, reservation, "confirmed_no_effect"
+        )
+        from .owner_results import verify_owner_result
+
+        verify_owner_result(
+            root, item, owner_artifact, "confirmed_no_effect"
+        )
+        outcome = "released_verified_no_effect"
     changes = [
         change for change in receipt["state_changes"]
         if change.get("after", {}).get("artifact_kind")
@@ -232,6 +286,7 @@ def _verify_release(
             and changes[0]["after"] == state,
             "invalid_dependency_cancellation",
             "downstream reservation is not currently released by cancellation")
+    return outcome
 
 
 def validate_dependency_cancellation(
@@ -261,9 +316,26 @@ def validate_dependency_cancellation(
     settlement = receipt["authority_settlement"]
     require(isinstance(settlement, dict), "invalid_dependency_cancellation",
             "authority_settlement must be an object")
-    if settlement.get("status") == "released_not_started":
-        _verify_release(root, _binding(settlement.get("receipt"), "release receipt"),
-                        _binding(intent["reservation"], "reservation"), intent_binding)
+    if settlement.get("status") in {
+        "released_not_started", "released_verified_no_effect",
+    }:
+        observed = _verify_release(
+            root,
+            _binding(settlement.get("receipt"), "release receipt"),
+            _binding(intent["reservation"], "reservation"),
+            intent_binding,
+            item,
+        )
+        require(observed == settlement["status"],
+                "invalid_dependency_cancellation",
+                "cancellation settlement status differs from its receipt")
+    elif settlement == {
+        "status": "blocked_registered_owner_settlement",
+        "reason": "registered_owner_not_started_release_forbidden",
+    }:
+        _verify_blocked_reservation(
+            root, _binding(intent["reservation"], "reservation")
+        )
     else:
         require(settlement == {"status": "not_reserved"}
                 and intent["reservation"] is None,

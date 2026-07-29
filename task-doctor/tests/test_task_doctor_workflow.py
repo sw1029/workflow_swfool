@@ -10,7 +10,6 @@ from typing import Any
 
 import pytest
 
-
 SCRIPT = Path(__file__).parents[1] / "scripts" / "task_doctor_workflow.py"
 LIB = SCRIPT.parent / "task_doctor_workflow_lib"
 SKILLS_ROOT = Path(__file__).resolve().parents[2]
@@ -18,12 +17,18 @@ sys.path.insert(0, str(SCRIPT.parent))
 sys.path.insert(0, str(SKILLS_ROOT / "manage-agent-authority" / "scripts"))
 sys.path.insert(0, str(SKILLS_ROOT / "manage-external-advice" / "scripts"))
 sys.path.insert(0, str(SKILLS_ROOT / "manage-task-state-index" / "scripts"))
+sys.path.insert(0, str(SKILLS_ROOT / "tests"))
 SPEC = importlib.util.spec_from_file_location("task_doctor_workflow_facade", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 workflow = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(workflow)
 
-from manage_agent_authority.artifact_store import register_grant, snapshot_file  # noqa: E402
+from manage_agent_authority import authority_interaction as interaction  # noqa: E402
+from manage_agent_authority import session_store  # noqa: E402
+from manage_agent_authority.artifact_store import (  # noqa: E402
+    snapshot_file,
+    update_current_policy,
+)
 from manage_agent_authority.canonical import (  # noqa: E402
     object_sha256,
     parse_time,
@@ -38,10 +43,29 @@ from manage_agent_authority.lifecycle import (  # noqa: E402
     verify_reservation_with_recovery,
 )
 from manage_agent_authority.operations import load_operation  # noqa: E402
-from manage_agent_authority.operation_compiler import compile_operation  # noqa: E402
 from manage_agent_authority.operation_publication import (  # noqa: E402
     publish_compilation,
 )
+from manage_agent_authority.operation_batch import (  # noqa: E402
+    load_operation_batch,
+    publish_operation_batch,
+    publish_operation_set,
+)
+from manage_agent_authority.projection_io import load_grant_artifact  # noqa: E402
+from manage_agent_authority.settlement import settle_owner_result  # noqa: E402
+from manage_agent_authority.verification_publication import (  # noqa: E402
+    verify_and_publish_precommit,
+)
+from manage_agent_authority.root_grant import (  # noqa: E402
+    compile_root_decision_seed,
+    load_root_approval_plan,
+    materialize_plan_bound_root_grant,
+    prepare_root_approval_plan,
+)
+from manage_agent_authority.semantic_context import (  # noqa: E402
+    publish_shared_semantic_context,
+)
+from manage_agent_authority.stable_store import publish_immutable  # noqa: E402
 from manage_task_state_index.state.transition_plan_contract import (  # type: ignore[import-not-found]  # noqa: E402
     validate_transition_plan,
 )
@@ -80,6 +104,9 @@ from task_doctor_workflow_lib import cli as task_doctor_cli  # noqa: E402
 from task_doctor_workflow_lib.authority_reservation_window import (  # noqa: E402
     verify_reservation_recipe,
 )
+from task_doctor_workflow_lib.authority_grant import (  # noqa: E402
+    load_bound_materialization,
+)
 from task_doctor_workflow_lib.intent_compiler import (  # noqa: E402
     accept_review,
     compile_intent,
@@ -90,6 +117,10 @@ from task_doctor_workflow_lib.workflow_advance import (  # noqa: E402
     build_resolution_bundle,
     publish_resolution_bundle,
 )
+from root_authorization_test_support import (  # noqa: E402
+    install_test_trust_anchor,
+    signed_root_authorization,
+)
 
 
 AT = "2026-07-18T10:00:00+09:00"
@@ -99,10 +130,13 @@ EXPIRY = "2030-07-18T10:00:00+09:00"
 
 
 @pytest.fixture(autouse=True)
-def _freeze_live_authority_time(monkeypatch: pytest.MonkeyPatch) -> None:
+def _freeze_live_authority_time(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
     from task_doctor_workflow_lib import authority_overlay
 
     monkeypatch.setattr(authority_overlay, "now", lambda: SETTLED_AT)
+    install_test_trust_anchor(monkeypatch, tmp_path)
 
 
 def _write_json(
@@ -123,16 +157,24 @@ def _workspace(root: Path) -> dict[str, Any]:
     policy.parent.mkdir(parents=True, exist_ok=True)
     policy.write_text("# Authority\n\nBounded local task transitions.\n", encoding="utf-8")
     goal.write_text("# Goal\n\n- concept_id: concept-1\n", encoding="utf-8")
+    initialization = _write_json(
+        root,
+        ".task/cycle/cycle-test/initialization.json",
+        {
+            "format_version": 1,
+            "cycle_id": "cycle-test",
+            "task_id": "task-test",
+        },
+    )
+    policy_binding = snapshot_file(
+        root, str(policy.relative_to(root)), "policy"
+    )
+    update_current_policy(root, policy_binding, expected_version=0)
     return {
-        "policy": snapshot_file(root, str(policy.relative_to(root)), "policy"),
+        "policy": policy_binding,
         "goal": {"ref": str(goal.relative_to(root)), "sha256": sha256_file(goal)},
+        "initialization": initialization,
     }
-
-
-def _operation_identity(spec: dict[str, str]) -> dict[str, str]:
-    return {key: spec[key] for key in (
-        "skill_id", "skill_version", "operation_id", "operation_version"
-    )}
 
 
 def _default_spec() -> dict[str, str]:
@@ -167,56 +209,141 @@ def _advice_spec() -> dict[str, str]:
     }
 
 
-def _request(
-    binding: dict[str, str], spec: dict[str, str], suffix: str,
-) -> dict[str, Any]:
-    return {
-        "schema_version": 2, "request_kind": "authority_operation",
-        "request_id": f"request-{suffix}", **_operation_identity(spec),
-        "cycle_id": "cycle-test", "task_id": "task-test", "pack_id": None,
-        "attempt_id": f"attempt-{suffix}", "actor_rank": "S0",
-        "subject": {"kind": spec["subject_kind"], "ref": binding["ref"],
-                    "digest": binding["sha256"], "revision": f"plan-{suffix}"},
-        "required_capabilities": [spec["capability"]],
-        "effect_class": spec["effect_class"], "data_class": spec["data_class"],
-        "mutation_class": "local_mutation",
-        "reversibility": "conditionally_reversible", "risk_tier": "R2",
-        "decision_class": spec["decision_class"], "intent_type": "grant_authority",
-        "cardinality_requested": "single_use", "use_budget_requested": 1,
-        "reservation_units": 1, "idempotency_key": f"request-key-{suffix}",
-        "context": {"external_input_status": "not_required",
-                    "goal_truth_status": "aligned",
-                    "risk_acceptance_status": "not_required",
-                    "design_selection_status": "not_required",
-                    "external_input_evidence": None,
-                    "risk_acceptance_evidence": None,
-                    "design_selection_evidence": None},
-        "composition_receipt": None,
-    }
+_BATCH_BY_REQUEST: dict[tuple[str, str], dict[str, str]] = {}
 
 
-def _context(
-    workspace: dict[str, Any], request: dict[str, Any], suffix: str,
-) -> dict[str, Any]:
+def _compile_batch(
+    root: Path,
+    workspace: dict[str, Any],
+    binding: dict[str, str],
+    spec: dict[str, str],
+    suffix: str,
+) -> tuple[dict[str, Any], dict[str, str]]:
     operation = ":".join(
-        request[key] for key in (
+        spec[key] for key in (
             "skill_id", "skill_version", "operation_id", "operation_version"
         )
     )
-    return {
-        "schema_version": 2, "context_kind": "authority_evaluation",
-        "session_ceiling": {"capabilities": request["required_capabilities"],
-                            "risk_ceiling": "R3",
-                            "mutation_classes": ["local_mutation"],
-                            "evidence_id": f"session-{suffix}"},
-        "goal_autonomy_envelope": {
-            "envelope_id": f"envelope-{suffix}",
-            "capabilities": request["required_capabilities"],
-            "risk_ceiling": "R3", "decision_classes": [request["decision_class"]],
-            "subjects": [request["subject"]["digest"]], "operations": [operation],
-            "source_binding": workspace["goal"],
+    context = publish_shared_semantic_context(
+        root,
+        workspace["initialization"],
+        {
+            "actor_rank": "S0",
+            "request_context": {
+                "external_input_status": "not_required",
+                "goal_truth_status": "aligned",
+                "risk_acceptance_status": "not_required",
+                "design_selection_status": "not_required",
+            },
+            "session_ceiling": {
+                "capabilities": [spec["capability"]],
+                "risk_ceiling": "R3",
+                "mutation_classes": ["local_mutation"],
+                "evidence_id": f"session-{suffix}",
+            },
+            "goal_autonomy_envelope": {
+                "envelope_id": f"envelope-{suffix}",
+                "capabilities": [spec["capability"]],
+                "risk_ceiling": "R3",
+                "decision_classes": [spec["decision_class"]],
+                "subjects": [binding["sha256"]],
+                "operations": [operation],
+                "source_ref": workspace["goal"]["ref"],
+            },
         },
-    }
+    )
+    operation_set = publish_operation_set(
+        root,
+        [{
+            "skill_id": spec["skill_id"],
+            "operation_id": spec["operation_id"],
+            "subject": {
+                "ref": binding["ref"],
+                "revision": f"plan-{suffix}",
+                "kind": spec["subject_kind"],
+            },
+            "scope": {
+                "cycle_id": "cycle-test",
+                "task_id": "task-test",
+                "pack_id": None,
+            },
+            "classification": {
+                "required_capabilities": [spec["capability"]],
+                "effect_class": spec["effect_class"],
+                "data_class": spec["data_class"],
+                "mutation_class": "local_mutation",
+                "reversibility": "conditionally_reversible",
+                "risk_tier": "R2",
+                "decision_class": spec["decision_class"],
+                "subject_kind": spec["subject_kind"],
+            },
+        }],
+    )
+    batch = publish_operation_batch(
+        root,
+        context["semantic_context"],
+        operation_set["operation_set"],
+        compiled_at=AT,
+        skills_root=SKILLS_ROOT,
+    )["operation_batch"]
+    _binding, _body, compilations = load_operation_batch(
+        root, batch, skills_root=SKILLS_ROOT
+    )
+    assert len(compilations) == 1
+    compilation = compilations[0]
+    _BATCH_BY_REQUEST[
+        (str(root.resolve()), compilation["request_sha256"])
+    ] = batch
+    return compilation, batch
+
+
+def _materialize_root_batch(
+    root: Path,
+    workspace: dict[str, Any],
+    batch: dict[str, str],
+    *,
+    decided_at: str,
+    evidence_id: str,
+) -> tuple[dict[str, str], dict[str, Any]]:
+    prepared = prepare_root_approval_plan(
+        root,
+        batch,
+        workspace["policy"],
+        {
+            "source_kind": "explicit_user_instruction",
+            "holder_rank": "S0",
+            "expires_at": EXPIRY,
+            "session_id": None,
+        },
+        prepared_at=AT,
+        skills_root=SKILLS_ROOT,
+    )
+    plan_binding = prepared["root_approval_plan"]
+    seed = compile_root_decision_seed(
+        root,
+        plan_binding,
+        authorization_evidence=signed_root_authorization(
+            root,
+            plan_binding,
+            decided_at=decided_at,
+            evidence_id=evidence_id,
+            skills_root=SKILLS_ROOT,
+        ),
+        skills_root=SKILLS_ROOT,
+    )
+    materialized = materialize_plan_bound_root_grant(
+        root,
+        plan_binding,
+        seed["decision_seed"],
+        skills_root=SKILLS_ROOT,
+    )
+    _binding, plan = load_root_approval_plan(
+        root, plan_binding, skills_root=SKILLS_ROOT
+    )
+    assert len(plan["approval_projection"]["grants"]) == 1
+    grant_id = plan["approval_projection"]["grants"][0]["grant_id"]
+    grant, _digest = load_grant_artifact(root, grant_id)
+    return materialized["source_approval"], grant
 
 
 def _authority_operation(
@@ -267,42 +394,28 @@ def _authority_operation(
             }
         else:
             plan_binding = _write_json(root, f"plans/{suffix}.json", owner_plan)
-    request = _request(plan_binding, spec, suffix)
-    grant_id = f"grant-{suffix}"
-    lineage_id = f"lineage-{suffix}"
-    approval = {
-        "schema_version": 2, "artifact_kind": "authority_source_approval",
-        "approval_id": f"approval-{suffix}",
-        "source_kind": "explicit_user_instruction", "source_rank": "S3",
-        "decision_type": "grant_authority",
-        "capabilities": ["authority.grant.issue", spec["capability"]],
-        "subjects": [request["subject"]], "operations": [_operation_identity(spec)],
-        "risk_ceiling": "R2", "decision_classes": [spec["decision_class"]],
-        "cardinalities": ["single_use"], "max_uses": 1,
-        "grant_ids": [grant_id], "request_digests": [object_sha256(request)],
-        "lineage_ids": [lineage_id], "delegation_binding": None,
-        "not_before": AT, "expires_at": EXPIRY,
-        "evidence_id": f"user-event-{suffix}", "integrity_status": "verified",
-    }
-    approval_source = _write_json(
-        root, f".task/authorization/source-{suffix}.json", approval
+    compilation, batch = _compile_batch(
+        root, workspace, plan_binding, spec, suffix
     )
-    approval_binding = snapshot_file(root, approval_source["ref"], "source_approval")
-    grant = {
-        "schema_version": 2, "artifact_kind": "authority_grant",
-        "grant_id": grant_id, "lineage_id": lineage_id, "parent_grant_id": None,
-        "issuer_rank": "S3", "holder_rank": "S0",
-        "capabilities": request["required_capabilities"],
-        "subjects": [request["subject"]], "operations": [_operation_identity(spec)],
-        "risk_ceiling": "R2", "decision_classes": [spec["decision_class"]],
-        "cardinality": "single_use", "max_uses": 1,
-        "not_before": AT, "expires_at": EXPIRY, "session_id": None,
-        "task_id": request["task_id"], "improvement_id": None,
-        "source_approval": approval_binding, "policy_snapshot": workspace["policy"],
-        "created_at": AT, "idempotency_key": f"grant-key-{suffix}",
+    request = compilation["request"]
+    context = compilation["evaluation_context"]
+    approval_binding, grant = _materialize_root_batch(
+        root,
+        workspace,
+        batch,
+        decided_at=AT,
+        evidence_id=f"user-event-{suffix}",
+    )
+    grant_spec = {
+        "grant_id": grant["grant_id"],
+        "lineage_id": grant["lineage_id"],
+        "holder_rank": grant["holder_rank"],
+        "cardinality": grant["cardinality"],
+        "max_uses": grant["max_uses"],
+        "not_before": grant["not_before"],
+        "expires_at": grant["expires_at"],
+        "idempotency_key": grant["idempotency_key"],
     }
-    register_grant(root, grant)
-    context = _context(workspace, request, suffix)
     operation = {
         "operation_id": suffix, "workflow_role": workflow_role,
         "owner_skill": f"${spec['skill_id']}", "effect_class": spec["effect_class"],
@@ -314,11 +427,7 @@ def _authority_operation(
             "materialization": {
                 "evaluation_context": context, "evaluated_at": AT,
                 "policy_snapshot": workspace["policy"],
-                "grant_spec": {"grant_id": grant_id, "lineage_id": lineage_id,
-                               "holder_rank": "S0", "cardinality": "single_use",
-                               "max_uses": 1, "not_before": AT,
-                               "expires_at": EXPIRY,
-                               "idempotency_key": f"grant-key-{suffix}"},
+                "grant_spec": grant_spec,
                 "reservation": {"reserved_at": RESERVED_AT,
                                 "idempotency_key": f"reserve-key-{suffix}"},
             },
@@ -326,7 +435,8 @@ def _authority_operation(
     }
     runtime = {"request": request, "context": context,
                "reservation_key": f"reserve-key-{suffix}",
-               "source_approval": approval_binding}
+               "source_approval": approval_binding,
+               "operation_batch": batch}
     return operation, approval_binding, runtime
 
 
@@ -538,6 +648,47 @@ def _precommit(root: Path, reservation: dict[str, str]) -> dict[str, str]:
     return {"ref": str(path.relative_to(root)), "sha256": digest}
 
 
+def _registered_settle(
+    root: Path,
+    reservation: dict[str, str],
+    owner_effect: dict[str, str],
+    *,
+    key: str,
+    precommit: dict[str, str] | None = None,
+) -> dict[str, str]:
+    wrapper = json.loads(
+        (root / owner_effect["ref"]).read_text(encoding="utf-8")
+    )
+    if precommit is None:
+        verified = verify_and_publish_precommit(
+            root,
+            reservation["ref"],
+            reservation["sha256"],
+            verified_at=SETTLED_AT,
+            expected_version=0,
+            skills_root=SKILLS_ROOT,
+        )
+        precommit = {
+            "ref": verified["verification_ref"],
+            "sha256": verified["verification_sha256"],
+        }
+    settled = settle_owner_result(
+        root,
+        reservation["ref"],
+        reservation["sha256"],
+        wrapper["owner_artifact"],
+        precommit,
+        settled_at=SETTLED_AT,
+        expected_version=0,
+        idempotency_key=key,
+        skills_root=SKILLS_ROOT,
+    )
+    return {
+        "ref": settled["settlement"]["ref"],
+        "sha256": settled["settlement"]["sha256"],
+    }
+
+
 def _owner_effect(
     root: Path, workflow_id: str, dispatch: dict[str, Any], effect: str,
 ) -> dict[str, str]:
@@ -610,8 +761,31 @@ def _settle(
         root, result["workflow_id"], result["next_operation"], result["revision"]
     )
     effect = "confirmed_no_effect" if no_effect else "confirmed_effect"
+    precommit = None
+    if dispatch["owner_dispatch"]["workflow_role"] == "task_index_transition":
+        verified = verify_and_publish_precommit(
+            root,
+            reservation["ref"],
+            reservation["sha256"],
+            verified_at=SETTLED_AT,
+            expected_version=0,
+            skills_root=SKILLS_ROOT,
+        )
+        precommit = {
+            "ref": verified["verification_ref"],
+            "sha256": verified["verification_sha256"],
+        }
     owner = _owner_effect(root, result["workflow_id"], dispatch, effect)
-    if no_effect:
+    if dispatch["owner_dispatch"]["workflow_role"] == "task_index_transition":
+        receipt = _registered_settle(
+            root,
+            reservation,
+            owner,
+            key=f"settle-{dispatch['operation_id']}",
+            precommit=precommit,
+        )
+        outcome = "confirmed_no_effect" if no_effect else "completed"
+    elif no_effect:
         settled = release(
             root, reservation["ref"], reservation["sha256"], owner,
             released_at=SETTLED_AT, expected_version=0,
@@ -814,13 +988,13 @@ def test_source_recovery_approval_wait_requires_new_plan_without_interaction(
 def test_one_exhausted_row_suppresses_other_semantic_approval_prompt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    body, _runtime = _plan(tmp_path, count=2, mode="consolidated_review")
+    body, runtime = _plan(tmp_path, count=2, mode="consolidated_review")
     from task_doctor_workflow_lib import authority_overlay
 
     def mixed(
         _root: Path, request: dict[str, Any], _context: dict[str, Any], **_kwargs: Any,
     ) -> dict[str, Any]:
-        if request["request_id"] == "request-op-2":
+        if request["request_id"] == runtime["op-2"]["request"]["request_id"]:
             return _approval_wait_projection(object_sha256(request))
         return {
             "schema_version": 2, "status": "resolved",
@@ -972,8 +1146,11 @@ def test_optional_skip_requires_release_and_leaves_no_reserved_budget(
         completion["ref"], completion["sha256"], resolved["revision"],
     )
     assert skipped["workflow_state"] == "complete"
+    grant_id = body["operations"][0]["authority"]["materialization"][
+        "grant_spec"
+    ]["grant_id"]
     grant_state = json.loads(
-        (tmp_path / ".task/authorization/state/grants/grant-op-1.json")
+        (tmp_path / ".task/authorization/state/grants" / f"{grant_id}.json")
         .read_text(encoding="utf-8")
     )
     assert grant_state["reserved_uses"] == 0
@@ -1007,8 +1184,11 @@ def test_post_dispatch_block_requires_verified_no_effect_release(
         completion["ref"], completion["sha256"], dispatch["revision"],
     )
     assert blocked["classification"] == outcome
+    grant_id = body["operations"][0]["authority"]["materialization"][
+        "grant_spec"
+    ]["grant_id"]
     grant_state = json.loads(
-        (tmp_path / ".task/authorization/state/grants/grant-op-1.json")
+        (tmp_path / ".task/authorization/state/grants" / f"{grant_id}.json")
         .read_text(encoding="utf-8")
     )
     assert grant_state["reserved_uses"] == 0
@@ -1156,11 +1336,182 @@ def test_materialization_bundle_exposes_exact_bridge_inputs(tmp_path: Path) -> N
     assert set(authority) == {
         "applicability", "request", "request_sha256", "subject",
         "operation_manifest", "snapshot_sources", "evaluate",
-        "register_grant_recipe", "reserve",
+        "grant_replay", "reserve",
     }
-    assert authority["register_grant_recipe"]["source_approval"] == (
+    assert authority["grant_replay"]["source_approval"] == (
         body["authorization_basis"]["approvals"][0]["source_approval"]
     )
+
+
+def test_schema_v5_root_source_consumes_exact_producer_grant(
+    tmp_path: Path,
+) -> None:
+    body, runtime = _plan(tmp_path)
+    operation = body["operations"][0]
+    source = body["authorization_basis"]["approvals"][0]["source_approval"]
+    loaded = load_bound_materialization(
+        tmp_path,
+        source,
+        operation["authority"]["request"],
+        operation["authority"]["materialization"]["policy_snapshot"],
+    )
+    assert loaded["source_approval"]["schema_version"] == 5
+    assert loaded["grant"]["schema_version"] == 3
+    assert loaded["projection"]["request_sha256"] == object_sha256(
+        runtime["op-1"]["request"]
+    )
+    with pytest.raises(SystemExit, match="exact request projection"):
+        load_bound_materialization(
+            tmp_path,
+            source,
+            {
+                **operation["authority"]["request"],
+                "request_id": "different-root-request",
+            },
+            operation["authority"]["materialization"]["policy_snapshot"],
+        )
+
+
+def test_schema_v6_session_child_consumes_exact_producer_grant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "workspace"
+    root.mkdir()
+    workspace_state = _workspace(root)
+    (root / ".agent_goal/final_goal.md").write_text(
+        "# Final goal\n", encoding="utf-8"
+    )
+    (root / ".agent_goal/goal_contract.yaml").write_text(
+        "goal: test\n", encoding="utf-8"
+    )
+    interaction_home = tmp_path / "authority-interaction"
+    interaction_home.mkdir()
+    monkeypatch.setattr(interaction, "INTERACTION_HOME", interaction_home)
+    monkeypatch.setattr(
+        interaction, "STATE_PATH", interaction_home / "state.json"
+    )
+    monkeypatch.setattr(
+        interaction, "LAST_ATTEMPT_PATH", interaction_home / "last.json"
+    )
+    config = interaction._normalize_config({
+        **interaction.DEFAULT_CONFIG, "enabled": True,
+    })
+    config_digest = object_sha256(config)
+    monkeypatch.setattr(
+        interaction, "load_config",
+        lambda: (config, config_digest, True),
+    )
+    monkeypatch.setattr(interaction, "_utc_now", lambda: AT)
+    plan_binding, _plan = interaction.build_activation_plan(
+        root, mode="governed", prepared_at=AT
+    )
+    evidence = {
+        "schema_version": 1,
+        "artifact_kind": "authority_interaction_activation_evidence",
+        "audience": "manage-agent-authority/authority-interaction-activation",
+        "issuer": "local-agent-managed-root-authorizer",
+        "activation_id": "authia-task-doctor-test",
+        "activation_plan": plan_binding,
+        "approved": True,
+        "decided_at": AT,
+        "evidence_id": "activation-evidence-task-doctor",
+        "signature": {
+            "algorithm": "rsassa-pkcs1-v1_5-sha256",
+            "key_id": "test",
+            "value_base64": "AA==",
+        },
+    }
+    monkeypatch.setattr(
+        interaction,
+        "validate_activation_evidence",
+        lambda value, **_kwargs: value,
+    )
+    payload = interaction._json_bytes(evidence)
+    evidence_path = (
+        root / interaction.EVIDENCE_ROOT
+        / f"{hashlib.sha256(payload).hexdigest()}.json"
+    )
+    publish_immutable(evidence_path, payload)
+    evidence_binding = {
+        "ref": evidence_path.relative_to(root).as_posix(),
+        "sha256": hashlib.sha256(payload).hexdigest(),
+    }
+    interaction.materialize_activation(root, evidence_binding)
+    monkeypatch.setenv("CODEX_THREAD_ID", "thread-task-doctor")
+    monkeypatch.setenv(
+        "CODEX_SESSION_APPROVAL_RECEIPT", "host-receipt-task-doctor"
+    )
+    lease = session_store.build_host_session_lease(
+        root,
+        thread_binding="thread-task-doctor",
+        provider="codex",
+        approval_receipt="host-receipt-task-doctor",
+        issued_at=AT,
+    )
+    request = {
+        "schema_version": 2,
+        "request_kind": "authority_operation",
+        "request_id": "request-session-child",
+        "skill_id": "repo-change-commit",
+        "skill_version": "2.0.0",
+        "operation_id": "finalize_git_state",
+        "operation_version": "1",
+        "cycle_id": "cycle-test",
+        "task_id": "task-test",
+        "pack_id": None,
+        "attempt_id": "attempt-test",
+        "actor_rank": "S1",
+        "subject": {
+            "kind": "repository", "ref": "repo",
+            "digest": "a" * 64, "revision": "head-test",
+        },
+        "required_capabilities": ["repository.git.finalize"],
+        "effect_class": "create_local_commit",
+        "data_class": "repository_state",
+        "mutation_class": "local_mutation",
+        "reversibility": "conditionally_reversible",
+        "risk_tier": "R2",
+        "decision_class": "D3",
+        "intent_type": "grant_authority",
+        "cardinality_requested": "single_use",
+        "use_budget_requested": 1,
+        "reservation_units": 1,
+        "idempotency_key": "session-child-use",
+        "context": {
+            "external_input_status": "not_required",
+            "goal_truth_status": "aligned",
+            "risk_acceptance_status": "not_required",
+            "design_selection_status": "not_required",
+            "external_input_evidence": None,
+            "risk_acceptance_evidence": None,
+            "design_selection_evidence": None,
+        },
+        "composition_receipt": None,
+    }
+    materialized = interaction.materialize_mode_child(
+        root, request, evaluated_at=AT, skills_root=SKILLS_ROOT
+    )
+    assert materialized is not None
+    grant, _grant_sha256 = load_grant_artifact(
+        root, materialized["grant_id"]
+    )
+    assert grant["session_id"] == lease["session_binding"]["session_id"]
+    loaded = load_bound_materialization(
+        root,
+        grant["source_approval"],
+        request,
+        workspace_state["policy"],
+    )
+    assert loaded["source_approval"]["schema_version"] == 6
+    assert loaded["grant"]["schema_version"] == 4
+    assert loaded["projection"]["request_sha256"] == object_sha256(request)
+    with pytest.raises(SystemExit, match="different exact request"):
+        load_bound_materialization(
+            root,
+            grant["source_approval"],
+            {**request, "request_id": "request-session-child-other"},
+            workspace_state["policy"],
+        )
 
 
 def test_real_task_index_plan_kind_and_dependencies(tmp_path: Path) -> None:
@@ -1388,9 +1739,7 @@ def test_task_scope_forward_completion_status_resume_and_staging_cleanup(
 ) -> None:
     body, runtime = _task_scope_workflow(tmp_path)
     prepared = _prepare(tmp_path, body)
-    reservations = {
-        key: _materialize(tmp_path, value) for key, value in runtime.items()
-    }
+    reservations = {"scope": _materialize(tmp_path, runtime["scope"])}
     resolved, _ = _resolve_all(tmp_path, prepared, reservations)
     scope_done, completion = _settle(tmp_path, resolved, reservations["scope"])
     expected = body["operations"][0]["plan"]["after_task"]["sha256"]
@@ -1406,6 +1755,7 @@ def test_task_scope_forward_completion_status_resume_and_staging_cleanup(
     )
     assert replay["replayed"] is True
 
+    reservations["index"] = _materialize(tmp_path, runtime["index"])
     index_ready, _ = _resolve_all(
         tmp_path, replay, {"index": reservations["index"]}
     )
@@ -1423,7 +1773,7 @@ def test_task_scope_forward_completion_status_resume_and_staging_cleanup(
     assert journal.read_bytes() == before
 
 
-def test_scope_no_effect_cancels_index_and_releases_early_reservation(
+def test_scope_no_effect_blocks_historical_early_index_reservation(
     tmp_path: Path,
 ) -> None:
     body, runtime = _task_scope_workflow(tmp_path)
@@ -1460,9 +1810,10 @@ def test_scope_no_effect_cancels_index_and_releases_early_reservation(
     assert cancellation["artifact_kind"] == (
         "task_doctor_dependency_cancellation_receipt"
     )
-    assert cancellation["authority_settlement"]["status"] == (
-        "released_not_started"
-    )
+    assert cancellation["authority_settlement"] == {
+        "status": "blocked_registered_owner_settlement",
+        "reason": "registered_owner_not_started_release_forbidden",
+    }
     reservation = json.loads(
         (tmp_path / early_index_reservation["ref"]).read_text(encoding="utf-8")
     )
@@ -1470,7 +1821,7 @@ def test_scope_no_effect_cancels_index_and_releases_early_reservation(
         (tmp_path / ".task/authorization/state/reservations"
          / f"{reservation['reservation_id']}.json").read_text(encoding="utf-8")
     )
-    assert state["status"] == "released"
+    assert state["status"] == "reserved"
     assert verify_transition_plan(
         tmp_path, body["operations"][1]["plan_binding"]["ref"], phase="apply"
     )["status"] == "stale"
@@ -2312,7 +2663,7 @@ def test_scope_excluded_row_source_loss_replans_without_second_prompt(
     def mixed(
         root: Path, request: dict[str, Any], context: dict[str, Any], **kwargs: Any,
     ) -> dict[str, Any]:
-        if request["request_id"] == "request-op-2":
+        if request["request_id"] == runtime["op-2"]["request"]["request_id"]:
             return _approval_wait_projection(object_sha256(request))
         return public_resolver(root, request, context, **kwargs)
 
@@ -2359,7 +2710,7 @@ def test_mixed_covered_and_uncovered_rows_accept_displayed_bundle_without_wideni
     def mixed(
         root: Path, request: dict[str, Any], context: dict[str, Any], **kwargs: Any,
     ) -> dict[str, Any]:
-        if request["request_id"] == "request-op-2":
+        if request["request_id"] == runtime["op-2"]["request"]["request_id"]:
             return _approval_wait_projection(object_sha256(request))
         return public_resolver(root, request, context, **kwargs)
 
@@ -2804,13 +3155,12 @@ def test_prior_effect_receipt_survives_later_canonical_task_transition(
 ) -> None:
     body, runtime = _task_scope_workflow(tmp_path)
     prepared = _prepare(tmp_path, body)
-    reservations = {
-        key: _materialize(tmp_path, value) for key, value in runtime.items()
-    }
+    reservations = {"scope": _materialize(tmp_path, runtime["scope"])}
     resolved, _bundle = _resolve_all(tmp_path, prepared, reservations)
     scope_done, _scope_completion = _settle(
         tmp_path, resolved, reservations["scope"]
     )
+    reservations["index"] = _materialize(tmp_path, runtime["index"])
     journal = json.loads(
         (tmp_path / scope_done["journal_ref"]).read_text(encoding="utf-8")
     )
@@ -2819,19 +3169,32 @@ def test_prior_effect_receipt_survives_later_canonical_task_transition(
         if item["operation_id"] == "index"
     )
     index_dispatch = {"operation_id": "index", "owner_dispatch": index_item}
+    verified = verify_and_publish_precommit(
+        tmp_path,
+        reservations["index"]["ref"],
+        reservations["index"]["sha256"],
+        verified_at=SETTLED_AT,
+        expected_version=0,
+        skills_root=SKILLS_ROOT,
+    )
+    index_precommit = {
+        "ref": verified["verification_ref"],
+        "sha256": verified["verification_sha256"],
+    }
     index_owner = _owner_effect(
         tmp_path, scope_done["workflow_id"], index_dispatch,
         "confirmed_no_effect",
     )
-    released = release(
-        tmp_path, reservations["index"]["ref"], reservations["index"]["sha256"],
-        index_owner, released_at=SETTLED_AT, expected_version=0,
-        idempotency_key="release-index-after-scope-no-effect",
-        effect_status="verified_no_effect",
+    release_binding = _registered_settle(
+        tmp_path,
+        reservations["index"],
+        index_owner,
+        key="release-index-after-scope-no-effect",
+        precommit=index_precommit,
     )
     index_completion = _completion(
         tmp_path, scope_done["workflow_id"], index_dispatch, index_owner,
-        {"ref": released["ref"], "sha256": released["sha256"]},
+        release_binding,
         "confirmed_no_effect",
     )
     complete = workflow.resolve(
@@ -2867,9 +3230,7 @@ def test_prior_no_effect_receipt_survives_later_unrelated_task_publication(
 ) -> None:
     body, runtime = _task_scope_workflow(tmp_path)
     prepared = _prepare(tmp_path, body)
-    reservations = {
-        key: _materialize(tmp_path, value) for key, value in runtime.items()
-    }
+    reservations = {"scope": _materialize(tmp_path, runtime["scope"])}
     resolved, _bundle = _resolve_all(tmp_path, prepared, reservations)
     scope_done, _scope_completion = _settle(
         tmp_path, resolved, reservations["scope"], no_effect=True
@@ -2899,65 +3260,22 @@ def test_prior_no_effect_receipt_survives_later_unrelated_task_publication(
 def _compact_advice_operation(
     root: Path, workspace_state: dict[str, Any], suffix: str,
 ) -> dict[str, Any]:
-    operation, approval, _runtime = _authority_operation(
-        root, workspace_state, suffix,
+    source = root / f"inputs/advice-{suffix}.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    text = f"# Advice {suffix}\n\nApply exact advice intake {suffix}.\n"
+    source.write_text(text, encoding="utf-8")
+    owner_plan = build_intake_plan(
+        root, text, f"Advice {suffix}", "normal", at=AT,
+        source_ref=str(source.relative_to(root)),
     )
-    request = operation["authority"]["request"]
-    compilation = compile_operation(
-        root,
-        {
-            "skill_id": request["skill_id"],
-            "operation_id": request["operation_id"],
-            "subject": {
-                "ref": request["subject"]["ref"],
-                "revision": request["subject"]["revision"],
-            },
-            "scope": {
-                "cycle_id": request["cycle_id"],
-                "task_id": request["task_id"],
-                "pack_id": request["pack_id"],
-            },
-            "actor_rank": request["actor_rank"],
-            "classification": {
-                "effect_class": request["effect_class"],
-                "data_class": request["data_class"],
-                "subject_kind": request["subject"]["kind"],
-            },
-            "context": {
-                "external_input_status": "not_required",
-                "goal_truth_status": "aligned",
-                "risk_acceptance_status": "not_required",
-                "design_selection_status": "not_required",
-            },
-            "session_ceiling": {
-                "capabilities": request["required_capabilities"],
-                "risk_ceiling": "R3",
-                "mutation_classes": ["local_mutation"],
-                "evidence_id": f"compact-session-{suffix}",
-            },
-            "goal_autonomy_envelope": {
-                "envelope_id": f"compact-envelope-{suffix}",
-                "capabilities": request["required_capabilities"],
-                "risk_ceiling": "R3",
-                "decision_classes": [request["decision_class"]],
-                "subjects": [request["subject"]["digest"]],
-                "operations": [":".join(request[key] for key in (
-                    "skill_id", "skill_version", "operation_id", "operation_version"
-                ))],
-                "source_ref": workspace_state["goal"]["ref"],
-            },
-        },
-        compiled_at=AT,
-        skills_root=SKILLS_ROOT,
+    published = publish_intake_plan(root, owner_plan)
+    plan_binding = {
+        "ref": published["plan_ref"],
+        "sha256": published["plan_file_sha256"],
+    }
+    compilation, _batch = _compile_batch(
+        root, workspace_state, plan_binding, _advice_spec(), suffix
     )
-    old_grant = operation["authority"]["materialization"]["grant_spec"]["grant_id"]
-    for path in (
-        root / ".task/authorization/grants" / f"{old_grant}.json",
-        root / ".task/authorization/state/grants" / f"{old_grant}.json",
-        root / approval["ref"],
-        Path(f"{root / approval['ref']}.json"),
-    ):
-        path.unlink(missing_ok=True)
     return {
         "operation_id": suffix,
         "compiled_operation": compilation,
@@ -2988,38 +3306,16 @@ def _review_source(
         item for item in review["operations"]
         if item["operation_id"] == operation_id
     )
-    request = row["compiled_operation"]["request"]
-    identity = row["materialization_identity"]
-    body = {
-        "schema_version": 2,
-        "artifact_kind": "authority_source_approval",
-        "approval_id": f"approval-{operation_id}-{evidence_id}",
-        "source_kind": "explicit_user_instruction",
-        "source_rank": "S3",
-        "decision_type": "grant_authority",
-        "capabilities": sorted({"authority.grant.issue", *request["required_capabilities"]}),
-        "subjects": [request["subject"]],
-        "operations": [{key: request[key] for key in (
-            "skill_id", "skill_version", "operation_id", "operation_version"
-        )}],
-        "risk_ceiling": request["risk_tier"],
-        "decision_classes": [request["decision_class"]],
-        "cardinalities": ["single_use"],
-        "max_uses": 1,
-        "grant_ids": [identity["grant_id"]],
-        "request_digests": [row["compiled_operation"]["request_sha256"]],
-        "lineage_ids": [identity["lineage_id"]],
-        "delegation_binding": None,
-        "not_before": not_before,
-        "expires_at": EXPIRY,
-        "evidence_id": evidence_id,
-        "integrity_status": "verified",
-    }
-    source = _write_json(
-        root, f".task/authorization/review-source-{operation_id}-{evidence_id}.json",
-        body,
+    request_sha256 = row["compiled_operation"]["request_sha256"]
+    batch = _BATCH_BY_REQUEST[(str(root.resolve()), request_sha256)]
+    source, _grant = _materialize_root_batch(
+        root,
+        {"policy": review["policy_snapshot"]},
+        batch,
+        decided_at=not_before,
+        evidence_id=evidence_id,
     )
-    return snapshot_file(root, source["ref"], "source_approval")
+    return source
 
 
 def test_compact_intent_review_replays_and_cannot_self_authorize(

@@ -10,10 +10,9 @@ from manage_agent_authority.projection_reconciliation import (
 
 from .authority import (
     _authority_call,
-    _current_settled_state,
-    _reservation_id,
     _reservation_scope,
 )
+from .authority_settlement import validate_terminal_state
 from .common import WorkflowError, read_json, require, workspace_file
 
 
@@ -50,6 +49,7 @@ def validate_unknown_settlement(
             "authority_settlement_mismatch",
             "unknown-effect receipt binds a different reservation")
     _reservation_scope(root, item, reservation)
-    _current_settled_state(root, _reservation_id(root, reservation),
-                           "quarantined_unknown_effect", receipt["receipt_id"], receipt)
+    validate_terminal_state(
+        root, reservation, "quarantined_unknown_effect", receipt
+    )
     return binding

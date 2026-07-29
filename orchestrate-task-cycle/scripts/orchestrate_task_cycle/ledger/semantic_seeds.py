@@ -60,6 +60,14 @@ _TERMINAL_FIELDS = {
     "terminal_lifecycle_kind",
     "reason",
 }
+_RUN_TERMINAL_FIELDS = {
+    "task_id",
+    "run_id",
+    "execution_status",
+    "run_terminal_projection",
+    "run_terminal_projection_binding",
+    "reason",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +78,12 @@ class StageObservationSeed:
 
 @dataclass(frozen=True, slots=True)
 class TerminalLifecycleSeed:
+    canonical_semantics: bytes
+    _capability: object
+
+
+@dataclass(frozen=True, slots=True)
+class RunTerminalSeed:
     canonical_semantics: bytes
     _capability: object
 
@@ -110,6 +124,13 @@ def make_terminal_lifecycle_seed(
     )
 
 
+def make_run_terminal_seed(semantic: dict[str, Any]) -> RunTerminalSeed:
+    return RunTerminalSeed(
+        _seal_semantics(semantic, _RUN_TERMINAL_FIELDS, "run terminal"),
+        _SEED_CAPABILITY,
+    )
+
+
 def _open_seed(value: object, expected: type, label: str) -> dict[str, Any]:
     if not isinstance(value, expected) or value._capability is not _SEED_CAPABILITY:
         raise ValueError(f"{label} publication requires a compiler-owned semantic seed")
@@ -139,11 +160,20 @@ def open_terminal_lifecycle_seed(value: object) -> dict[str, Any]:
     return semantic
 
 
+def open_run_terminal_seed(value: object) -> dict[str, Any]:
+    semantic = _open_seed(value, RunTerminalSeed, "run terminal")
+    _seal_semantics(semantic, _RUN_TERMINAL_FIELDS, "run terminal")
+    return semantic
+
+
 __all__ = [
     "StageObservationSeed",
     "TerminalLifecycleSeed",
+    "RunTerminalSeed",
+    "make_run_terminal_seed",
     "make_stage_observation_seed",
     "make_terminal_lifecycle_seed",
     "open_stage_observation_seed",
     "open_terminal_lifecycle_seed",
+    "open_run_terminal_seed",
 ]

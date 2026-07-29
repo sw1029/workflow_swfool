@@ -248,6 +248,10 @@ OPTIONAL_OWNER_FIELDS: dict[str, tuple[str, ...]] = {
         "expected_completion_artifacts",
         "failure_autopsy",
     ),
+    "closeout_commit": (
+        "settlement_anchor_path",
+        "settlement_verification",
+    ),
     "qualitative_review": (
         "direct_read_scope",
         "reviewer_routing",
@@ -280,6 +284,7 @@ OPTIONAL_OWNER_FIELDS: dict[str, tuple[str, ...]] = {
         "leakage_report_path",
         "validation_set_root_path",
         "premise_receipts",
+        "validation_set_not_applicable_reason",
     ),
     "cycle_efficiency_profile": ("compiler_efficiency",),
     "derive": (
@@ -314,7 +319,14 @@ OPTIONAL_OWNER_FIELDS: dict[str, tuple[str, ...]] = {
         "resolution_downgrade_gate",
         "report_key_integrity_gate",
     ),
-    "issue": ("issue_paths", "issue_urls", "resolution_evidence"),
+    "issue": (
+        "issue_paths",
+        "issue_urls",
+        "resolution_evidence",
+        "issue_skipped_reason",
+    ),
+    "schema_pre_derive": ("schema_skipped_reason",),
+    "schema_post_derive": ("schema_skipped_reason",),
     "commit": ("commit_hash", "commit_subject", "commit_skipped_reason"),
     "dashboard": (
         "authoritative_projection",

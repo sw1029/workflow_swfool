@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from types import MappingProxyType
 
 from ..result_contract.configuration import (
     AGENT_ROUTING_TARGETS,
@@ -39,6 +40,71 @@ class ExecutorSpec:
             self.allowed_routing_profiles
         )
         return {**projected, "routing_required": self.routing_required}
+
+
+@dataclass(frozen=True, slots=True)
+class OwnerEffectPolicy:
+    """Continuation effect and recovery contract for one owner target."""
+
+    side_effect_class: str
+    action_effect_classes: tuple[str, ...]
+    recovery_strategy: str
+
+
+def _local(
+    side_effect_class: str = "workspace_metadata_write",
+) -> OwnerEffectPolicy:
+    return OwnerEffectPolicy(
+        side_effect_class,
+        ("local_reversible",),
+        "uncertain",
+    )
+
+
+def _git(*, verified_closeout: bool = False) -> OwnerEffectPolicy:
+    return OwnerEffectPolicy(
+        "git_mutation",
+        ("local_commit",),
+        (
+            "verify_closeout_anchor"
+            if verified_closeout
+            else "uncertain"
+        ),
+    )
+
+
+OWNER_EFFECT_MATRIX = MappingProxyType(
+    {
+        "authority": _local(),
+        "acceptance": _local(),
+        "validation_scope_plan": _local(),
+        "validation_set_plan": _local(),
+        "governance": _local("workspace_mutation"),
+        "run": OwnerEffectPolicy(
+            "external_or_long_running_effect",
+            ("unknown", "local_long_run"),
+            "uncertain",
+        ),
+        "validation_set_build": _local("workspace_mutation"),
+        "visible_increment": _local(),
+        "validation_scope_finalize": _local(),
+        "index_pre_validate": _local(),
+        "issue": _local(),
+        "schema_pre_derive": _local(),
+        "schema_post_derive": _local(),
+        "index": _local(),
+        "commit": _git(),
+        "closeout_commit": _git(verified_closeout=True),
+        "qualitative_review": OwnerEffectPolicy(
+            "observe_only",
+            ("observe_only",),
+            "safe_reissue",
+        ),
+        "loopback_audit": _local(),
+        "derive": _local(),
+        "validate": _local(),
+    }
+)
 
 
 _COMMAND_IDS = {
@@ -94,29 +160,35 @@ _OWNERS = {
     "validate": "validate-task-completion",
 }
 
-_SIDE_EFFECTS = {
-    "governance": "workspace_mutation",
-    "run": "external_or_long_running_effect",
-    "visible_increment": "workspace_metadata_write",
-    "issue": "workspace_metadata_write",
-    "schema_pre_derive": "workspace_metadata_write",
-    "schema_post_derive": "workspace_metadata_write",
-    "index": "workspace_metadata_write",
-    "commit": "git_mutation",
-    "dashboard": "workspace_projection_write",
-    "report": "workspace_projection_write",
-    "closeout_commit": "git_mutation",
-}
+_DETERMINISTIC_SIDE_EFFECTS = MappingProxyType(
+    {
+        "repo_skill_adapter_scan": "observe_only",
+        "repo_skill_adapter_validate": "observe_only",
+        "code_structure_audit": "observe_only",
+        "repo_skill_gap_analysis": "observe_only",
+        "cycle_efficiency_profile": "observe_only",
+        "dashboard": "workspace_projection_write",
+        "report": "workspace_projection_write",
+    }
+)
+
 
 # Exact selectors which an already-executed, contract-valid owner result may
-# move between preparation and publication.  Every unlisted selector remains a
-# precondition and must still equal the preparation-bound fingerprint.  Empty
-# rows are deliberate: deterministic dashboard/report writes are compiler-owned
-# `.task/cycle/` projections and therefore do not alter selected repository state.
+# move between preparation and publication. Every unlisted selector remains a
+# precondition and must still equal the preparation-bound fingerprint. Empty
+# rows are deliberate for content-addressed producer writes which do not alter
+# selected repository state.
 _POST_EFFECT_SELECTORS = {
+    "authority": (),
+    "acceptance": (),
+    "validation_scope_plan": (),
+    "validation_set_plan": (),
     "governance": ("task", "git_worktree"),
     "run": ("git_worktree", "session"),
+    "validation_set_build": ("validation",),
     "visible_increment": ("git_worktree",),
+    "validation_scope_finalize": (),
+    "index_pre_validate": (),
     "issue": ("issue",),
     "schema_pre_derive": ("schema",),
     "schema_post_derive": ("schema",),
@@ -125,6 +197,9 @@ _POST_EFFECT_SELECTORS = {
     "dashboard": (),
     "report": (),
     "closeout_commit": ("git_head", "git_worktree"),
+    "loopback_audit": (),
+    "derive": (),
+    "validate": (),
 }
 
 
@@ -145,6 +220,11 @@ def _kind(target: str) -> str:
 def _spec(target: str) -> ExecutorSpec:
     kind = _kind(target)
     routed = target in AGENT_ROUTING_TARGETS
+    side_effect = (
+        _DETERMINISTIC_SIDE_EFFECTS[target]
+        if kind == "deterministic"
+        else OWNER_EFFECT_MATRIX[target].side_effect_class
+    )
     return ExecutorSpec(
         target=target,
         executor_kind=kind,
@@ -170,7 +250,7 @@ def _spec(target: str) -> ExecutorSpec:
             else "stage-owner-result-v1"
         ),
         semantic_schema_id=(f"stage-semantic-{target}-v1" if kind == "hybrid" else None),
-        side_effect_class=_SIDE_EFFECTS.get(target, "observe_only"),
+        side_effect_class=side_effect,
     )
 
 
@@ -197,7 +277,16 @@ if any(
     raise RuntimeError("deterministic executors must not declare model routing")
 if any(not spec.command_id or not spec.output_adapter_id for spec in EXECUTOR_REGISTRY.values()):
     raise RuntimeError("executor registry contains an unbound executor")
-if set(_POST_EFFECT_SELECTORS) != set(_SIDE_EFFECTS):
+if set(OWNER_EFFECT_MATRIX) != set(TARGETS) - set(DETERMINISTIC_TARGETS):
+    raise RuntimeError("owner effect matrix must cover every owner and hybrid target")
+if set(_DETERMINISTIC_SIDE_EFFECTS) != set(DETERMINISTIC_TARGETS):
+    raise RuntimeError("deterministic side-effect matrix is incomplete")
+_EFFECTFUL_TARGETS = {
+    target
+    for target, spec in EXECUTOR_REGISTRY.items()
+    if spec.side_effect_class != "observe_only"
+}
+if set(_POST_EFFECT_SELECTORS) != _EFFECTFUL_TARGETS:
     raise RuntimeError("side-effecting executors require an explicit post-effect boundary")
 if any(
     not set(selectors) <= set(dependency_selectors(target))
@@ -213,9 +302,46 @@ def executor_spec(target: str) -> ExecutorSpec:
         raise ValueError(f"unregistered stage executor: {target}") from exc
 
 
+def continuation_effect_class(
+    target: str,
+    *,
+    executor_kind: str,
+    side_effect_class: str,
+    local_long_run_authorized: bool = False,
+) -> str:
+    """Resolve an owner action effect only from the closed target policy."""
+
+    registered = EXECUTOR_REGISTRY.get(target)
+    policy = OWNER_EFFECT_MATRIX.get(target)
+    if (
+        registered is None
+        or policy is None
+        or registered.executor_kind not in {"owner", "hybrid"}
+        or executor_kind != registered.executor_kind
+        or side_effect_class != policy.side_effect_class
+    ):
+        return "unknown"
+    if target == "run" and local_long_run_authorized:
+        return "local_long_run"
+    return policy.action_effect_classes[0]
+
+
+def owner_recovery_strategy(target: str, effect_class: str) -> str:
+    """Return a safe recovery strategy, defaulting to typed uncertainty."""
+
+    policy = OWNER_EFFECT_MATRIX.get(target)
+    if policy is None or effect_class not in policy.action_effect_classes:
+        return "uncertain"
+    return policy.recovery_strategy
+
+
 __all__ = [
     "EXECUTOR_REGISTRY",
     "ExecutorSpec",
+    "OWNER_EFFECT_MATRIX",
+    "OwnerEffectPolicy",
     "allowed_post_effect_selectors",
+    "continuation_effect_class",
     "executor_spec",
+    "owner_recovery_strategy",
 ]

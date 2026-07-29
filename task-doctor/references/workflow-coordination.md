@@ -17,8 +17,8 @@
 `$task-doctor` is the only user-interaction owner for one doctoring workflow. Child
 owners return machine states and artifacts; they do not ask the user for authority.
 Group genuinely missing decisions into one review, while preserving one exact v2
-request, grant, reservation, pre-commit verification, and settlement per governed
-owner effect.
+request, producer-created schema-v3/v4 grant, reservation, pre-commit verification,
+and settlement per governed owner effect.
 
 Keep truth ownership separate:
 
@@ -63,7 +63,7 @@ content-addressed consolidated review containing only uncovered operations. Comp
 output is the default; use `--detail full` only for diagnostics. Replaying identical
 inputs returns the same review or plan identity instead of rotating IDs.
 
-After the actual user decision has been represented by pre-existing closed authority
+After the actual user decision has been represented by producer-created authority
 source-approval snapshots, accept the exact review binding:
 
 ```bash
@@ -72,14 +72,16 @@ python3 -P -m task_doctor_workflow_lib accept-review \
   --decision review-decision.json
 ```
 
-The decision file is a binding to an actual decision and its typed source snapshots;
-it is not permission by itself. The command must reject a missing snapshot, an
-uncovered or extra operation, a stale review, a pre-decision source, a source whose
-evidence/request/grant/lineage scope differs, or any attempt to manufacture approval
-from the review. The accepted plan uses schema-v2 reservation windows. It fixes the
-post-decision source/grant/evaluation identities while leaving `reserved_at` to the
-later dependency-ready instant. Legacy schema-v1 plans retain their exact planned
-`reserved_at` and remain readable without rewriting.
+The decision file binds an actual decision to current producer output: a schema-v5
+root approval with one exact `grant_projections` row, or a schema-v6 session approval
+with one exact `activation_child`. It is not permission by itself. The command must
+reject a missing producer materialization, an uncovered or extra operation, a stale
+review, a pre-decision source, a source whose request/grant/lineage scope differs, or
+any attempt to manufacture approval from the review. The accepted plan uses
+schema-v2 reservation windows and projects the existing producer grant without
+creating one. It fixes the post-decision source/grant/evaluation identities while
+leaving `reserved_at` to the later dependency-ready instant. Legacy source schemas
+and schema-v1 plans remain reader-only and are never emitted as new authority.
 
 For an existing journal, derive a small resolution bundle and advance only across
 deterministic system-owned transitions:
@@ -94,7 +96,7 @@ python3 -P -m task_doctor_workflow_lib advance \
 ```
 
 Dry-run is the default. Mutating advance requires explicit `--apply` and `--at`, uses
-the already verified source snapshot, registers/evaluates the exact grant, and
+the already verified producer source and grant, evaluates that exact binding, and
 reserves only a dependency-ready governed operation. It must stop on owner/model
 judgment, genuine approval, goal truth, external input, risk/cost, design selection,
 effect settlement, stale evidence, or an exhausted step budget. A repeated state
@@ -233,25 +235,33 @@ Apply these invariants:
   `authority_applicability` and `authorization_mechanism` are both `none`; it starts
   as `authority_not_applicable` and carries no reservation evidence.
 - Any changed operation, owner plan bytes, subject, dependency, manifest digest,
-  effect, risk, context, grant recipe, or reservation key requires a new workflow.
+  effect, risk, context, producer grant projection, or reservation key requires a
+  new workflow.
 
 ## Declared authorization and consolidated review
 
 Use `execute_with_declared_authorization` only when an initiating user decision
 already covers every governed local effect. Set the interaction budget to zero.
 `authorization_basis` is not a free-form evidence binding. It is a closed mapping
-from every governed workflow operation to the authority owner's immutable,
-content-addressed source-approval snapshot.
+from every governed workflow operation to an immutable, content-addressed
+producer-owned source approval and its already-materialized exact grant.
 
-The helper requires each snapshot to:
+For newly accepted review authority, the helper requires each source to:
 
 - use `.task/authorization/source_snapshots/source_approval-<digest>.json`;
-- have matching snapshot metadata;
-- parse as a closed v2 `authority_source_approval`;
-- represent verified `explicit_user_instruction` / `S3` / `grant_authority`;
-- bind the exact request digest, subject, owner operation, capability set, decision
-  class, risk ceiling, cardinality, use budget, grant ID, and lineage ID;
+- parse as a current schema-v5 root or schema-v6 activation-child approval;
+- bind the accepted review evidence when it is a root approval, or the live signed
+  session activation when it is a session child;
+- contain exactly one matching request projection/child and bind its request digest,
+  grant ID, lineage ID, and grant idempotency key;
+- reopen one existing schema-v3/v4 grant and its producer materialization chain;
+- match the exact subject, owner operation, capabilities, decision class, risk
+  ceiling, cardinality, use budget, task, and improvement identifiers;
 - be effective at the planned evaluation time.
+
+Historical schemas remain usable only when they reopen one existing exact grant and
+validate their original source-decision binding. They are never accepted as new
+review output.
 
 `already_covered` therefore means only “the exact decision source exists.” It is
 not dispatchable. Materialize exact grants and decisions without another prompt,
@@ -291,10 +301,10 @@ Keep semantic acceptance and reservation resolution as two distinct mutations:
 1. The one user-interaction bundle covers every prompt-required governed operation in
    the journal-bound semantic scope, including downstream rows whose dependencies are
    incomplete. Validate those owner plans structurally. Each resolution is
-   `already_covered` and binds that operation's exact immutable source-approval
-   snapshot. It binds no reservation and increments `approval_interactions_used`
-   exactly once. A live-covered row outside the displayed scope keeps its existing
-   journal state and evidence.
+   `already_covered` and binds that operation's exact immutable producer source and
+   materialized grant. It binds no reservation and increments
+   `approval_interactions_used` exactly once. A live-covered row outside the
+   displayed scope keeps its existing journal state and evidence.
 2. Later system-only bundles include only the dependency-complete, public-owner
    `ready` frontier. Each resolution is `ready_to_resume` and binds one current
    exact reservation. These bundles never increment the interaction counter.
@@ -314,31 +324,33 @@ every included governed item it exposes:
 - owner operation-manifest binding;
 - exact evaluation context, context digest, and evaluation time;
 - exact policy snapshot;
-- declared source-approval snapshot, or closed S3 source-approval requirements for
-  consolidated review;
-- a full deterministic `register_grant_recipe` derived from the request and fixed
-  grant specification;
+- either the exact producer source-approval binding and validated source schema, or
+  the closed requirements that the authority producer must satisfy after the one
+  user decision;
+- when covered, the exact already-materialized schema-v3/v4 grant identity and
+  producer receipt chain;
 - exact `reserve` timestamp and idempotency key.
 
 Materialize in this order:
 
 ```text
 typed user decision
-  -> snapshot_file(kind=source_approval)
-  -> register_grant(exact register_grant_recipe with snapshot binding)
-  -> evaluate(exact request, exact context, exact evaluated_at)
+  -> authority producer emits schema-v5 root or schema-v6 activation-child source
+  -> authority producer materializes the exact schema-v3/v4 grant
+  -> task-doctor reopens and validates the producer chain
+  -> evaluate(exact request, exact context, producer grant created_at)
   -> persist immutable allowed decision
   -> wait until dependencies are terminal and owner apply phase is ready
   -> reserve(exact decision binding, exact reserved_at, exact idempotency_key)
   -> resolve-all(exact reservation file bindings)
 ```
 
-For declared authorization, `register_grant_recipe.source_approval` is already an
-exact binding. For consolidated review it is null until the one user decision is
-captured; fill only that field from the newly produced content-addressed snapshot
-and require it to meet `source_approval_requirements`. Do not alter any request,
-subject, operation, grant, context, policy, time, or reservation field while doing
-so.
+For declared authorization, the producer source and grant are already exact
+bindings. For consolidated review they remain absent until the one user decision is
+captured by the authority producer. Task-doctor must consume those artifacts as-is;
+it must never fill a grant template, mint grant/lineage IDs, or synthesize an
+approval from review JSON. Do not alter any request, subject, operation, grant,
+context, policy, time, or reservation field.
 
 ## Reservation resolution and dispatch
 
@@ -366,7 +378,8 @@ owner's public validators and additionally requires:
 - exact request and request digest;
 - exact evaluation context and time;
 - exact owner operation-manifest binding;
-- exact grant recipe and source/policy bindings;
+- exact existing producer grant, materialization receipt, and source/policy
+  bindings;
 - exact reservation timestamp and idempotency key;
 - current reservation projection equal to `reserved`, version `0`, with the
   reservation ID as its last event.
@@ -395,17 +408,15 @@ Retain the public status instead of reducing verification to pass/fail:
 | `conflict` | Contract repair/fail-close | Never |
 
 If a required upstream operation settles `confirmed_no_effect`, a speculative final
-index plan anchored to that operation is no longer dispatchable. Publish an exact
-dependency-cancellation intent and receipt, mark the index row `plan_changed`, and
-prepare a replacement index plan before any new authority prompt. If an old workflow
-already reserved that never-dispatched index operation, release only that exact
-reservation with the cancellation intent as `not_started` evidence. This path is
-available only when the public index verifier reports `stale` and explicitly proves
-no plan intent, effect, receipt, or historical completion. `materializing`,
-`already_applied`, `settled_no_effect`, `recovery_required`, and `conflict` retain
-their typed routes and must never be cancelled as not started. This is a
-coordinator cancellation, not an index-owner no-effect outcome; never create a fake
-index no-effect receipt or consume its reservation.
+index plan anchored to that operation is no longer dispatchable. If the downstream
+owner was never registered, publish an exact dependency-cancellation intent and
+receipt, mark the index row `plan_changed`, and prepare a replacement index plan
+before any new authority prompt. If a historical workflow already registered or
+reserved that downstream owner, task-doctor cannot prove `not_started`: project
+`blocked_registered_owner_settlement`, fail closed, and require owner settlement or
+reconciliation before replanning. Never manufacture a coordinator-authored no-effect
+result or release receipt. `materializing`, `already_applied`, `settled_no_effect`,
+`recovery_required`, and `conflict` retain their typed routes.
 
 For semantic acceptance, use `from_classification=needs_user_approval`,
 `user_interaction=true`, and resolve every item in the durable
@@ -508,7 +519,8 @@ A regular JSON file with plausible fields is not a settlement.
 A release with `effect_status=not_started` proves only that reserved budget was
 returned before dispatch. It is not an owner no-effect result and must never route
 to `recover_owner_completion`. Project `plan_changed` /
-`replanning_required`, prepare a new immutable plan or fresh authority recipe, and
+`replanning_required`, prepare a new immutable plan or fresh producer authority
+identity set, and
 retain `should_prompt=false`. Only `verified_no_effect` or reconciled
 `confirmed_no_effect` with the exact typed owner result may recover completion.
 
@@ -572,16 +584,17 @@ Keep these states distinct:
 | `projection_repair` | Exact reservation permits the bounded projection repair | None |
 | `effect_reconciliation` | A dispatch may have changed state | None by default |
 | `plan_changed` | Target/effect/risk/design changed | Prepare a new exact plan |
+| `blocked_registered_owner_settlement` | Registered downstream owner lacks exact settlement | Reconcile owner; never fabricate no-effect |
 | `blocked_by_defect` | Workflow or owner contract is defective | Repair internally |
 
-If a fixed exact source grant ID is exhausted, revoked, expired, or otherwise
+If a fixed exact producer grant ID is exhausted, revoked, expired, or otherwise
 unmaterializable, project `plan_changed` / `replanning_required` with the system
 action `prepare_new_plan`. Build a new immutable coordination plan with distinct
 request, grant, lineage, and reservation identities before asking the user anything.
 Reapproval cannot repair a stale plan that hard-codes an unusable grant ID.
 The same route applies if the authority owner later exposes
 `needs_user_approval` / `approve_exact_recovery_projection` for a replacement-source
-recipe. That recovery projection belongs to a new authority identity set; the old
+projection. That recovery projection belongs to a new authority identity set; the old
 task-doctor plan must not expose it as its ordinary approval bundle, increment its
 interaction counter, or adopt the replacement IDs in place.
 
@@ -591,5 +604,5 @@ spend another grant, or increment the journal revision.
 
 Report only outcome, workflow ID/state/classification, changed artifacts,
 `user_action: none|approve|choose|supply_input`, and one exact next action. Keep
-digests, authority matrices, recipes, and event history in machine artifacts unless
+digests, authority matrices, materialization chains, and event history in machine artifacts unless
 the user requests them or a mismatch needs diagnosis.

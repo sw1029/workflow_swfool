@@ -5,6 +5,7 @@
 - [Execution evidence](#execution-evidence)
 - [Log field mapping](#log-field-mapping)
 - [Status rules](#status-rules)
+- [Terminal projection fields](#terminal-projection-fields)
 - [Run disposition fields](#run-disposition-fields)
 - [Gate failure fields](#gate-failure-fields)
 - [Producer progress claim fields](#producer-progress-claim-fields)
@@ -106,6 +107,42 @@ When a caller or adapter can classify output disposition, record:
 - `disposition_unclassified`: warning when the classifier hook exists but required safety/quality scalars are missing.
 
 Discard unsafe `failed_closed` artifacts. Preserve `candidate_degraded` artifacts as measurement evidence, but do not describe them as canonical baseline, success, or completion.
+
+## Terminal Projection Fields
+
+Publish one `run_terminal_projection@v1` with:
+
+- `projection_id`, exact `cycle_id`, `run_id`, `status`, and derived `terminal`;
+- `monitor.status` plus bounded monitor/stop command IDs;
+- `harvest.status` and optional exact evidence binding;
+- closed safe-surviving and discarded artifact rows;
+- nullable failure reason/evidence;
+- `next_action`; and
+- `retry_policy.automatic_retry`.
+
+For `failed_closed`, require terminal monitor state, harvest
+`required|completed|unavailable`, non-null failure evidence, `next_action=review`,
+and `automatic_retry=false`. Artifact identities must be disjoint and every surviving
+row must be `safety_status=safe`.
+
+Use:
+
+```bash
+PYTHONPATH="${CODEX_HOME:-$HOME/.codex}/skills/run-task-code-and-log/scripts" \
+  python3 -P -m run_task_code_and_log terminal-projection \
+  --root . --input run-terminal.json --publish
+```
+
+Record the returned projection binding in the run result and `.agent_log`. Do not
+copy an equivalent JSON file to another path or treat a hash-shaped caller value as
+producer evidence.
+
+Terminal projection publication is single-assignment per cycle/run. An exact replay
+reuses the existing producer CAS and ledger event; a different terminal projection
+for the same run is a conflict rather than a later override.
+Every later completion or stage-ordering consumer must reopen the fixed producer CAS
+for both `succeeded` and `failed_closed`; a deleted or changed projection stops
+progress even when the ledger event itself remains.
 
 ## Gate Failure Fields
 

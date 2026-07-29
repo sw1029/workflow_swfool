@@ -1,4 +1,4 @@
 interface:
   display_name: "Task Doctor"
-  short_description: "Retarget tasks with one bounded review"
-  default_prompt: "Use $task-doctor to compile a retargeting intent, coordinate supported owner plans, and stop at a genuine decision or terminal receipt."
+  short_description: "Retarget tasks with exact reusable authority"
+  default_prompt: "Use $task-doctor to compile and apply one exact task retargeting workflow using current producer-owned authority."

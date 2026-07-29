@@ -34,6 +34,7 @@ _MACHINE_MODEL_KEYS = (
     "goal_truth",
     "advice",
     "cycle",
+    "run_terminal_intake",
     "selection_publication",
     "authority",
     "pending_runs",
@@ -313,6 +314,7 @@ def _bound_preparation(
             str(preparation["state_fingerprint"]),
             preparation["context_binding"],
             fingerprints,
+            schema_version=int(preparation["schema_version"]),
         )
         if canonical_bytes(work_order) != canonical_bytes(expected_work_order):
             raise ValueError("v3 work order differs from compiler rendering")

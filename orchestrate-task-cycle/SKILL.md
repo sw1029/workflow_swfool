@@ -1,6 +1,6 @@
 ---
 name: orchestrate-task-cycle
-description: Run a governed repository task cycle when work requires ordered discovery, implementation, execution, review, loopback, completion validation, next-task derivation, state indexing, and final reporting with durable handoff contracts.
+description: Run one or more governed repository task cycles with ordered discovery, implementation, execution, review, validation, derivation, indexing, and closeout. Use when a bounded host-session approval should sustain deterministic continuation across owner actions without repeated approval prompts.
 ---
 
 # Orchestrate Task Cycle
@@ -17,22 +17,23 @@ Coordinate through compact packets, IDs, paths, verdicts, blockers, and changed-
 
 Read these first-level references only when the corresponding part of the cycle is active:
 
-- [workflow-routing.md](references/workflow-routing.md): full phase order, detailed procedure, routing table, transition rules, worker reasoning/model policy, helper-script hooks, ordering rules, and failure handling.
-- [model-effort-routing.md](references/model-effort-routing.md): dynamic Tier 1-5 policy, abstract configured model references, structured promotion signals, binding/enforcement evidence, and bounded `max`/`ultra` rules. The executable map is [model-effort-profiles.json](references/model-effort-profiles.json).
-- [workflow-interface-contracts.md](references/workflow-interface-contracts.md): skill handoff surfaces, packet ownership, required fields, helper-script inputs/outputs, fail-closed rules, and downstream consumers.
-- [compiler-first-efficiency.md](references/compiler-first-efficiency.md): preparation-v3, the closed executor registry, semantic-only model boundaries, exact routing receipts, compact result hydration, body-free publication, lazy context, compatibility, and efficiency evidence.
-- [authority-boundary-contract.md](references/authority-boundary-contract.md): closed authority phase packet, independent decision axes, owner decision/reservation/pre-dispatch/pre-commit/settlement bindings, scoped terminal-wait replay, and legacy migration.
-- [approval-ux-review.md](references/approval-ux-review.md): pre-prompt resolution, signed-mode reuse, wait deduplication, batching, and reviewer limits.
-- [cycle-artifacts.md](references/cycle-artifacts.md): ledger, result-contract, optional noncanonical session-audit sidecar, visible-increment, validation-scope, evidence-cache, dashboard/profile, and running-execution artifact contracts.
-- [mode-profile-contract.md](references/mode-profile-contract.md): bounded internal capture/consume/reaction composition, activation provenance, reducing local overrides, and the exact derived-metadata repair allowlist. The executable registry is [mode-profiles.json](references/mode-profiles.json).
-- [repo-local-skill-adapters.md](references/repo-local-skill-adapters.md): repository-local `.codex/skills/` adapter scan, manifest-v3 recursive closure and typed-hook contracts, architecture audit, consumption, creation/update routing, validation, and `$skill-creator` compliance.
-- [execution-context-contracts.md](references/execution-context-contracts.md): Part M long-run harvest-gate preflight, cost-proportional terminal disposition, predicate/directive satisfiability, and truncated collection consumption rules.
-- [anti-loop-progress-gates.md](references/anti-loop-progress-gates.md): loopback progress gates, output-delta policy, provenance-hardened root-cause actionability, adapter mandate, cumulative goal-distance stalls, acceptance reachability, oracle/metric validity, gate satisfiability/self-check, terminal quiescence, terminal escalation, and no-overclaim boundaries.
-- [initial-selection-provenance.md](references/initial-selection-provenance.md): prospective/replacement first-selection transactions, existing-pack normalization, CAS publication, and authority boundary.
-- [task-pack-workflow.md](references/task-pack-workflow.md): optional `.task/task_pack` queues, pack mutation rules, authority-settled non-retroactive legacy retirement overlays, positive input deltas, and terminal blocker shape.
-- [selection-reentry-and-publication.md](references/selection-reentry-and-publication.md): normal-cycle and terminal-wait exact selection triggers, acknowledgement/rebase, authority-settled current-baseline ownership, projected root-approval continuation, and forward-recoverable prospective task-state/publication settlement.
-- [selection-storage-v4-retention.md](references/selection-storage-v4-retention.md): compact-state migration plus bounded, authority-gated, no-follow selection-CAS retention and restore.
-- [code-structure-audit.md](references/code-structure-audit.md): generated/changed code plus repo-adapter architecture fact, semantic, and deterministic adjudication policy.
+- [workflow-routing.md](references/workflow-routing.md): phase order, routing, transition, and failure rules.
+- [model-effort-routing.md](references/model-effort-routing.md): model tiers, promotion signals, and enforcement. Registry: [model-effort-profiles.json](references/model-effort-profiles.json).
+- [workflow-interface-contracts.md](references/workflow-interface-contracts.md): handoff fields, ownership, and fail-closed rules.
+- [compiler-first-efficiency.md](references/compiler-first-efficiency.md): preparation-v3, executor registry, compact transport, and efficiency evidence.
+- [session-continuation-workflow.md](references/session-continuation-workflow.md): session entry, actions, budgets, recovery, and closeout.
+- [authority-boundary-contract.md](references/authority-boundary-contract.md): authority packet, owner bindings, replay, and migration.
+- [approval-ux-review.md](references/approval-ux-review.md): reuse, deduplication, batching, and reviewer limits.
+- [cycle-artifacts.md](references/cycle-artifacts.md): ledger and cycle artifact contracts.
+- [mode-profile-contract.md](references/mode-profile-contract.md): mode composition and repair allowlist. Registry: [mode-profiles.json](references/mode-profiles.json).
+- [repo-local-skill-adapters.md](references/repo-local-skill-adapters.md): adapter manifests, hooks, audits, and `$skill-creator` compliance.
+- [execution-context-contracts.md](references/execution-context-contracts.md): long-run preflight and terminal disposition.
+- [anti-loop-progress-gates.md](references/anti-loop-progress-gates.md): progress, stall, and terminal gates.
+- [initial-selection-provenance.md](references/initial-selection-provenance.md): first-selection transactions and provenance.
+- [task-pack-workflow.md](references/task-pack-workflow.md): optional task-pack mutation and retirement.
+- [selection-reentry-and-publication.md](references/selection-reentry-and-publication.md): selection reentry, authority, and publication settlement.
+- [selection-storage-v4-retention.md](references/selection-storage-v4-retention.md): selection-CAS retention and restore.
+- [code-structure-audit.md](references/code-structure-audit.md): code and adapter architecture adjudication.
 - [cycle-report-template.md](references/cycle-report-template.md): required Korean final-report field order.
 
 Do not add README, changelog, quick-reference, or auxiliary process documents. Put future detailed rules in the relevant `references/` file and link them here.
@@ -49,20 +50,39 @@ PYTHONPATH="$SKILLS_ROOT/orchestrate-task-cycle/scripts" \
 
 Use `workflow authority|task-doctor|external-advice|task-index|cycle` for cross-owner calls. The launcher dispatches only the selected registered owner; it does not grant authority or alter owner effect semantics. Retain direct `python3 -P -m orchestrate_task_cycle <command> ...` for compatibility when the caller already supplies the complete dependency environment. Do not call a file under `scripts/` directly.
 
-`-P` host-entry examples require CPython 3.11 or newer. The checked-in library
-contract still supports CPython 3.10: workflow child processes and generated
-selected-successor `execute_argv` / `recover_argv` use
-`isolated_python.isolated_module_argv`, which starts `-B -I -c`, imports `runpy`
-before adding paths, pins the current absolute interpreter, and then inserts only
-canonical, real, validated owner roots. `-I` intentionally retains that
-interpreter's system site-packages as the trusted third-party dependency surface;
-it excludes the caller CWD, `PYTHONPATH`, and user site, not system packages. A
-3.10 embedding must enter through an already trusted or installed library surface
-and use that constructor; never obtain compatibility by deleting `-P` from a raw
-`python -m` command, because that reintroduces the caller's working directory.
-Generated commands always import executable code from the co-located installed
-skills root. A separately supplied `--skills-root` remains a validation/data
-argument and must never redirect those executable imports.
+`-P` host entry requires CPython 3.11+. CPython 3.10 embeddings must enter through
+an installed surface and use `isolated_python.isolated_module_argv`; never remove
+`-P` from raw module commands. Generated commands load code only from the
+co-located skills root, while `--skills-root` remains a validation/data argument.
+
+## Session Continuation
+
+When the user approves a bounded host session, use
+[session-continuation-workflow.md](references/session-continuation-workflow.md).
+Start from one live session lease, then let the deterministic controller advance
+until it yields one exact owner, user, host, external, completion, or stop action.
+The host adapter uses `continue --emit-action`. Do not hand an agent action back to
+the user: invoke its exact owner skill, accept the bound result, and continue again.
+Repeat this dispatch/accept/continue loop until a genuine user, host, external,
+completion, or stop boundary.
+
+```bash
+python3 -P -m orchestrate_task_cycle workflow cycle session start \
+  --root . --cycle-id <cycle>
+python3 -P -m orchestrate_task_cycle workflow cycle session continue --root .
+python3 -P -m orchestrate_task_cycle workflow cycle session status --root .
+python3 -P -m orchestrate_task_cycle workflow cycle session stop --root .
+```
+
+Reuse the session only inside the same goal/policy/manifest/risk envelope and within
+3 cycles, 72 agent actions, 1 concurrent long run, and 1 closeout commit per cycle.
+R3, push, external/destructive effects, credentials, policy/mode changes, and
+authority/goal-design changes always remain separate. A missing host lease hides any
+pending agent action behind one stable host boundary. Re-running `continue` rechecks
+user/external evidence, preserves the same action/state while its fingerprint is
+unchanged, and never treats the retry itself as approval.
+Auto-dispatch `run` only when its sealed preparation and live authority packet prove
+the exact session-bound `run-task-code-and-log:run_long:1` operation.
 
 ## Compiled Stage Workflow
 
@@ -81,7 +101,9 @@ Prefer compiler-first stage coordination over hand-authoring a full result JSON.
 - Unsealed v1 and unmarked or unsealed v2 cycles are historical read-only debt. Protocol v2 uses `stage prepare`, `stage submit`, and bounded `stage advance`.
 - Run the cycle mutation-contract guard before every effectful renderer, standalone `dashboard.md` write, or dashboard `--result-output` write. Dashboard stdout remains read-only. Never remove a profile, protocol, provenance marker, or seal—or precreate legacy metadata—to regain a write path.
 
-The ledger CLI and direct API initialize every new cycle with immutable initialization provenance; protocol-v2 also uses preparation schema v3 and the compiler-first workflow profile. Existing unsealed v1 and unmarked or unsealed v2 cycles remain readable/renderable but cannot append, publish compiler artifacts or owner results, submit with effects, dispatch an effectful renderer, or advance. Start a new task-bound sealed cycle instead of mutating or silently migrating one. Metadata without an explicit protocol field is invalid/read-only, never implicit v1.
+Apply the initialization and historical read-only rules in
+[compiler-first-efficiency.md](references/compiler-first-efficiency.md); start a new
+sealed cycle instead of mutating or silently migrating an old one.
 
 ```bash
 python3 -P -m orchestrate_task_cycle workflow cycle context --root . --cycle-id <cycle> \
@@ -108,11 +130,18 @@ After `normalize_acceptance_and_demo compile` returns `owner_result_binding`, us
 
 The model projection is never a validator substitute. Preserve the current semantic-context digest, exact actionable advice, authority axes, pending runs, and target dependencies; truncate only diagnostic inventories. The semantic binding excludes declared volatile observation metadata such as collection time. Its `ref` remains null unless the digest names an exact immutable context artifact that actually exists. If required semantic material exceeds the projection budget or normalized advice is missing, stop rather than infer from a sample.
 
-`stage prepare` derives protected identifiers, the exact executor specification, GT/advice bindings, dependency hashes, and the target judgment contract. Its default remains write-free. Use `--publish` to write content-addressed artifacts and return only exact bindings and scalar metrics. Preparation-v3 writes a machine-only input for deterministic targets; owner and hybrid targets receive target-selected context plus a work-order-v2 binding. For v2/v3, create required bindings only with `stage publish-owner-result`, `stage publish-semantic`, `stage compile-routing`, and optional `stage publish-usage-observation`; then pass them to `stage submit`. Semantic input is capped at 64 KiB.
+`stage prepare` derives protected identifiers, the exact executor specification, GT/advice bindings, dependency hashes, and the target judgment contract. Its default remains write-free. Use `--publish` to write content-addressed artifacts and return only exact bindings and scalar metrics. Preparation-v3 writes a machine-only input for deterministic targets; owner and hybrid targets receive a bound-lazy work-order-v3 of at most 12 KiB with no inline `selected_context`. For v2/v3, create required bindings only with `stage publish-owner-result`, `stage publish-semantic`, `stage compile-routing`, and optional `stage publish-usage-observation`; then pass them to `stage submit`. Semantic input is capped at 64 KiB.
 
-Construct the authority packet from exact owner bindings, then use `authority-packet --cycle-id <cycle> --publish` through the manifested `publish_authority_packet_binding` operation to validate it again and write the canonical `stage_owner_result` wrapper under that cycle's owner-result CAS. On publication, reopen the decision/reservation/pre-dispatch verification and bounded local-resolution seed, rebuild the packet, and require byte-exact equality; a caller-rehashed `packet_id`, `evidence_ids`, projection, or receipt is not publishable. This compiler-owned publication has `effect_boundary: preparation_only`; consume only the returned compact binding. Protocol-v2 rejects full packet stdout and arbitrary `--output`; protocol-v1 rendering remains inspection/recovery only.
+Construct and publish authority packets only through the manifested compiler path
+in [authority-boundary-contract.md](references/authority-boundary-contract.md).
+Consume its compact exact binding; never substitute caller-rehashed packet fields.
+Use `authority-packet --cycle-id <cycle> --publish` through
+`publish_authority_packet_binding`; its `effect_boundary: preparation_only`.
 
-If the runtime exposes actual usage, bind `--usage-ref` with `--usage-sha256`. The current usage-v2 schema records caller-asserted provider, runtime, model, request, and token fields but has no trusted runtime issuer or attestation boundary; classify it as `caller_asserted_unverified`, keep it aggregate-ineligible, and report it separately from legacy usage-v1. A caller-set eligibility flag or canonical file digest cannot upgrade trust. Until an issuer-bound attestation contract exists, verified token totals remain zero. Without a comparable trusted runtime receipt, emit no savings claim. Never record prices or estimates. Inline `--judgment` is legacy v1 only. Add `--apply` only after result, routing, and transition validation pass. `stage advance` is dry-run by default; with `--apply` it appends bounded system stages and automatically executes registered deterministic targets, then stops at an owner/hybrid or governed effect boundary. `stage execute` accepts only the registered deterministic command; it is not an arbitrary command runner.
+Apply the usage trust and deterministic execution rules in
+[compiler-first-efficiency.md](references/compiler-first-efficiency.md). Never turn
+caller-asserted usage into attested savings, and add `--apply` only after all gates
+pass.
 
 Store compiled results once as canonical packet CAS bytes and count actual immutable-link new/reused outcomes. Origin intents precede CAS links. Keep per-attempt counters outside durable identity, hydrate public reads from exact compact bindings, and never duplicate bodies into `stage.jsonl` or `current_stage.json`.
 
@@ -239,7 +268,7 @@ Preserve evidence and route remediation to the owning skill:
 
 - Missing `task.md`: complete the separate bootstrap transaction, then start a fresh normal cycle at task-bound adapter scan; never normalize acceptance from task-absent context.
 - Governance blocker: stop before unsafe execution and keep task_miss/index evidence.
-- Execution failure: log through `$run-task-code-and-log`, collect scalar-safe failure autopsy when possible, finalize validation scope, snapshot the pre-validation index, then validate as `partial` or `failed`.
+- Execution failure: log through `$run-task-code-and-log`, publish an exact `run_terminal_projection@v1`, and collect scalar-safe failure autopsy when possible. A verified `failed_closed` projection sets `automatic_retry=false`, preserves only explicitly safe artifacts, and permits closure-only review/validation/reporting; otherwise the run remains blocking.
 - Running execution: log monitor/stop details, index the active run, defer final-output-dependent derivation or completion claims.
 - Long-running branch: record `run_id`, owner task, launch cycle, body-free `command_argv`, workdir, output/log/checkpoint paths, heartbeat, monitor/stop commands, expected completion signal/artifacts, and remaining validation before leaving the process running. Defer final-output-dependent review/loopback and permit only `partial` handoff completion validation plus non-closing issue tracking. A pending run cannot produce `passed`, `advanced`, schema/derive promotion, task-pack promotion, or unrelated next-task derivation until monitor/harvest resolves the run or records a terminal/user-escalation blocker.
 - Long-running branch with Part M evidence: keep launch manifest anchors, target scale, harvest-gate preflight status, risk-acceptance flag, terminal disposition policy, and reharvest path in the run packet so monitor and harvest consumers do not derive expectations from the current task, current lane, capped samples, or stale validation contracts.

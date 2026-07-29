@@ -33,9 +33,11 @@ publication plans, result envelopes, packets, hashes, projections, or receipts.
 ## Persistent evidence and model work orders
 
 Persist complete evidence once and expose a separate bounded work order to the model.
-For owner and hybrid targets, the work order contains only the current target, exact
-executor specification, task/goal/advice bindings or relevant slices, allowed semantic
-fields, owner-result contract, routing requirement, and state fingerprint. A v3
+For owner and hybrid targets, work-order-v3 contains only the current target, exact
+executor specification, dependency selectors, task/goal/advice bindings, allowed
+semantic fields, owner-result contract, routing requirement, and state fingerprint.
+Selected context stays in its bound compiler artifact and is opened lazily by the
+owner; it is never copied inline into the work order. A v3
 deterministic preparation contains neither context nor work order: it binds one
 machine-input artifact selected for the registered renderer and exposes zero
 model-visible bytes.
@@ -54,7 +56,8 @@ model-visible bytes.
   advice IDs. Preserve that lineage in the preparation and compiled result, and include
   the immutable candidate lineage in pre-transition validation. Owners may neither
   author nor override it; a newly aligned context requires a fresh preparation.
-- Keep a work order at or below 128 KiB and a v2 preparation at or below 256 KiB.
+- Keep work-order-v3 at or below 12 KiB and a v2/v3 preparation at or below
+  256 KiB. Historical work-order-v2 remains readable under its original bounds.
 - Persist context, work orders, and canonical results by content digest; reference them
   from preparations, ledger events, and current projections.
 - Recollect selected dependencies before submission and reject stale bindings. Keep
@@ -331,7 +334,8 @@ The generic full-packet renderer is diagnostics only for the exact initialized,
 provenance-sealed protocol-v1 cycle and task supplied to it. There is no public unbound
 packet path; context and stage cycle identifiers must agree, every supplied task
 identifier must match the seal, and every `PacketState` plus built-in stage revalidates
-the opaque legacy permit. The default pipeline is private. Use v3 work orders for v2.
+the opaque legacy permit. The default pipeline is private. New preparation-v3 owner
+and hybrid targets use bound-lazy work-order-v3; do not retrofit historical v2 bytes.
 
 The authority owner follows the same boundary: run `authority-packet --cycle-id
 <cycle> --publish` after exact decision/reservation/verification validation. The

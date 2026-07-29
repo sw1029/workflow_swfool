@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT / "manage-agent-authority" / "scripts"))
 
 from manage_agent_authority import authority_receipt  # noqa: E402
 from manage_agent_authority import artifact_store as artifact_store_module  # noqa: E402
+from manage_agent_authority import authority_interaction as interaction_module  # noqa: E402
 from manage_agent_authority import lifecycle as lifecycle_module  # noqa: E402
 from manage_agent_authority import settlement as settlement_module  # noqa: E402
 from manage_agent_authority import authority_cli  # noqa: E402
@@ -81,6 +82,8 @@ from manage_agent_authority.owner_validation_io import (  # noqa: E402
 )
 from manage_agent_authority.projection_recovery import MAX_INTENT_BYTES  # noqa: E402
 from manage_agent_authority.projection_recovery import recover_projection_intents  # noqa: E402
+from manage_agent_authority.workflow_status import advance_operation  # noqa: E402
+from manage_agent_authority.workflow_status import inspect_operation  # noqa: E402
 from manage_agent_authority.workflow_status import resolve_operation  # noqa: E402
 from manage_agent_authority.workflow_status import status_snapshot  # noqa: E402
 from manage_agent_authority.verification_publication import (  # noqa: E402
@@ -1380,6 +1383,130 @@ def test_resolve_treats_historical_source_without_grant_as_exhausted(
     assert first["wait_identity"] is second["wait_identity"] is None
     assert first["recovery_identity"] == second["recovery_identity"]
     assert "no_authority_grants_registered" in first["reason_codes"]
+
+
+def test_inspect_cli_is_write_free_and_never_materializes_mode_child(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = setup_workspace(tmp_path)
+    request = request_for(workspace)
+    context = context_for(workspace, request)
+    request_path = write(
+        tmp_path / "inspect-request.json",
+        json.dumps(request, sort_keys=True) + "\n",
+    )
+    context_path = write(
+        tmp_path / "inspect-context.json",
+        json.dumps(context, sort_keys=True) + "\n",
+    )
+    marker = tmp_path / "mode-child-materialized"
+
+    def forbidden_materialization(*_args: object, **_kwargs: object) -> None:
+        marker.write_text("unexpected\n", encoding="utf-8")
+        raise AssertionError("inspect attempted mode-child materialization")
+
+    monkeypatch.setattr(
+        interaction_module,
+        "materialize_mode_child",
+        forbidden_materialization,
+    )
+
+    def snapshot() -> dict[str, bytes]:
+        return {
+            path.relative_to(tmp_path).as_posix(): path.read_bytes()
+            for path in sorted(tmp_path.rglob("*"))
+            if path.is_file()
+        }
+
+    before = snapshot()
+    assert (
+        authority_cli.main(
+            [
+                "inspect",
+                "--root",
+                str(tmp_path),
+                "--request",
+                str(request_path),
+                "--context",
+                str(context_path),
+                "--at",
+                AT,
+                "--skills-root",
+                str(ROOT),
+            ]
+        )
+        == 0
+    )
+    result = json.loads(capsys.readouterr().out)
+    assert result["decision"] == "approval_required"
+    assert result["authority_interaction_child"] is None
+    assert snapshot() == before
+    assert not marker.exists()
+
+
+def test_advance_and_resolve_alias_attempt_one_materialization_each(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = setup_workspace(tmp_path)
+    request = request_for(workspace)
+    context = context_for(workspace, request)
+    calls: list[str] = []
+
+    def observe_materialization(
+        _root: Path,
+        raw_request: dict[str, Any],
+        *,
+        evaluated_at: str,
+        skills_root: Path | None,
+    ) -> None:
+        assert raw_request == request
+        assert evaluated_at == AT
+        assert skills_root == ROOT
+        calls.append(raw_request["request_id"])
+        return None
+
+    monkeypatch.setattr(
+        interaction_module,
+        "materialize_mode_child",
+        observe_materialization,
+    )
+
+    advanced = advance_operation(
+        tmp_path,
+        request,
+        context,
+        evaluated_at=AT,
+        skills_root=ROOT,
+    )
+    resolved = resolve_operation(
+        tmp_path,
+        request,
+        context,
+        evaluated_at=AT,
+        skills_root=ROOT,
+    )
+    assert advanced["decision"] == resolved["decision"] == "approval_required"
+    assert calls == [request["request_id"], request["request_id"]]
+
+
+def test_authority_cli_exposes_inspect_advance_and_resolve_alias() -> None:
+    parser = authority_cli.build_parser()
+    for command in ("inspect", "advance", "resolve"):
+        parsed = parser.parse_args(
+            [
+                command,
+                "--request",
+                "request.json",
+                "--context",
+                "context.json",
+                "--at",
+                AT,
+            ]
+        )
+        assert parsed.command == command
 
 
 def test_resolve_returns_one_common_user_interaction_projection(

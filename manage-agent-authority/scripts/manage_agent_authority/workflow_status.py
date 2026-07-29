@@ -120,7 +120,7 @@ def status_snapshot(
     )
 
 
-def resolve_operation(
+def inspect_operation(
     root: Path,
     request: dict[str, Any],
     context: dict[str, Any],
@@ -128,9 +128,9 @@ def resolve_operation(
     evaluated_at: str,
     skills_root: Path | None,
 ) -> dict[str, Any]:
-    from .workflow_resolver import resolve_operation as resolve
+    from .workflow_resolver import inspect_operation as inspect
 
-    return resolve(
+    return inspect(
         root,
         request,
         context,
@@ -139,4 +139,47 @@ def resolve_operation(
     )
 
 
-__all__ = ["resolve_operation", "status_snapshot"]
+def advance_operation(
+    root: Path,
+    request: dict[str, Any],
+    context: dict[str, Any],
+    *,
+    evaluated_at: str,
+    skills_root: Path | None,
+) -> dict[str, Any]:
+    from .workflow_resolver import advance_operation as advance
+
+    return advance(
+        root,
+        request,
+        context,
+        evaluated_at=evaluated_at,
+        skills_root=skills_root,
+    )
+
+
+def resolve_operation(
+    root: Path,
+    request: dict[str, Any],
+    context: dict[str, Any],
+    *,
+    evaluated_at: str,
+    skills_root: Path | None,
+) -> dict[str, Any]:
+    """Deprecated compatibility alias for :func:`advance_operation`."""
+
+    return advance_operation(
+        root,
+        request,
+        context,
+        evaluated_at=evaluated_at,
+        skills_root=skills_root,
+    )
+
+
+__all__ = [
+    "advance_operation",
+    "inspect_operation",
+    "resolve_operation",
+    "status_snapshot",
+]

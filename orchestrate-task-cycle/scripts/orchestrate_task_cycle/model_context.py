@@ -18,6 +18,7 @@ from .git_worktree_identity import (
     bind_git_worktree_identity,
     legacy_git_changed_paths,
 )
+from .model_context_decisions import DECISION_SCALARS
 
 
 MAX_ESSENTIAL_ITEMS = 5_000
@@ -37,21 +38,6 @@ DIRECTIVE_FIELDS = (
     "actionable_child",
     "actionable_child_consumption_state",
 )
-DECISION_SCALARS = (
-    "validation_verdict",
-    "progress_verdict",
-    "authoritative_final",
-    "execution_status",
-    "review_status",
-    "quality_verdict",
-    "selection_outcome",
-    "index_status",
-    "audit_observation_scope",
-    "live_revalidation_required",
-    "commit_status",
-)
-
-
 def _canonical_bytes(value: Any) -> bytes:
     return json.dumps(
         value,
@@ -327,6 +313,40 @@ def _authority_projection(context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _terminal_intake_projection(context: dict[str, Any]) -> dict[str, Any] | None:
+    value = context.get("run_terminal_intake")
+    return _scalar_tree(value) if isinstance(value, dict) else None
+
+
+def _essential_budget(
+    advice: dict[str, Any],
+    task: dict[str, Any],
+    goal: dict[str, Any],
+    cycle: dict[str, Any],
+    authority: dict[str, Any],
+    terminal: dict[str, Any] | None,
+) -> tuple[int, int]:
+    count = (
+        len(advice.get("actionable_clause_ids") or [])
+        + sum(
+            len(item.get("directives") or [])
+            for item in advice.get("items") or []
+            if isinstance(item, dict)
+        )
+        + len((cycle.get("steps") or {}))
+        + len((terminal or {}).get("safe_surviving_artifacts") or [])
+    )
+    material = {
+        "task": task,
+        "goal_truth": goal,
+        "advice": advice,
+        "cycle": cycle,
+        "authority": authority,
+        "run_terminal_intake": terminal,
+    }
+    return count, len(_canonical_bytes(material))
+
+
 def project_model_context(
     context: dict[str, Any],
     *,
@@ -375,25 +395,14 @@ def project_model_context(
     goal_projection = _goal_projection(context)
     task_projection = _task_projection(context)
     authority_projection = _authority_projection(context)
-    essential_count = (
-        len(advice.get("actionable_clause_ids") or [])
-        + sum(
-            len(item.get("directives") or [])
-            for item in advice.get("items") or []
-            if isinstance(item, dict)
-        )
-        + len((cycle_projection.get("steps") or {}))
-    )
-    essential_bytes = len(
-        _canonical_bytes(
-            {
-                "task": task_projection,
-                "goal_truth": goal_projection,
-                "advice": advice,
-                "cycle": cycle_projection,
-                "authority": authority_projection,
-            }
-        )
+    terminal_intake = _terminal_intake_projection(context)
+    essential_count, essential_bytes = _essential_budget(
+        advice,
+        task_projection,
+        goal_projection,
+        cycle_projection,
+        authority_projection,
+        terminal_intake,
     )
     stop_reason = None
     if advice.get("status") not in {"available", "not_applicable"}:
@@ -415,6 +424,7 @@ def project_model_context(
         "goal_truth": goal_projection,
         "advice": advice,
         "cycle": cycle_projection,
+        "run_terminal_intake": terminal_intake,
         "selection_publication": context.get("selection_publication"),
         "authority": authority_projection,
         "pending_runs": [

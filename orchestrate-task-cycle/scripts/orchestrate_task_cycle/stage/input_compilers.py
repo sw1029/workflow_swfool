@@ -240,6 +240,20 @@ def publish_owner_result(
         root, preparation_ref, preparation_sha256
     )
     target = str(preparation["target"])
+    from ..continuation.terminal import reject_discarded_terminal_inputs
+
+    reject_discarded_terminal_inputs(
+        workspace,
+        str(preparation["cycle_id"]),
+        {
+            "owner_result": body,
+            "source_binding": (
+                {"ref": source_ref, "sha256": source_sha256}
+                if source_ref and source_sha256
+                else None
+            ),
+        },
+    )
     if target not in OWNER_RESULT_PRODUCER_TARGETS:
         raise ValueError(
             "deterministic targets publish through their registered executor"

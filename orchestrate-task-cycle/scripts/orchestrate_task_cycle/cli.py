@@ -210,6 +210,11 @@ def _workflow(argv: Sequence[str]) -> int:
 
     return main(list(argv))
 
+def _session(argv: Sequence[str]) -> int:
+    from .continuation.cli import main
+
+    return main(list(argv))
+
 
 COMMANDS = (
     CommandSpec("ledger", "manage the durable cycle ledger", _ledger),
@@ -299,6 +304,11 @@ COMMANDS = (
         "workflow",
         "run a workflow owner with exact sibling dependencies",
         _workflow,
+    ),
+    CommandSpec(
+        "session",
+        "continue governed task cycles under one session approval",
+        _session,
     ),
 )
 COMMANDS_BY_NAME = {spec.name: spec for spec in COMMANDS}

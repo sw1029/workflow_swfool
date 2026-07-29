@@ -35,14 +35,6 @@ from manage_agent_authority.projection_io import (  # noqa: E402
     load_grant_artifact,
     validate_reservation_state,
 )
-from manage_agent_authority.projection_receipts import (  # noqa: E402
-    validate_release_receipt,
-    validate_use_receipt,
-)
-from manage_agent_authority.projection_reconciliation import (  # noqa: E402
-    validate_reconciliation_evidence,
-    validate_reconciliation_receipt,
-)
 from manage_agent_authority.projection_reservations import (  # noqa: E402
     load_bound_reservation,
 )
@@ -50,6 +42,7 @@ from manage_agent_authority.projection_reservations import (  # noqa: E402
 from .authority_grant import verify_materialized_grant  # noqa: E402
 from .authority_materialization import normalize_materialization  # noqa: E402
 from .authority_reservation_window import verify_reservation_recipe  # noqa: E402
+from .authority_settlement import validate_settlement_receipt  # noqa: E402
 
 
 T = TypeVar("T")
@@ -248,7 +241,11 @@ def _reservation_scope(
         "invalid_authority_evidence", "reserved authority grant",
         lambda: load_grant_artifact(root, materialization["grant_spec"]["grant_id"]),
     )
-    verify_materialized_grant(grant, authority)
+    _authority_call(
+        "authority_binding_mismatch",
+        "materialized grant",
+        lambda: verify_materialized_grant(root, grant, authority),
+    )
     verify_reservation_recipe(reservation, materialization["reservation"])
     return reservation, uses, normalized
 
@@ -336,96 +333,6 @@ def _owner_effect(
     return binding, body
 
 
-def _current_settled_state(
-    root: Path, reservation_id: str, status: str, receipt_id: str,
-    receipt: dict[str, Any],
-) -> None:
-    state_ref = f".task/authorization/state/reservations/{reservation_id}.json"
-    path = workspace_regular_file(root, state_ref, "settled_reservation_state")
-    state = read_json(path, "invalid_authority_settlement")
-    state = _authority_call(
-        "invalid_authority_settlement", "settled reservation state",
-        lambda: validate_reservation_state(state, reservation_id, "settled reservation state"),
-    )
-    require(state["status"] == status and state["last_event_id"] == receipt_id,
-            "stale_authority_settlement",
-            "authority receipt is not the current reservation settlement")
-    raw_changes = receipt.get("state_changes")
-    require(isinstance(raw_changes, list), "invalid_authority_settlement",
-            "authority receipt lacks exact state changes")
-    assert isinstance(raw_changes, list)
-    changes = raw_changes
-    matching = [change for change in changes if isinstance(change, dict)
-                and change.get("ref") == state_ref]
-    require(len(matching) == 1 and matching[0].get("after") == state,
-            "stale_authority_settlement",
-            "current reservation state differs from the receipt after-state")
-
-
-def _receipt(
-    root: Path, receipt_binding: dict[str, str], reservation: dict[str, str],
-    owner: dict[str, str], effect_status: str,
-) -> str:
-    path = workspace_file(root, receipt_binding["ref"], receipt_binding["sha256"],
-                          "authority_settlement.receipt")
-    receipt = read_json(path, "invalid_authority_settlement")
-    kind = receipt.get("artifact_kind")
-    if kind == "authority_use_receipt":
-        _authority_call("invalid_authority_settlement", "authority use receipt",
-                        lambda: validate_use_receipt(root, receipt, path))
-        require(effect_status == "confirmed_effect"
-                and receipt.get("owner_execution_result") == owner,
-                "authority_settlement_mismatch",
-                "use receipt does not bind the exact confirmed-effect owner result")
-        expected_status = "consumed"
-    elif kind == "authority_release_receipt":
-        _authority_call("invalid_authority_settlement", "authority release receipt",
-                        lambda: validate_release_receipt(root, receipt, path))
-        require(effect_status == "confirmed_no_effect"
-                and receipt.get("effect_status") == "verified_no_effect"
-                and receipt.get("release_applied") is True
-                and receipt.get("no_effect_evidence") == owner,
-                "authority_settlement_mismatch",
-                "release receipt does not prove the exact confirmed no-effect result")
-        expected_status = "released"
-    elif kind == "authority_reconciliation_receipt":
-        _authority_call("invalid_authority_settlement", "authority reconciliation receipt",
-                        lambda: validate_reconciliation_receipt(root, receipt, path))
-        require(receipt.get("outcome") == effect_status,
-                "authority_settlement_mismatch", "reconciliation outcome mismatch")
-        bound_reservation, _, normalized = _authority_call(
-            "invalid_authority_settlement", "reconciliation reservation",
-            lambda: load_bound_reservation(root, receipt["reservation"],
-                                           "reconciliation reservation"),
-        )
-        evidence = _authority_call(
-            "invalid_authority_settlement", "reconciliation evidence",
-            lambda: validate_reconciliation_evidence(
-                root, receipt["effect_evidence"], bound_reservation, normalized,
-                receipt["outcome"], require_current_subject=False),
-        )
-        require(evidence.get("owner_result") == owner,
-                "authority_settlement_mismatch",
-                "reconciliation receipt does not bind the exact owner result")
-        expected_status = "consumed" if effect_status == "confirmed_effect" else "released"
-    else:
-        raise WorkflowError("invalid_authority_settlement",
-                            "authority settlement must be a v2 use, release, or reconciliation receipt")
-    require(receipt.get("reservation") == reservation,
-            "authority_settlement_mismatch", "settlement binds a different reservation")
-    _current_settled_state(root, _reservation_id(root, reservation),
-                           expected_status, receipt["receipt_id"], receipt)
-    return effect_status
-
-
-def _reservation_id(root: Path, binding: dict[str, str]) -> str:
-    reservation, _, _ = _authority_call(
-        "invalid_authority_settlement", "settlement reservation",
-        lambda: load_bound_reservation(root, binding, "settlement reservation"),
-    )
-    return reservation["reservation_id"]
-
-
 def validate_completion(
     root: Path, journal: dict[str, Any], operation_id: str,
     completion_ref: str, completion_sha256: str,
@@ -487,5 +394,9 @@ def validate_completion(
             require({key: resolution.get(key) for key in ("ref", "sha256")}
                     == reservation, "authority_settlement_mismatch",
                     "settlement differs from the dispatched reservation")
-        _receipt(root, receipt_binding, reservation, owner_binding, expected_effect)
+        validate_settlement_receipt(
+            root, receipt_binding, reservation, owner_binding,
+            _binding(owner_body["owner_artifact"], "owner_artifact"),
+            expected_effect,
+        )
     return body, expected_effect

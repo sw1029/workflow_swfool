@@ -28,8 +28,6 @@ from .grant_intent_compiler import (
     replay_registered_grant,
 )
 from .semantic_context import publish_shared_semantic_context
-from .workflow_status import resolve_operation
-from .workflow_status import status_snapshot
 from .reconciliation_evidence import prepare_reconciliation_evidence
 from .source_recovery import prepare_source_recovery
 from .settlement import settle_owner_result
@@ -39,6 +37,7 @@ from .verification_publication import verify_and_publish_predispatch
 from .cli_errors import emit_error
 from .cli_parser import build_parser as _build_parser
 from .authority_transition_cli import command_transition
+from .authority_workflow_cli import handlers as _workflow_handler_factory
 
 
 def _emit(value: Any) -> int:
@@ -107,6 +106,18 @@ def _operation_inputs(
     if getattr(args, "context", None) is None:
         raise SystemExit("--request requires --context.")
     return load_object(args.request), load_object(args.context)
+
+
+_workflow_handlers = _workflow_handler_factory(
+    emit=_emit,
+    root=_root,
+    operation_inputs=_operation_inputs,
+    skills_root=_skills_root,
+)
+command_status = _workflow_handlers["status"]
+command_inspect = _workflow_handlers["inspect"]
+command_advance = _workflow_handlers["advance"]
+command_resolve = _workflow_handlers["resolve"]
 
 
 def command_snapshot_policy(args: argparse.Namespace) -> int:
@@ -412,32 +423,6 @@ def command_materialize_approved_recovery(args: argparse.Namespace) -> int:
     )
 
 
-def command_status(args: argparse.Namespace) -> int:
-    return _emit(
-        status_snapshot(
-            _root(args),
-            grant_id=args.grant_id,
-            request_sha256=getattr(args, "request_sha256", None),
-            evaluated_at=args.at,
-            skills_root=_skills_root(args),
-        )
-    )
-
-
-def command_resolve(args: argparse.Namespace) -> int:
-    root = _root(args)
-    request, context = _operation_inputs(args, root)
-    return _emit(
-        resolve_operation(
-            root,
-            request,
-            context,
-            evaluated_at=args.at,
-            skills_root=_skills_root(args),
-        )
-    )
-
-
 def build_parser() -> argparse.ArgumentParser:
     from .authority_interaction_cli import handlers as interaction_handlers
 
@@ -469,6 +454,8 @@ def build_parser() -> argparse.ArgumentParser:
             command_materialize_plan_bound_root_grant,
         "transition": command_transition,
         "status": command_status,
+        "inspect": command_inspect,
+        "advance": command_advance,
         "resolve": command_resolve,
     }
     handlers.update(

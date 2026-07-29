@@ -80,10 +80,11 @@ Freeze each exact owner plan, plan-file digest, subject, target, before/after di
 effect, exclusion, and risk before reservation. Reverify exact authority before
 calling the owner. Consume only after the owner transaction returns a typed effect
 receipt. After dispatch, release only against a public durable owner no-effect
-receipt. Before dispatch, an invalidated dependent plan may release its exact
-reservation only against the coordinator's durable `not_started` dependency-
-cancellation intent. Route a possible effect to reconciliation or quarantine;
-never convert uncertainty into no effect.
+receipt. Do not speculatively reserve a registered downstream owner. A historical
+early reservation cannot be released with coordinator-authored `not_started`
+evidence: project `blocked_registered_owner_settlement`, fail closed, and replan
+without fabricating owner evidence. Route a possible effect to reconciliation or
+quarantine; never convert uncertainty into no effect.
 
 Keep approval, goal ratification, risk acceptance, external-input availability, and
 bounded design selection as separate typed decisions.
@@ -108,7 +109,13 @@ python3 -P -m task_doctor_workflow_lib prepare-intent \
 
 `compile-intent` is read-only. `prepare-intent` either prepares a prompt-free workflow when every exact source already exists, or publishes one content-addressed review for only the uncovered operations. Do not create a grant, evaluation, or reservation before the actual decision.
 
-After a genuine decision, call `accept-review` only with exact pre-existing typed source snapshots whose evidence IDs bind that review and whose `not_before` is not earlier than the decision. The compiler then emits workflow plan schema-v2: source/grant/evaluation time is fixed after the decision, while each reservation stores a finite `not_before|expires_at` window so JIT reservation records its real later time. Continue reading legacy schema-v1 plans without rewriting them.
+After a genuine decision, call `accept-review` only with current producer-owned
+authority: schema-v5 root approval `grant_projections`, or a schema-v6 signed-mode
+`activation_child`, each bound to the exact request SHA and materialization chain.
+Reopen the resulting schema-v3/v4 grant; never synthesize task-doctor grant or
+lineage IDs. The compiler emits workflow plan schema-v2 with that exact grant and a
+finite reservation window so JIT reservation records its real later time. Legacy
+sources remain reader-only, and legacy schema-v1 plans remain readable as-is.
 
 Use `build-resolution-bundle` to derive classifications and evidence bindings from live status, and use bounded `advance` or read-only `replay-or-route` to reuse settled state. These commands may prepare coordinator/authority state, but they stop at the exact owner dispatch, genuine approval, GT/risk/design/external-input decision, unknown effect, stale plan, recovery, or terminal result. Never rotate IDs to redispatch a released, consumed, or settled-no-effect owner plan.
 
@@ -166,9 +173,9 @@ Use `build-resolution-bundle` to derive classifications and evidence bindings fr
      its operation-exact source snapshot and no reservation. Increment the interaction
      count only for this bundle. Already-covered live rows stay outside the mutation;
      accepting the displayed bundle cannot widen their authority or alter their state.
-   - Materialize exact source snapshots, grants, and decisions for an
-     `already_covered` operation without prompting, but reserve only the current
-     dependency-complete owner frontier.
+   - Reopen the exact producer materialization and schema-v3/v4 grant for an
+     `already_covered` operation without prompting. Reserve only the current
+     dependency-complete owner frontier; never emit a grant recipe.
    - If a journal row still says `needs_user_approval` but its durable live authority
      state is already prompt-free, expose an `authority_bundle`, never an
      `approval_bundle`. Resolve its exact source or current reservation as system work
@@ -181,7 +188,7 @@ Use `build-resolution-bundle` to derive classifications and evidence bindings fr
      instead of opening a new prompt.
    - Treat `ready_to_resume`, `reserved_authority_recovery`, consumed, released,
      exhausted-source, and reconciliation states as system work.
-   - Route an exhausted fixed grant recipe, and any later
+   - Route an exhausted fixed producer grant projection, and any later
      `approve_exact_recovery_projection` wait for replacement source/grant identities,
      to `plan_changed` / `replanning_required` and `prepare_new_plan`; the old plan
      cannot adopt replacement authority identities in place. Require a new immutable
@@ -210,14 +217,11 @@ Use `build-resolution-bundle` to derive classifications and evidence bindings fr
    - Never use a still-ready plan, an arbitrary JSON result, or absence of an error as
      no-effect evidence.
    - Apply the final task-index owner exactly once after all dependencies complete.
-   - If an upstream required effect settles no effect and thereby invalidates the
-     speculative final-index plan, publish the coordinator's exact dependency-
-     cancellation intent and receipt, release any never-dispatched early reservation
-     as `not_started`, and mark the immutable index plan `plan_changed`. Require the
-     index public verifier to prove `stale` with no intent, effect, receipt, or
-     historical completion first. Every other public state keeps its typed
-     effect/recovery route. Rebuild before any prompt and never manufacture an index
-     no-effect owner receipt.
+   - If an upstream required effect settles no effect, invalidate the unreserved
+     speculative final-index plan and mark it `plan_changed`. If historical state
+     already contains an early registered index reservation, stop with
+     `blocked_registered_owner_settlement` and replan; direct release is forbidden
+     because no index-owner no-effect result exists. Never manufacture one.
 
 9. Resume conservatively.
    - Run `status`, then `resume` at the current revision after interruption.
@@ -247,7 +251,8 @@ Do not collapse these states into “approval required”:
 | `owner_settled_no_effect` | Public owner reports receipt-bound no effect | None; settle/release |
 | `owner_recovery_required` | Public owner intent/effect needs forward recovery | None; recover |
 | `owner_plan_stale` | Never-dispatched owner plan no longer matches apply state | None; cancel/replan |
-| `plan_changed` | Immutable target or authority recipe changed | Prepare a new plan |
+| `blocked_registered_owner_settlement` | Historical registered reservation lacks owner settlement evidence | None; fail closed/replan |
+| `plan_changed` | Immutable target or producer authority identity changed | Prepare a new plan |
 | `blocked_by_defect` | Owner/workflow contract is defective | Internal repair |
 
 Use `awaiting_exact_approval` only for `needs_user_approval`. A missing active grant

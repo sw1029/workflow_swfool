@@ -1,4 +1,4 @@
 interface:
   display_name: "Run Task Code And Log"
-  short_description: "Execute code and log run evidence"
-  default_prompt: "Use $run-task-code-and-log to run the specified command exactly as instructed, capture scalar failure and gate self-check evidence, and log the result."
+  short_description: "Run code and publish durable terminal evidence"
+  default_prompt: "Use $run-task-code-and-log to execute the requested command, log factual evidence, and publish its terminal projection."

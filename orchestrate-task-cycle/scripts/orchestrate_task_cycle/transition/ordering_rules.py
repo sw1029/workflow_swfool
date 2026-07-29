@@ -19,6 +19,19 @@ from .constants import (
 from .context import ValidationContext
 
 
+def _completion_location(
+    state: ValidationContext,
+) -> tuple[str | None, str | None]:
+    root = state.context.get("workspace_root")
+    cycle_id = state.context.get("cycle_id") or state.stage.get("cycle_id")
+    if cycle_id is None:
+        cycle_id = step_event(state.stage, "run").get("cycle_id")
+    return (
+        str(root) if root is not None else None,
+        str(cycle_id) if cycle_id is not None else None,
+    )
+
+
 def validate_workflow_and_required_order(state: ValidationContext) -> None:
     if state.workflow_mode not in {"normal", "bootstrap"}:
         raise ValueError(f"unsupported workflow mode: {state.workflow_mode}")
@@ -41,8 +54,11 @@ def validate_workflow_and_required_order(state: ValidationContext) -> None:
             f"`{state.transition}` is not allowed in `{state.workflow_mode}` workflow mode.",
             {"allowed_transitions": sorted(requirements)},
         )
+    root, cycle_id = _completion_location(state)
     for step in requirements.get(state.transition, []):
-        if not completed(state.stage, step):
+        if not completed(
+            state.stage, step, root=root, cycle_id=cycle_id
+        ):
             state.add(
                 "block",
                 "ordering_required_step_missing",
@@ -254,13 +270,26 @@ def _validate_required_handoff(
 def validate_ordering_gaps_and_bootstrap(state: ValidationContext) -> None:
     active_order = BOOTSTRAP_ORDER if state.workflow_mode == "bootstrap" else ORDER
     required = _requirements(state).get(state.transition, [])
-    completed_steps = [step for step in active_order if completed(state.stage, step)]
+    root, cycle_id = _completion_location(state)
+    completed_steps = [
+        step
+        for step in active_order
+        if completed(state.stage, step, root=root, cycle_id=cycle_id)
+    ]
     if completed_steps:
         latest_idx = max(active_order.index(step) for step in completed_steps)
         for earlier in active_order[:latest_idx]:
             if earlier in {"schema_pre_derive", "schema_post_derive"}:
                 continue
-            if not completed(state.stage, earlier) and earlier in required:
+            if (
+                not completed(
+                    state.stage,
+                    earlier,
+                    root=root,
+                    cycle_id=cycle_id,
+                )
+                and earlier in required
+            ):
                 state.add(
                     "block",
                     "ordering_gap",

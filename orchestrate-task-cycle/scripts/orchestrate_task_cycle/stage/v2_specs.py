@@ -84,6 +84,8 @@ GIT_TARGETS = frozenset(
         "qualitative_review",
         "visible_increment",
         "validation_scope_finalize",
+        "schema_pre_derive",
+        "schema_post_derive",
         "commit",
         "dashboard",
         "report",

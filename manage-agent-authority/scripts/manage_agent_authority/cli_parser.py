@@ -404,7 +404,30 @@ def _recovery_and_status(
     status.add_argument("--request-sha256")
     status.set_defaults(func=handlers["status"])
 
-    resolve = subparsers.add_parser("resolve")
+    inspect = subparsers.add_parser(
+        "inspect",
+        help="Inspect one exact operation without materializing authority artifacts.",
+    )
+    _root(inspect)
+    _at(inspect)
+    _skills_root(inspect)
+    _operation_input(inspect)
+    inspect.set_defaults(func=handlers["inspect"])
+
+    advance = subparsers.add_parser(
+        "advance",
+        help="Advance one exact operation through at most one mode-child materialization.",
+    )
+    _root(advance)
+    _at(advance)
+    _skills_root(advance)
+    _operation_input(advance)
+    advance.set_defaults(func=handlers["advance"])
+
+    resolve = subparsers.add_parser(
+        "resolve",
+        help="Deprecated compatibility alias for advance.",
+    )
     _root(resolve)
     _at(resolve)
     _skills_root(resolve)

@@ -62,7 +62,10 @@ from orchestrate_task_cycle.stage.contracts import (
     canonical_sha256,
     preparation_identity,
 )
-from orchestrate_task_cycle.stage.executor_registry import EXECUTOR_REGISTRY
+from orchestrate_task_cycle.stage.executor_registry import (
+    EXECUTOR_REGISTRY,
+    OWNER_EFFECT_MATRIX,
+)
 from orchestrate_task_cycle.stage.deterministic_dispatch import dispatch_deterministic
 from orchestrate_task_cycle.stage.publication import publish_result
 from orchestrate_task_cycle.stage.service import (
@@ -288,6 +291,30 @@ def test_executor_registry_is_closed_for_exact_7_16_4_partition() -> None:
             assert spec.allowed_routing_profiles
 
 
+def test_owner_effect_matrix_is_closed_and_conservative() -> None:
+    owner_targets = {
+        target
+        for target, spec in EXECUTOR_REGISTRY.items()
+        if spec.executor_kind in {"owner", "hybrid"}
+    }
+    assert set(OWNER_EFFECT_MATRIX) == owner_targets
+    assert {
+        target
+        for target, policy in OWNER_EFFECT_MATRIX.items()
+        if policy.side_effect_class == "observe_only"
+    } == {"qualitative_review"}
+    for target, policy in OWNER_EFFECT_MATRIX.items():
+        assert (
+            EXECUTOR_REGISTRY[target].side_effect_class
+            == policy.side_effect_class
+        )
+        assert policy.action_effect_classes
+        if policy.recovery_strategy == "safe_reissue":
+            assert policy.action_effect_classes == ("observe_only",)
+        else:
+            assert "observe_only" not in policy.action_effect_classes
+
+
 def test_preparation_bound_producer_registry_covers_all_20_model_targets() -> None:
     model_targets = {
         target
@@ -302,6 +329,33 @@ def test_preparation_bound_producer_registry_covers_all_20_model_targets() -> No
         TARGET_COMPILE_SPECS[target].owner_receipt_fields
         for target in OWNER_RESULT_PRODUCER_TARGETS
     )
+
+
+def test_v3_work_order_is_lazy_and_within_coordinator_budget(
+    tmp_path: Path,
+) -> None:
+    cycle_id = _cycle(tmp_path, "cycle-lazy-work-order")
+    target = "validation_scope_plan"
+    _prime(tmp_path, cycle_id, target)
+
+    preparation = prepare_stage(
+        tmp_path,
+        cycle_id,
+        target,
+        persist_compiler_artifacts=True,
+    )
+    work_order = load_compiler_artifact(
+        tmp_path,
+        cycle_id,
+        preparation["work_order_binding"],
+        "work_order",
+    )
+
+    assert work_order["schema_version"] == 3
+    assert work_order["context_access"]["mode"] == "bound_lazy"
+    assert work_order["context_access"]["inline_selected_context"] is False
+    assert "selected_context" not in work_order
+    assert len(canonical_bytes(work_order)) <= 12 * 1024
 
 
 def test_owner_and_hybrid_semantic_publishers_derive_exact_v2_wrappers(

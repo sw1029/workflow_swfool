@@ -25,6 +25,9 @@ from .executor_registry import executor_spec
 from .specs import TargetCompileSpec
 
 
+MAX_V3_WORK_ORDER_BYTES = 12 * 1024
+
+
 def _empty_advice(root: Path) -> dict[str, Any]:
     directory = root / ".agent_advice"
     return {
@@ -125,7 +128,10 @@ def _selector_material(
         task = model.get("task") if isinstance(model.get("task"), dict) else {}
         return {"task_md": task.get("task_md")}
     if selector == "cycle":
-        return model.get("cycle")
+        return {
+            "cycle": model.get("cycle"),
+            "run_terminal_intake": model.get("run_terminal_intake"),
+        }
     if selector == "authority":
         return model.get("authority")
     if selector == "pending_runs":
@@ -209,6 +215,9 @@ def collect_selected_context(
             else _empty_advice(root)
         ),
     }
+    from ..continuation.terminal import run_terminal_owner_intake
+
+    data["run_terminal_intake"] = run_terminal_owner_intake(root, cycle_id)
     if "task_state" in selectors:
         data["task_state"] = collect_task(root, max_files)
     if "issue" in selectors:
@@ -274,33 +283,13 @@ def render_work_order(
     state_fingerprint: str,
     context_binding: dict[str, Any],
     precondition_fingerprints: dict[str, str] | None = None,
+    *,
+    schema_version: int = 2,
 ) -> dict[str, Any]:
     selectors = frozenset(spec.dependency_selectors)
-    selected_context: dict[str, Any] = {
-        "task": model.get("task"),
-        "goal_truth": model.get("goal_truth"),
-        "cycle": model.get("cycle"),
-        "authority": model.get("authority"),
-        "selection_publication": model.get("selection_publication"),
-    }
-    if "advice" in selectors:
-        selected_context["advice"] = model.get("advice")
-    if selectors & {"git_head", "git_worktree"}:
-        selected_context["git"] = model.get("git")
-    if selectors & {
-        "task_state",
-        "issue",
-        "agent_log",
-        "session",
-        "validation",
-        "schema",
-    }:
-        selected_context["diagnostic_artifacts"] = model.get(
-            "diagnostic_artifacts"
-        )
     registered = executor_spec(target)
     work_order = {
-        "schema_version": 2,
+        "schema_version": schema_version,
         "artifact_kind": "orchestrate_stage_work_order",
         "cycle_id": cycle_id,
         "target": target,
@@ -316,7 +305,6 @@ def render_work_order(
         },
         "state_fingerprint": state_fingerprint,
         "context_binding": context_binding,
-        "selected_context": selected_context,
         "required_output": {
             "semantic_fields": list(spec.semantic_fields),
             "optional_semantic_fields": list(spec.optional_semantic_fields),
@@ -324,8 +312,46 @@ def render_work_order(
             "optional_owner_fields": list(spec.optional_owner_fields),
         },
     }
+    if schema_version == 2:
+        selected_context: dict[str, Any] = {
+            "task": model.get("task"),
+            "goal_truth": model.get("goal_truth"),
+            "cycle": model.get("cycle"),
+            "run_terminal_intake": model.get("run_terminal_intake"),
+            "authority": model.get("authority"),
+            "selection_publication": model.get("selection_publication"),
+        }
+        if "advice" in selectors:
+            selected_context["advice"] = model.get("advice")
+        if selectors & {"git_head", "git_worktree"}:
+            selected_context["git"] = model.get("git")
+        if selectors & {
+            "task_state",
+            "issue",
+            "agent_log",
+            "session",
+            "validation",
+            "schema",
+        }:
+            selected_context["diagnostic_artifacts"] = model.get(
+                "diagnostic_artifacts"
+            )
+        work_order["selected_context"] = selected_context
+    elif schema_version == 3:
+        work_order["context_access"] = {
+            "mode": "bound_lazy",
+            "dependency_selectors": list(spec.dependency_selectors),
+            "inline_selected_context": False,
+        }
+    else:
+        raise ValueError("unsupported work-order schema version")
     if precondition_fingerprints is not None:
         work_order["precondition_fingerprints"] = precondition_fingerprints
+    if (
+        schema_version == 3
+        and len(canonical_bytes(work_order)) > MAX_V3_WORK_ORDER_BYTES
+    ):
+        raise ValueError("v3 work order exceeds the 12 KiB coordinator budget")
     return work_order
 
 
@@ -360,6 +386,7 @@ def render_machine_input(
         "goal_truth": model.get("goal_truth"),
         "advice": model.get("advice"),
         "cycle": model.get("cycle"),
+        "run_terminal_intake": model.get("run_terminal_intake"),
         "selection_publication": model.get("selection_publication"),
         "authority": model.get("authority"),
         "pending_runs": model.get("pending_runs"),
@@ -369,6 +396,7 @@ def render_machine_input(
 
 
 __all__ = [
+    "MAX_V3_WORK_ORDER_BYTES",
     "collect_selected_context",
     "render_work_order",
     "render_machine_input",

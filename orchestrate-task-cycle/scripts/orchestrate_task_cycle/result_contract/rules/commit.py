@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+
 from ..base import RuleContext, TargetContractRule
 from ..common import add, has_value, value_for
 
@@ -48,3 +51,57 @@ class CommitRule(TargetContractRule):
             add(findings, "block" if mode == "block" else "warn", "commit_subject_missing", "Created commit result is missing `commit_subject`.")
         if status in {"skipped", "not_applicable", "blocked", "failed"} and not skipped_reason:
             add(findings, "block" if mode == "block" else "warn", "commit_skipped_reason_missing", "Skipped/blocked commit result is missing `commit_skipped_reason`.")
+        anchor = value_for(result, "settlement_anchor_path")
+        verification = value_for(result, "settlement_verification")
+        if target == "closeout_commit" and (anchor is not None or verification is not None):
+            if not isinstance(anchor, str) or not anchor.strip():
+                add(
+                    findings,
+                    "block",
+                    "settlement_anchor_missing",
+                    "Embedded closeout verification requires its exact anchor path.",
+                )
+            fields = {
+                "contract_id",
+                "settlement_id",
+                "commit_oid",
+                "terminal",
+                "tracked_post_commit_receipt_required",
+                "verification_sha256",
+            }
+            valid = isinstance(verification, dict) and set(verification) == fields
+            if valid:
+                material = {
+                    key: verification[key]
+                    for key in verification
+                    if key != "verification_sha256"
+                }
+                expected = hashlib.sha256(
+                    json.dumps(
+                        material,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    ).encode("utf-8")
+                ).hexdigest()
+                valid = (
+                    verification["contract_id"]
+                    == "git_embedded_settlement_verification@v1"
+                    and verification["terminal"] is True
+                    and verification[
+                        "tracked_post_commit_receipt_required"
+                    ]
+                    is False
+                    and verification["commit_oid"] == value_for(
+                        result, "commit_hash"
+                    )
+                    and verification["verification_sha256"] == expected
+                )
+            if not valid:
+                add(
+                    findings,
+                    "block",
+                    "settlement_verification_invalid",
+                    "Closeout settlement verification is missing, altered, or bound to another commit.",
+                )

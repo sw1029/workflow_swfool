@@ -149,11 +149,13 @@ def build_closeout_commit(ctx: PacketBuildContext) -> dict[str, Any]:
             "stage.jsonl/current_stage.json updates",
             "used `.agent_advice/active` or `.agent_advice/applied` files",
             "local_only reason for any closeout artifact intentionally not tracked",
+            "for an adaptive session, exact authority request/reservation/pre-commit bindings and the deterministic settlement anchor path",
         ],
         "commit_gates": [
             "use commit_role: closeout",
             "do not backfill the closeout commit hash into a report that is part of that same commit",
             "create a closeout commit when report/dashboard/advice artifacts are intentional and coherent",
+            "for an adaptive session, embed and verify git_embedded_settlement@v1 in the same commit",
             "skip only with commit_skipped_reason",
         ],
         "required_outputs": [
@@ -161,6 +163,7 @@ def build_closeout_commit(ctx: PacketBuildContext) -> dict[str, Any]:
             "commit_status",
             "tracked_artifacts",
             "commit_hash and commit_subject when created",
+            "settlement_anchor_path and settlement_verification for an adaptive session commit",
             "commit_skipped_reason when skipped/blocked/failed",
             "evidence_paths",
         ],

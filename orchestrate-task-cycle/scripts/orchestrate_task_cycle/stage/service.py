@@ -16,6 +16,12 @@ from ..model_context import project_model_context
 from ..result_contract.api import validate as validate_result
 from ..transition.constants import BOOTSTRAP_ORDER, ORDER, TERMINAL_OK
 from .builder import ResultBuilder
+from .closure import (
+    is_failed_closed_run_event,
+    is_run_failure_event,
+    is_run_terminal_event,
+    is_verified_run_terminal_event,
+)
 from .contracts import (
     PREPARATION_KIND,
     PREPARATION_SCHEMA_VERSION,
@@ -131,7 +137,11 @@ def prepare_stage(
     if not any(event.get("step") == "context" for event in events):
         raise ValueError("stage prepare requires the deterministic context event")
     expected_target = _next_target(
-        events, workflow_mode, preparation_schema_version
+        events,
+        workflow_mode,
+        preparation_schema_version,
+        root=workspace,
+        cycle_id=cycle_id,
     )
     if expected_target != target:
         raise ValueError(
@@ -416,11 +426,28 @@ def _target_order(workflow_mode: str, schema_version: int = 1) -> list[str]:
 
 
 def _next_target(
-    events: list[dict[str, Any]], workflow_mode: str, schema_version: int = 1
+    events: list[dict[str, Any]],
+    workflow_mode: str,
+    schema_version: int = 1,
+    *,
+    root: str | Path | None = None,
+    cycle_id: str | None = None,
 ) -> str | None:
     latest = {str(event.get("step")): event for event in events}
     for target in _target_order(workflow_mode, schema_version):
         event = latest.get(target)
+        if is_run_terminal_event(event):
+            if is_verified_run_terminal_event(
+                event, root=root, cycle_id=cycle_id
+            ):
+                continue
+            return target
+        if is_run_failure_event(event):
+            if not is_failed_closed_run_event(
+                event, root=root, cycle_id=cycle_id
+            ):
+                return target
+            continue
         if event is None or str(event.get("status") or "").lower() not in TERMINAL_OK:
             return target
     return None

@@ -331,6 +331,7 @@ def prepare_authority_inputs(
     *,
     register_existing_grants: bool = True,
     shared_grant_max_uses: int | None = None,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """Create external policy/grant/context inputs, but no lifecycle proofs."""
 
@@ -412,14 +413,14 @@ def prepare_authority_inputs(
             ),
             "subjects": [row["subject"] for row in bundle["execution_order"]],
             "operations": [row["operation"] for row in bundle["execution_order"]],
-            "risk_ceiling": "R3",
+            "risk_ceiling": "R2" if session_id else "R3",
             "decision_classes": ["D2"],
             "cardinality": "bounded_reusable",
             "max_uses": shared_grant_max_uses,
             "not_before": AT,
             "expires_at": EXPIRY,
-            "session_id": None,
-            "task_id": None,
+            "session_id": session_id,
+            "task_id": bundle["selected_task_id"] if session_id else None,
             "improvement_id": None,
             "source_approval": source_binding,
             "policy_snapshot": policy_binding,
@@ -449,14 +450,14 @@ def prepare_authority_inputs(
             "capabilities": manifest["required_capabilities"],
             "subjects": [row["subject"]],
             "operations": [row["operation"]],
-            "risk_ceiling": "R3",
+            "risk_ceiling": "R2" if session_id else "R3",
             "decision_classes": ["D2"],
             "cardinality": "single_use",
             "max_uses": 1,
             "not_before": AT,
             "expires_at": EXPIRY,
-            "session_id": None,
-            "task_id": None,
+            "session_id": session_id,
+            "task_id": bundle["selected_task_id"] if session_id else None,
             "improvement_id": None,
             "source_approval": source_binding,
             "policy_snapshot": policy_binding,
@@ -491,9 +492,9 @@ def prepare_authority_inputs(
                 for item in manifest["required_capabilities"]
             }
         ),
-        "risk_ceiling": "R3",
+        "risk_ceiling": "R2" if session_id else "R3",
         "mutation_classes": ["local_mutation"],
-        "evidence_id": "selected-successor-compiler-session",
+        "evidence_id": session_id or "selected-successor-compiler-session",
     }
     goal_autonomy_envelope = {
         "envelope_id": "selected-successor-compiler-envelope",
@@ -504,7 +505,7 @@ def prepare_authority_inputs(
                 for item in manifest["required_capabilities"]
             }
         ),
-        "risk_ceiling": "R3",
+        "risk_ceiling": "R2" if session_id else "R3",
         "decision_classes": ["D2"],
         "subjects": sorted(
             {row["subject"]["digest"] for row in bundle["execution_order"]}

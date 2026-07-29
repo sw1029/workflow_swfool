@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from manage_agent_authority import authority_interaction as interaction
+from manage_agent_authority import authority_interaction_broker as broker
 from manage_agent_authority.canonical import object_sha256
 from manage_agent_authority.root_grant_request_binding import (
     root_grant_request_binding_covers,
@@ -182,12 +183,26 @@ def test_mode_child_is_request_bound_and_idempotent(
     interaction.materialize_activation(root, evidence_binding)
 
     request = _request()
+    assert interaction.materialize_mode_child(
+        root, request, evaluated_at=now
+    ) is None
+    monkeypatch.setattr(
+        broker,
+        "_session_scope",
+        lambda *_args, **_kwargs: ("session-approved", _plan["expires_at"]),
+    )
+    monkeypatch.setattr(
+        broker,
+        "_assert_session_child_budget",
+        lambda *_args, **_kwargs: None,
+    )
     first = interaction.materialize_mode_child(root, request, evaluated_at=now)
     second = interaction.materialize_mode_child(root, request, evaluated_at=now)
     assert first is not None and second is not None
     assert first["grant_id"] == second["grant_id"]
     grant_path = root / first["grant_binding"]["ref"]
     grant = json.loads(grant_path.read_text(encoding="utf-8"))
+    assert grant["session_id"] == "session-approved"
     assert grant["policy_snapshot"] == policy_binding
     assert grant["request_sha256"] == object_sha256(request)
     assert not root_grant_request_binding_covers(grant, _request("cycle-b"))
@@ -199,3 +214,31 @@ def test_profile_refuses_external_and_ssh_push() -> None:
     external = {**request, "operation_id": "push_git_ssh", "mutation_class": "external_mutation", "risk_tier": "R3"}
     operation = {"source_rank_floor": "S3"}
     assert not interaction._operation_allowed(external, operation, profile)
+
+
+def test_governed_session_registry_covers_routine_cycle_writes() -> None:
+    registered = set().union(*interaction.OPERATION_REGISTRY.values())
+    routine = {
+        ("build-validation-set-with-agents", "mutate_validation_set_assets", "1"),
+        ("derive-improvement-task", "publish_task", "1"),
+        ("maintain-cycle-ledger", "append_cycle_evidence", "1"),
+        ("maintain-cycle-ledger", "finalize_cycle_attempt", "1"),
+        ("manage-external-advice", "mutate_advice_lifecycle", "1"),
+        ("manage-implementation-issues", "mutate_local_issue_lifecycle", "1"),
+        ("manage-schema-contracts", "publish_contract", "1"),
+        ("monitor-running-execution", "record_execution_monitor_event", "1"),
+        ("normalize-acceptance-and-demo", "publish_acceptance_packet", "1"),
+        ("plan-validation-scope", "publish_validation_scope", "1"),
+        ("task-md-agent-governance", "advance_task_state", "1"),
+        ("task-md-agent-governance", "implement_local_change", "1"),
+    }
+    assert routine <= registered
+    assert (
+        "task-doctor",
+        "mutate_task_scope",
+        "1",
+    ) not in registered
+    assert all(
+        operation_id not in interaction.ALWAYS_DENY_OPERATION_IDS
+        for _skill_id, operation_id, _version in registered
+    )

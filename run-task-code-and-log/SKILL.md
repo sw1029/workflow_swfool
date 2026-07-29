@@ -38,6 +38,32 @@ When task-state IDs are available, link the run evidence and log entry through `
 - Create a fresh log when the run was intentionally fresh, inputs changed, output changed, exit status changed, stdout/stderr contains new material evidence, or the task explicitly requires a fresh execution artifact.
 - Never use idempotent reuse to hide a failed rerun. If a command is executed and fails, log the failure even when an older passing log exists.
 
+## Terminal Projection
+
+Every bounded or long-running run that leaves the `run` stage must produce
+`run_terminal_projection@v1`. Keep `running`, `succeeded`, and `failed_closed`
+distinct. A failed-closed projection requires terminal monitor state, an explicit
+harvest disposition, failure evidence, `automatic_retry=false`, and disjoint
+safe-surviving versus discarded artifacts. Only `safety_status=safe` artifacts may
+survive.
+
+Validate and publish the canonical projection through the producer-owned CAS:
+
+```bash
+SKILLS_ROOT="${CODEX_HOME:-$HOME/.codex}/skills"
+PYTHONPATH="$SKILLS_ROOT/run-task-code-and-log/scripts" \
+  python3 -P -m run_task_code_and_log terminal-projection \
+  --root . --input run-terminal.json --publish
+```
+
+Pass the returned `projection` and exact `binding` to the orchestrator's pending
+monitor action. The orchestrator reopens those bytes, requires the same active
+`run_id`, and publishes the terminal run observation. A missing, copied, altered, or
+non-producer binding does not close the run. Both successful and failed terminal
+claims are reopened again wherever later stage ordering interprets them. Never
+automatically retry
+`failed_closed`; downstream work is closure-only and must not reuse discarded output.
+
 ## Workflow
 
 1. Parse the requested run.
@@ -91,7 +117,7 @@ When task-state IDs are available, link the run evidence and log entry through `
    - When execution fails with a nonzero exit, traceback, RuntimeError, or HTTP/provider-style error, run the `failure-autopsy` module command on captured stdout/stderr or bounded log files when available. Include only scalar diagnostics such as `error_type`, `exception_class`, `traceback_last_frame`, `http_status`, `missing_env_key_names`, `provider_request_count`, `provider_status`, `failure_class`, `provider_response_empty`, `provider_response_parse_failed`, `classification`, `alternative_evidence_source`, `gate_selfcheck`, `mitigations_attempted`, and `mitigations_unavailable`; do not persist raw source, prompt, provider, generated, stdout/stderr body, credential value, token, or secret-bearing payloads.
    - For every failed run, include `last_successful_stage` and an adapter/caller `execution_stage_ladder` when available. Use `execution_stage_ladder(**context)` from the domain adapter or pass `--execution-stage-ladder-json`; the autopsy derives `failure_surface_stage` as the next ladder rung after `last_successful_stage`. After the failure, include safe scalar/enum diagnostics with `--post-failure-diagnostics-json` or explicitly emit `diagnostics_unavailable=true` with a reason. A no-body policy still permits bounded scalar fields such as counts, enum labels, stage names, and status codes; it does not permit leaving the autopsy opaque when those fields are available.
    - For failed runs, include adapter/caller `runtime_config_echo` when available. Use only scalar/enum effective settings, `config_origin: cli|config_file|code_default|backend_default`, and derived `config_overrides`; never store prompt bodies, source text, provider payloads, credentials, secrets, or raw logs. A `code_default` override that plausibly caused the failure should be preserved as self-inflicted gate/root-cause routing evidence.
-   - After producing safe output artifacts, classify execution disposition with adapter `run_disposition(safety_violations, quality_vector, **context)` when available. Record `failed_closed` for safety-contract violations and discard unsafe outputs; record `candidate_degraded` for quality misses and preserve safe scalar artifacts with degradation reasons and verification flags, without promoting them as canonical success; record `candidate_written` only when the run met the output/write criteria. If the hook exists but required safety/quality scalars are missing, record `disposition_unclassified` as warning evidence.
+   - After producing safe output artifacts, classify execution disposition with adapter `run_disposition(safety_violations, quality_vector, **context)` when available. Record `failed_closed` for safety-contract violations, publish the terminal projection, and discard unsafe outputs; record `candidate_degraded` for quality misses and preserve safe scalar artifacts with degradation reasons and verification flags, without promoting them as canonical success; record `candidate_written` only when the run met the output/write criteria. If the hook exists but required safety/quality scalars are missing, record `disposition_unclassified` as warning evidence.
    - If produced artifacts or command summaries contain progress verdict fields, downgrade those fields in the run packet and log to `observed_producer_claim`. Use adapter `producer_progress_claim_fields()` when available; otherwise treat conventional fields such as `progress_kind`, `effective_progress_kind`, `progress_verdict`, `goal_productive`, and `produced_domain_delta` as producer claims. Do not expose these fields as authoritative progress, completion, or goal-distance evidence from this skill.
    - If a gate or validator fails with a blocker reason code, include `blocker_actionability`: `gate_id`, `reason_code`, `violated_relation`, `observed_values`, `expected_relation`, and `minimum_input_delta` when available. If the violated relation spans multiple input keys, include the abstract key names and scalar observations; set `authorization_contract_repair_candidate=true` when a named single authorization input would make the precondition discoverable. If the failure only exposes a state/code, set `blocker_opacity=true` so downstream contracts can route blocker-contract repair after repetition.
    - If produced artifacts, validators, or reports declare Part K fields, preserve them in the run packet as scalar/id-only evidence: `expectation_anchor`, `designated_baseline`, `expectation_anchor_missing`, `expectation_lineage_stale`, `parity_axes`, `parity_axis_status`, `parity_unverified`, `adoption_axis_classification`, `required_output_classes`, `majority_vote_adoption`, `provisional_adoption`, `measured_but_disqualified`, `required_evidence_resolution`, `observed_evidence_resolution`, `resolution_downgrade`, `surrogate_resolution_basis`, `report_key_divergence`, and duplicate report-key path/value pairs. Do not decide adoption or completion here.
@@ -206,6 +232,7 @@ python3 -m run_task_code_and_log failure-autopsy \
 - Do not omit `last_successful_stage`, `failure_surface_stage`, or safe post-failure scalar diagnostics when an execution stage ladder is available. If diagnostics cannot be collected, say `diagnostics_unavailable=true`; do not infer a terminal classification from an opaque failure.
 - Do not omit safe scalar runtime configuration echo when an adapter/caller exposes it for a failed run. Record `code_default` overrides as routing evidence, not as completion proof.
 - Do not discard quality-miss outputs under the same path as safety violations. Discard only unsafe `failed_closed` artifacts; preserve safe `candidate_degraded` artifacts without promoting them to canonical success.
+- Do not close a failed run from a scalar status alone. Require the exact cycle-bound `run_terminal_projection@v1` reopened from its producer CAS with its raw-byte binding, keep `automatic_retry=false`, and reject a different second terminal projection for the same run.
 - Do not promote a `candidate_degraded` artifact as baseline or completion evidence from this skill. Downstream loopback/validation must decide which independently verified axes are consumable.
 - Do not promote a run as baseline, comparison winner, adoption proof, or close evidence from this skill when its own artifacts declare `expectation_lineage_stale`, `parity_unverified`, failed gating adoption axes, `resolution_downgrade`, or `report_key_divergence`. Log those fields and let downstream contracts decide.
 - Do not promote a run as current-lane capability, baseline, comparison winner, adoption proof, close evidence, or metric high-water evidence from this skill when its artifacts declare `pass_on_stale_lane`, `decision_metadata_revision`, `stale_measurement_artifact`, or `basis_overclaim`. Log those fields and let downstream contracts decide.

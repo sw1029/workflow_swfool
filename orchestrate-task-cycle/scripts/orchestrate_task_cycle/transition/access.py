@@ -5,6 +5,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from ..stage.closure import (
+    is_failed_closed_run_event,
+    is_run_failure_event,
+    is_run_terminal_event,
+    is_verified_run_terminal_event,
+)
 from .constants import ORDER, STEP_ALIASES, TERMINAL_OK
 
 
@@ -140,7 +146,22 @@ def status_for_step(stage: dict[str, Any], step: str) -> str | None:
     return None
 
 
-def completed(stage: dict[str, Any], step: str) -> bool:
+def completed(
+    stage: dict[str, Any],
+    step: str,
+    *,
+    root: str | Path | None = None,
+    cycle_id: str | None = None,
+) -> bool:
+    event = step_event(stage, step)
+    if step == "run" and is_run_terminal_event(event):
+        return is_verified_run_terminal_event(
+            event, root=root, cycle_id=cycle_id
+        )
+    if step == "run" and is_run_failure_event(event):
+        return is_failed_closed_run_event(
+            event, root=root, cycle_id=cycle_id
+        )
     status = status_for_step(stage, step)
     return bool(status and status in TERMINAL_OK)
 

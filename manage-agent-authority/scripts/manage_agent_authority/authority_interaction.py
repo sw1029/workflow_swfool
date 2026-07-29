@@ -104,21 +104,38 @@ DEFAULT_CONFIG: dict[str, Any] = {
 # This is intentionally closed.  Config can select a group or omit it but
 # cannot name arbitrary operation IDs.
 OPERATION_REGISTRY: dict[str, set[tuple[str, str, str]]] = {
-    "local_edit": {("run-task-code-and-log", "edit_local", "1")},
+    "local_edit": {
+        ("run-task-code-and-log", "edit_local", "1"),
+        ("task-md-agent-governance", "implement_local_change", "1"),
+    },
     "local_worker": {("orchestrate-task-cycle", "dispatch_local_worker", "1")},
-    "monitor_state": set(),
+    "monitor_state": {
+        ("monitor-running-execution", "record_execution_monitor_event", "1"),
+    },
     "task_lifecycle": {
+        ("derive-improvement-task", "publish_task", "1"),
+        ("maintain-cycle-ledger", "append_cycle_evidence", "1"),
+        ("maintain-cycle-ledger", "finalize_cycle_attempt", "1"),
+        ("manage-external-advice", "mutate_advice_lifecycle", "1"),
+        ("manage-implementation-issues", "mutate_local_issue_lifecycle", "1"),
         ("orchestrate-task-cycle", "retire_terminal_wait_baseline_successor", "1"),
         ("orchestrate-task-cycle", "publish_terminal_wait_baseline_binding", "1"),
         ("orchestrate-task-cycle", "activate_terminal_wait_baseline_settlement", "1"),
+        ("task-md-agent-governance", "advance_task_state", "1"),
     },
     "task_topology": {
+        ("manage-task-state-index", "mutate_task_state_index", "1"),
         ("orchestrate-task-cycle", "mutate_task_topology", "1"),
         ("orchestrate-task-cycle", "publish_selected_successor_topology", "1"),
         ("orchestrate-task-cycle", "settle_selected_successor_task_state", "1"),
         ("orchestrate-task-cycle", "activate_task_topology_settlement", "1"),
     },
-    "validation_assets": set(),
+    "validation_assets": {
+        ("build-validation-set-with-agents", "mutate_validation_set_assets", "1"),
+        ("manage-schema-contracts", "publish_contract", "1"),
+        ("normalize-acceptance-and-demo", "publish_acceptance_packet", "1"),
+        ("plan-validation-scope", "publish_validation_scope", "1"),
+    },
     "local_long_run": {("run-task-code-and-log", "run_long", "1")},
     "local_git_commit": {("repo-change-commit", "finalize_git_state", "1")},
 }

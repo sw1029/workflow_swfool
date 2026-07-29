@@ -24,6 +24,28 @@ is S3/R3/external/single-use and binds the exact remote identity, refspec,
 branch, and commit SHA in its request subject. Force pushes, tag deletion, and
 remote replacement are outside the registered operation.
 
+## Bounded host session
+
+A session lease is a convenience layer under an eligible signed activation,
+not another authority source. Prefer a host-issued
+`CODEX_SESSION_APPROVAL_RECEIPT` bound to `CODEX_THREAD_ID`; if the host receipt
+is absent, `session-start` may request one exact foreground TTY confirmation.
+The producer derives the session ID and stores only hashes of the host thread
+and receipt.
+
+Use `authority-mode session-start|session-status|session-stop --workspace
+<absolute-root>`. The lease is reusable only while workspace, activation,
+goal, policy, manifests, operation groups, risk envelope, and host thread
+remain current. It is capped at R2, 3 cycles, 72 agent actions, 1 concurrent
+long run, and 1 closeout commit per cycle. Push, R3, external/destructive
+effects, credentials, and policy/mode/authority/goal-design changes always
+cross a new exact approval boundary.
+
+Session-derived children are producer-owned schema-v6 source approvals and
+schema-v4 grants that bind the session ID and expiry. A legacy grant with a
+null session ID remains reader-only. Missing or stopped leases, drift,
+expiry, budget exhaustion, and unknown effects fail closed.
+
 ## Signed activation
 
 `authority-mode activate --workspace <absolute-root> --mode governed` first
@@ -71,3 +93,8 @@ The effective authority is always:
 hard tier ∩ signed activation ∩ current config ∩ runtime ceiling
           ∩ OS/tool sandbox ∩ exact request
 ```
+
+For interaction UX, `authority inspect` is pure read-only. `authority advance`
+performs one bounded resolution step; deprecated `authority resolve` is only an
+effectful compatibility alias. Status rendering must never materialize,
+reserve, or settle authority.

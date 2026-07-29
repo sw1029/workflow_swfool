@@ -52,11 +52,11 @@ def _decision_binding_matches(
             "live allowed decision does not select the planned exact grant")
     try:
         grant, _binding = load_grant_artifact(root, grant_id)
+        verify_materialized_grant(root, grant, item["authority"])
     except (SystemExit, KeyError, TypeError, ValueError) as error:
         raise WorkflowError(
             "invalid_authority_overlay", "selected live grant is invalid"
         ) from error
-    verify_materialized_grant(grant, item["authority"])
 
 
 def _reservation_binding_matches(

@@ -14,8 +14,10 @@ from .constants import (
     COMPILED_TERMINAL_LIFECYCLE_EVENT_KIND,
 )
 from .semantic_seeds import (
+    RunTerminalSeed,
     StageObservationSeed,
     TerminalLifecycleSeed,
+    open_run_terminal_seed,
     open_stage_observation_seed,
     open_terminal_lifecycle_seed,
 )
@@ -175,6 +177,27 @@ def compile_stage_observation(seed: StageObservationSeed) -> CompiledEventBindin
     return _seal(event, _STAGE_OBSERVATION)
 
 
+def compile_run_terminal(seed: RunTerminalSeed) -> CompiledEventBinding:
+    semantic = open_run_terminal_seed(seed)
+    projection = semantic["run_terminal_projection"]
+    disposition = str(projection.get("status") or "")
+    cycle_id = str(projection.get("cycle_id") or "")
+    event = {
+        **semantic,
+        "cycle_id": cycle_id,
+        "event_id": (
+            f"{cycle_id}-run-terminal-{projection.get('projection_id')}"
+        ),
+        "observation_kind": "run_terminal",
+        "step": "run",
+        "status": "failed" if disposition == "failed_closed" else "complete",
+        "reason": str(
+            semantic.get("reason") or f"run terminal projection: {disposition}"
+        ),
+    }
+    return _seal(event, _STAGE_OBSERVATION)
+
+
 def compile_terminal_lifecycle(seed: TerminalLifecycleSeed) -> CompiledEventBinding:
     semantic = open_terminal_lifecycle_seed(seed)
     event = {
@@ -284,6 +307,41 @@ def validate_compiled_event_derivation(
             _opened_derivation(binding),
             previous_events,
         )
+        return
+    if producer_kind == _STAGE_OBSERVATION.producer_kind:
+        if event.get("observation_kind") != "run_terminal":
+            return
+        from ..stage.closure import reopen_run_terminal_event
+
+        projection = reopen_run_terminal_event(root, cycle_id, event)
+        previous_runs = [
+            row for row in previous_events if row.get("step") == "run"
+        ]
+        if (
+            not previous_runs
+            or previous_runs[-1].get("run_id") != projection["run_id"]
+        ):
+            raise ValueError(
+                "terminal projection does not match the active cycle run"
+            )
+        for previous in previous_runs:
+            if (
+                previous.get("producer_kind") != _STAGE_OBSERVATION.producer_kind
+                or previous.get("observation_kind") != "run_terminal"
+                or previous.get("run_id") != projection["run_id"]
+            ):
+                continue
+            prior_projection = reopen_run_terminal_event(
+                root, cycle_id, previous
+            )
+            if (
+                prior_projection != projection
+                or previous.get("run_terminal_projection_binding")
+                != event.get("run_terminal_projection_binding")
+            ):
+                raise ValueError(
+                    "run already has a different terminal projection"
+                )
         return
     if producer_kind != _SYSTEM.producer_kind:
         return

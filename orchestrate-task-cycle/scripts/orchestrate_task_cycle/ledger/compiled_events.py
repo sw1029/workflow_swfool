@@ -7,6 +7,7 @@ from typing import Any
 
 from .compiler_binding import (
     CompiledEventBinding,
+    compile_run_terminal,
     compile_stage_observation,
     compile_system_event,
     compile_terminal_lifecycle,
@@ -15,7 +16,11 @@ from .compiler_binding import (
 from .constants import COMPILED_STAGE_RESULT_EVENT_KIND
 from .repository import append_compiled_binding, read_current_expanded, read_events
 from .result_hydration import validate_compact_result_envelope
-from .semantic_seeds import StageObservationSeed, TerminalLifecycleSeed
+from .semantic_seeds import (
+    RunTerminalSeed,
+    StageObservationSeed,
+    TerminalLifecycleSeed,
+)
 from .support import (
     current_stage_path,
     ledger_path,
@@ -100,6 +105,12 @@ def append_compiled_stage_observation(
     return _publish(root, cycle_id, compile_stage_observation(seed))
 
 
+def append_compiled_run_terminal(
+    root: Path, cycle_id: str, seed: RunTerminalSeed
+) -> dict[str, Any]:
+    return _publish(root, cycle_id, compile_run_terminal(seed))
+
+
 def append_compiled_terminal_lifecycle(
     root: Path, cycle_id: str, seed: TerminalLifecycleSeed
 ) -> dict[str, Any]:
@@ -108,6 +119,7 @@ def append_compiled_terminal_lifecycle(
 
 __all__ = [
     "append_compiled_stage_observation",
+    "append_compiled_run_terminal",
     "append_compiled_stage_result_binding",
     "append_compiled_system_stage",
     "append_compiled_terminal_lifecycle",

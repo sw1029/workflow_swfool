@@ -10,8 +10,10 @@ from manage_agent_authority.artifact_store import AUTHORIZATION_ROOT, register_g
 from manage_agent_authority.canonical import parse_time, write_immutable_json
 from manage_agent_authority.evaluator import evaluate
 from manage_agent_authority.lifecycle import reserve
+from manage_agent_authority.projection_io import load_grant_artifact
 
 from .authority_basis import materialization_item
+from .authority_grant import verify_materialized_grant
 from .common import WorkflowError, require, sha256_json, workspace_file
 from .journal import load
 from .lifecycle import status
@@ -184,8 +186,14 @@ def _jit_materialize(
             "JIT materialization cannot invent a missing source approval",
             user_action_required=True, next_action="supply_exact_source_snapshot")
     actual = _jit_time(recipe["reserve"], at)
-    grant_recipe = recipe["register_grant_recipe"]
-    grant_result = register_grant(root, grant_recipe, parent_id=None)
+    grant_replay = recipe["grant_replay"]
+    grant, _grant_sha256 = load_grant_artifact(
+        root, grant_replay["grant_id"]
+    )
+    verify_materialized_grant(root, grant, item["authority"])
+    grant_result = register_grant(
+        root, grant, parent_id=grant["parent_grant_id"]
+    )
     decision = evaluate(
         root, recipe["request"], recipe["evaluate"]["evaluation_context"],
         evaluated_at=recipe["evaluate"]["evaluated_at"], skills_root=SKILLS_ROOT,

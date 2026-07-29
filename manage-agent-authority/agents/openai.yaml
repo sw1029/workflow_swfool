@@ -1,4 +1,4 @@
 interface:
   display_name: "Manage Agent Authority"
-  short_description: "Compile, approve, and settle exact authority"
-  default_prompt: "Use $manage-agent-authority to compile shared operation authority, render a plan-bound root grant, and settle owner results."
+  short_description: "Manage bounded session and operation authority"
+  default_prompt: "Use $manage-agent-authority to inspect or advance exact operation authority and reuse a bounded host-session approval."

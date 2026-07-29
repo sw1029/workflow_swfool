@@ -45,6 +45,7 @@ def _prepared(
     *,
     grants: bool = True,
     shared_grant_max_uses: int | None = None,
+    session_id: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     _initialize_active_task(root)
     decision = _selected_receipt(root, capsys)
@@ -64,6 +65,7 @@ def _prepared(
         prepared["bundle"],
         register_existing_grants=grants,
         shared_grant_max_uses=shared_grant_max_uses,
+        session_id=session_id,
     )
     return prepared, bundle, inputs
 

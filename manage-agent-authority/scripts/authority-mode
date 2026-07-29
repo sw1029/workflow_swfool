@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 from typing import Any
 
 from manage_agent_authority.authority_interaction import (
+    _utc_now,
     build_activation_plan,
     materialize_activation,
     publish_activation_evidence,
@@ -24,6 +26,14 @@ from manage_agent_authority.root_authorization_signer import (
     preflight_tty,
 )
 from manage_agent_authority.root_tty import RootTTYError
+from manage_agent_authority.session_approval import (
+    public_session_card,
+    start_session_from_host_or_tty,
+)
+from manage_agent_authority.session_store import (
+    session_status,
+    stop_matching_session,
+)
 from manage_agent_authority.stable_store import read_regular
 
 
@@ -118,6 +128,9 @@ def main(argv: list[str] | None = None) -> int:
     downgrade.add_argument("--mode", choices=("workspace", "observe", "manual"), required=True)
     disable = subs.add_parser("disable")
     disable.add_argument("--workspace", required=True)
+    for name in ("session-start", "session-status", "session-stop"):
+        item = subs.add_parser(name)
+        item.add_argument("--workspace", required=True)
     args = parser.parse_args(argv)
     root = _workspace(args.workspace)
     if args.command == "status":
@@ -130,6 +143,33 @@ def main(argv: list[str] | None = None) -> int:
         return _emit(set_mode(args.mode))
     if args.command == "disable":
         return _emit(set_mode("manual", disable=True))
+    thread_binding = os.environ.get("CODEX_THREAD_ID")
+    if not thread_binding:
+        raise SystemExit("authority_session_thread_binding_unavailable")
+    if args.command == "session-start":
+        return _emit(
+            public_session_card(
+                start_session_from_host_or_tty(
+                    root,
+                    thread_binding=thread_binding,
+                    host_approval_receipt=os.environ.get(
+                        "CODEX_SESSION_APPROVAL_RECEIPT"
+                    ),
+                )
+            )
+        )
+    if args.command == "session-status":
+        return _emit(session_status(root, thread_binding=thread_binding))
+    if args.command == "session-stop":
+        stopped = stop_matching_session(
+            root, thread_binding=thread_binding, stopped_at=_utc_now()
+        )
+        return _emit(
+            {
+                "status": "stopped",
+                "session_id": stopped["session_binding"]["session_id"],
+            }
+        )
     raise SystemExit("authority_mode_unknown_command")
 
 

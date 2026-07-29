@@ -1,6 +1,6 @@
 ---
 name: repo-change-commit
-description: "Inspect a local Git repository's implementation state and create an intentional commit, using Tier 1 `model_ref:balanced`/low when commit finalization is delegated. Separate intentional source changes from generated or local-only files, enforce goal-aware readiness, stage only coherent files, include issue or goal/task references, and coordinate Git state with issue-tracked or `/goal` task cycles."
+description: "Inspect a local Git repository and create one intentional, goal-aware commit. Use for coherent staging, validation-aware checkpoint/closeout messages, and session-cycle one-commit settlement that embeds its own verification anchor without a follow-up metadata commit."
 ---
 
 # Repo Change Commit
@@ -13,7 +13,44 @@ Creating the commit is `finalize_git_state` in `authority.operations.json` and f
 
 When a Codex `/goal` is active, treat `.agent_goal/goal_contract.yaml` as the commit contract. A commit is allowed only when the diff is inside the goal scope, a task node or checkpoint exists, validation is recorded as `passed` or explicitly `known_failed`, and the commit message carries the goal and task identity. Do not turn a partial goal state into an ambiguous success commit.
 
-When invoked from `$orchestrate-task-cycle`, treat commit finalization as the authoritative source of created commit hashes. Workflow artifacts written before this skill may contain `base_commit` or pre-commit context; do not rely on those hashes as the final cycle commit. Use `commit_role: implementation` for the validation/issue-gated change set and `commit_role: closeout` for report/dashboard/ledger/advice artifacts after report rendering.
+When invoked from `$orchestrate-task-cycle`, treat commit finalization as the authoritative source of the created commit hash. Workflow artifacts written before this skill may contain `base_commit` or pre-commit context; those are not the final cycle commit. A non-session caller may use `commit_role: implementation|closeout`. The adaptive session workflow batches implementation and workflow artifacts into one `closeout` commit after validation, derive, index, dashboard, and report.
+
+## One-commit session settlement
+
+For an adaptive session, do not create an implementation commit followed by a
+closeout-metadata commit. Stage the complete coherent payload except the anchor, then
+prepare `git_embedded_settlement@v1`:
+
+```bash
+SKILLS_ROOT="${CODEX_HOME:-$HOME/.codex}/skills"
+PYTHONPATH="$SKILLS_ROOT/repo-change-commit/scripts:$SKILLS_ROOT/manage-agent-authority/scripts" \
+  python3 -P -m repo_change_commit prepare-anchor \
+  --root . \
+  --anchor-path .task/authorization/settlements/<cycle-id>.json \
+  --message-file /path/to/exact-message.txt \
+  --intent settlement-intent.json
+```
+
+The closed intent binds `commit_role`, nullable goal/task/cycle/session IDs, exact
+producer-owned authority request and reservation, and pre-commit evidence. The
+producer reopens their fixed artifacts, validates request/reservation/pre-commit
+and session lineage, then uses a
+temporary index to project the payload without touching the real index, writes the
+canonical anchor, and stages only that anchor. Reinspect the final staged set, make
+one commit with the exact message, then verify `HEAD` read-only:
+
+```bash
+PYTHONPATH="$SKILLS_ROOT/repo-change-commit/scripts:$SKILLS_ROOT/manage-agent-authority/scripts" \
+  python3 -P -m repo_change_commit verify-head \
+  --root . \
+  --anchor-path .task/authorization/settlements/<cycle-id>.json
+```
+
+Verification binds the parent, message digest, anchor bytes, payload tree, changed
+paths, goal/task/cycle/session, and authority evidence. It returns a terminal derived
+receipt with `tracked_post_commit_receipt_required=false`; never create a second
+tracked receipt or amend solely to record the commit hash. Push is still a separate
+exact S3/R3 operation.
 
 ## Routing Policy
 
@@ -30,7 +67,7 @@ When invoked from `$orchestrate-task-cycle`, treat commit finalization as the au
    - Run `git status --short --branch`, `git diff --stat`, `git diff --name-status`, and `git ls-files --others --exclude-standard`.
    - Read the active task context if present, such as the user request, `task.md`, `.issue/` issue records or GitHub issue mirrors, recent changed files, or relevant project docs.
    - Read validation/progress context when present, especially `validation_verdict`, `progress_verdict`, active blockers, issue IDs, and whether the commit is complete, partial/checkpoint, or safety-only.
-   - Read `commit_role` when supplied. For `$orchestrate-task-cycle`, default missing `commit_role` to `implementation` before report rendering and to `closeout` only when the closeout packet explicitly names rendered report/dashboard artifacts.
+   - Read `commit_role` when supplied. For an adaptive session, require `closeout` and one complete payload. For a non-session `$orchestrate-task-cycle` call, default missing `commit_role` to `implementation` before report rendering and to `closeout` only when the closeout packet explicitly names rendered report/dashboard artifacts.
    - Read active goal context when present: `.goal/active_goal.md`, `.agent_goal/goal_contract.yaml`, `.task/goal_plan.yaml`, `.goal/progress.jsonl`, `.goal/checkpoints/`, and `.task/validation/latest.json`.
    - If `.issue/` names a branch/worktree for the active issue, confirm the current branch/worktree matches the intended issue context or report the mismatch before committing.
    - Inspect diffs for touched source, tests, config, docs, and `.gitignore`. Do not rely only on filenames.
@@ -85,7 +122,8 @@ When invoked from `$orchestrate-task-cycle`, treat commit finalization as the au
    - Include `Progress: advanced|safety_only|no_progress|regressed|not_recorded` when the validation report or orchestrator provides a progress verdict.
    - Include `Commit-Role: implementation|closeout` when `$orchestrate-task-cycle` supplies a role.
    - For `safety_only`, `no_progress`, `partial`, failed, or known-failed checkpoint commits, include an explicit remaining-blocker line and avoid subjects or bodies that imply task/final-goal completion.
-   - For `commit_role: closeout`, keep the subject clearly about workflow closeout artifacts, and do not amend or rewrite a report solely to include the closeout commit hash created by the same commit.
+   - For `commit_role: closeout`, keep the subject about the coherent task/cycle outcome, not merely metadata. Do not amend or rewrite a report solely to include the commit hash created by the same commit.
+   - In an adaptive session, prepare and validate the embedded settlement anchor after every intended payload path is staged and before `git commit`; verify `HEAD` immediately afterward without writing another tracked artifact.
    - Do not close issues from this skill. `$manage-implementation-issues` closes or archives issues only after verification evidence exists.
    - Run `git commit` only when the user asked for a commit. Afterward, report `git log -1 --oneline` and the remaining `git status --short --branch`.
    - Report both the pre-commit/base hash when known and the created commit hash. The created commit hash is the authoritative finalization result.
@@ -136,4 +174,5 @@ Schema: clean
 - Never label a `/goal` commit as complete unless the goal status is `complete_verified` and validation evidence is passed. Use an explicit known-failed checkpoint commit only when the user asked for that state.
 - Never let a `safety_only` validation pass look like issue closure, readiness promotion, or final-goal progress in the commit message.
 - Never write a commit hash into pre-existing workflow artifacts after committing unless a new follow-up commit or explicit amend is intended; report the created hash in the skill outcome instead.
+- Never create a second “receipt commit” after an embedded session settlement; `verify-head` is deliberately read-only.
 - Never leave used active/applied advice or rendered closeout reports untracked in an orchestrated Git-backed cycle unless the caller records a local-only reason.

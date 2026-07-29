@@ -23,6 +23,7 @@ from .common import (
     workspace_file,
 )
 from .compilation_loader import load_compilation
+from .intent_authority import projected_materialization, verify_new_source
 from .plan import ROLE_BY_OPERATION, normalize_plan, validate_normalized_plan
 from .task_transition_store import publish_immutable
 
@@ -70,9 +71,6 @@ def _identity(request_sha256: str, operation_id: str) -> dict[str, str]:
         "request_sha256": request_sha256, "operation_id": operation_id,
     })
     return {
-        "grant_id": f"tdg-{fingerprint[:24]}",
-        "lineage_id": f"tdl-{fingerprint[8:32]}",
-        "grant_idempotency_key": f"tdg-key-{fingerprint[:20]}",
         "reservation_idempotency_key": f"tdr-key-{fingerprint[:20]}",
     }
 
@@ -88,12 +86,11 @@ def _source_body(root: Path, binding: dict[str, str]) -> dict[str, Any]:
 
 
 def _plan_item(
-    row: dict[str, Any], source: dict[str, str], at: str,
+    root: Path, row: dict[str, Any], source: dict[str, str], at: str,
     expires_at: str, policy: dict[str, str],
 ) -> dict[str, Any]:
     compilation = row["compiled_operation"]
     request = compilation["request"]
-    identity = row["materialization_identity"]
     return {
         "operation_id": row["operation_id"],
         "workflow_role": row["workflow_role"],
@@ -107,28 +104,9 @@ def _plan_item(
         "authority": {
             "applicability": "required",
             "request": copy.deepcopy(request),
-            "materialization": {
-                "evaluation_context": copy.deepcopy(
-                    compilation["evaluation_context"]
-                ),
-                "evaluated_at": at,
-                "policy_snapshot": copy.deepcopy(policy),
-                "grant_spec": {
-                    "grant_id": identity["grant_id"],
-                    "lineage_id": identity["lineage_id"],
-                    "holder_rank": request["actor_rank"],
-                    "cardinality": "single_use",
-                    "max_uses": 1,
-                    "not_before": at,
-                    "expires_at": expires_at,
-                    "idempotency_key": identity["grant_idempotency_key"],
-                },
-                "reservation": {
-                    "not_before": at,
-                    "expires_at": expires_at,
-                    "idempotency_key": identity["reservation_idempotency_key"],
-                },
-            },
+            "materialization": projected_materialization(
+                root, row, source, at, expires_at, policy
+            ),
         },
         "initial_resolution": "already_covered",
         "source_approval": copy.deepcopy(source),
@@ -139,7 +117,7 @@ def _verify_existing_source(
     root: Path, row: dict[str, Any], binding: dict[str, str], at: str,
     expires_at: str, policy: dict[str, str],
 ) -> None:
-    item = _plan_item(row, binding, at, expires_at, policy)
+    item = _plan_item(root, row, binding, at, expires_at, policy)
     item["authority"]["request_sha256"] = row["compiled_operation"][
         "request_sha256"
     ]
@@ -359,15 +337,13 @@ def _build_plan(
             item["operation_id"] for item in review["approval_scope"]["operations"]
         }:
             approval = _source_body(root, source)
-            require(approval["evidence_id"] == evidence_id,
-                    "invalid_authorization_basis",
-                    "new source approval evidence does not bind the accepted review")
-            require(_time(approval["not_before"], "source not_before")
-                    >= _time(decided_at, "decided_at"),
-                    "invalid_authorization_basis",
-                    "new source approval predates the review decision")
+            verify_new_source(
+                approval,
+                decided_at=decided_at,
+                root_evidence_id=evidence_id,
+            )
         item = _plan_item(
-            row, source, decided_at, review["expires_at"],
+            root, row, source, decided_at, review["expires_at"],
             review["policy_snapshot"],
         )
         item.pop("source_approval")

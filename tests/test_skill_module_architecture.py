@@ -25,6 +25,7 @@ SKILL_PACKAGES = {
     "orchestrate-task-cycle": "orchestrate_task_cycle",
     "plan-validation-scope": "plan_validation_scope",
     "record-agent-work-log": "record_agent_work_log",
+    "repo-change-commit": "repo_change_commit",
     "run-task-code-and-log": "run_task_code_and_log",
     "validate-task-completion": "validate_task_completion",
 }

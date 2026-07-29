@@ -17,6 +17,12 @@ from .contracts import (
     canonical_sha256,
     state_fingerprint,
 )
+from .closure import (
+    is_failed_closed_run_event,
+    is_run_failure_event,
+    is_run_terminal_event,
+    is_verified_run_terminal_event,
+)
 from .gates import boundary_reason
 from .protocol import cycle_preparation_version
 from .specs import TARGET_COMPILE_SPECS
@@ -139,12 +145,32 @@ def _context(
     return legacy_context(workspace, cycle_id, max_files, max_paths)
 
 
-def _blocked(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _blocked(
+    events: list[dict[str, Any]],
+    *,
+    root: str | Path | None = None,
+    cycle_id: str | None = None,
+) -> list[dict[str, Any]]:
     latest = {str(event.get("step")): event for event in events}
     return [
         event
         for event in latest.values()
-        if str(event.get("status") or "").lower() in {"blocked", "failed"}
+        if (
+            is_run_terminal_event(event)
+            and not is_verified_run_terminal_event(
+                event, root=root, cycle_id=cycle_id
+            )
+        )
+        or (
+            (
+                str(event.get("status") or "").lower()
+                in {"blocked", "failed"}
+                or is_run_failure_event(event)
+            )
+            and not is_failed_closed_run_event(
+                event, root=root, cycle_id=cycle_id
+            )
+        )
     ]
 
 
@@ -168,6 +194,24 @@ def _prepare_target(
         max_paths=max_paths,
         preparation_schema_version=schema_version,
         persist_compiler_artifacts=False,
+    )
+
+
+def _next_target_bound(
+    workspace: Path,
+    cycle_id: str,
+    events: list[dict[str, Any]],
+    workflow_mode: str,
+    schema_version: int,
+) -> str | None:
+    from .service import _next_target
+
+    return _next_target(
+        events,
+        workflow_mode,
+        schema_version,
+        root=workspace,
+        cycle_id=cycle_id,
     )
 
 
@@ -312,8 +356,7 @@ def advance_stage(
     max_paths: int = 40,
     preparation_schema_version: int | None = None,
 ) -> dict[str, Any]:
-    from .service import _next_target, _task_id
-
+    from .service import _task_id
     if max_steps < 1 or max_steps > 32:
         raise ValueError("max_steps must be between 1 and 32")
     workspace = Path(root).resolve(strict=True)
@@ -327,14 +370,12 @@ def advance_stage(
             "historical unsealed or invalid cycles cannot advance; "
             "initialize a new compiler-first cycle"
         )
-    schema_version = cycle_preparation_version(
-        workspace, cycle_id, preparation_schema_version
-    )
+    schema_version = cycle_preparation_version(workspace, cycle_id, preparation_schema_version)
     actions: list[dict[str, Any]] = []
     fingerprints: set[str] = set()
     for _step in range(max_steps):
         events = read_events(workspace, cycle_id)
-        blocked = _blocked(events)
+        blocked = _blocked(events, root=workspace, cycle_id=cycle_id)
         if blocked:
             return {
                 "status": "block",
@@ -378,7 +419,9 @@ def advance_stage(
             if ready:
                 return ready
             continue
-        target = _next_target(events, workflow_mode, schema_version)
+        target = _next_target_bound(
+            workspace, cycle_id, events, workflow_mode, schema_version
+        )
         if target is None:
             return {
                 "status": "complete",

@@ -113,6 +113,7 @@ def _preparation_bindings(
             if schema_version == PREPARATION_SCHEMA_VERSION_V3
             else None
         ),
+        schema_version=schema_version,
     )
     raw_work_order_binding = compiler_artifact_binding(
         root,

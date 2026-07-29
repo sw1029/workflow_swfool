@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -173,16 +174,158 @@ def _updated_state(state: dict[str, Any], grant: dict[str, Any]) -> dict[str, An
     return {**state, "child_grants": state.get("child_grants", 0) + 1, "total_uses": state.get("total_uses", 0) + grant["max_uses"], "uses_by_cardinality": uses, "child_grant_ids": sorted([*state.get("child_grant_ids", []), grant["grant_id"]]), "version": state.get("version", 0) + 1}
 
 
-def _child_source(root: Path, *, activation_id: str, plan_binding: dict[str, str], evidence_binding: dict[str, str], receipt_binding: dict[str, str], request: dict[str, Any], now: str) -> tuple[dict[str, Any], dict[str, Any]]:
+def _assert_session_child_budget(
+    root: Path,
+    *,
+    session_id: str | None,
+    activation_state: dict[str, Any],
+    proposed_grant_id: str,
+) -> None:
+    if session_id is None:
+        return
+    thread = os.environ.get("CODEX_THREAD_ID")
+    from .session_store import matching_session_leases
+
+    leases = [
+        lease
+        for _path, lease in matching_session_leases(
+            root, thread_binding=thread
+        )
+        if lease["session_binding"]["session_id"] == session_id
+        and lease["lifecycle"]["status"] == "live"
+    ]
+    if len(leases) != 1:
+        raise SystemExit("authority_session_dispatch_blocked")
+    session_grants: set[str] = set()
+    for grant_id in activation_state.get("child_grant_ids") or []:
+        path = grant_path(root, str(grant_id))
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            grant = validate_grant(
+                json.loads(
+                    (read_regular(path, label="authority child grant") or b"{}")
+                    .decode("utf-8")
+                )
+            )
+        except (SystemExit, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if grant.get("session_id") == session_id:
+            session_grants.add(str(grant["grant_id"]))
+    if proposed_grant_id in session_grants:
+        return
+    if len(session_grants) >= leases[0]["budgets"]["max_agent_actions"]:
+        raise SystemExit("authority_session_agent_action_budget_exhausted")
+
+
+def _session_scope(
+    root: Path,
+    *,
+    activation_id: str,
+    at: str,
+    request: dict[str, Any] | None = None,
+    plan: dict[str, Any] | None = None,
+) -> tuple[str | None, str | None]:
+    """Return the one live thread-bound narrowing lease, if present."""
+
+    thread = os.environ.get("CODEX_THREAD_ID")
+    if not thread:
+        return None, None
+    from .session_store import matching_session_leases
+
+    host_receipt = os.environ.get("CODEX_SESSION_APPROVAL_RECEIPT")
+    host_receipt_sha = (
+        hashlib.sha256(host_receipt.encode("utf-8")).hexdigest()
+        if host_receipt
+        else None
+    )
+    rows = [
+        lease
+        for _path, lease in matching_session_leases(
+            root, thread_binding=thread
+        )
+        if lease["lifecycle"]["status"] == "live"
+        and (
+            lease["session_binding"]["trust_class"]
+            != "platform_host_receipt"
+            or lease["session_binding"]["approval_receipt_sha256"]
+            == host_receipt_sha
+        )
+        and lease["session_binding"]["activation_evidence_id"] == activation_id
+        and (
+            lease["expires_at"] is None
+            or parse_time(at, "session child at")
+            < parse_time(lease["expires_at"], "session lease expiry")
+        )
+    ]
+    if len(rows) > 1:
+        raise SystemExit("authority_interaction_multiple_live_sessions")
+    if not rows:
+        return None, None
+    lease = rows[0]
+    if request is not None and plan is not None:
+        from .session_binding import canonical_bytes
+        from .session_lease import assert_dispatch_allowed
+
+        operation_key = (
+            request["skill_id"],
+            request["operation_id"],
+            request["operation_version"],
+        )
+        matching_groups = sorted(
+            group
+            for group in plan["profile"]["operation_groups"]
+            if operation_key in interaction.OPERATION_REGISTRY[group]
+            and group in lease["allowed_operation_groups"]
+        )
+        if not matching_groups:
+            raise SystemExit("authority_session_operation_outside_envelope")
+        snapshot = plan["goal_policy_snapshot"]
+        try:
+            assert_dispatch_allowed(
+                lease,
+                at=at,
+                goal_digest=str(snapshot["final_goal_sha256"]),
+                policy_digest=str(snapshot["authority_policy_sha256"]),
+                manifest_digest=hashlib.sha256(
+                    canonical_bytes(plan["manifest_bindings"])
+                ).hexdigest(),
+                operation_group=matching_groups[0],
+                risk_tier=str(request["risk_tier"]),
+            )
+        except ValueError as exc:
+            raise SystemExit("authority_session_dispatch_blocked") from exc
+    return lease["session_binding"]["session_id"], lease["expires_at"]
+
+
+def _child_source(root: Path, *, activation_id: str, plan: dict[str, Any], plan_binding: dict[str, str], evidence_binding: dict[str, str], receipt_binding: dict[str, str], request: dict[str, Any], now: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
     request_sha = object_sha256(request)
-    identity = object_sha256({"activation_id": activation_id, "request_sha256": request_sha})
+    session_id, session_expiry = _session_scope(
+        root,
+        activation_id=activation_id,
+        at=now,
+        request=request,
+        plan=plan,
+    )
+    # Schema-v6 mode children are a session-only write path.  Historical null
+    # grants remain parseable evidence, but a missing live lease must never
+    # mint a fresh executable grant.
+    if session_id is None:
+        return None
+    identity = object_sha256(
+        {
+            "activation_id": activation_id,
+            "request_sha256": request_sha,
+            "session_id": session_id,
+        }
+    )
     grant_id = f"authg-mode-{identity[:19]}"
     child_receipt_ref = (interaction.MATERIALIZATION_ROOT / activation_id / "children" / grant_id / "receipt.json").as_posix()
     operations = [{key: request[key] for key in ("skill_id", "skill_version", "operation_id", "operation_version")}]
-    projection = {"grant_id": grant_id, "lineage_id": f"authl-mode-{identity[:18]}", "grant_idempotency_key": f"authgk-mode-{identity[:17]}", "request_sha256": request_sha, "holder_rank": request["actor_rank"], "capabilities": request["required_capabilities"], "subjects": [request["subject"]], "operations": operations, "risk_ceiling": request["risk_tier"], "decision_classes": [request["decision_class"]], "cardinality": request["cardinality_requested"], "max_uses": request["use_budget_requested"], "session_id": None, "task_id": request["task_id"], "improvement_id": request["pack_id"], "policy_snapshot": _policy_binding(root), "activation_materialization_ref": child_receipt_ref}
+    projection = {"grant_id": grant_id, "lineage_id": f"authl-mode-{identity[:18]}", "grant_idempotency_key": f"authgk-mode-{identity[:17]}", "request_sha256": request_sha, "holder_rank": request["actor_rank"], "capabilities": request["required_capabilities"], "subjects": [request["subject"]], "operations": operations, "risk_ceiling": request["risk_tier"], "decision_classes": [request["decision_class"]], "cardinality": request["cardinality_requested"], "max_uses": request["use_budget_requested"], "session_id": session_id, "task_id": request["task_id"], "improvement_id": request["pack_id"], "policy_snapshot": _policy_binding(root), "activation_materialization_ref": child_receipt_ref}
     source = {"schema_version": 6, "artifact_kind": "authority_source_approval", "approval_id": f"authsrc-mode-{identity[:16]}", "source_kind": "delegated_policy_steward", "source_rank": "S2", "decision_type": "grant_authority", "capabilities": sorted(set(request["required_capabilities"]) | {"authority.grant.issue"}), "subjects": [request["subject"]], "operations": operations, "risk_ceiling": request["risk_tier"], "decision_classes": [request["decision_class"]], "cardinalities": [request["cardinality_requested"]], "max_uses": request["use_budget_requested"], "grant_ids": [grant_id], "request_digests": [request_sha], "lineage_ids": [projection["lineage_id"]], "delegation_binding": plan_binding, "not_before": now, "expires_at": None, "evidence_id": activation_id, "decision_binding": evidence_binding, "decision_trust_class": "host_user_signed_mode_activation_child", "activation_plan": plan_binding, "activation_evidence": evidence_binding, "activation_materialization": receipt_binding, "activation_child": projection}
     source_payload = interaction._json_bytes(source)
-    grant = {"schema_version": 4, "artifact_kind": "authority_grant", "grant_id": grant_id, "lineage_id": projection["lineage_id"], "parent_grant_id": None, "issuer_rank": "S2", "holder_rank": request["actor_rank"], "capabilities": request["required_capabilities"], "subjects": [request["subject"]], "operations": operations, "risk_ceiling": request["risk_tier"], "decision_classes": [request["decision_class"]], "cardinality": request["cardinality_requested"], "max_uses": request["use_budget_requested"], "not_before": now, "expires_at": None, "session_id": None, "task_id": request["task_id"], "improvement_id": request["pack_id"], "source_approval": {"ref": (Path(".task/authorization/source_snapshots") / f"source_approval-{hashlib.sha256(source_payload).hexdigest()}.json").as_posix(), "sha256": hashlib.sha256(source_payload).hexdigest()}, "policy_snapshot": projection["policy_snapshot"], "created_at": now, "idempotency_key": projection["grant_idempotency_key"], "request_sha256": request_sha, "activation_materialization_ref": child_receipt_ref}
+    grant = {"schema_version": 4, "artifact_kind": "authority_grant", "grant_id": grant_id, "lineage_id": projection["lineage_id"], "parent_grant_id": None, "issuer_rank": "S2", "holder_rank": request["actor_rank"], "capabilities": request["required_capabilities"], "subjects": [request["subject"]], "operations": operations, "risk_ceiling": request["risk_tier"], "decision_classes": [request["decision_class"]], "cardinality": request["cardinality_requested"], "max_uses": request["use_budget_requested"], "not_before": now, "expires_at": session_expiry, "session_id": session_id, "task_id": request["task_id"], "improvement_id": request["pack_id"], "source_approval": {"ref": (Path(".task/authorization/source_snapshots") / f"source_approval-{hashlib.sha256(source_payload).hexdigest()}.json").as_posix(), "sha256": hashlib.sha256(source_payload).hexdigest()}, "policy_snapshot": projection["policy_snapshot"], "created_at": now, "idempotency_key": projection["grant_idempotency_key"], "request_sha256": request_sha, "activation_materialization_ref": child_receipt_ref}
     return source, grant
 
 
@@ -201,12 +344,21 @@ def materialize_mode_child(root: Path, request: dict[str, Any], *, evaluated_at:
             continue
         now = parse_time(evaluated_at, "mode child materialized_at").isoformat()
         receipt_path = _receipt_path(root, state["activation_id"])
-        source, raw_grant = _child_source(root, activation_id=state["activation_id"], plan_binding=plan_binding, evidence_binding=evidence_binding, receipt_binding=interaction._binding(root, receipt_path), request=request, now=now)
+        child_source = _child_source(root, activation_id=state["activation_id"], plan=plan, plan_binding=plan_binding, evidence_binding=evidence_binding, receipt_binding=interaction._binding(root, receipt_path), request=request, now=now)
+        if child_source is None:
+            continue
+        source, raw_grant = child_source
         child_receipt = {"schema_version": 1, "artifact_kind": "authority_interaction_child_materialization", "activation_id": state["activation_id"], "activation_plan": plan_binding, "request_sha256": raw_grant["request_sha256"], "source_approval": raw_grant["source_approval"], "grant_id": raw_grant["grant_id"]}
         with authority_lock(root):
             current_state = json.loads((read_regular(_state_path(root, state["activation_id"]), label="authority interaction state") or b"").decode("utf-8"))
             if not _state_allows_child(current_state, plan, raw_grant):
                 continue
+            _assert_session_child_budget(
+                root,
+                session_id=raw_grant.get("session_id"),
+                activation_state=current_state,
+                proposed_grant_id=raw_grant["grant_id"],
+            )
             publish_immutable(root / raw_grant["source_approval"]["ref"], interaction._json_bytes(source))
             publish_immutable(root / raw_grant["activation_materialization_ref"], interaction._json_bytes(child_receipt))
             registered = _register_compiled_grant(root, validate_grant(raw_grant), producer_capability=_AUTHORITY_PRODUCER_CAPABILITY)
@@ -253,7 +405,20 @@ def activation_child_eligible(root: Path, grant: dict[str, Any], *, at: Any, ski
         interaction.validate_activation_evidence(evidence, root=root, plan_binding=plan_binding, plan=plan)
         valid, _reason = _current(root, plan, at=parse_time(at, "mode child eligibility").isoformat())
         state = json.loads((read_regular(_state_path(root, evidence["activation_id"]), label="authority interaction state") or b"").decode("utf-8"))
-        return valid and state.get("status") == "active" and grant["grant_id"] in state.get("child_grant_ids", [])
+        if not (
+            valid
+            and state.get("status") == "active"
+            and grant["grant_id"] in state.get("child_grant_ids", [])
+        ):
+            return False
+        if grant.get("session_id") is None:
+            return False
+        session_id, _expiry = _session_scope(
+            root,
+            activation_id=str(evidence["activation_id"]),
+            at=parse_time(at, "mode child eligibility").isoformat(),
+        )
+        return session_id == grant["session_id"]
     except (SystemExit, KeyError, TypeError, json.JSONDecodeError):
         return False
 

@@ -4,7 +4,11 @@ import copy
 from pathlib import Path
 from typing import Any
 
-from .authority import OPERATION_KEYS, _authority_call
+from .authority import _authority_call
+from .authority_grant import (
+    load_bound_materialization,
+    verify_materialized_grant,
+)
 from .common import (
     expect_keys,
     read_json,
@@ -14,10 +18,8 @@ from .common import (
     workspace_regular_file,
 )
 
-from manage_agent_authority.contracts import risk_value  # noqa: E402
 from manage_agent_authority.source_approval import (  # noqa: E402
     load_source_approval,
-    validate_delegation_lineage,
 )
 
 
@@ -51,12 +53,13 @@ def verify_operation_source_approval(
             "source decision must bind a content-addressed approval snapshot")
     path = workspace_file(root, binding["ref"], binding["sha256"],
                           f"source_approval.{item['operation_id']}")
-    _verify_snapshot_metadata(root, binding)
     approval = _authority_call(
         "invalid_authorization_basis", "operation source approval",
         lambda: load_source_approval(path),
     )
-    _verify_source_approval(root, approval, item)
+    if approval["schema_version"] != 6:
+        _verify_snapshot_metadata(root, binding)
+    _verify_source_approval(root, approval, item, binding)
     return {"ref": binding["ref"], "sha256": binding["sha256"]}
 
 
@@ -79,41 +82,27 @@ def _verify_snapshot_metadata(root: Path, binding: dict[str, str]) -> None:
 
 def _verify_source_approval(
     root: Path, approval: dict[str, Any], item: dict[str, Any],
+    binding: dict[str, str],
 ) -> None:
     authority = item["authority"]
-    request = authority["request"]
-    spec = authority["materialization"]["grant_spec"]
-    operation = {key: request[key] for key in OPERATION_KEYS}
-    require(approval["source_kind"] == "explicit_user_instruction"
-            and approval["source_rank"] == "S3"
-            and approval["decision_type"] == "grant_authority"
-            and approval["integrity_status"] == "verified",
-            "invalid_authorization_basis",
-            "declared basis must be verified S3 user authority")
-    require(authority["request_sha256"] in approval["request_digests"]
-            and request["subject"] in approval["subjects"]
-            and operation in approval["operations"],
-            "invalid_authorization_basis",
-            "declared basis does not bind request scope")
-    covers = (
-        set(request["required_capabilities"]).issubset(approval["capabilities"])
-        and request["decision_class"] in approval["decision_classes"]
-        and request["cardinality_requested"] in approval["cardinalities"]
-        and spec["grant_id"] in approval["grant_ids"]
-        and spec["lineage_id"] in approval["lineage_ids"]
+    loaded = _authority_call(
+        "invalid_authorization_basis",
+        "producer-owned authority materialization",
+        lambda: load_bound_materialization(
+            root,
+            binding,
+            authority["request"],
+            authority["materialization"]["policy_snapshot"],
+        ),
     )
-    require(covers, "invalid_authorization_basis",
-            "declared basis does not cover the exact grant")
-    require(risk_value(request["risk_tier"]) <= risk_value(approval["risk_ceiling"]),
-            "invalid_authorization_basis", "declared basis risk ceiling is too low")
-    maximum = approval["max_uses"]
-    require(maximum is None or maximum >= request["use_budget_requested"],
-            "invalid_authorization_basis", "declared basis use budget is too low")
+    require(loaded["source_approval"] == approval,
+            "invalid_authorization_basis",
+            "source approval changed during producer verification")
     _authority_call(
-        "invalid_authorization_basis", "declared source lineage",
-        lambda: validate_delegation_lineage(
-            root, approval,
-            effective_at=authority["materialization"]["evaluated_at"],
+        "invalid_authorization_basis",
+        "materialized grant",
+        lambda: verify_materialized_grant(
+            root, loaded["grant"], authority
         ),
     )
 
@@ -128,25 +117,6 @@ def materialization_item(item: dict[str, Any]) -> dict[str, Any]:
     request = authority["request"]
     grant = materialization["grant_spec"]
     source = authority.get("source_approval")
-    operation = {key: request[key] for key in OPERATION_KEYS}
-    grant_recipe = {
-        "schema_version": 2, "artifact_kind": "authority_grant",
-        "grant_id": grant["grant_id"], "lineage_id": grant["lineage_id"],
-        "parent_grant_id": None, "issuer_rank": "S3",
-        "holder_rank": grant["holder_rank"],
-        "capabilities": copy.deepcopy(request["required_capabilities"]),
-        "subjects": [copy.deepcopy(request["subject"])], "operations": [operation],
-        "risk_ceiling": request["risk_tier"],
-        "decision_classes": [request["decision_class"]],
-        "cardinality": grant["cardinality"], "max_uses": grant["max_uses"],
-        "not_before": grant["not_before"], "expires_at": grant["expires_at"],
-        "session_id": None, "task_id": request["task_id"],
-        "improvement_id": request["pack_id"],
-        "source_approval": copy.deepcopy(source),
-        "policy_snapshot": copy.deepcopy(materialization["policy_snapshot"]),
-        "created_at": materialization["evaluated_at"],
-        "idempotency_key": grant["idempotency_key"],
-    }
     return {
         "applicability": "required", "request": copy.deepcopy(request),
         "request_sha256": authority["request_sha256"],
@@ -156,8 +126,8 @@ def materialization_item(item: dict[str, Any]) -> dict[str, Any]:
             "policy_snapshot": copy.deepcopy(materialization["policy_snapshot"]),
             "source_approval": copy.deepcopy(source),
             "source_approval_requirements": {
-                "source_kind": "explicit_user_instruction", "source_rank": "S3",
                 "decision_type": "grant_authority",
+                "accepted_schema_versions": [2, 3, 4, 5, 6],
                 "request_sha256": authority["request_sha256"],
                 "grant_id": grant["grant_id"], "lineage_id": grant["lineage_id"],
             },
@@ -165,7 +135,11 @@ def materialization_item(item: dict[str, Any]) -> dict[str, Any]:
         "evaluate": {"evaluation_context": copy.deepcopy(materialization["evaluation_context"]),
                      "evaluation_context_sha256": materialization["evaluation_context_sha256"],
                      "evaluated_at": materialization["evaluated_at"]},
-        "register_grant_recipe": grant_recipe,
+        "grant_replay": {
+            "grant_id": grant["grant_id"],
+            "request_sha256": authority["request_sha256"],
+            "source_approval": copy.deepcopy(source),
+        },
         "reserve": copy.deepcopy(materialization["reservation"]),
     }
 
